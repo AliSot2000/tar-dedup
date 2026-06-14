@@ -1,0 +1,41 @@
+use std::path::PathBuf;
+
+use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("database error: {0}")]
+    Database(#[from] rusqlite::Error),
+
+    #[error("io error at {path}: {source}")]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("invalid configuration: {0}")]
+    Config(String),
+
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
+}
+
+impl Error {
+    pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
+        Self::Io {
+            path: path.into(),
+            source,
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io {
+            path: PathBuf::new(),
+            source,
+        }
+    }
+}
