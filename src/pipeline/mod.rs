@@ -11,7 +11,7 @@ use fs4::fs_std::FileExt;
 
 use crate::config::{Config, PipelinePhase, RuntimeState};
 use crate::db::Database;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
 pub use extract::run as run_extract;
@@ -31,14 +31,28 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
     };
 
     while state.phase != PipelinePhase::Done {
-        if shutdown.requested() {
-            db.save_runtime_state(&state)?;
-            tracing::warn!("shutdown requested; state saved");
-            return Ok(());
-        }
+        shutdown.check_between_files()?;
 
         tracing::info!(phase = state.phase.as_str(), "pipeline phase");
-        run_phase(&state.phase, &config, &db, &shutdown)?;
+        match run_phase(&state.phase, &config, &db, &shutdown) {
+            Ok(()) => {}
+            Err(Error::Interrupted) => {
+                db.save_runtime_state(&state)?;
+                if shutdown.is_force() {
+                    eprintln!(
+                        "aborted during {}; in-flight progress discarded — rerun with --resume",
+                        state.phase.as_str()
+                    );
+                } else {
+                    eprintln!(
+                        "stopped during {}; completed work saved — rerun with --resume",
+                        state.phase.as_str()
+                    );
+                }
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        }
 
         if let Some(next) = state.phase.next() {
             state.phase = next;
@@ -70,10 +84,10 @@ fn run_phase(
     shutdown: &Shutdown,
 ) -> Result<()> {
     match phase {
-        PipelinePhase::Inventory => inventory::run(config, db),
-        PipelinePhase::Hash => hash::run(config, db),
-        PipelinePhase::Dedup => dedup::run(config, db),
-        PipelinePhase::Stage => stage::run(config, db),
+        PipelinePhase::Inventory => inventory::run(config, db, shutdown),
+        PipelinePhase::Hash => hash::run(config, db, shutdown),
+        PipelinePhase::Dedup => dedup::run(config, db, shutdown),
+        PipelinePhase::Stage => stage::run(config, db, shutdown),
         PipelinePhase::Archive => archive::run(config, db, shutdown),
         PipelinePhase::Done => Ok(()),
     }
