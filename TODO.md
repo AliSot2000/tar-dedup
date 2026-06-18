@@ -41,3 +41,4 @@ The interface for the program should
 Feat:
 - Sort files based on file extensions when compressing to increase chances that frequently used parts e.g. header / 
 footer can be efficiently compressed.
+- Docker style progress (bottom all files, top each file being hashed)
