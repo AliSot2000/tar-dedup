@@ -32,10 +32,6 @@ impl Error {
             source,
         }
     }
-
-    pub fn is_interrupted(&self) -> bool {
-        matches!(self, Self::Interrupted)
-    }
 }
 
 impl From<std::io::Error> for Error {
