@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::path::Path;
 
-use crate::config::Config;
+use crate::config::{CompressionFormat, Config};
 use crate::db::types::FilePhase;
 use crate::db::Database;
 use crate::error::{Error, Result};
@@ -10,6 +10,14 @@ use crate::shutdown::Shutdown;
 use crate::tar_writer::TarWriter;
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    if config.compression == CompressionFormat::Xz {
+        eprintln!(
+            "xz compression: preset -{}, {} threads",
+            crate::compression::XZ_PRESET,
+            config.jobs
+        );
+    }
+
     let archive_offset = archive_file_len(&config.archive_path);
     let (session_id, session_start_offset) = match db.open_archive_session()? {
         Some(open) => (open.id, open.archive_offset),
@@ -21,8 +29,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let progress = ByteProgress::new("archive", total_bytes);
     progress.set_position(already_archived);
 
-    let mut writer =
-        TarWriter::open(config.archive_path.clone(), config.compression, session_id)?;
+    let mut writer = TarWriter::open(
+        config.archive_path.clone(),
+        config.compression,
+        config.jobs,
+        shutdown.clone(),
+    )?;
 
     let to_archive = db.list_canonical_files(FilePhase::Staged)?;
     if to_archive.is_empty() && already_archived == 0 {
@@ -48,6 +60,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             crate::content_id::content_id_from_digest(&digest, record.size, &record.rel_path).0;
         let source = config.stage_dir().join(&tar_name);
 
+        progress.set_file("archive", &record.rel_path.to_string_lossy());
+
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
             Ok(()) => {}
             Err(Error::Interrupted) => {
@@ -64,7 +78,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     if stopped {
         if shutdown.is_force() {
-            drop(writer);
+            writer.abandon();
             truncate_archive(&config.archive_path, session_start_offset)?;
             db.abandon_archive_session(session_id)?;
             if session_start_offset == 0 {

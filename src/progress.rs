@@ -17,7 +17,7 @@ impl ByteProgress {
         let bar = ProgressBar::new(total);
         bar.set_style(
             ProgressStyle::with_template(
-                "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
+                "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} @ {bytes_per_sec}",
             )
             .unwrap()
             .progress_chars("=>-"),
@@ -33,6 +33,11 @@ impl ByteProgress {
 
     pub fn inc(&self, n: u64) {
         self.bar.inc(n);
+    }
+
+    pub fn set_file(&self, label: &str, file: &str) {
+        let short = truncate_middle(file, 56);
+        self.bar.set_message(format!("{label} {short}"));
     }
 
     pub fn set_message(&self, msg: &str) {
@@ -72,4 +77,12 @@ impl CountProgress {
     pub fn finish(&self, label: &str) {
         self.bar.finish_with_message(format!("{label}: {} items", self.bar.position()));
     }
+}
+
+fn truncate_middle(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let keep = max.saturating_sub(1) / 2;
+    format!("{}…{}", &s[..keep], &s[s.len() - keep..])
 }
