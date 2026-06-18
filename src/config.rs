@@ -29,6 +29,7 @@ pub struct Config {
     pub compression: CompressionFormat,
     pub jobs: usize,
     pub resume: bool,
+    pub fresh: bool,
 }
 
 impl Config {
@@ -56,6 +57,7 @@ impl Config {
             compression,
             jobs,
             resume: args.resume,
+            fresh: args.fresh,
         })
     }
 
@@ -71,6 +73,7 @@ impl Config {
             compression: CompressionFormat::None,
             jobs: 1,
             resume: false,
+            fresh: false,
         })
     }
 

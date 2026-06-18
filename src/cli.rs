@@ -38,9 +38,13 @@ pub struct ArchiveArgs {
     #[arg(long = "jobs", value_name = "N")]
     pub jobs: Option<usize>,
 
-    /// Resume from existing state in the work directory.
+    /// Resume from existing state in the work directory (auto-detected if omitted).
     #[arg(long)]
     pub resume: bool,
+
+    /// Ignore saved state and restart from inventory.
+    #[arg(long, conflicts_with = "resume")]
+    pub fresh: bool,
 }
 
 #[derive(Debug, Args, Default)]
