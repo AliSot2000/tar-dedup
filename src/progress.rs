@@ -79,10 +79,13 @@ impl CountProgress {
     }
 }
 
-fn truncate_middle(s: &str, max: usize) -> String {
-    if s.len() <= max {
+fn truncate_middle(s: &str, max_chars: usize) -> String {
+    let n = s.chars().count();
+    if n <= max_chars {
         return s.to_string();
     }
-    let keep = max.saturating_sub(1) / 2;
-    format!("{}…{}", &s[..keep], &s[s.len() - keep..])
+    let keep = max_chars.saturating_sub(1) / 2;
+    let prefix: String = s.chars().take(keep).collect();
+    let suffix: String = s.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{prefix}…{suffix}")
 }
