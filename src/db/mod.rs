@@ -114,4 +114,10 @@ impl Database {
     pub fn sum_archived_canonical_bytes(&self) -> Result<u64> {
         archive::sum_archived_canonical_bytes(&self.conn)
     }
+
+    /// Flush WAL pages so the on-disk db file is safe to copy into the archive.
+    pub fn checkpoint(&self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
 }
