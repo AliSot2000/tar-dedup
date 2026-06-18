@@ -20,7 +20,6 @@ rayon = "1"
 signal-hook = "0.3"
 num_cpus = "1"
 indicatif = "0.17"
-humansize = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
