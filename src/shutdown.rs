@@ -30,17 +30,17 @@ impl Shutdown {
                     1 => {
                         mode_for_handler.store(MODE_GRACEFUL, Ordering::SeqCst);
                         eprintln!(
-                            "Gracefully shutdown. Finishing in-flight files (2 more signals to abort now)"
+                            "\nGracefully shutdown. Finishing in-flight files (2 more signals to abort now)"
                         );
                     }
                     2 => {
                         eprintln!(
-                            "Gracefully shutdown. Finishing in-flight files (one more signal to abort now)"
+                            "\nGracefully shutdown. Finishing in-flight files (one more signal to abort now)"
                         );
                     }
                     _ => {
                         mode_for_handler.store(MODE_FORCE, Ordering::SeqCst);
-                        eprintln!("Aborting now; in-flight progress is discarded.");
+                        eprintln!("\nAborting now; in-flight progress is discarded.");
                     }
                 }
             }
