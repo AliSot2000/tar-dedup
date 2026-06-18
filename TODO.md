@@ -39,8 +39,6 @@ The interface for the program should
 - take -C (for output directory)
 
 Feat:
-- Sort files based on file extensions when compressing to increase chances that frequently used parts e.g. header / 
-footer can be efficiently compressed.
 - Docker style progress (bottom all files, top each file being hashed)
 - Pass compression args to the different compression algos (e.g. -9 for xz)
 - 
