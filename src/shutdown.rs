@@ -47,16 +47,8 @@ impl Shutdown {
         Ok(Self { mode })
     }
 
-    pub fn is_graceful(&self) -> bool {
-        self.mode.load(Ordering::SeqCst) == MODE_GRACEFUL
-    }
-
     pub fn is_force(&self) -> bool {
         self.mode.load(Ordering::SeqCst) == MODE_FORCE
-    }
-
-    pub fn requested(&self) -> bool {
-        self.mode.load(Ordering::SeqCst) != MODE_RUNNING
     }
 
     /// Stop before starting a new unit of work (file, group, tar entry, …).
@@ -74,9 +66,5 @@ impl Shutdown {
         } else {
             Ok(())
         }
-    }
-
-    pub fn check(&self) -> Result<()> {
-        self.check_between_files()
     }
 }
