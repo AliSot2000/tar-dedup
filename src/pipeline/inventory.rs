@@ -6,12 +6,12 @@ use crate::config::Config;
 use crate::db::types::NewFileRecord;
 use crate::db::Database;
 use crate::error::Result;
-use crate::progress::ByteProgress;
+use crate::progress::CountProgress;
 
 pub fn run(config: &Config, db: &Database) -> Result<()> {
     tracing::info!(root = %config.input_dir.display(), "inventory pass");
-    let mut count = 0u64;
-    let mut progress = ByteProgress::new("inventory", None);
+    let progress = CountProgress::new("inventory");
+    let mut inserted = 0u64;
 
     for entry in WalkDir::new(&config.input_dir)
         .follow_links(false)
@@ -29,7 +29,7 @@ pub fn run(config: &Config, db: &Database) -> Result<()> {
             .to_path_buf();
         let meta = std::fs::metadata(path).map_err(|e| crate::error::Error::io(path, e))?;
 
-        db.insert_file(&NewFileRecord {
+        if db.insert_file(&NewFileRecord {
             rel_path: rel,
             size: meta.len(),
             mtime: file_mtime(&meta),
@@ -37,14 +37,14 @@ pub fn run(config: &Config, db: &Database) -> Result<()> {
             uid: file_uid(path),
             gid: file_gid(path),
             mode: Some(file_mode(&meta)),
-        })?;
-
-        count += 1;
-        progress.on_bytes(count);
+        })? {
+            inserted += 1;
+            progress.inc(1);
+        }
     }
 
-    progress.finish();
-    tracing::info!(files = count, "inventory complete");
+    progress.finish("inventory complete");
+    tracing::info!(inserted, total = db.count_files()?, "inventory indexed");
     Ok(())
 }
 

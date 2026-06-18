@@ -5,6 +5,10 @@ mod hash;
 mod inventory;
 mod stage;
 
+use std::fs::OpenOptions;
+
+use fs4::fs_std::FileExt;
+
 use crate::config::{Config, PipelinePhase, RuntimeState};
 use crate::db::Database;
 use crate::error::Result;
@@ -13,6 +17,8 @@ use crate::shutdown::Shutdown;
 pub use extract::run as run_extract;
 
 pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
+    let _lock = acquire_workdir_lock(&config)?;
+
     let db = Database::open(&config.db_path())?;
 
     let mut state = match db.load_runtime_state()? {
@@ -31,6 +37,7 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
             return Ok(());
         }
 
+        tracing::info!(phase = state.phase.as_str(), "pipeline phase");
         run_phase(&state.phase, &config, &db, &shutdown)?;
 
         if let Some(next) = state.phase.next() {
@@ -42,6 +49,18 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn acquire_workdir_lock(config: &Config) -> Result<std::fs::File> {
+    let lock_path = config.work_dir.join(".lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| crate::error::Error::io(&lock_path, e))?;
+    lock.lock_exclusive()
+        .map_err(|e| crate::error::Error::io(&lock_path, e))?;
+    Ok(lock)
 }
 
 fn run_phase(
