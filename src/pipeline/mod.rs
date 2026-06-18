@@ -42,6 +42,10 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
         state.max_workers = config.jobs;
         db.save_runtime_state(&state)?;
         state
+    } else if config.resume {
+        return Err(Error::Config(
+            "no saved state to resume in work directory (omit --resume or use --fresh)".into(),
+        ));
     } else {
         let state = RuntimeState::new(config.jobs);
         db.save_runtime_state(&state)?;

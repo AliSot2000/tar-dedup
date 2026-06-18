@@ -58,10 +58,6 @@ impl Database {
         hash::duplicate_groups(&self.conn)
     }
 
-    pub fn canonical_for(&self, sha1: [u8; 20], size: u64) -> Result<Option<FileId>> {
-        hash::canonical_for(&self.conn, sha1, size)
-    }
-
     pub fn set_canonical(&self, file_id: FileId, canonical_id: FileId) -> Result<()> {
         dedup::set_canonical(&self.conn, file_id, canonical_id)
     }
