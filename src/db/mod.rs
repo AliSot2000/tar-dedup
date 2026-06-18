@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 use crate::config::RuntimeState;
 use crate::db::types::{
-    ArchiveSession, DuplicateGroup, FileId, FilePhase, FileRecord, NewFileRecord, PipelineStatus,
+    ArchiveSession, DuplicateGroup, FileId, FilePhase, FileRecord, NewFileRecord,
 };
 use crate::error::Result;
 
@@ -30,7 +30,7 @@ impl Database {
         Ok(Self { conn })
     }
 
-    pub fn insert_file(&self, record: &NewFileRecord) -> Result<FileId> {
+    pub fn insert_file(&self, record: &NewFileRecord) -> Result<bool> {
         inventory::insert_file(&self.conn, record)
     }
 
@@ -82,14 +82,6 @@ impl Database {
         inventory::save_runtime_state(&self.conn, state)
     }
 
-    pub fn pipeline_status(&self) -> Result<Option<PipelineStatus>> {
-        Ok(self.load_runtime_state()?.map(|state| PipelineStatus {
-            phase: state.phase,
-            snapshot_taken_at: state.snapshot_taken_at,
-            max_workers: state.max_workers,
-        }))
-    }
-
     pub fn begin_archive_session(&self) -> Result<i64> {
         let stream_index = archive::next_stream_index(&self.conn)?;
         archive::begin_session(&self.conn, stream_index)
@@ -103,7 +95,11 @@ impl Database {
         archive::open_session(&self.conn)
     }
 
-    pub fn queue_archive_entry(&self, file_id: FileId, session_id: i64, tar_path: &str) -> Result<()> {
+    pub fn queue_archive_entry(&self, file_id: FileId, session_id: i64, tar_path: &str) -> Result<i64> {
         archive::queue_entry(&self.conn, file_id, session_id, tar_path)
+    }
+
+    pub fn mark_entry_done(&self, entry_id: i64) -> Result<()> {
+        archive::mark_entry_done(&self.conn, entry_id)
     }
 }

@@ -23,22 +23,21 @@ pub fn finalize_session(conn: &Connection, session_id: i64, bytes_in: u64, bytes
 }
 
 pub fn next_stream_index(conn: &Connection) -> Result<i64> {
-    let index: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(stream_index), -1) + 1 FROM archive_sessions",
-            [],
-            |row| row.get(0),
-        )?;
-    Ok(index)
+    conn.query_row(
+        "SELECT COALESCE(MAX(stream_index), -1) + 1 FROM archive_sessions",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
 }
 
-pub fn queue_entry(conn: &Connection, file_id: FileId, session_id: i64, tar_path: &str) -> Result<()> {
+pub fn queue_entry(conn: &Connection, file_id: FileId, session_id: i64, tar_path: &str) -> Result<i64> {
     conn.execute(
         "INSERT INTO archive_entries (file_id, session_id, tar_path, status)
          VALUES (?1, ?2, ?3, 'pending')",
         params![file_id.0, session_id, tar_path],
     )?;
-    Ok(())
+    Ok(conn.last_insert_rowid())
 }
 
 pub fn mark_entry_done(conn: &Connection, entry_id: i64) -> Result<()> {
@@ -51,21 +50,9 @@ pub fn mark_entry_done(conn: &Connection, entry_id: i64) -> Result<()> {
 
 pub fn open_session(conn: &Connection) -> Result<Option<ArchiveSession>> {
     conn.query_row(
-        "SELECT id, stream_index, bytes_in, bytes_out, finalized
-         FROM archive_sessions
-         WHERE finalized = 0
-         ORDER BY id DESC
-         LIMIT 1",
+        "SELECT id FROM archive_sessions WHERE finalized = 0 ORDER BY id DESC LIMIT 1",
         [],
-        |row| {
-            Ok(ArchiveSession {
-                id: row.get(0)?,
-                stream_index: row.get(1)?,
-                bytes_in: row.get::<_, i64>(2)? as u64,
-                bytes_out: row.get::<_, i64>(3)? as u64,
-                finalized: row.get::<_, i64>(4)? != 0,
-            })
-        },
+        |row| Ok(ArchiveSession { id: row.get(0)? }),
     )
     .optional()
     .map_err(Into::into)

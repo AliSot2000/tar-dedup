@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::db::types::FilePhase;
 use crate::db::Database;
 use crate::error::Result;
 use crate::shutdown::Shutdown;
@@ -23,11 +24,16 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let Some(record) = db.get_file(file_id)? else {
             continue;
         };
-        let digest = record.sha1.expect("canonical hashed");
+        if record.sha1.is_none() {
+            continue;
+        }
+        let digest = record.sha1.unwrap();
         let tar_name = crate::content_id::content_id_from_digest(&digest, record.size).0;
         let source = config.stage_dir().join(&tar_name);
         writer.append_path(&source, &tar_name)?;
-        db.queue_archive_entry(file_id, session_id, &tar_name)?;
+        let entry_id = db.queue_archive_entry(file_id, session_id, &tar_name)?;
+        db.mark_entry_done(entry_id)?;
+        db.mark_file_phase(file_id, FilePhase::Archived)?;
     }
 
     let (bytes_in, bytes_out) = writer.finalize_session()?;

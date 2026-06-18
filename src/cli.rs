@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
-
-use crate::config::CompressionFormat;
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "tar-dedup", about = "Deduplicating archival pipeline")]
@@ -19,9 +17,9 @@ pub enum Command {
     Extract(ExtractArgs),
 }
 
-#[derive(Debug, clap::Args)]
+#[derive(Debug, Args)]
 pub struct ArchiveArgs {
-    /// Output archive path (e.g. snapshot.tar.xz).
+    /// Archive path (relative paths are resolved from the current directory).
     #[arg(short = 'f')]
     pub archive: PathBuf,
 
@@ -29,50 +27,71 @@ pub struct ArchiveArgs {
     #[arg(short = 'i')]
     pub input: PathBuf,
 
-    /// Working/output directory (db, staging, temp).
+    /// Working directory for sqlite/staging (defaults to `.NAME.work` next to the archive).
     #[arg(short = 'C')]
-    pub output_dir: PathBuf,
+    pub work_dir: Option<PathBuf>,
 
-    /// Compression format for tar payload sessions.
-    #[arg(long, value_enum, default_value_t = CompressionFormatCli::Xz)]
-    pub compression: CompressionFormatCli,
+    #[command(flatten)]
+    pub compression: CompressionFlags,
 
-    /// Maximum concurrent workers (hash/compress/etc.).
-    #[arg(short = 'j', long = "jobs")]
+    /// Maximum concurrent workers.
+    #[arg(long = "jobs", value_name = "N")]
     pub jobs: Option<usize>,
 
-    /// Resume from existing state in the output directory.
+    /// Resume from existing state in the work directory.
     #[arg(long)]
     pub resume: bool,
 }
 
-#[derive(Debug, clap::Args)]
+#[derive(Debug, Args, Default)]
+pub struct CompressionFlags {
+    /// Use archive suffix to pick the compression filter.
+    #[arg(short = 'a', long = "auto-compress", group = "compress_filter")]
+    pub auto_compress: bool,
+
+    #[arg(short = 'z', long = "gzip", group = "compress_filter")]
+    pub gzip: bool,
+
+    #[arg(short = 'j', long = "bzip2", group = "compress_filter")]
+    pub bzip2: bool,
+
+    #[arg(short = 'J', long = "xz", group = "compress_filter")]
+    pub xz: bool,
+
+    #[arg(long = "zstd", group = "compress_filter")]
+    pub zstd: bool,
+
+    /// GNU tar alias for xz.
+    #[arg(long = "lzma", group = "compress_filter")]
+    pub lzma: bool,
+
+    #[arg(long = "lzip", group = "compress_filter")]
+    pub lzip: bool,
+
+    #[arg(long = "lzop", group = "compress_filter")]
+    pub lzop: bool,
+
+    #[arg(short = 'Z', long = "compress", group = "compress_filter")]
+    pub compress: bool,
+
+    /// Filter through PROG (must accept -d). Not implemented yet.
+    #[arg(short = 'I', long = "use-compress-program", value_name = "PROG")]
+    pub use_compress_program: Option<PathBuf>,
+
+    /// Do not infer compression from the archive suffix.
+    #[arg(long = "no-auto-compress")]
+    pub no_auto_compress: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct ExtractArgs {
     #[arg(short = 'f')]
     pub archive: PathBuf,
 
+    /// Directory to restore into (required for extract).
     #[arg(short = 'C')]
     pub output_dir: PathBuf,
 
     #[arg(long)]
     pub restore_owner: bool,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum CompressionFormatCli {
-    Xz,
-    Gz,
-    Bz2,
-    None,
-}
-
-impl From<CompressionFormatCli> for CompressionFormat {
-    fn from(value: CompressionFormatCli) -> Self {
-        match value {
-            CompressionFormatCli::Xz => CompressionFormat::Xz,
-            CompressionFormatCli::Gz => CompressionFormat::Gz,
-            CompressionFormatCli::Bz2 => CompressionFormat::Bz2,
-            CompressionFormatCli::None => CompressionFormat::None,
-        }
-    }
 }

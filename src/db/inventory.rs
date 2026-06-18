@@ -4,9 +4,9 @@ use crate::config::{PipelinePhase, RuntimeState};
 use crate::db::types::{FileId, FilePhase, FileRecord, NewFileRecord};
 use crate::error::Result;
 
-pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<FileId> {
-    conn.execute(
-        "INSERT INTO files (rel_path, size, mtime, atime, uid, gid, mode, phase)
+pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
+    let changed = conn.execute(
+        "INSERT OR IGNORE INTO files (rel_path, size, mtime, atime, uid, gid, mode, phase)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'inventoried')",
         params![
             record.rel_path.to_string_lossy(),
@@ -18,7 +18,7 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<FileId> 
             record.mode,
         ],
     )?;
-    Ok(FileId(conn.last_insert_rowid()))
+    Ok(changed > 0)
 }
 
 pub fn count_files(conn: &Connection) -> Result<u64> {

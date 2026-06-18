@@ -4,48 +4,26 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# CLI
 clap = { version = "4", features = ["derive"] }
-
-# Archive format + compression (standard formats only)
 tar = "0.4"
 xz2 = "0.1"
 flate2 = "1"
 bzip2 = "0.5"
-
-# Inventory, dedup graph, resume/checkpoint state
+zstd = "0.13"
 rusqlite = { version = "0.32", features = ["bundled"] }
-
-# Content addressing
 sha1 = "0.10"
 base64 = "0.22"
-
-# Filesystem walk + restore metadata
 walkdir = "2"
 nix = { version = "0.29", features = ["user", "fs"] }
 fs4 = "0.12"
-
-# Resizable worker pool, graceful shutdown
-crossbeam-channel = "0.5"
-parking_lot = "0.12"
 signal-hook = "0.3"
 num_cpus = "1"
-
-# Progress, throughput, long-run logging
 indicatif = "0.17"
 humansize = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Runtime config + snapshot timestamps
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
-
-# Hot-reload of job limits (e.g. day/night concurrency)
-notify = "6"
-
-# Errors
 anyhow = "1"
 thiserror = "1"
 

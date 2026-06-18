@@ -1,9 +1,5 @@
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
-
-use crate::config::PipelinePhase;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileId(pub i64);
 
@@ -16,11 +12,17 @@ pub struct FileRecord {
     pub rel_path: PathBuf,
     pub size: u64,
     pub sha1: Option<[u8; 20]>,
+    #[allow(dead_code)]
     pub mtime: Option<i64>,
+    #[allow(dead_code)]
     pub atime: Option<i64>,
+    #[allow(dead_code)]
     pub uid: Option<u32>,
+    #[allow(dead_code)]
     pub gid: Option<u32>,
+    #[allow(dead_code)]
     pub mode: Option<u32>,
+    #[allow(dead_code)]
     pub canonical_id: Option<FileId>,
 }
 
@@ -39,6 +41,7 @@ pub struct NewFileRecord {
 pub enum FilePhase {
     Inventoried,
     Hashed,
+    #[allow(dead_code)]
     Deduped,
     Staged,
     Archived,
@@ -54,15 +57,4 @@ pub struct DuplicateGroup {
 #[derive(Debug, Clone)]
 pub struct ArchiveSession {
     pub id: i64,
-    pub stream_index: i64,
-    pub bytes_in: u64,
-    pub bytes_out: u64,
-    pub finalized: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct PipelineStatus {
-    pub phase: PipelinePhase,
-    pub snapshot_taken_at: DateTime<Utc>,
-    pub max_workers: usize,
 }
