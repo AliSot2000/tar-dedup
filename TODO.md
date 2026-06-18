@@ -37,3 +37,7 @@ The interface for the program should
 - take -f (like tar for file)
 - take -i (for input directory - will change later on)
 - take -C (for output directory)
+
+Feat:
+- Sort files based on file extensions when compressing to increase chances that frequently used parts e.g. header / 
+footer can be efficiently compressed.
