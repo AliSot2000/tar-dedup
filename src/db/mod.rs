@@ -82,9 +82,9 @@ impl Database {
         inventory::save_runtime_state(&self.conn, state)
     }
 
-    pub fn begin_archive_session(&self) -> Result<i64> {
+    pub fn begin_archive_session(&self, archive_offset: u64) -> Result<i64> {
         let stream_index = archive::next_stream_index(&self.conn)?;
-        archive::begin_session(&self.conn, stream_index)
+        archive::begin_session(&self.conn, stream_index, archive_offset)
     }
 
     pub fn finalize_archive_session(&self, session_id: i64, bytes_in: u64, bytes_out: u64) -> Result<()> {
@@ -101,5 +101,17 @@ impl Database {
 
     pub fn mark_entry_done(&self, entry_id: i64) -> Result<()> {
         archive::mark_entry_done(&self.conn, entry_id)
+    }
+
+    pub fn abandon_archive_session(&self, session_id: i64) -> Result<()> {
+        archive::abandon_session(&self.conn, session_id)
+    }
+
+    pub fn sum_canonical_bytes_to_archive(&self) -> Result<u64> {
+        archive::sum_canonical_bytes_to_archive(&self.conn)
+    }
+
+    pub fn sum_archived_canonical_bytes(&self) -> Result<u64> {
+        archive::sum_archived_canonical_bytes(&self.conn)
     }
 }

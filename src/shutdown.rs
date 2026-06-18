@@ -29,7 +29,9 @@ impl Shutdown {
                 match count {
                     1 => {
                         mode_for_handler.store(MODE_GRACEFUL, Ordering::SeqCst);
-                        eprintln!("Gracefully shutdown. Finishing in-flight files");
+                        eprintln!(
+                            "Gracefully shutdown. Finishing in-flight files (2 more signals to abort now)"
+                        );
                     }
                     2 => {
                         eprintln!(

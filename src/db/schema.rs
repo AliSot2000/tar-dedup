@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS archive_sessions (
     stream_index  INTEGER NOT NULL,
     bytes_in      INTEGER NOT NULL DEFAULT 0,
     bytes_out     INTEGER NOT NULL DEFAULT 0,
+    archive_offset INTEGER NOT NULL DEFAULT 0,
     finalized     INTEGER NOT NULL DEFAULT 0,
     started_at    TEXT NOT NULL,
     finished_at   TEXT
@@ -52,5 +53,9 @@ CREATE INDEX IF NOT EXISTS idx_archive_entries_status ON archive_entries(status)
 
 pub fn initialize(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
+    let _ = conn.execute(
+        "ALTER TABLE archive_sessions ADD COLUMN archive_offset INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
     Ok(())
 }
