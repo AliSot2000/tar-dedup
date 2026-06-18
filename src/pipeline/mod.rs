@@ -5,7 +5,7 @@ mod hash;
 mod inventory;
 mod stage;
 
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 
 use fs4::fs_std::FileExt;
 
@@ -22,15 +22,23 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
     let db = Database::open(&config.db_path())?;
     let saved = db.load_runtime_state()?;
 
+    if let Some(state) = saved.as_ref() {
+        if state.phase == PipelinePhase::Done && !config.fresh {
+            eprintln!(
+                "archive already complete: {}",
+                config.archive_path.display()
+            );
+            return Ok(());
+        }
+    }
+
     let mut state = if config.fresh {
         let state = RuntimeState::new(config.jobs);
         db.save_runtime_state(&state)?;
         state
-    } else if should_resume(&config, &db, saved.as_ref()) {
+    } else if should_resume(saved.as_ref()) {
         let mut state = saved.expect("checked above");
-        if !config.resume {
-            eprintln!("resuming from phase `{}`", state.phase.as_str());
-        }
+        eprintln!("resuming from phase `{}`", state.phase.as_str());
         state.max_workers = config.jobs;
         db.save_runtime_state(&state)?;
         state
@@ -72,17 +80,44 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
         }
     }
 
+    eprintln!(
+        "archive written to {}",
+        config.archive_path.display()
+    );
+
+    if !config.keep_stage {
+        cleanup_workdir(&config)?;
+    } else {
+        eprintln!(
+            "keeping work dir (--keep-stage): {}",
+            config.work_dir.display()
+        );
+    }
+
     Ok(())
 }
 
-fn should_resume(config: &Config, db: &Database, saved: Option<&RuntimeState>) -> bool {
-    if config.resume {
-        return saved.is_some();
-    }
+fn should_resume(saved: Option<&RuntimeState>) -> bool {
     match saved {
-        Some(state) if state.phase != PipelinePhase::Done => true,
-        _ => db.count_files().map(|n| n > 0).unwrap_or(false),
+        Some(state) => state.phase != PipelinePhase::Done,
+        None => false,
     }
+}
+
+fn cleanup_workdir(config: &Config) -> Result<()> {
+    let stage = config.stage_dir();
+    if stage.is_dir() {
+        fs::remove_dir_all(&stage).map_err(|e| Error::io(&stage, e))?;
+    }
+    let db_path = config.db_path();
+    if db_path.is_file() {
+        fs::remove_file(&db_path).map_err(|e| Error::io(&db_path, e))?;
+    }
+    let lock = config.work_dir.join(".lock");
+    if lock.is_file() {
+        let _ = fs::remove_file(&lock);
+    }
+    Ok(())
 }
 
 fn acquire_workdir_lock(config: &Config) -> Result<std::fs::File> {
@@ -91,9 +126,9 @@ fn acquire_workdir_lock(config: &Config) -> Result<std::fs::File> {
         .create(true)
         .write(true)
         .open(&lock_path)
-        .map_err(|e| crate::error::Error::io(&lock_path, e))?;
+        .map_err(|e| Error::io(&lock_path, e))?;
     lock.lock_exclusive()
-        .map_err(|e| crate::error::Error::io(&lock_path, e))?;
+        .map_err(|e| Error::io(&lock_path, e))?;
     Ok(lock)
 }
 

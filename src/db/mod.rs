@@ -70,8 +70,8 @@ impl Database {
         dedup::mark_self_canonical(&self.conn, file_id)
     }
 
-    pub fn list_canonical_files(&self) -> Result<Vec<FileId>> {
-        dedup::list_canonical_files(&self.conn)
+    pub fn list_canonical_files(&self, phase: FilePhase) -> Result<Vec<FileId>> {
+        dedup::list_canonical_files(&self.conn, phase)
     }
 
     pub fn load_runtime_state(&self) -> Result<Option<RuntimeState>> {
