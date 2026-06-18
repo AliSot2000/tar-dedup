@@ -7,8 +7,9 @@ use crate::db::types::NewFileRecord;
 use crate::db::Database;
 use crate::error::Result;
 use crate::progress::CountProgress;
+use crate::shutdown::Shutdown;
 
-pub fn run(config: &Config, db: &Database) -> Result<()> {
+pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     tracing::info!(root = %config.input_dir.display(), "inventory pass");
     let progress = CountProgress::new("inventory");
     let mut inserted = 0u64;
@@ -18,6 +19,8 @@ pub fn run(config: &Config, db: &Database) -> Result<()> {
         .into_iter()
         .filter_map(|e| e.ok())
     {
+        shutdown.check_between_files()?;
+
         if !entry.file_type().is_file() {
             continue;
         }

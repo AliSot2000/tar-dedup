@@ -18,6 +18,9 @@ pub enum Error {
     #[error("invalid configuration: {0}")]
     Config(String),
 
+    #[error("interrupted")]
+    Interrupted,
+
     #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
@@ -28,6 +31,10 @@ impl Error {
             path: path.into(),
             source,
         }
+    }
+
+    pub fn is_interrupted(&self) -> bool {
+        matches!(self, Self::Interrupted)
     }
 }
 
