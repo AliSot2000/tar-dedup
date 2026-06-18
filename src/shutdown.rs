@@ -40,7 +40,9 @@ impl Shutdown {
                     }
                     _ => {
                         mode_for_handler.store(MODE_FORCE, Ordering::SeqCst);
-                        eprintln!("\nAborting now; in-flight progress is discarded.");
+                        if count == 3 {
+                            eprintln!("\nAborting now; in-flight progress is discarded.");
+                        }
                     }
                 }
             }
