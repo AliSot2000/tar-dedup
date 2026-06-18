@@ -11,7 +11,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     std::fs::create_dir_all(config.stage_dir())
         .map_err(|e| crate::error::Error::io(&config.stage_dir(), e))?;
 
-    for file_id in db.list_canonical_files()? {
+    for file_id in db.list_canonical_files(crate::db::types::FilePhase::Deduped)? {
         shutdown.check_between_files()?;
         let Some(record) = db.get_file(file_id)? else {
             continue;

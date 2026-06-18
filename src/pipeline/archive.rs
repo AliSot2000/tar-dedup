@@ -13,7 +13,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     let mut writer = TarWriter::open(config.archive_path.clone(), config.compression, session_id)?;
 
-    for file_id in db.list_canonical_files()? {
+    let to_archive = db.list_canonical_files(FilePhase::Staged)?;
+    if to_archive.is_empty() {
+        tracing::warn!("no staged files to archive");
+    }
+
+    for file_id in to_archive {
         shutdown.check_between_files()?;
         let Some(record) = db.get_file(file_id)? else {
             continue;

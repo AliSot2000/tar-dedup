@@ -45,6 +45,10 @@ pub struct ArchiveArgs {
     /// Ignore saved state and restart from inventory.
     #[arg(long, conflicts_with = "resume")]
     pub fresh: bool,
+
+    /// Keep work-dir snapshot.sqlite and stage/ after a successful archive.
+    #[arg(long)]
+    pub keep_stage: bool,
 }
 
 #[derive(Debug, Args, Default)]

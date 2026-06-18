@@ -30,6 +30,7 @@ pub struct Config {
     pub jobs: usize,
     pub resume: bool,
     pub fresh: bool,
+    pub keep_stage: bool,
 }
 
 impl Config {
@@ -58,6 +59,7 @@ impl Config {
             jobs,
             resume: args.resume,
             fresh: args.fresh,
+            keep_stage: args.keep_stage,
         })
     }
 
@@ -74,6 +76,7 @@ impl Config {
             jobs: 1,
             resume: false,
             fresh: false,
+            keep_stage: false,
         })
     }
 

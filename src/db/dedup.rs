@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection};
 
-use crate::db::types::FileId;
+use crate::db::types::{FileId, FilePhase};
 use crate::error::Result;
 
 pub fn set_canonical(conn: &Connection, file_id: FileId, canonical_id: FileId) -> Result<()> {
@@ -19,10 +19,19 @@ pub fn mark_self_canonical(conn: &Connection, file_id: FileId) -> Result<()> {
     Ok(())
 }
 
-pub fn list_canonical_files(conn: &Connection) -> Result<Vec<FileId>> {
+pub fn list_canonical_files(conn: &Connection, phase: FilePhase) -> Result<Vec<FileId>> {
+    let phase_str = match phase {
+        FilePhase::Deduped => "deduped",
+        FilePhase::Staged => "staged",
+        other => {
+            return Err(crate::error::Error::Config(format!(
+                "cannot list canonical files in phase {other:?}"
+            )));
+        }
+    };
     let mut stmt = conn.prepare(
-        "SELECT id FROM files WHERE canonical_id = id AND phase = 'deduped' ORDER BY id",
+        "SELECT id FROM files WHERE canonical_id = id AND phase = ?1 ORDER BY id",
     )?;
-    let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId))?;
+    let rows = stmt.query_map([phase_str], |row| row.get::<_, i64>(0).map(FileId))?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
