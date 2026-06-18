@@ -49,8 +49,6 @@ pub enum FilePhase {
 
 #[derive(Debug, Clone)]
 pub struct DuplicateGroup {
-    pub sha1: [u8; 20],
-    pub size: u64,
     pub members: Vec<FileId>,
 }
 
