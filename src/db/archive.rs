@@ -63,15 +63,13 @@ pub fn open_session(conn: &Connection) -> Result<Option<ArchiveSession>> {
     .map_err(Into::into)
 }
 
-pub fn abandon_session(conn: &Connection, session_id: i64) -> Result<()> {
+pub fn reset_archive_state(conn: &Connection) -> Result<()> {
     conn.execute(
-        "DELETE FROM archive_entries WHERE session_id = ?1",
-        params![session_id],
+        "UPDATE files SET phase = 'staged' WHERE phase = 'archived'",
+        [],
     )?;
-    conn.execute(
-        "DELETE FROM archive_sessions WHERE id = ?1 AND finalized = 0",
-        params![session_id],
-    )?;
+    conn.execute("DELETE FROM archive_entries", [])?;
+    conn.execute("DELETE FROM archive_sessions", [])?;
     Ok(())
 }
 

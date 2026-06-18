@@ -86,7 +86,13 @@ impl TarWriter {
 
         let layer = match format {
             CompressionFormat::Xz => {
-                CompressLayer::Xz(InterruptibleXzEncoder::new(file, jobs, shutdown)?)
+                let (encoder, threads) =
+                    InterruptibleXzEncoder::new(file, jobs, shutdown.clone())?;
+                let hw = InterruptibleXzEncoder::<File>::hardware_threads();
+                eprintln!(
+                    "xz encoder: {threads} worker thread(s) (liblzma reports {hw} CPU thread(s) available)"
+                );
+                CompressLayer::Xz(encoder)
             }
             CompressionFormat::Gz => {
                 CompressLayer::Gz(GzEncoder::new(file, Compression::best()))
@@ -134,7 +140,7 @@ impl TarWriter {
         };
 
         out.write_all(header.as_bytes())
-            .map_err(|e| io_to_error(e, &self.archive_path))?;
+            .map_err(|e| Error::io(&self.archive_path, e))?;
 
         let mut buf = io_buffer();
         let mut remaining = len;
@@ -151,7 +157,7 @@ impl TarWriter {
                 )));
             }
             out.write_all(&buf[..n])
-                .map_err(|e| io_to_error(e, &self.archive_path))?;
+                .map_err(|e| Error::io(&self.archive_path, e))?;
             on_input_bytes(n as u64);
             remaining -= n as u64;
         }
@@ -160,13 +166,13 @@ impl TarWriter {
         if pad > 0 {
             shutdown.check_in_flight()?;
             out.write_all(&vec![0u8; pad as usize])
-                .map_err(|e| io_to_error(e, &self.archive_path))?;
+                .map_err(|e| Error::io(&self.archive_path, e))?;
         }
 
         shutdown.check_in_flight()?;
         self.layer
             .flush()
-            .map_err(|e| crate::error::Error::io(&self.archive_path, e))?;
+            .map_err(|e| Error::io(&self.archive_path, e))?;
         self.bytes_in += len;
         Ok(())
     }
@@ -178,37 +184,37 @@ impl TarWriter {
         let bytes_out = match self.layer {
             CompressLayer::Xz(w) => {
                 w.finish()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
             CompressLayer::Gz(w) => {
                 w.finish()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
             CompressLayer::Bz(w) => {
                 w.finish()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
             CompressLayer::Zstd(w) => {
                 w.finish()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
             CompressLayer::Plain(mut w) => {
                 w.flush()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?;
+                    .map_err(|e| Error::io(&archive_path, e))?;
                 w.metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
         };
@@ -232,13 +238,5 @@ impl TarWriter {
             }
             CompressLayer::Plain(_) => {}
         }
-    }
-}
-
-fn io_to_error(e: io::Error, path: &Path) -> Error {
-    if e.kind() == io::ErrorKind::Interrupted {
-        Error::Interrupted
-    } else {
-        Error::io(path, e)
     }
 }

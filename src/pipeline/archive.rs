@@ -1,4 +1,3 @@
-use std::fs::OpenOptions;
 use std::path::Path;
 
 use crate::config::{CompressionFormat, Config};
@@ -14,14 +13,14 @@ const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     if config.compression == CompressionFormat::Xz {
         eprintln!(
-            "xz compression: preset -{}, {} threads",
+            "xz compression: preset -{}, {} threads requested",
             crate::compression::XZ_PRESET,
             config.jobs
         );
     }
 
     let archive_offset = archive_file_len(&config.archive_path);
-    let (session_id, session_start_offset) = match db.open_archive_session()? {
+    let (session_id, _session_start_offset) = match db.open_archive_session()? {
         Some(open) => (open.id, open.archive_offset),
         None => (db.begin_archive_session(archive_offset)?, archive_offset),
     };
@@ -71,7 +70,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
             Ok(()) => {}
-            Err(Error::Interrupted) => {
+            Err(e) if e.is_interrupted() => {
                 stopped = true;
                 break;
             }
@@ -85,19 +84,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     if stopped {
         if shutdown.is_force() {
-            writer.abandon();
-            truncate_archive(&config.archive_path, session_start_offset)?;
-            db.abandon_archive_session(session_id)?;
-            if session_start_offset == 0 {
-                let _ = std::fs::remove_file(&config.archive_path);
-            } else {
-                eprintln!(
-                    "removed incomplete compression stream from {}",
-                    config.archive_path.display()
-                );
-            }
-            progress.abandon();
-            return Err(Error::Interrupted);
+            return force_abort_archive(writer, config, db, &progress);
         }
 
         end_session(
@@ -107,22 +94,48 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             shutdown,
             &progress,
             session_id,
-            session_start_offset,
         )?;
         progress.abandon();
         return Err(Error::Interrupted);
     }
 
-    end_session(
-        writer,
-        config,
-        db,
-        shutdown,
-        &progress,
-        session_id,
-        session_start_offset,
-    )?;
+    end_session(writer, config, db, shutdown, &progress, session_id)?;
     progress.finish("archive complete");
+    Ok(())
+}
+
+fn force_abort_archive(
+    writer: TarWriter,
+    config: &Config,
+    db: &Database,
+    progress: &ByteProgress,
+) -> Result<()> {
+    writer.abandon();
+    remove_archive_file(config)?;
+    db.reset_archive_state()?;
+    eprintln!(
+        "removed archive {}; archive progress reset in work directory",
+        config.archive_path.display()
+    );
+    progress.abandon();
+    Err(Error::Interrupted)
+}
+
+fn force_abort_without_writer(config: &Config, db: &Database) -> Result<()> {
+    remove_archive_file(config)?;
+    db.reset_archive_state()?;
+    eprintln!(
+        "removed archive {}; archive progress reset in work directory",
+        config.archive_path.display()
+    );
+    Err(Error::Interrupted)
+}
+
+fn remove_archive_file(config: &Config) -> Result<()> {
+    if config.archive_path.is_file() {
+        std::fs::remove_file(&config.archive_path)
+            .map_err(|e| crate::error::Error::io(&config.archive_path, e))?;
+    }
     Ok(())
 }
 
@@ -171,10 +184,15 @@ fn end_session(
     shutdown: &Shutdown,
     progress: &ByteProgress,
     session_id: i64,
-    session_start_offset: u64,
 ) -> Result<()> {
     progress.set_message("archive writing snapshot.sqlite (progress)");
-    append_snapshot(&mut writer, config, db, shutdown)?;
+    if let Err(e) = append_snapshot(&mut writer, config, db, shutdown) {
+        if e.is_interrupted() && shutdown.is_force() {
+            writer.abandon();
+            return force_abort_without_writer(config, db);
+        }
+        return Err(e);
+    }
 
     progress.set_message("archive finalizing compression stream");
     match writer.finalize_session(shutdown) {
@@ -182,36 +200,11 @@ fn end_session(
             db.finalize_archive_session(session_id, bytes_in, bytes_out)?;
             Ok(())
         }
-        Err(Error::Interrupted) if shutdown.is_force() => {
-            truncate_archive(&config.archive_path, session_start_offset)?;
-            db.abandon_archive_session(session_id)?;
-            if session_start_offset == 0 {
-                let _ = std::fs::remove_file(&config.archive_path);
-            } else {
-                eprintln!(
-                    "removed incomplete compression stream from {}",
-                    config.archive_path.display()
-                );
-            }
-            Err(Error::Interrupted)
-        }
+        Err(e) if e.is_interrupted() && shutdown.is_force() => force_abort_without_writer(config, db),
         Err(e) => Err(e),
     }
 }
 
 fn archive_file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-}
-
-fn truncate_archive(path: &Path, len: u64) -> Result<()> {
-    if !path.is_file() {
-        return Ok(());
-    }
-    let file = OpenOptions::new()
-        .write(true)
-        .open(path)
-        .map_err(|e| crate::error::Error::io(path, e))?;
-    file.set_len(len)
-        .map_err(|e| crate::error::Error::io(path, e))?;
-    Ok(())
 }
