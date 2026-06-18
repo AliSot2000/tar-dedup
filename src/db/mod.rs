@@ -99,8 +99,8 @@ impl Database {
         archive::mark_entry_done(&self.conn, entry_id)
     }
 
-    pub fn abandon_archive_session(&self, session_id: i64) -> Result<()> {
-        archive::abandon_session(&self.conn, session_id)
+    pub fn reset_archive_state(&self) -> Result<()> {
+        archive::reset_archive_state(&self.conn)
     }
 
     pub fn sum_canonical_bytes_to_archive(&self) -> Result<u64> {

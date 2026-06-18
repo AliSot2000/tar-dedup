@@ -6,7 +6,8 @@ edition = "2024"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tar = "0.4"
-xz2 = "0.1"
+xz2 = { version = "0.1", features = ["static"] }
+lzma-sys = "0.1"
 flate2 = "1"
 bzip2 = "0.5"
 zstd = "0.13"

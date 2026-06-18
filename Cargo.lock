@@ -1126,6 +1126,7 @@ dependencies = [
  "flate2",
  "fs4",
  "indicatif",
+ "lzma-sys",
  "nix",
  "num_cpus",
  "predicates",
