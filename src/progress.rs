@@ -1,9 +1,52 @@
+use std::time::Duration;
+
 use indicatif::{ProgressBar, ProgressStyle};
 
 const IO_BUF_SIZE: usize = 1024 * 1024;
 
 pub fn io_buffer() -> Vec<u8> {
     vec![0u8; IO_BUF_SIZE]
+}
+
+pub struct ByteProgress {
+    bar: ProgressBar,
+}
+
+impl ByteProgress {
+    pub fn new(label: &str, total: u64) -> Self {
+        let bar = ProgressBar::new(total);
+        bar.set_style(
+            ProgressStyle::with_template(
+                "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
+            )
+            .unwrap()
+            .progress_chars("=>-"),
+        );
+        bar.set_message(label.to_string());
+        bar.enable_steady_tick(Duration::from_millis(100));
+        Self { bar }
+    }
+
+    pub fn set_position(&self, pos: u64) {
+        self.bar.set_position(pos);
+    }
+
+    pub fn inc(&self, n: u64) {
+        self.bar.inc(n);
+    }
+
+    pub fn set_message(&self, msg: &str) {
+        self.bar.set_message(msg.to_string());
+    }
+
+    pub fn finish(&self, label: &str) {
+        self.bar
+            .finish_with_message(format!("{label}: {}", self.bar.position()));
+    }
+
+    pub fn abandon(&self) {
+        self.bar.abandon();
+    }
 }
 
 pub struct CountProgress {

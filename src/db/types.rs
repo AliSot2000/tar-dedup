@@ -57,4 +57,5 @@ pub struct DuplicateGroup {
 #[derive(Debug, Clone)]
 pub struct ArchiveSession {
     pub id: i64,
+    pub archive_offset: u64,
 }

@@ -4,10 +4,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::db::types::{ArchiveSession, FileId};
 use crate::error::Result;
 
-pub fn begin_session(conn: &Connection, stream_index: i64) -> Result<i64> {
+pub fn begin_session(conn: &Connection, stream_index: i64, archive_offset: u64) -> Result<i64> {
     conn.execute(
-        "INSERT INTO archive_sessions (stream_index, started_at) VALUES (?1, ?2)",
-        params![stream_index, Utc::now().to_rfc3339()],
+        "INSERT INTO archive_sessions (stream_index, archive_offset, started_at) VALUES (?1, ?2, ?3)",
+        params![stream_index, archive_offset as i64, Utc::now().to_rfc3339()],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -50,10 +50,49 @@ pub fn mark_entry_done(conn: &Connection, entry_id: i64) -> Result<()> {
 
 pub fn open_session(conn: &Connection) -> Result<Option<ArchiveSession>> {
     conn.query_row(
-        "SELECT id FROM archive_sessions WHERE finalized = 0 ORDER BY id DESC LIMIT 1",
+        "SELECT id, archive_offset FROM archive_sessions WHERE finalized = 0 ORDER BY id DESC LIMIT 1",
         [],
-        |row| Ok(ArchiveSession { id: row.get(0)? }),
+        |row| {
+            Ok(ArchiveSession {
+                id: row.get(0)?,
+                archive_offset: row.get::<_, i64>(1)? as u64,
+            })
+        },
     )
     .optional()
     .map_err(Into::into)
+}
+
+pub fn abandon_session(conn: &Connection, session_id: i64) -> Result<()> {
+    conn.execute(
+        "DELETE FROM archive_entries WHERE session_id = ?1",
+        params![session_id],
+    )?;
+    conn.execute(
+        "DELETE FROM archive_sessions WHERE id = ?1 AND finalized = 0",
+        params![session_id],
+    )?;
+    Ok(())
+}
+
+pub fn sum_canonical_bytes_to_archive(conn: &Connection) -> Result<u64> {
+    let total: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(size), 0)
+         FROM files
+         WHERE canonical_id = id AND phase IN ('staged', 'archived')",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(total as u64)
+}
+
+pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
+    let total: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(size), 0)
+         FROM files
+         WHERE canonical_id = id AND phase = 'archived'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(total as u64)
 }
