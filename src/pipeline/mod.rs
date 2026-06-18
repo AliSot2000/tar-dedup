@@ -20,14 +20,24 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
     let _lock = acquire_workdir_lock(&config)?;
 
     let db = Database::open(&config.db_path())?;
+    let saved = db.load_runtime_state()?;
 
-    let mut state = match db.load_runtime_state()? {
-        Some(state) if config.resume => state,
-        _ => {
-            let state = RuntimeState::new(config.jobs);
-            db.save_runtime_state(&state)?;
-            state
+    let mut state = if config.fresh {
+        let state = RuntimeState::new(config.jobs);
+        db.save_runtime_state(&state)?;
+        state
+    } else if should_resume(&config, &db, saved.as_ref()) {
+        let mut state = saved.expect("checked above");
+        if !config.resume {
+            eprintln!("resuming from phase `{}`", state.phase.as_str());
         }
+        state.max_workers = config.jobs;
+        db.save_runtime_state(&state)?;
+        state
+    } else {
+        let state = RuntimeState::new(config.jobs);
+        db.save_runtime_state(&state)?;
+        state
     };
 
     while state.phase != PipelinePhase::Done {
@@ -40,12 +50,12 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
                 db.save_runtime_state(&state)?;
                 if shutdown.is_force() {
                     eprintln!(
-                        "aborted during {}; in-flight progress discarded — rerun with --resume",
+                        "aborted during {}; in-flight progress discarded — rerun to resume",
                         state.phase.as_str()
                     );
                 } else {
                     eprintln!(
-                        "stopped during {}; completed work saved — rerun with --resume",
+                        "stopped during {}; completed work saved — rerun to resume",
                         state.phase.as_str()
                     );
                 }
@@ -63,6 +73,16 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn should_resume(config: &Config, db: &Database, saved: Option<&RuntimeState>) -> bool {
+    if config.resume {
+        return saved.is_some();
+    }
+    match saved {
+        Some(state) if state.phase != PipelinePhase::Done => true,
+        _ => db.count_files().map(|n| n > 0).unwrap_or(false),
+    }
 }
 
 fn acquire_workdir_lock(config: &Config) -> Result<std::fs::File> {
