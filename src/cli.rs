@@ -49,6 +49,14 @@ pub struct ArchiveArgs {
     /// Keep work-dir snapshot.sqlite and stage/ after a successful archive.
     #[arg(long)]
     pub keep_stage: bool,
+
+    /// Stop after the current pipeline phase completes (saved state, clean exit).
+    #[arg(long = "exit-after-stage")]
+    pub exit_after_stage: bool,
+
+    /// Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`.
+    #[arg(long = "memlimit-compress", value_name = "LIMIT")]
+    pub memlimit_compress: Option<String>,
 }
 
 #[derive(Debug, Args, Default)]

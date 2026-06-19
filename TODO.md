@@ -43,3 +43,4 @@ Feat:
 - Pass compression args to the different compression algos (e.g. -9 for xz)
 - leave aborted compression progress with flag
 - command to abort after a certain stage    
+- Start compression during dedup.
