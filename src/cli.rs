@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(name = "tar-dedup", about = "Deduplicating archival pipeline")]
@@ -50,9 +50,10 @@ pub struct ArchiveArgs {
     #[arg(long)]
     pub keep_stage: bool,
 
-    /// Stop after the current pipeline phase completes (saved state, clean exit).
-    #[arg(long = "exit-after-stage")]
-    pub exit_after_stage: bool,
+    /// Run through STAGE then exit cleanly (state saved). STAGE: scan, hash, dedup,
+    /// stage, tar, cleanup (and aliases inventory, archive).
+    #[arg(long = "exit-after-stage", value_name = "STAGE", value_enum)]
+    pub exit_after_stage: Option<ExitAfterStageArg>,
 
     /// Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`.
     #[arg(long = "memlimit-compress", value_name = "LIMIT")]
@@ -110,4 +111,23 @@ pub struct ExtractArgs {
 
     #[arg(long)]
     pub restore_owner: bool,
+}
+
+/// Pipeline stop point for `--exit-after-stage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum ExitAfterStageArg {
+    /// Walk the input tree (inventory).
+    #[value(alias = "inventory")]
+    Scan,
+    Hash,
+    Dedup,
+    /// Symlink canonical files into the work-dir stage/.
+    #[value(alias = "symlink")]
+    Stage,
+    /// Write the compressed tar archive.
+    #[value(alias = "archive")]
+    Tar,
+    /// Full pipeline then remove the work directory (unless `--keep-stage`).
+    Cleanup,
 }

@@ -84,13 +84,16 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
             break;
         }
 
-        if config.exit_after_stage {
-            eprintln!(
-                "exit-after-stage: finished `{}`, resume from `{}`",
-                completed.as_str(),
-                state.phase.as_str()
-            );
-            return Ok(());
+        if let Some(stop_after) = config.exit_after_stage.and_then(|s| s.stop_after_phase()) {
+            if completed == stop_after {
+                eprintln!(
+                    "exit-after-stage `{}`: finished `{}`, resume from `{}`",
+                    stop_after.as_str(),
+                    completed.as_str(),
+                    state.phase.as_str()
+                );
+                return Ok(());
+            }
         }
     }
 
@@ -98,6 +101,19 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
         "archive written to {}",
         config.archive_path.display()
     );
+
+    if config.exit_after_stage == Some(crate::config::ExitAfterStage::Cleanup) {
+        if !config.keep_stage {
+            cleanup_workdir(&config)?;
+            eprintln!("exit-after-stage `cleanup`: work directory removed");
+        } else {
+            eprintln!(
+                "exit-after-stage `cleanup`: keeping work dir (--keep-stage): {}",
+                config.work_dir.display()
+            );
+        }
+        return Ok(());
+    }
 
     if !config.keep_stage {
         cleanup_workdir(&config)?;

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{ArchiveArgs, CompressionFlags, ExtractArgs};
+use crate::cli::{ArchiveArgs, CompressionFlags, ExitAfterStageArg, ExtractArgs};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,7 +31,7 @@ pub struct Config {
     pub resume: bool,
     pub fresh: bool,
     pub keep_stage: bool,
-    pub exit_after_stage: bool,
+    pub exit_after_stage: Option<ExitAfterStage>,
     /// Max RAM for xz MT encoder (`None` = no limit, like default `xz`).
     pub memlimit_compress: Option<u64>,
 }
@@ -68,7 +68,7 @@ impl Config {
             resume: args.resume,
             fresh: args.fresh,
             keep_stage: args.keep_stage,
-            exit_after_stage: args.exit_after_stage,
+            exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             memlimit_compress,
         })
     }
@@ -87,7 +87,7 @@ impl Config {
             resume: false,
             fresh: false,
             keep_stage: false,
-            exit_after_stage: false,
+            exit_after_stage: None,
             memlimit_compress: None,
         })
     }
@@ -193,6 +193,43 @@ fn default_work_dir(archive_path: &Path) -> PathBuf {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "archive".into());
     parent.join(format!(".{name}.work"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitAfterStage {
+    Scan,
+    Hash,
+    Dedup,
+    Stage,
+    Tar,
+    Cleanup,
+}
+
+impl From<ExitAfterStageArg> for ExitAfterStage {
+    fn from(arg: ExitAfterStageArg) -> Self {
+        match arg {
+            ExitAfterStageArg::Scan => Self::Scan,
+            ExitAfterStageArg::Hash => Self::Hash,
+            ExitAfterStageArg::Dedup => Self::Dedup,
+            ExitAfterStageArg::Stage => Self::Stage,
+            ExitAfterStageArg::Tar => Self::Tar,
+            ExitAfterStageArg::Cleanup => Self::Cleanup,
+        }
+    }
+}
+
+impl ExitAfterStage {
+    /// Pipeline phase whose successful completion triggers exit (`None` = run through cleanup).
+    pub fn stop_after_phase(self) -> Option<PipelinePhase> {
+        match self {
+            Self::Scan => Some(PipelinePhase::Inventory),
+            Self::Hash => Some(PipelinePhase::Hash),
+            Self::Dedup => Some(PipelinePhase::Dedup),
+            Self::Stage => Some(PipelinePhase::Stage),
+            Self::Tar => Some(PipelinePhase::Archive),
+            Self::Cleanup => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
