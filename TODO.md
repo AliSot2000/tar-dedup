@@ -44,3 +44,4 @@ Feat:
 - leave aborted compression progress with flag
 - command to abort after a certain stage    
 - Start compression during dedup.
+- Check file times when dedup and hash are performed.
