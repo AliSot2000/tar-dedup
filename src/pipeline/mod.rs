@@ -76,11 +76,21 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
             Err(e) => return Err(e),
         }
 
+        let completed = state.phase;
         if let Some(next) = state.phase.next() {
             state.phase = next;
             db.save_runtime_state(&state)?;
         } else {
             break;
+        }
+
+        if config.exit_after_stage {
+            eprintln!(
+                "exit-after-stage: finished `{}`, resume from `{}`",
+                completed.as_str(),
+                state.phase.as_str()
+            );
+            return Ok(());
         }
     }
 

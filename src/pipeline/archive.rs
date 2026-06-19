@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::config::{CompressionFormat, Config};
+use crate::config::Config;
 use crate::db::types::{FileId, FilePhase, FileRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
@@ -11,14 +11,6 @@ use crate::tar_writer::TarWriter;
 const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    if config.compression == CompressionFormat::Xz {
-        eprintln!(
-            "xz compression: preset -{}, {} threads requested",
-            crate::compression::XZ_PRESET,
-            config.jobs
-        );
-    }
-
     let archive_offset = archive_file_len(&config.archive_path);
     let (session_id, _session_start_offset) = match db.open_archive_session()? {
         Some(open) => (open.id, open.archive_offset),
@@ -34,6 +26,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         config.archive_path.clone(),
         config.compression,
         config.jobs,
+        config.memlimit_compress,
         shutdown.clone(),
     )?;
 
@@ -66,7 +59,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             crate::content_id::content_id_from_digest(&digest, record.size, &record.rel_path).0;
         let source = config.stage_dir().join(&tar_name);
 
-        progress.set_file("archive", &record.rel_path.to_string_lossy());
+        progress.set_file("archive", &record.rel_path);
 
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
             Ok(()) => {}

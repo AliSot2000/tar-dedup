@@ -9,7 +9,7 @@ use tar::Header;
 use crate::compression::InterruptibleXzEncoder;
 use crate::config::CompressionFormat;
 use crate::error::{Error, Result};
-use crate::progress::io_buffer;
+use crate::progress::archive_io_buffer;
 use crate::shutdown::Shutdown;
 
 pub struct TarWriter {
@@ -74,6 +74,7 @@ impl TarWriter {
         archive_path: PathBuf,
         format: CompressionFormat,
         jobs: usize,
+        memlimit_compress: Option<u64>,
         shutdown: Shutdown,
     ) -> Result<Self> {
         crate::compression::warn_on_start(format);
@@ -87,11 +88,9 @@ impl TarWriter {
         let layer = match format {
             CompressionFormat::Xz => {
                 let (encoder, threads) =
-                    InterruptibleXzEncoder::new(file, jobs, shutdown.clone())?;
+                    InterruptibleXzEncoder::new(file, jobs, memlimit_compress, shutdown.clone())?;
                 let hw = InterruptibleXzEncoder::<File>::hardware_threads();
-                eprintln!(
-                    "xz encoder: {threads} worker thread(s) (liblzma reports {hw} CPU thread(s) available)"
-                );
+                eprintln!("xz encoder: {threads} worker thread(s) active ({hw} CPU threads available)");
                 CompressLayer::Xz(encoder)
             }
             CompressionFormat::Gz => {
@@ -142,7 +141,7 @@ impl TarWriter {
         out.write_all(header.as_bytes())
             .map_err(|e| Error::io(&self.archive_path, e))?;
 
-        let mut buf = io_buffer();
+        let mut buf = archive_io_buffer();
         let mut remaining = len;
         while remaining > 0 {
             shutdown.check_in_flight()?;
@@ -169,10 +168,6 @@ impl TarWriter {
                 .map_err(|e| Error::io(&self.archive_path, e))?;
         }
 
-        shutdown.check_in_flight()?;
-        self.layer
-            .flush()
-            .map_err(|e| Error::io(&self.archive_path, e))?;
         self.bytes_in += len;
         Ok(())
     }

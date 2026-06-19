@@ -31,6 +31,9 @@ pub struct Config {
     pub resume: bool,
     pub fresh: bool,
     pub keep_stage: bool,
+    pub exit_after_stage: bool,
+    /// Max RAM for xz MT encoder (`None` = no limit, like default `xz`).
+    pub memlimit_compress: Option<u64>,
 }
 
 impl Config {
@@ -50,6 +53,11 @@ impl Config {
 
         let compression = resolve_compression(&args.compression, &archive_path)?;
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
+        let memlimit_compress = args
+            .memlimit_compress
+            .as_deref()
+            .map(parse_memlimit)
+            .transpose()?;
 
         Ok(Self {
             archive_path,
@@ -60,6 +68,8 @@ impl Config {
             resume: args.resume,
             fresh: args.fresh,
             keep_stage: args.keep_stage,
+            exit_after_stage: args.exit_after_stage,
+            memlimit_compress,
         })
     }
 
@@ -77,6 +87,8 @@ impl Config {
             resume: false,
             fresh: false,
             keep_stage: false,
+            exit_after_stage: false,
+            memlimit_compress: None,
         })
     }
 
@@ -242,4 +254,56 @@ fn validate_dir(path: &Path, label: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Parse `xz`-style memory limits: raw bytes, `MiB`/`GiB`, or `%` of physical RAM.
+fn parse_memlimit(s: &str) -> Result<u64> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        let pct: u64 = pct
+            .trim()
+            .parse()
+            .map_err(|_| Error::Config(format!("invalid memlimit percentage: {s}")))?;
+        if pct == 0 || pct > 100 {
+            return Err(Error::Config(format!(
+                "memlimit percentage must be 1–100, got {pct}%"
+            )));
+        }
+        let ram = physical_ram_bytes().ok_or_else(|| {
+            Error::Config("cannot read physical RAM for memlimit percentage".into())
+        })?;
+        return Ok(pct * ram / 100);
+    }
+
+    let (num, scale) = if let Some(v) = s.strip_suffix("GiB") {
+        (v.trim(), 1024u64 * 1024 * 1024)
+    } else if let Some(v) = s.strip_suffix("G") {
+        (v.trim(), 1000u64 * 1000 * 1000)
+    } else if let Some(v) = s.strip_suffix("MiB") {
+        (v.trim(), 1024u64 * 1024)
+    } else if let Some(v) = s.strip_suffix("M") {
+        (v.trim(), 1000u64 * 1000)
+    } else if let Some(v) = s.strip_suffix("KiB") {
+        (v.trim(), 1024u64)
+    } else if let Some(v) = s.strip_suffix("K") {
+        (v.trim(), 1000u64)
+    } else {
+        (s, 1u64)
+    };
+
+    let n: u64 = num
+        .parse()
+        .map_err(|_| Error::Config(format!("invalid memlimit: {s}")))?;
+    n.checked_mul(scale)
+        .ok_or_else(|| Error::Config(format!("memlimit overflow: {s}")))
+}
+
+fn physical_ram_bytes() -> Option<u64> {
+    let line = std::fs::read_to_string("/proc/meminfo")
+        .ok()?
+        .lines()
+        .find(|l| l.starts_with("MemTotal:"))?
+        .to_string();
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
 }

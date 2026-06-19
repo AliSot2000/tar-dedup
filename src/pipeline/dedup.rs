@@ -1,19 +1,58 @@
 use crate::config::Config;
 use crate::db::types::FileId;
 use crate::db::Database;
-use crate::error::Result;
-use crate::progress::io_buffer;
+use crate::error::{Error, Result};
+use crate::progress::{io_buffer, CountProgress};
 use crate::shutdown::Shutdown;
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    let total = db.count_files()?;
+    let pending_hashed = db.files_in_phase(crate::db::types::FilePhase::Hashed)?;
+    let already = total.saturating_sub(pending_hashed.len() as u64);
+
+    if total == already {
+        return Ok(());
+    }
+
+    let bar = CountProgress::with_total("dedup", total);
+    bar.set_position(already);
+
+    let result = run_inner(config, db, shutdown, &bar);
+
+    let force = shutdown.is_force();
+    match result {
+        Ok(()) => {
+            bar.finish("dedup complete");
+            Ok(())
+        }
+        Err(Error::Interrupted) if force => {
+            bar.abandon();
+            Err(Error::Interrupted)
+        }
+        Err(Error::Interrupted) => {
+            bar.abandon();
+            Err(Error::Interrupted)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn run_inner(
+    config: &Config,
+    db: &Database,
+    shutdown: &Shutdown,
+    bar: &CountProgress,
+) -> Result<()> {
     for group in db.duplicate_groups()? {
         shutdown.check_between_files()?;
-        dedup_group(config, db, shutdown, &group.members)?;
+        dedup_group(config, db, shutdown, &group.members, bar)?;
     }
 
     for record in db.files_in_phase(crate::db::types::FilePhase::Hashed)? {
         shutdown.check_between_files()?;
+        bar.set_file("dedup", &record.rel_path);
         db.mark_self_canonical(record.id)?;
+        bar.inc(1);
     }
 
     Ok(())
@@ -26,6 +65,7 @@ fn dedup_group(
     db: &Database,
     shutdown: &Shutdown,
     members: &[FileId],
+    bar: &CountProgress,
 ) -> Result<()> {
     let mut members = members.to_vec();
     members.sort_by_key(|id| id.0);
@@ -37,6 +77,11 @@ fn dedup_group(
         shutdown.check_between_files()?;
 
         let member_path = resolve_path(config, db, member)?;
+        let rel = db
+            .get_file(member)?
+            .map(|r| r.rel_path)
+            .unwrap_or_default();
+        bar.set_file("dedup", &rel);
 
         let mut matched = None;
         for &rep in &representatives {
@@ -55,6 +100,7 @@ fn dedup_group(
                 representatives.push(member);
             }
         }
+        bar.inc(1);
     }
 
     Ok(())
