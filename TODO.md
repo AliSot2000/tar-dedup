@@ -40,8 +40,15 @@ The interface for the program should
 
 Feat:
 - Docker style progress (bottom all files, top each file being hashed)
-- Pass compression args to the different compression algos (e.g. -9 for xz)
-- leave aborted compression progress with flag
-- command to abort after a certain stage    
+- Pass compression args to the different compression algos (e.g. -9 for xz) 
 - Start compression during dedup.
 - Check file times when dedup and hash are performed.
+- Create an interruptible tar when compressing dir without any duplicates
+- Fix permissions when extracting
+
+- CTime
+- Mode
+- Archived session finished at empty
+
+- Only update the ETA when we are actively consuming data, not when we are compressing buffer.
+- _ separator in staged name
