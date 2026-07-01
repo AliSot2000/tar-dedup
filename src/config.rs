@@ -24,7 +24,10 @@ impl CompressionFormat {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub archive_path: PathBuf,
+    /// Archive input root (`archive` subcommand only).
     pub input_dir: PathBuf,
+    /// Extract output root (`extract` subcommand `-C`).
+    pub output_dir: PathBuf,
     pub work_dir: PathBuf,
     pub compression: CompressionFormat,
     pub jobs: usize,
@@ -34,11 +37,14 @@ pub struct Config {
     pub exit_after_stage: Option<ExitAfterStage>,
     /// Max RAM for xz MT encoder (`None` = no limit, like default `xz`).
     pub memlimit_compress: Option<u64>,
+    /// Extract: restore uid/gid when possible.
+    pub restore_owner: bool,
 }
 
 impl Config {
     pub fn from_archive_args(args: &ArchiveArgs) -> Result<Self> {
-        validate_dir(&args.input, "input directory")?;
+        let input_dir = resolve_user_path(&args.input)?;
+        validate_dir(&input_dir, "input directory")?;
 
         let archive_path = resolve_user_path(&args.archive)?;
         if let Some(parent) = archive_path.parent() {
@@ -61,7 +67,8 @@ impl Config {
 
         Ok(Self {
             archive_path,
-            input_dir: args.input.clone(),
+            input_dir,
+            output_dir: PathBuf::new(),
             work_dir,
             compression,
             jobs,
@@ -70,25 +77,40 @@ impl Config {
             keep_stage: args.keep_stage,
             exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             memlimit_compress,
+            restore_owner: false,
         })
     }
 
     pub fn from_extract_args(args: &ExtractArgs) -> Result<Self> {
         let archive_path = resolve_user_path(&args.archive)?;
+        if !archive_path.is_file() {
+            return Err(Error::Config(format!(
+                "archive does not exist or is not a file: {}",
+                archive_path.display()
+            )));
+        }
+
         let output_dir = resolve_user_path(&args.output_dir)?;
         std::fs::create_dir_all(&output_dir).map_err(|e| Error::io(&output_dir, e))?;
+
+        let work_dir = default_extract_work_dir(&archive_path);
+        std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
+
+        let compression = infer_compression_from_suffix(&archive_path);
 
         Ok(Self {
             archive_path,
             input_dir: PathBuf::new(),
-            work_dir: output_dir,
-            compression: CompressionFormat::None,
+            output_dir,
+            work_dir,
+            compression,
             jobs: 1,
             resume: false,
-            fresh: false,
+            fresh: args.fresh,
             keep_stage: false,
             exit_after_stage: None,
             memlimit_compress: None,
+            restore_owner: args.restore_owner,
         })
     }
 
@@ -98,6 +120,10 @@ impl Config {
 
     pub fn stage_dir(&self) -> PathBuf {
         self.work_dir.join("stage")
+    }
+
+    pub fn extract_cache_dir(&self) -> PathBuf {
+        self.work_dir.join("cache")
     }
 }
 
@@ -159,7 +185,7 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
     Ok(CompressionFormat::None)
 }
 
-fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
+pub fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
     let name = path.to_string_lossy().to_ascii_lowercase();
     if name.ends_with(".tar.xz") || name.ends_with(".txz") {
         CompressionFormat::Xz
@@ -181,6 +207,18 @@ pub fn resolve_user_path(path: &Path) -> Result<PathBuf> {
         let cwd = std::env::current_dir().map_err(Error::from)?;
         Ok(cwd.join(path))
     }
+}
+
+fn default_extract_work_dir(archive_path: &Path) -> PathBuf {
+    let parent = archive_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = archive_path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "archive".into());
+    parent.join(format!(".{name}.extract.work"))
 }
 
 fn default_work_dir(archive_path: &Path) -> PathBuf {

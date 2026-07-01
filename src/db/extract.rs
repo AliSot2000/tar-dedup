@@ -22,12 +22,51 @@ pub fn get_file_by_tar_path(conn: &Connection, tar_path: &str) -> Result<Option<
 }
 
 /// After ingesting snapshot.sqlite: files still marked archived become unarchived.
-pub fn apply_snapshot_archived(conn: &Connection) -> Result<u64> {
+pub fn prepare_materialize_restore(conn: &Connection) -> Result<u64> {
     let updated = conn.execute(
-        "UPDATE files SET phase = 'unarchived' WHERE phase = 'archived'",
+        "UPDATE files SET phase = 'unarchived'
+         WHERE phase IN ('archived', 'deduped', 'staged')",
         [],
     )?;
     Ok(updated as u64)
+}
+
+pub fn list_files_to_restore(conn: &Connection) -> Result<Vec<FileRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path
+         FROM files
+         WHERE phase = 'unarchived'
+         ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], inventory::map_file_record)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn tar_member_path(conn: &Connection, record: &FileRecord) -> Result<String> {
+    if let Some(ref path) = record.tar_path {
+        return Ok(path.clone());
+    }
+    let canonical_id = record.canonical_id.unwrap_or(record.id);
+    let canonical = inventory::get_file(conn, canonical_id)?.ok_or_else(|| {
+        crate::error::Error::Config(format!(
+            "missing canonical file id {} for {}",
+            canonical_id.0,
+            record.rel_path.display()
+        ))
+    })?;
+    canonical.tar_path.ok_or_else(|| {
+        crate::error::Error::Config(format!(
+            "no tar member for {}",
+            record.rel_path.display()
+        ))
+    })
+}
+
+pub fn init_extract_runtime_state(conn: &Connection) -> Result<()> {
+    if load_extract_runtime_state(conn)?.is_none() {
+        save_extract_runtime_state(conn, &ExtractRuntimeState::new())?;
+    }
+    Ok(())
 }
 
 pub fn load_extract_runtime_state(conn: &Connection) -> Result<Option<ExtractRuntimeState>> {

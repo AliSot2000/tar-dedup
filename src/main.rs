@@ -7,6 +7,7 @@ mod error;
 mod pipeline;
 mod progress;
 mod shutdown;
+mod tar_reader;
 mod tar_writer;
 
 use clap::Parser;
@@ -30,7 +31,7 @@ fn main() -> error::Result<()> {
         }
         Command::Extract(args) => {
             let config = Config::from_extract_args(&args)?;
-            pipeline::run_extract(&config, &db::Database::open(&config.db_path())?)
+            pipeline::run_extract(config, shutdown)
         }
     }
 }

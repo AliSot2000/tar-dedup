@@ -123,8 +123,8 @@ impl Database {
         extract::record_tar_seen(&self.conn, tar_path, size)
     }
 
-    pub fn apply_snapshot_archived(&self) -> Result<u64> {
-        extract::apply_snapshot_archived(&self.conn)
+    pub fn prepare_materialize_restore(&self) -> Result<u64> {
+        extract::prepare_materialize_restore(&self.conn)
     }
 
     pub fn load_extract_runtime_state(&self) -> Result<Option<ExtractRuntimeState>> {
@@ -137,5 +137,17 @@ impl Database {
 
     pub fn record_snapshot_ingested(&self) -> Result<u32> {
         extract::record_snapshot_ingested(&self.conn)
+    }
+
+    pub fn list_files_to_restore(&self) -> Result<Vec<FileRecord>> {
+        extract::list_files_to_restore(&self.conn)
+    }
+
+    pub fn tar_member_path(&self, record: &FileRecord) -> Result<String> {
+        extract::tar_member_path(&self.conn, record)
+    }
+
+    pub fn init_extract_runtime_state(&self) -> Result<()> {
+        extract::init_extract_runtime_state(&self.conn)
     }
 }
