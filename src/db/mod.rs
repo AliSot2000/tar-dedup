@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::config::RuntimeState;
+use crate::config::{ExtractRuntimeState, RuntimeState};
 use crate::db::types::{
     ArchiveSession, DuplicateGroup, FileId, FilePhase, FileRecord, NewFileRecord,
 };
@@ -12,6 +12,7 @@ pub mod types;
 
 mod archive;
 mod dedup;
+mod extract;
 mod hash;
 mod inventory;
 mod schema;
@@ -36,6 +37,14 @@ impl Database {
 
     pub fn get_file(&self, file_id: FileId) -> Result<Option<FileRecord>> {
         inventory::get_file(&self.conn, file_id)
+    }
+
+    pub fn get_file_by_tar_path(&self, tar_path: &str) -> Result<Option<FileRecord>> {
+        inventory::get_file_by_tar_path(&self.conn, tar_path)
+    }
+
+    pub fn set_tar_path(&self, file_id: FileId, tar_path: &str) -> Result<()> {
+        inventory::set_tar_path(&self.conn, file_id, tar_path)
     }
 
     pub fn count_files(&self) -> Result<u64> {
@@ -91,14 +100,6 @@ impl Database {
         archive::open_session(&self.conn)
     }
 
-    pub fn queue_archive_entry(&self, file_id: FileId, session_id: i64, tar_path: &str) -> Result<i64> {
-        archive::queue_entry(&self.conn, file_id, session_id, tar_path)
-    }
-
-    pub fn mark_entry_done(&self, entry_id: i64) -> Result<()> {
-        archive::mark_entry_done(&self.conn, entry_id)
-    }
-
     pub fn reset_archive_state(&self) -> Result<()> {
         archive::reset_archive_state(&self.conn)
     }
@@ -111,9 +112,30 @@ impl Database {
         archive::sum_archived_canonical_bytes(&self.conn)
     }
 
-    /// Flush WAL pages so the on-disk db file is safe to copy into the archive.
     pub fn checkpoint(&self) -> Result<()> {
         self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
+    }
+
+    // --- Extract pipeline ---
+
+    pub fn record_tar_seen(&self, tar_path: &str, size: u64) -> Result<Option<FileId>> {
+        extract::record_tar_seen(&self.conn, tar_path, size)
+    }
+
+    pub fn apply_snapshot_archived(&self) -> Result<u64> {
+        extract::apply_snapshot_archived(&self.conn)
+    }
+
+    pub fn load_extract_runtime_state(&self) -> Result<Option<ExtractRuntimeState>> {
+        extract::load_extract_runtime_state(&self.conn)
+    }
+
+    pub fn save_extract_runtime_state(&self, state: &ExtractRuntimeState) -> Result<()> {
+        extract::save_extract_runtime_state(&self.conn, state)
+    }
+
+    pub fn record_snapshot_ingested(&self) -> Result<u32> {
+        extract::record_snapshot_ingested(&self.conn)
     }
 }
