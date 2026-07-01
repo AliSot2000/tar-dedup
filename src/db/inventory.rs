@@ -80,7 +80,7 @@ pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Resul
     Ok(())
 }
 
-fn map_file_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
+pub(crate) fn map_file_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
     let sha1_blob: Option<Vec<u8>> = row.get(3)?;
     let sha1 = sha1_blob
         .and_then(|b| b.try_into().ok())

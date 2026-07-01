@@ -13,7 +13,7 @@ pub struct Cli {
 pub enum Command {
     /// Walk, deduplicate, and write a resumable archive.
     Archive(ArchiveArgs),
-    /// Restore an archive (not yet implemented).
+    /// Restore a tar-dedup archive (materialize: full copy at each original path).
     Extract(ExtractArgs),
 }
 
@@ -105,12 +105,17 @@ pub struct ExtractArgs {
     #[arg(short = 'f')]
     pub archive: PathBuf,
 
-    /// Directory to restore into (required for extract).
-    #[arg(short = 'C')]
+    /// Extract files relative to this directory (like GNU tar -C).
+    #[arg(short = 'C', value_name = "DIR")]
     pub output_dir: PathBuf,
 
+    /// Restore saved uid/gid on extracted files (best effort; may require root).
     #[arg(long)]
     pub restore_owner: bool,
+
+    /// Ignore saved extract state and start over.
+    #[arg(long)]
+    pub fresh: bool,
 }
 
 /// Pipeline stop point for `--exit-after-stage`.
