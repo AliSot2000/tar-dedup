@@ -32,26 +32,16 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
 
     if state.phase == ExtractPipelinePhase::ScanTar {
         eprintln!("extract: scanning archive");
-        let snapshot = scan_tar(&config, &shutdown)?;
-        ingest_snapshot(&snapshot, &db_path)?;
-        let db = Database::open(&db_path)?;
-        db.init_extract_runtime_state()?;
-        let restored = db.prepare_materialize_restore()?;
-        if restored == 0 {
-            return Err(Error::Config(
-                "snapshot contains no restorable files; is this a tar-dedup archive?".into(),
-            ));
-        }
-        db.record_snapshot_ingested()?;
+        let db = scan_tar(&config, &db_path, &shutdown)?;
         state.phase = ExtractPipelinePhase::Place;
         db.save_extract_runtime_state(&state)?;
-        eprintln!("extract: catalog loaded ({restored} paths)");
     }
 
     let db = Database::open(&db_path)?;
 
     if state.phase == ExtractPipelinePhase::Place {
         materialize(&config, &db, &shutdown)?;
+        warn_catalog_uncertainty(&db)?;
         state.phase = ExtractPipelinePhase::Cleanup;
         db.save_extract_runtime_state(&state)?;
     }
@@ -93,12 +83,20 @@ fn reset_extract_work(config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn scan_tar(config: &Config, shutdown: &Shutdown) -> Result<PathBuf> {
+/// Walk the tar stream: load initial manifest, cache payloads, ingest snapshot confirmations.
+fn scan_tar(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Database> {
     fs::create_dir_all(config.extract_cache_dir())
         .map_err(|e| Error::io(&config.extract_cache_dir(), e))?;
 
     let mut archive = open_tar_archive(&config.archive_path, config.compression)?;
-    let latest_snapshot = config.work_dir.join(".snapshot-ingest.tmp");
+    let snapshot_tmp = config.work_dir.join(".snapshot-ingest.tmp");
+    let mut manifest_loaded = db_path.is_file();
+    let mut snapshots = 0u32;
+    let mut db = if manifest_loaded {
+        Some(Database::open(db_path)?)
+    } else {
+        None
+    };
 
     for entry in archive.entries().map_err(|e| Error::io(&config.archive_path, e))? {
         shutdown.check_between_files()?;
@@ -109,13 +107,32 @@ fn scan_tar(config: &Config, shutdown: &Shutdown) -> Result<PathBuf> {
         let name = entry_name(&path)?;
 
         if name == SNAPSHOT_TAR_NAME {
-            let mut out = fs::File::create(&latest_snapshot)
-                .map_err(|e| Error::io(&latest_snapshot, e))?;
-            copy(&mut entry, &mut out).map_err(|e| Error::io(&latest_snapshot, e))?;
+            let mut out = fs::File::create(&snapshot_tmp)
+                .map_err(|e| Error::io(&snapshot_tmp, e))?;
+            copy(&mut entry, &mut out).map_err(|e| Error::io(&snapshot_tmp, e))?;
+
+            if !manifest_loaded {
+                Database::install_initial_manifest(&snapshot_tmp, db_path)?;
+                let opened = Database::open(db_path)?;
+                opened.init_extract_runtime_state()?;
+                db = Some(opened);
+                manifest_loaded = true;
+            } else {
+                let d = db.as_ref().expect("manifest loaded");
+                d.apply_snapshot_archived_flags(&snapshot_tmp)?;
+            }
+            let d = db.as_ref().expect("manifest loaded");
+            snapshots = d.record_snapshot_ingested()?;
             continue;
         }
 
-        let dest = config.extract_cache_dir().join(name);
+        if !manifest_loaded {
+            return Err(Error::Config(format!(
+                "tar member `{name}` before initial `{SNAPSHOT_TAR_NAME}`; not a tar-dedup archive?"
+            )));
+        }
+
+        let dest = config.extract_cache_dir().join(&name);
         if let Some(parent) = dest.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
@@ -124,23 +141,28 @@ fn scan_tar(config: &Config, shutdown: &Shutdown) -> Result<PathBuf> {
         entry
             .unpack(&dest)
             .map_err(|e| Error::io(&dest, e))?;
+
+        db.as_ref()
+            .expect("manifest loaded")
+            .promote_cached_tar_member(&name)?;
     }
 
-    if !latest_snapshot.is_file() {
+    if snapshots == 0 {
         return Err(Error::Config(format!(
             "archive missing embedded `{SNAPSHOT_TAR_NAME}`; not a tar-dedup archive?"
         )));
     }
 
-    Ok(latest_snapshot)
-}
+    let db = db.ok_or_else(|| {
+        Error::Config(format!(
+            "archive missing embedded `{SNAPSHOT_TAR_NAME}`; not a tar-dedup archive?"
+        ))
+    })?;
 
-fn ingest_snapshot(snapshot: &Path, db_path: &Path) -> Result<()> {
-    if db_path.is_file() {
-        fs::remove_file(db_path).map_err(|e| Error::io(db_path, e))?;
-    }
-    fs::copy(snapshot, db_path).map_err(|e| Error::io(db_path, e))?;
-    Ok(())
+    let paths = db.list_files_to_restore()?.len();
+    eprintln!("extract: manifest loaded, {paths} path(s) cached and unarchived, {snapshots} snapshot(s) seen");
+
+    Ok(db)
 }
 
 fn materialize(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
@@ -179,6 +201,17 @@ fn materialize(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()
     }
 
     progress.finish("extract complete");
+    Ok(())
+}
+
+fn warn_catalog_uncertainty(db: &Database) -> Result<()> {
+    let unconfirmed = db.count_unconfirmed_restored()?;
+    if unconfirmed > 0 {
+        eprintln!(
+            "warning: {unconfirmed} restored file(s) were never listed as `archived` in an \
+             ingested snapshot (archive may be incomplete or interrupted)"
+        );
+    }
     Ok(())
 }
 
