@@ -1,45 +1,75 @@
+use std::path::Path;
+
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::config::{ExtractPipelinePhase, ExtractRuntimeState};
 use crate::db::inventory;
-use crate::db::types::{FileId, FilePhase, FileRecord};
+use crate::db::types::FileRecord;
 use crate::error::Result;
 
-/// Tar member observed during scan: mark the matching canonical file row (by tar_path).
-pub fn record_tar_seen(conn: &Connection, tar_path: &str, size: u64) -> Result<Option<FileId>> {
-    let Some(record) = inventory::get_file_by_tar_path(conn, tar_path)? else {
-        return Ok(None);
-    };
-    if record.size != size {
-        return Ok(None);
+/// Copy the first embedded snapshot into the extract work DB (initial manifest).
+pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<()> {
+    if db_path.is_file() {
+        std::fs::remove_file(db_path).map_err(|e| crate::error::Error::io(db_path, e))?;
     }
-    inventory::mark_phase(conn, record.id, FilePhase::TarSeen)?;
-    Ok(Some(record.id))
+    std::fs::copy(snapshot_path, db_path).map_err(|e| crate::error::Error::io(db_path, e))?;
+    Ok(())
 }
 
-pub fn get_file_by_tar_path(conn: &Connection, tar_path: &str) -> Result<Option<FileRecord>> {
-    inventory::get_file_by_tar_path(conn, tar_path)
-}
-
-/// After ingesting snapshot.sqlite: files still marked archived become unarchived.
-pub fn prepare_materialize_restore(conn: &Connection) -> Result<u64> {
-    let updated = conn.execute(
-        "UPDATE files SET phase = 'unarchived'
-         WHERE phase IN ('archived', 'deduped', 'staged')",
+/// Rows listed as `archived` in an ingested snapshot → `snapshot_archived = 1` (catalog confirmation).
+pub fn apply_snapshot_archived_flags(conn: &Connection, snapshot_path: &Path) -> Result<u64> {
+    let path = snapshot_path.to_string_lossy();
+    conn.execute("ATTACH DATABASE ?1 AS snap", params![path.as_ref()])?;
+    let flagged = conn.execute(
+        "UPDATE files SET snapshot_archived = 1
+         WHERE rel_path IN (SELECT rel_path FROM snap.files WHERE phase = 'archived')",
         [],
     )?;
-    Ok(updated as u64)
+    conn.execute(
+        "UPDATE files SET snapshot_archived = 1
+         WHERE snapshot_archived = 0
+           AND canonical_id IN (SELECT id FROM files WHERE snapshot_archived = 1)",
+        [],
+    )?;
+    conn.execute("DETACH DATABASE snap", [])?;
+    Ok(flagged as u64)
+}
+
+/// Payload landed in extract cache → ready to place (`snapshot_archived` unchanged).
+pub fn promote_cached_tar_member(conn: &Connection, tar_path: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE files SET phase = 'unarchived' WHERE tar_path = ?1",
+        params![tar_path],
+    )?;
+    conn.execute(
+        "UPDATE files SET phase = 'unarchived'
+         WHERE tar_path IS NULL
+           AND canonical_id = (SELECT id FROM files WHERE tar_path = ?1 LIMIT 1)",
+        params![tar_path],
+    )?;
+    Ok(())
 }
 
 pub fn list_files_to_restore(conn: &Connection) -> Result<Vec<FileRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path
+        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path, snapshot_archived
          FROM files
          WHERE phase = 'unarchived'
          ORDER BY id",
     )?;
     let rows = stmt.query_map([], inventory::map_file_record)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn count_unconfirmed_restored(conn: &Connection) -> Result<u64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files
+         WHERE phase IN ('unarchived', 'at_destination', 'link_at_destination')
+           AND snapshot_archived = 0",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(count as u64)
 }
 
 pub fn tar_member_path(conn: &Connection, record: &FileRecord) -> Result<String> {

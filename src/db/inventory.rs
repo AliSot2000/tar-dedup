@@ -4,6 +4,9 @@ use crate::config::{PipelinePhase, RuntimeState};
 use crate::db::types::{FileId, FilePhase, FileRecord, NewFileRecord};
 use crate::error::Result;
 
+const FILES_SELECT: &str =
+    "id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path, snapshot_archived";
+
 pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
     let changed = conn.execute(
         "INSERT OR IGNORE INTO files (rel_path, size, mtime, atime, uid, gid, mode, phase)
@@ -27,22 +30,18 @@ pub fn count_files(conn: &Connection) -> Result<u64> {
 }
 
 pub fn list_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<Vec<FileRecord>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path
-         FROM files
-         WHERE phase = ?1
-         ORDER BY id",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {FILES_SELECT} FROM files WHERE phase = ?1 ORDER BY id"
+    ))?;
 
     let rows = stmt.query_map([phase.as_str()], map_file_record)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 pub fn get_file(conn: &Connection, file_id: FileId) -> Result<Option<FileRecord>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path
-         FROM files WHERE id = ?1",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {FILES_SELECT} FROM files WHERE id = ?1"
+    ))?;
     let mut rows = stmt.query([file_id.0])?;
     if let Some(row) = rows.next()? {
         return Ok(Some(map_file_record(row)?));
@@ -51,12 +50,9 @@ pub fn get_file(conn: &Connection, file_id: FileId) -> Result<Option<FileRecord>
 }
 
 pub fn get_file_by_tar_path(conn: &Connection, tar_path: &str) -> Result<Option<FileRecord>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path
-         FROM files
-         WHERE tar_path = ?1
-         LIMIT 1",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {FILES_SELECT} FROM files WHERE tar_path = ?1 LIMIT 1"
+    ))?;
     let mut rows = stmt.query([tar_path])?;
     if let Some(row) = rows.next()? {
         return Ok(Some(map_file_record(row)?));
@@ -98,6 +94,7 @@ pub(crate) fn map_file_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileR
         mode: row.get::<_, Option<i64>>(8)?.map(|v| v as u32),
         canonical_id: row.get::<_, Option<i64>>(9)?.map(FileId),
         tar_path: row.get(10)?,
+        snapshot_archived: row.get::<_, i64>(11)? != 0,
     })
 }
 

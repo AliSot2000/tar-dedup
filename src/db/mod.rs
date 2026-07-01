@@ -119,12 +119,20 @@ impl Database {
 
     // --- Extract pipeline ---
 
-    pub fn record_tar_seen(&self, tar_path: &str, size: u64) -> Result<Option<FileId>> {
-        extract::record_tar_seen(&self.conn, tar_path, size)
+    pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<()> {
+        extract::install_initial_manifest(snapshot_path, db_path)
     }
 
-    pub fn prepare_materialize_restore(&self) -> Result<u64> {
-        extract::prepare_materialize_restore(&self.conn)
+    pub fn apply_snapshot_archived_flags(&self, snapshot_path: &Path) -> Result<u64> {
+        extract::apply_snapshot_archived_flags(&self.conn, snapshot_path)
+    }
+
+    pub fn promote_cached_tar_member(&self, tar_path: &str) -> Result<()> {
+        extract::promote_cached_tar_member(&self.conn, tar_path)
+    }
+
+    pub fn count_unconfirmed_restored(&self) -> Result<u64> {
+        extract::count_unconfirmed_restored(&self.conn)
     }
 
     pub fn load_extract_runtime_state(&self) -> Result<Option<ExtractRuntimeState>> {
