@@ -52,3 +52,4 @@ Feat:
 
 - Only update the ETA when we are actively consuming data, not when we are compressing buffer.
 - _ separator in staged name
+- Detect identical hash with different file extension.
