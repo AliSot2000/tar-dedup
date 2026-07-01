@@ -1,7 +1,7 @@
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::db::types::{ArchiveSession, FileId};
+use crate::db::types::ArchiveSession;
 use crate::error::Result;
 
 pub fn begin_session(conn: &Connection, stream_index: i64, archive_offset: u64) -> Result<i64> {
@@ -31,23 +31,6 @@ pub fn next_stream_index(conn: &Connection) -> Result<i64> {
     .map_err(Into::into)
 }
 
-pub fn queue_entry(conn: &Connection, file_id: FileId, session_id: i64, tar_path: &str) -> Result<i64> {
-    conn.execute(
-        "INSERT INTO archive_entries (file_id, session_id, tar_path, status)
-         VALUES (?1, ?2, ?3, 'pending')",
-        params![file_id.0, session_id, tar_path],
-    )?;
-    Ok(conn.last_insert_rowid())
-}
-
-pub fn mark_entry_done(conn: &Connection, entry_id: i64) -> Result<()> {
-    conn.execute(
-        "UPDATE archive_entries SET status = 'done' WHERE id = ?1",
-        params![entry_id],
-    )?;
-    Ok(())
-}
-
 pub fn open_session(conn: &Connection) -> Result<Option<ArchiveSession>> {
     conn.query_row(
         "SELECT id, archive_offset FROM archive_sessions WHERE finalized = 0 ORDER BY id DESC LIMIT 1",
@@ -68,7 +51,6 @@ pub fn reset_archive_state(conn: &Connection) -> Result<()> {
         "UPDATE files SET phase = 'staged' WHERE phase = 'archived'",
         [],
     )?;
-    conn.execute("DELETE FROM archive_entries", [])?;
     conn.execute("DELETE FROM archive_sessions", [])?;
     Ok(())
 }

@@ -70,8 +70,6 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             Err(e) => return Err(e),
         }
 
-        let entry_id = db.queue_archive_entry(file_id, session_id, &tar_name)?;
-        db.mark_entry_done(entry_id)?;
         db.mark_file_phase(file_id, FilePhase::Archived)?;
     }
 

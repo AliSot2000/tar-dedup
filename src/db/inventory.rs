@@ -27,21 +27,20 @@ pub fn count_files(conn: &Connection) -> Result<u64> {
 }
 
 pub fn list_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<Vec<FileRecord>> {
-    let phase_str = file_phase_to_str(phase);
     let mut stmt = conn.prepare(
-        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id
+        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path
          FROM files
          WHERE phase = ?1
          ORDER BY id",
     )?;
 
-    let rows = stmt.query_map([phase_str], map_file_record)?;
+    let rows = stmt.query_map([phase.as_str()], map_file_record)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 pub fn get_file(conn: &Connection, file_id: FileId) -> Result<Option<FileRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id
+        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path
          FROM files WHERE id = ?1",
     )?;
     let mut rows = stmt.query([file_id.0])?;
@@ -51,10 +50,32 @@ pub fn get_file(conn: &Connection, file_id: FileId) -> Result<Option<FileRecord>
     Ok(None)
 }
 
+pub fn get_file_by_tar_path(conn: &Connection, tar_path: &str) -> Result<Option<FileRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path
+         FROM files
+         WHERE tar_path = ?1
+         LIMIT 1",
+    )?;
+    let mut rows = stmt.query([tar_path])?;
+    if let Some(row) = rows.next()? {
+        return Ok(Some(map_file_record(row)?));
+    }
+    Ok(None)
+}
+
+pub fn set_tar_path(conn: &Connection, file_id: FileId, tar_path: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE files SET tar_path = ?1 WHERE id = ?2",
+        params![tar_path, file_id.0],
+    )?;
+    Ok(())
+}
+
 pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
     conn.execute(
         "UPDATE files SET phase = ?1 WHERE id = ?2",
-        params![file_phase_to_str(phase), file_id.0],
+        params![phase.as_str(), file_id.0],
     )?;
     Ok(())
 }
@@ -76,6 +97,7 @@ fn map_file_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
         gid: row.get::<_, Option<i64>>(7)?.map(|v| v as u32),
         mode: row.get::<_, Option<i64>>(8)?.map(|v| v as u32),
         canonical_id: row.get::<_, Option<i64>>(9)?.map(FileId),
+        tar_path: row.get(10)?,
     })
 }
 
@@ -92,22 +114,32 @@ pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
         return Ok(None);
     };
 
-    let snapshot_taken_at = conn.query_row(
-        "SELECT value FROM meta WHERE key = 'snapshot_taken_at'",
-        [],
-        |row| row.get::<_, String>(0),
-    )?;
+    let max_workers: usize = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'max_workers'",
+            [],
+            |row| row.get::<_, String>(0),
+        )?
+        .parse()
+        .map_err(|_| {
+            crate::error::Error::Config("invalid max_workers in meta".into())
+        })?;
 
-    let max_workers: i64 = conn.query_row(
-        "SELECT value FROM meta WHERE key = 'max_workers'",
-        [],
-        |row| row.get::<_, String>(0),
-    )?.parse().unwrap_or(1);
+    let snapshot_taken_at = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'snapshot_taken_at'",
+            [],
+            |row| row.get::<_, String>(0),
+        )?
+        .parse()
+        .map_err(|_| {
+            crate::error::Error::Config("invalid snapshot_taken_at in meta".into())
+        })?;
 
     Ok(Some(RuntimeState {
-        snapshot_taken_at: snapshot_taken_at.parse().unwrap_or_else(|_| chrono::Utc::now()),
-        phase: parse_phase(&phase_raw),
-        max_workers: max_workers as usize,
+        snapshot_taken_at,
+        phase: PipelinePhase::parse(&phase_raw)?,
+        max_workers,
     }))
 }
 
@@ -125,26 +157,4 @@ fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
         params![key, value],
     )?;
     Ok(())
-}
-
-fn file_phase_to_str(phase: FilePhase) -> &'static str {
-    match phase {
-        FilePhase::Inventoried => "inventoried",
-        FilePhase::Hashed => "hashed",
-        FilePhase::Deduped => "deduped",
-        FilePhase::Staged => "staged",
-        FilePhase::Archived => "archived",
-    }
-}
-
-fn parse_phase(raw: &str) -> PipelinePhase {
-    match raw {
-        "inventory" => PipelinePhase::Inventory,
-        "hash" => PipelinePhase::Hash,
-        "dedup" => PipelinePhase::Dedup,
-        "stage" => PipelinePhase::Stage,
-        "archive" => PipelinePhase::Archive,
-        "done" => PipelinePhase::Done,
-        _ => PipelinePhase::Inventory,
-    }
 }

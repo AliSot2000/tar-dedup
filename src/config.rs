@@ -264,6 +264,80 @@ impl PipelinePhase {
             Self::Done => None,
         }
     }
+
+    pub fn parse(raw: &str) -> crate::error::Result<Self> {
+        match raw {
+            "inventory" => Ok(Self::Inventory),
+            "hash" => Ok(Self::Hash),
+            "dedup" => Ok(Self::Dedup),
+            "stage" => Ok(Self::Stage),
+            "archive" => Ok(Self::Archive),
+            "done" => Ok(Self::Done),
+            other => Err(crate::error::Error::Config(format!(
+                "unknown pipeline phase: {other}"
+            ))),
+        }
+    }
+}
+
+/// Extract pipeline driver phase (persisted in meta `extract_phase`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExtractPipelinePhase {
+    /// Scan tar members, record tar_seen, ingest snapshot.sqlite copies.
+    ScanTar,
+    /// Place extracted payloads / links at final rel_paths.
+    Place,
+    /// Remove temporary extract files and embedded snapshot copies.
+    Cleanup,
+    Done,
+}
+
+impl ExtractPipelinePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ScanTar => "scan_tar",
+            Self::Place => "place",
+            Self::Cleanup => "cleanup",
+            Self::Done => "done",
+        }
+    }
+
+    pub fn parse(raw: &str) -> crate::error::Result<Self> {
+        match raw {
+            "scan_tar" => Ok(Self::ScanTar),
+            "place" => Ok(Self::Place),
+            "cleanup" => Ok(Self::Cleanup),
+            "done" => Ok(Self::Done),
+            other => Err(crate::error::Error::Config(format!(
+                "unknown extract pipeline phase: {other}"
+            ))),
+        }
+    }
+
+    pub fn next(self) -> Option<Self> {
+        match self {
+            Self::ScanTar => Some(Self::Place),
+            Self::Place => Some(Self::Cleanup),
+            Self::Cleanup => Some(Self::Done),
+            Self::Done => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractRuntimeState {
+    pub phase: ExtractPipelinePhase,
+    /// Number of snapshot.sqlite members ingested from the archive so far.
+    pub snapshots_ingested: u32,
+}
+
+impl ExtractRuntimeState {
+    pub fn new() -> Self {
+        Self {
+            phase: ExtractPipelinePhase::ScanTar,
+            snapshots_ingested: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
