@@ -78,19 +78,6 @@ pub struct CompressionFlags {
     #[arg(long = "zstd", group = "compress_filter")]
     pub zstd: bool,
 
-    /// GNU tar alias for xz.
-    #[arg(long = "lzma", group = "compress_filter")]
-    pub lzma: bool,
-
-    #[arg(long = "lzip", group = "compress_filter")]
-    pub lzip: bool,
-
-    #[arg(long = "lzop", group = "compress_filter")]
-    pub lzop: bool,
-
-    #[arg(short = 'Z', long = "compress", group = "compress_filter")]
-    pub compress: bool,
-
     /// Filter through PROG (must accept -d). Not implemented yet.
     #[arg(short = 'I', long = "use-compress-program", value_name = "PROG")]
     pub use_compress_program: Option<PathBuf>,
