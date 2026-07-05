@@ -146,8 +146,8 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
         Ok(())
     };
 
-    if flags.xz || flags.lzma {
-        pick("xz/lzma", CompressionFormat::Xz)?;
+    if flags.xz {
+        pick("xz", CompressionFormat::Xz)?;
     }
     if flags.gzip {
         pick("gzip", CompressionFormat::Gz)?;
@@ -157,21 +157,6 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
     }
     if flags.zstd {
         pick("zstd", CompressionFormat::Zstd)?;
-    }
-    if flags.lzip {
-        return Err(Error::Config(
-            "lzip is not implemented yet; use -J/--xz, -z/--gzip, -j/--bzip2, or --zstd".into(),
-        ));
-    }
-    if flags.lzop {
-        return Err(Error::Config(
-            "lzop is not implemented yet; use -J/--xz, -z/--gzip, -j/--bzip2, or --zstd".into(),
-        ));
-    }
-    if flags.compress {
-        return Err(Error::Config(
-            "unix compress is not implemented yet; use -J/--xz, -z/--gzip, -j/--bzip2, or --zstd".into(),
-        ));
     }
 
     if let Some(format) = chosen {
@@ -362,7 +347,7 @@ impl ExtractPipelinePhase {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractRuntimeState {
     pub phase: ExtractPipelinePhase,
     /// Number of snapshot.sqlite members ingested from the archive so far.
