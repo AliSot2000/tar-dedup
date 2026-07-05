@@ -15,7 +15,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let mut inserted = 0u64;
 
     for entry in WalkDir::new(&config.input_dir)
-        .follow_links(false)
+        .follow_links(false) // Feature follow symlinks
         .into_iter()
         .filter_map(|e| e.ok())
     {
