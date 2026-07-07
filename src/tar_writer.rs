@@ -103,6 +103,7 @@ impl TarWriter {
                 zstd::stream::write::Encoder::new(file, 19)
                     .map_err(|e| crate::error::Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
             ),
+            CompressionFormat::PIPE => return Err(Error::Other(anyhow::anyhow!("pipe mode not supported"))),
             CompressionFormat::None => CompressLayer::Plain(file),
         };
 
