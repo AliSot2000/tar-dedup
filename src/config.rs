@@ -12,6 +12,7 @@ pub enum CompressionFormat {
     Gz,
     Bz2,
     Zstd,
+    PIPE,
     None,
 }
 
