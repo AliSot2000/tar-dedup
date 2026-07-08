@@ -3,6 +3,10 @@ name = "tar-dedup"
 version = "0.1.0"
 edition = "2024"
 
+
+[profile.release]
+panic = "abort"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tar = "0.4"
