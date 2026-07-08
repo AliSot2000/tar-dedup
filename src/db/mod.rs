@@ -38,7 +38,7 @@ impl Database {
     pub fn get_file(&self, file_id: FileId) -> Result<Option<FileRecord>> {
         inventory::get_file(&self.conn, file_id)
     }
-
+    // TODO: Resolution does happen to single file which is not deterministic.
     pub fn get_file_by_tar_path(&self, tar_path: &str) -> Result<Option<FileRecord>> {
         inventory::get_file_by_tar_path(&self.conn, tar_path)
     }
