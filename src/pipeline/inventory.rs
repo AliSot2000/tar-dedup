@@ -20,7 +20,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         .filter_map(|e| e.ok())
     {
         shutdown.check_between_files()?;
-
+        // TODO deal with special files.
         if !entry.file_type().is_file() {
             continue;
         }
@@ -51,6 +51,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     Ok(())
 }
 
+// TODO: Propagate errors.
 fn file_mtime(meta: &std::fs::Metadata) -> Option<i64> {
     meta.modified()
         .ok()
@@ -60,6 +61,14 @@ fn file_mtime(meta: &std::fs::Metadata) -> Option<i64> {
 
 fn file_atime(meta: &std::fs::Metadata) -> Option<i64> {
     meta.accessed()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+}
+
+// Just testing if I can write proper rust code myself
+fn file_ctime(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.created()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
