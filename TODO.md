@@ -50,6 +50,16 @@ Feat:
 - CTime
 - Mode
 - Archived session finished at empty
+- Sparse tar archives. 
+  - General
+  - Write as Sparse (detect if a long stretch of zeros is present and skip it.)
+  - Write Sparse Canonical prior to Tar writer.
+- ACL
+- SELinux
+- XAttrs
+- Abort on Change
+- Check on extraction that the file hashes are still consistent.
+- Progress memory in .cache dir 
 
 - Only update the ETA when we are actively consuming data, not when we are compressing buffer.
 - _ separator in staged name
