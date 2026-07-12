@@ -24,11 +24,15 @@ impl CompressionFormat {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Path to archive being created or to archive being extracted filename.tar[.compression]
     pub archive_path: PathBuf,
+
     /// Archive input root (`archive` subcommand only).
     pub input_dir: PathBuf,
+
     /// Extract output root (`extract` subcommand `-C`).
     pub output_dir: PathBuf,
+
     pub work_dir: PathBuf,
     pub compression: CompressionFormat,
     pub jobs: usize,
