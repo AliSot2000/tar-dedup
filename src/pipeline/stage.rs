@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::symlink;
 
 use crate::config::Config;
-use crate::content_id::content_id_from_digest;
+use crate::db::content_id::content_id_from_digest;
 use crate::db::Database;
 use crate::error::Result;
 
@@ -20,7 +20,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let digest = record.sha1.ok_or_else(|| {
             crate::error::Error::Config(format!("canonical {} missing sha1", file_id.0))
         })?;
-        let content_id = content_id_from_digest(&digest, record.size, &record.rel_path);
+        let content_id =
+            content_id_from_digest(&digest, record.size, file_id, &record.rel_path);
         let tar_name = content_id.0.as_str();
         let source_rel = config.input_dir.join(&record.rel_path);
         let source = source_rel

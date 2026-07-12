@@ -1,7 +1,6 @@
 pub mod cli;
 pub mod compression;
 pub mod config;
-pub mod content_id;
 pub mod db;
 pub mod error;
 pub mod pipeline;

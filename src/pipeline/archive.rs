@@ -55,7 +55,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             continue;
         }
         let digest = record.sha1.unwrap();
-        let tar_name = crate::content_id::content_id_from_digest(
+        let tar_name = crate::db::content_id::content_id_from_digest(
             &digest,
             record.size,
             file_id,
