@@ -77,7 +77,8 @@ pub struct CompressionFlags {
 
     #[arg(long = "zstd", group = "compress_filter")]
     pub zstd: bool,
-
+    
+    // TODO: Shell out needs to be defined.
     /// Filter through PROG (must accept -d). Not implemented yet.
     #[arg(short = 'I', long = "use-compress-program", value_name = "PROG")]
     pub use_compress_program: Option<PathBuf>,
