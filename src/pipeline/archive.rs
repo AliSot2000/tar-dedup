@@ -55,8 +55,13 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             continue;
         }
         let digest = record.sha1.unwrap();
-        let tar_name =
-            crate::content_id::content_id_from_digest(&digest, record.size, &record.rel_path).0;
+        let tar_name = crate::content_id::content_id_from_digest(
+            &digest,
+            record.size,
+            file_id,
+            &record.rel_path,
+        )
+        .0;
         let source = config.stage_dir().join(&tar_name);
 
         progress.set_file("archive", &record.rel_path);
