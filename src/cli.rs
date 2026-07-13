@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(name = "tar-dedup", about = "Deduplicating archival pipeline")]
@@ -13,7 +13,7 @@ pub struct Cli {
 pub enum Command {
     /// Walk, deduplicate, and write a resumable archive.
     Archive(ArchiveArgs),
-    /// Restore an archive (not yet implemented).
+    /// Restore a tar-dedup archive (materialize: full copy at each original path).
     Extract(ExtractArgs),
 }
 
@@ -49,6 +49,15 @@ pub struct ArchiveArgs {
     /// Keep work-dir snapshot.sqlite and stage/ after a successful archive.
     #[arg(long)]
     pub keep_stage: bool,
+
+    /// Run through STAGE then exit cleanly (state saved). STAGE: scan, hash, dedup,
+    /// stage, tar, cleanup (and aliases inventory, archive).
+    #[arg(long = "exit-after-stage", value_name = "STAGE", value_enum)]
+    pub exit_after_stage: Option<ExitAfterStageArg>,
+
+    /// Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`.
+    #[arg(long = "memlimit-compress", value_name = "LIMIT")]
+    pub memlimit_compress: Option<String>,
 }
 
 #[derive(Debug, Args, Default)]
@@ -68,20 +77,8 @@ pub struct CompressionFlags {
 
     #[arg(long = "zstd", group = "compress_filter")]
     pub zstd: bool,
-
-    /// GNU tar alias for xz.
-    #[arg(long = "lzma", group = "compress_filter")]
-    pub lzma: bool,
-
-    #[arg(long = "lzip", group = "compress_filter")]
-    pub lzip: bool,
-
-    #[arg(long = "lzop", group = "compress_filter")]
-    pub lzop: bool,
-
-    #[arg(short = 'Z', long = "compress", group = "compress_filter")]
-    pub compress: bool,
-
+    
+    // TODO: Shell out needs to be defined.
     /// Filter through PROG (must accept -d). Not implemented yet.
     #[arg(short = 'I', long = "use-compress-program", value_name = "PROG")]
     pub use_compress_program: Option<PathBuf>,
@@ -96,10 +93,34 @@ pub struct ExtractArgs {
     #[arg(short = 'f')]
     pub archive: PathBuf,
 
-    /// Directory to restore into (required for extract).
-    #[arg(short = 'C')]
+    /// Extract files relative to this directory (like GNU tar -C).
+    #[arg(short = 'C', value_name = "DIR")]
     pub output_dir: PathBuf,
 
+    /// Restore saved uid/gid on extracted files (best effort; may require root).
     #[arg(long)]
     pub restore_owner: bool,
+
+    /// Ignore saved extract state and start over.
+    #[arg(long)]
+    pub fresh: bool,
+}
+
+/// Pipeline stop point for `--exit-after-stage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum ExitAfterStageArg {
+    /// Walk the input tree (inventory).
+    #[value(alias = "inventory")]
+    Scan,
+    Hash,
+    Dedup,
+    /// Symlink canonical files into the work-dir stage/.
+    #[value(alias = "symlink")]
+    Stage,
+    /// Write the compressed tar archive.
+    #[value(alias = "archive")]
+    Tar,
+    /// Full pipeline then remove the work directory (unless `--keep-stage`).
+    Cleanup,
 }

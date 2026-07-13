@@ -42,6 +42,10 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
         state.max_workers = config.jobs;
         db.save_runtime_state(&state)?;
         state
+    } else if config.resume {
+        return Err(Error::Config(
+            "no saved state to resume in work directory (omit --resume or use --fresh)".into(),
+        ));
     } else {
         let state = RuntimeState::new(config.jobs);
         db.save_runtime_state(&state)?;
@@ -72,11 +76,24 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
             Err(e) => return Err(e),
         }
 
+        let completed = state.phase;
         if let Some(next) = state.phase.next() {
             state.phase = next;
             db.save_runtime_state(&state)?;
         } else {
             break;
+        }
+
+        if let Some(stop_after) = config.exit_after_stage.and_then(|s| s.stop_after_phase()) {
+            if completed == stop_after {
+                eprintln!(
+                    "exit-after-stage `{}`: finished `{}`, resume from `{}`",
+                    stop_after.as_str(),
+                    completed.as_str(),
+                    state.phase.as_str()
+                );
+                return Ok(());
+            }
         }
     }
 
@@ -84,6 +101,19 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
         "archive written to {}",
         config.archive_path.display()
     );
+
+    if config.exit_after_stage == Some(crate::config::ExitAfterStage::Cleanup) {
+        if !config.keep_stage {
+            cleanup_workdir(&config)?;
+            eprintln!("exit-after-stage `cleanup`: work directory removed");
+        } else {
+            eprintln!(
+                "exit-after-stage `cleanup`: keeping work dir (--keep-stage): {}",
+                config.work_dir.display()
+            );
+        }
+        return Ok(());
+    }
 
     if !config.keep_stage {
         cleanup_workdir(&config)?;

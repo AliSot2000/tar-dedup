@@ -27,18 +27,29 @@ pub enum Error {
 
 impl Error {
     pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
+        if source.kind() == std::io::ErrorKind::Interrupted {
+            return Self::Interrupted;
+        }
         Self::Io {
             path: path.into(),
             source,
         }
     }
+
+    pub fn is_interrupted(&self) -> bool {
+        matches!(self, Self::Interrupted)
+    }
 }
 
 impl From<std::io::Error> for Error {
     fn from(source: std::io::Error) -> Self {
-        Self::Io {
-            path: PathBuf::new(),
-            source,
+        if source.kind() == std::io::ErrorKind::Interrupted {
+            Self::Interrupted
+        } else {
+            Self::Io {
+                path: PathBuf::new(),
+                source,
+            }
         }
     }
 }

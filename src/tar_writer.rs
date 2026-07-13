@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use tar::Builder;
+use tar::Header;
 
+use crate::compression::InterruptibleXzEncoder;
 use crate::config::CompressionFormat;
 use crate::error::{Error, Result};
+use crate::progress::archive_io_buffer;
 use crate::shutdown::Shutdown;
 
 pub struct TarWriter {
@@ -17,7 +19,7 @@ pub struct TarWriter {
 }
 
 enum CompressLayer {
-    Xz(xz2::write::XzEncoder<File>),
+    Xz(InterruptibleXzEncoder<File>),
     Gz(GzEncoder<File>),
     Bz(bzip2::write::BzEncoder<File>),
     Zstd(zstd::stream::write::Encoder<'static, File>),
@@ -25,7 +27,7 @@ enum CompressLayer {
 }
 
 impl Write for CompressLayer {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
             Self::Xz(w) => w.write(buf),
             Self::Gz(w) => w.write(buf),
@@ -35,7 +37,7 @@ impl Write for CompressLayer {
         }
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> io::Result<()> {
         match self {
             Self::Xz(w) => w.flush(),
             Self::Gz(w) => w.flush(),
@@ -67,27 +69,14 @@ impl<W: Write> Write for ShutdownWrite<'_, W> {
     }
 }
 
-struct MeteredReader<R, F> {
-    inner: R,
-    shutdown: Shutdown,
-    on_read: F,
-}
-
-impl<R: Read, F: FnMut(u64)> Read for MeteredReader<R, F> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.shutdown
-            .check_in_flight()
-            .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "interrupted"))?;
-        let n = self.inner.read(buf)?;
-        if n > 0 {
-            (self.on_read)(n as u64);
-        }
-        Ok(n)
-    }
-}
-
 impl TarWriter {
-    pub fn open(archive_path: PathBuf, format: CompressionFormat, _session_id: i64) -> Result<Self> {
+    pub fn open(
+        archive_path: PathBuf,
+        format: CompressionFormat,
+        jobs: usize,
+        memlimit_compress: Option<u64>,
+        shutdown: Shutdown,
+    ) -> Result<Self> {
         crate::compression::warn_on_start(format);
 
         let file = OpenOptions::new()
@@ -97,8 +86,16 @@ impl TarWriter {
             .map_err(|e| crate::error::Error::io(&archive_path, e))?;
 
         let layer = match format {
-            CompressionFormat::Xz => CompressLayer::Xz(xz2::write::XzEncoder::new(file, 9)),
-            CompressionFormat::Gz => CompressLayer::Gz(GzEncoder::new(file, Compression::best())),
+            CompressionFormat::Xz => {
+                let (encoder, threads) =
+                    InterruptibleXzEncoder::new(file, jobs, memlimit_compress, shutdown.clone())?;
+                let hw = InterruptibleXzEncoder::<File>::hardware_threads();
+                eprintln!("xz encoder: {threads} worker thread(s) active ({hw} CPU threads available)");
+                CompressLayer::Xz(encoder)
+            }
+            CompressionFormat::Gz => {
+                CompressLayer::Gz(GzEncoder::new(file, Compression::best()))
+            }
             CompressionFormat::Bz2 => {
                 CompressLayer::Bz(bzip2::write::BzEncoder::new(file, bzip2::Compression::best()))
             }
@@ -106,6 +103,7 @@ impl TarWriter {
                 zstd::stream::write::Encoder::new(file, 19)
                     .map_err(|e| crate::error::Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
             ),
+            CompressionFormat::PIPE => return Err(Error::Other(anyhow::anyhow!("pipe mode not supported"))),
             CompressionFormat::None => CompressLayer::Plain(file),
         };
 
@@ -129,37 +127,48 @@ impl TarWriter {
             .map_err(|e| crate::error::Error::io(path, e))?
             .len();
 
-        let mut header = tar::Header::new_gnu();
+        let mut header = Header::new_gnu();
         header
             .set_path(tar_name)
             .map_err(|e| crate::error::Error::Other(anyhow::anyhow!("{e}")))?;
         header.set_size(len);
         header.set_cksum();
 
-        let mut metered = MeteredReader {
-            inner: &mut file,
+        let mut out = ShutdownWrite {
+            inner: &mut self.layer,
             shutdown: shutdown.clone(),
-            on_read: |n| {
-                on_input_bytes(n);
-            },
         };
 
-        {
-            let mut guarded = ShutdownWrite {
-                inner: &mut self.layer,
-                shutdown: shutdown.clone(),
-            };
-            let mut builder = Builder::new(&mut guarded);
-            builder
-                .append(&header, &mut metered)
-                .map_err(io_to_error)?;
-            builder.finish().map_err(io_to_error)?;
+        out.write_all(header.as_bytes())
+            .map_err(|e| Error::io(&self.archive_path, e))?;
+
+        let mut buf = archive_io_buffer();
+        let mut remaining = len;
+        while remaining > 0 {
+            shutdown.check_in_flight()?;
+            let chunk = std::cmp::min(buf.len() as u64, remaining) as usize;
+            let n = file
+                .read(&mut buf[..chunk])
+                .map_err(|e| crate::error::Error::io(path, e))?;
+            if n == 0 {
+                return Err(crate::error::Error::Other(anyhow::anyhow!(
+                    "unexpected EOF reading {}",
+                    path.display()
+                )));
+            }
+            out.write_all(&buf[..n])
+                .map_err(|e| Error::io(&self.archive_path, e))?;
+            on_input_bytes(n as u64);
+            remaining -= n as u64;
         }
 
-        shutdown.check_in_flight()?;
-        self.layer
-            .flush()
-            .map_err(|e| crate::error::Error::io(&self.archive_path, e))?;
+        let pad = (512 - (len % 512)) % 512;
+        if pad > 0 {
+            shutdown.check_in_flight()?;
+            out.write_all(&vec![0u8; pad as usize])
+                .map_err(|e| Error::io(&self.archive_path, e))?;
+        }
+
         self.bytes_in += len;
         Ok(())
     }
@@ -171,48 +180,59 @@ impl TarWriter {
         let bytes_out = match self.layer {
             CompressLayer::Xz(w) => {
                 w.finish()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
             CompressLayer::Gz(w) => {
                 w.finish()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
             CompressLayer::Bz(w) => {
                 w.finish()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
             CompressLayer::Zstd(w) => {
                 w.finish()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
             CompressLayer::Plain(mut w) => {
                 w.flush()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?;
+                    .map_err(|e| Error::io(&archive_path, e))?;
                 w.metadata()
-                    .map_err(|e| crate::error::Error::io(&archive_path, e))?
+                    .map_err(|e| Error::io(&archive_path, e))?
                     .len()
             }
         };
         Ok((bytes_in, bytes_out))
     }
-}
 
-fn io_to_error(e: io::Error) -> Error {
-    if e.kind() == io::ErrorKind::Interrupted {
-        Error::Interrupted
-    } else {
-        Error::Other(anyhow::anyhow!("{e}"))
+    /// Force-abort: release the output file without finalizing compression.
+    pub fn abandon(self) {
+        match self.layer {
+            CompressLayer::Xz(w) => {
+                w.abandon();
+            }
+            CompressLayer::Gz(w) => {
+                std::mem::forget(w);
+            }
+            CompressLayer::Bz(w) => {
+                std::mem::forget(w);
+            }
+            CompressLayer::Zstd(w) => {
+                std::mem::forget(w);
+            }
+            CompressLayer::Plain(_) => {}
+        }
     }
 }
