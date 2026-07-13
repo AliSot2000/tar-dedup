@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileId(pub i64);
 
@@ -13,9 +15,9 @@ pub struct FileRecord {
     pub size: u64,
     pub sha1: Option<[u8; 20]>,
     #[allow(dead_code)]
-    pub mtime: Option<i64>,
+    pub mtime: Option<DateTime<Utc>>,
     #[allow(dead_code)]
-    pub atime: Option<i64>,
+    pub atime: Option<DateTime<Utc>>,
     #[allow(dead_code)]
     pub uid: Option<u32>,
     #[allow(dead_code)]
@@ -34,8 +36,8 @@ pub struct FileRecord {
 pub struct NewFileRecord {
     pub rel_path: PathBuf,
     pub size: u64,
-    pub mtime: Option<i64>,
-    pub atime: Option<i64>,
+    pub mtime: Option<DateTime<Utc>>,
+    pub atime: Option<DateTime<Utc>>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     pub mode: Option<u32>,

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use walkdir::WalkDir;
 
 use crate::config::Config;
@@ -52,26 +53,17 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 }
 
 // TODO: Propagate errors.
-fn file_mtime(meta: &std::fs::Metadata) -> Option<i64> {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
+fn file_mtime(meta: &std::fs::Metadata) -> Option<DateTime<Utc>> {
+    meta.modified().ok().map(DateTime::<Utc>::from)
 }
 
-fn file_atime(meta: &std::fs::Metadata) -> Option<i64> {
-    meta.accessed()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
+fn file_atime(meta: &std::fs::Metadata) -> Option<DateTime<Utc>> {
+    meta.accessed().ok().map(DateTime::<Utc>::from)
 }
 
 // Just testing if I can write proper rust code myself
-fn file_ctime(meta: &std::fs::Metadata) -> Option<i64> {
-    meta.created()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
+fn file_ctime(meta: &std::fs::Metadata) -> Option<DateTime<Utc>> {
+    meta.created().ok().map(DateTime::<Utc>::from)
 }
 
 #[cfg(unix)]

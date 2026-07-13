@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::config::{PipelinePhase, RuntimeState};
@@ -14,8 +15,8 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
         named_params! {
             ":rel_path": record.rel_path.to_string_lossy(),
             ":size": record.size,
-            ":mtime": record.mtime,
-            ":atime": record.atime,
+            ":mtime": record.mtime.as_ref().map(|t| t.to_rfc3339()),
+            ":atime": record.atime.as_ref().map(|t| t.to_rfc3339()),
             ":uid": record.uid,
             ":gid": record.gid,
             ":mode": record.mode,
@@ -100,8 +101,8 @@ pub(crate) fn map_file_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileR
         rel_path: row.get::<_, String>("rel_path")?.into(),
         size: row.get::<_, i64>("size")? as u64,
         sha1,
-        mtime: row.get("mtime")?,
-        atime: row.get("atime")?,
+        mtime: optional_rfc3339(row, "mtime")?,
+        atime: optional_rfc3339(row, "atime")?,
         uid: row.get::<_, Option<i64>>("uid")?.map(|v| v as u32),
         gid: row.get::<_, Option<i64>>("gid")?.map(|v| v as u32),
         mode: row.get::<_, Option<i64>>("mode")?.map(|v| v as u32),
@@ -109,6 +110,25 @@ pub(crate) fn map_file_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileR
         tar_path: row.get("tar_path")?,
         snapshot_archived: row.get::<_, i64>("snapshot_archived")? != 0,
     })
+}
+
+fn optional_rfc3339(
+    row: &rusqlite::Row<'_>,
+    column: &str,
+) -> rusqlite::Result<Option<DateTime<Utc>>> {
+    let raw: Option<String> = row.get(column)?;
+    match raw {
+        None => Ok(None),
+        Some(s) => DateTime::parse_from_rfc3339(&s)
+            .map(|dt| Some(dt.with_timezone(&Utc)))
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            }),
+    }
 }
 
 pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
