@@ -1,13 +1,17 @@
-[package]
-name = "tar-dedup"
+[workspace]
+resolver = "2"
+members = [
+    "crates/tar-dedup",
+    "crates/tar-dedup-cli",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
+[workspace.dependencies]
+tar-dedup = { path = "crates/tar-dedup" }
 
-[profile.release]
-panic = "abort"
-
-[dependencies]
 clap = { version = "4", features = ["derive"] }
 tar = "0.4"
 xz2 = { version = "0.1", features = ["static"] }
@@ -33,7 +37,9 @@ filetime = "0.2"
 anyhow = "1"
 thiserror = "1"
 
-[dev-dependencies]
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
+
+[profile.release]
+panic = "abort"
