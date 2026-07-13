@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{ArchiveArgs, CompressionFlags, ExtractArgs};
+use crate::cli::{ArchiveArgs, CompressionFlags, ExitAfterStageArg, ExtractArgs};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,6 +12,7 @@ pub enum CompressionFormat {
     Gz,
     Bz2,
     Zstd,
+    PIPE,
     None,
 }
 
@@ -23,19 +24,32 @@ impl CompressionFormat {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Path to archive being created or to archive being extracted filename.tar[.compression]
     pub archive_path: PathBuf,
+
+    /// Archive input root (`archive` subcommand only).
     pub input_dir: PathBuf,
+
+    /// Extract output root (`extract` subcommand `-C`).
+    pub output_dir: PathBuf,
+
     pub work_dir: PathBuf,
     pub compression: CompressionFormat,
     pub jobs: usize,
     pub resume: bool,
     pub fresh: bool,
     pub keep_stage: bool,
+    pub exit_after_stage: Option<ExitAfterStage>,
+    /// Max RAM for xz MT encoder (`None` = no limit, like default `xz`).
+    pub memlimit_compress: Option<u64>,
+    /// Extract: restore uid/gid when possible.
+    pub restore_owner: bool,
 }
 
 impl Config {
     pub fn from_archive_args(args: &ArchiveArgs) -> Result<Self> {
-        validate_dir(&args.input, "input directory")?;
+        let input_dir = resolve_user_path(&args.input)?;
+        validate_dir(&input_dir, "input directory")?;
 
         let archive_path = resolve_user_path(&args.archive)?;
         if let Some(parent) = archive_path.parent() {
@@ -50,33 +64,58 @@ impl Config {
 
         let compression = resolve_compression(&args.compression, &archive_path)?;
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
+        let memlimit_compress = args
+            .memlimit_compress
+            .as_deref()
+            .map(parse_memlimit)
+            .transpose()?;
 
         Ok(Self {
             archive_path,
-            input_dir: args.input.clone(),
+            input_dir,
+            output_dir: PathBuf::new(),
             work_dir,
             compression,
             jobs,
             resume: args.resume,
             fresh: args.fresh,
             keep_stage: args.keep_stage,
+            exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
+            memlimit_compress,
+            restore_owner: false,
         })
     }
 
     pub fn from_extract_args(args: &ExtractArgs) -> Result<Self> {
         let archive_path = resolve_user_path(&args.archive)?;
+        if !archive_path.is_file() {
+            return Err(Error::Config(format!(
+                "archive does not exist or is not a file: {}",
+                archive_path.display()
+            )));
+        }
+
         let output_dir = resolve_user_path(&args.output_dir)?;
         std::fs::create_dir_all(&output_dir).map_err(|e| Error::io(&output_dir, e))?;
+
+        let work_dir = default_extract_work_dir(&archive_path);
+        std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
+
+        let compression = infer_compression_from_suffix(&archive_path);
 
         Ok(Self {
             archive_path,
             input_dir: PathBuf::new(),
-            work_dir: output_dir,
-            compression: CompressionFormat::None,
+            output_dir,
+            work_dir,
+            compression,
             jobs: 1,
             resume: false,
-            fresh: false,
+            fresh: args.fresh,
             keep_stage: false,
+            exit_after_stage: None,
+            memlimit_compress: None,
+            restore_owner: args.restore_owner,
         })
     }
 
@@ -86,6 +125,10 @@ impl Config {
 
     pub fn stage_dir(&self) -> PathBuf {
         self.work_dir.join("stage")
+    }
+
+    pub fn extract_cache_dir(&self) -> PathBuf {
+        self.work_dir.join("cache")
     }
 }
 
@@ -108,8 +151,8 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
         Ok(())
     };
 
-    if flags.xz || flags.lzma {
-        pick("xz/lzma", CompressionFormat::Xz)?;
+    if flags.xz {
+        pick("xz", CompressionFormat::Xz)?;
     }
     if flags.gzip {
         pick("gzip", CompressionFormat::Gz)?;
@@ -119,21 +162,6 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
     }
     if flags.zstd {
         pick("zstd", CompressionFormat::Zstd)?;
-    }
-    if flags.lzip {
-        return Err(Error::Config(
-            "lzip is not implemented yet; use -J/--xz, -z/--gzip, -j/--bzip2, or --zstd".into(),
-        ));
-    }
-    if flags.lzop {
-        return Err(Error::Config(
-            "lzop is not implemented yet; use -J/--xz, -z/--gzip, -j/--bzip2, or --zstd".into(),
-        ));
-    }
-    if flags.compress {
-        return Err(Error::Config(
-            "unix compress is not implemented yet; use -J/--xz, -z/--gzip, -j/--bzip2, or --zstd".into(),
-        ));
     }
 
     if let Some(format) = chosen {
@@ -147,7 +175,7 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
     Ok(CompressionFormat::None)
 }
 
-fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
+pub fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
     let name = path.to_string_lossy().to_ascii_lowercase();
     if name.ends_with(".tar.xz") || name.ends_with(".txz") {
         CompressionFormat::Xz
@@ -171,6 +199,18 @@ pub fn resolve_user_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
+fn default_extract_work_dir(archive_path: &Path) -> PathBuf {
+    let parent = archive_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = archive_path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "archive".into());
+    parent.join(format!(".{name}.extract.work"))
+}
+
 fn default_work_dir(archive_path: &Path) -> PathBuf {
     let parent = archive_path
         .parent()
@@ -181,6 +221,43 @@ fn default_work_dir(archive_path: &Path) -> PathBuf {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "archive".into());
     parent.join(format!(".{name}.work"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitAfterStage {
+    Scan,
+    Hash,
+    Dedup,
+    Stage,
+    Tar,
+    Cleanup,
+}
+
+impl From<ExitAfterStageArg> for ExitAfterStage {
+    fn from(arg: ExitAfterStageArg) -> Self {
+        match arg {
+            ExitAfterStageArg::Scan => Self::Scan,
+            ExitAfterStageArg::Hash => Self::Hash,
+            ExitAfterStageArg::Dedup => Self::Dedup,
+            ExitAfterStageArg::Stage => Self::Stage,
+            ExitAfterStageArg::Tar => Self::Tar,
+            ExitAfterStageArg::Cleanup => Self::Cleanup,
+        }
+    }
+}
+
+impl ExitAfterStage {
+    /// Pipeline phase whose successful completion triggers exit (`None` = run through cleanup).
+    pub fn stop_after_phase(self) -> Option<PipelinePhase> {
+        match self {
+            Self::Scan => Some(PipelinePhase::Inventory),
+            Self::Hash => Some(PipelinePhase::Hash),
+            Self::Dedup => Some(PipelinePhase::Dedup),
+            Self::Stage => Some(PipelinePhase::Stage),
+            Self::Tar => Some(PipelinePhase::Archive),
+            Self::Cleanup => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,6 +292,80 @@ impl PipelinePhase {
             Self::Done => None,
         }
     }
+
+    pub fn parse(raw: &str) -> crate::error::Result<Self> {
+        match raw {
+            "inventory" => Ok(Self::Inventory),
+            "hash" => Ok(Self::Hash),
+            "dedup" => Ok(Self::Dedup),
+            "stage" => Ok(Self::Stage),
+            "archive" => Ok(Self::Archive),
+            "done" => Ok(Self::Done),
+            other => Err(crate::error::Error::Config(format!(
+                "unknown pipeline phase: {other}"
+            ))),
+        }
+    }
+}
+
+/// Extract pipeline driver phase (persisted in meta `extract_phase`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExtractPipelinePhase {
+    /// Scan tar stream into cache; ingest snapshot.sqlite copies into the extract work DB.
+    ScanTar,
+    /// Place extracted payloads / links at final rel_paths.
+    Place,
+    /// Remove temporary extract files and embedded snapshot copies.
+    Cleanup,
+    Done,
+}
+
+impl ExtractPipelinePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ScanTar => "scan_tar",
+            Self::Place => "place",
+            Self::Cleanup => "cleanup",
+            Self::Done => "done",
+        }
+    }
+
+    pub fn parse(raw: &str) -> crate::error::Result<Self> {
+        match raw {
+            "scan_tar" => Ok(Self::ScanTar),
+            "place" => Ok(Self::Place),
+            "cleanup" => Ok(Self::Cleanup),
+            "done" => Ok(Self::Done),
+            other => Err(crate::error::Error::Config(format!(
+                "unknown extract pipeline phase: {other}"
+            ))),
+        }
+    }
+
+    pub fn next(self) -> Option<Self> {
+        match self {
+            Self::ScanTar => Some(Self::Place),
+            Self::Place => Some(Self::Cleanup),
+            Self::Cleanup => Some(Self::Done),
+            Self::Done => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtractRuntimeState {
+    pub phase: ExtractPipelinePhase,
+    /// Number of snapshot.sqlite members ingested from the archive so far.
+    pub snapshots_ingested: u32,
+}
+
+impl ExtractRuntimeState {
+    pub fn new() -> Self {
+        Self {
+            phase: ExtractPipelinePhase::ScanTar,
+            snapshots_ingested: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,4 +393,56 @@ fn validate_dir(path: &Path, label: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Parse `xz`-style memory limits: raw bytes, `MiB`/`GiB`, or `%` of physical RAM.
+fn parse_memlimit(s: &str) -> Result<u64> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        let pct: u64 = pct
+            .trim()
+            .parse()
+            .map_err(|_| Error::Config(format!("invalid memlimit percentage: {s}")))?;
+        if pct == 0 || pct > 100 {
+            return Err(Error::Config(format!(
+                "memlimit percentage must be 1–100, got {pct}%"
+            )));
+        }
+        let ram = physical_ram_bytes().ok_or_else(|| {
+            Error::Config("cannot read physical RAM for memlimit percentage".into())
+        })?;
+        return Ok(pct * ram / 100);
+    }
+
+    let (num, scale) = if let Some(v) = s.strip_suffix("GiB") {
+        (v.trim(), 1024u64 * 1024 * 1024)
+    } else if let Some(v) = s.strip_suffix("G") {
+        (v.trim(), 1000u64 * 1000 * 1000)
+    } else if let Some(v) = s.strip_suffix("MiB") {
+        (v.trim(), 1024u64 * 1024)
+    } else if let Some(v) = s.strip_suffix("M") {
+        (v.trim(), 1000u64 * 1000)
+    } else if let Some(v) = s.strip_suffix("KiB") {
+        (v.trim(), 1024u64)
+    } else if let Some(v) = s.strip_suffix("K") {
+        (v.trim(), 1000u64)
+    } else {
+        (s, 1u64)
+    };
+
+    let n: u64 = num
+        .parse()
+        .map_err(|_| Error::Config(format!("invalid memlimit: {s}")))?;
+    n.checked_mul(scale)
+        .ok_or_else(|| Error::Config(format!("memlimit overflow: {s}")))
+}
+
+fn physical_ram_bytes() -> Option<u64> {
+    let line = std::fs::read_to_string("/proc/meminfo")
+        .ok()?
+        .lines()
+        .find(|l| l.starts_with("MemTotal:"))?
+        .to_string();
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
 }

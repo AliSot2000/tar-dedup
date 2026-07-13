@@ -24,6 +24,10 @@ pub struct FileRecord {
     pub mode: Option<u32>,
     #[allow(dead_code)]
     pub canonical_id: Option<FileId>,
+    /// Staged/tar member name (`content_id`); set for canonical files at stage time.
+    pub tar_path: Option<String>,
+    /// Set when an ingested snapshot lists this row (or its canonical) as `archived`.
+    pub snapshot_archived: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -39,18 +43,69 @@ pub struct NewFileRecord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilePhase {
+    // Archive pipeline
     Inventoried,
     Hashed,
-    #[allow(dead_code)]
     Deduped,
     Staged,
     Archived,
+    // Extract pipeline — placement at final rel_path
+    /// Ready to restore (payload may already be in extract cache).
+    Unarchived,
+    /// Regular file restored at its final rel_path.
+    AtDestination,
+    /// Symlink (or link) restored at its final rel_path.
+    LinkAtDestination,
+}
+
+impl FilePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inventoried => "inventoried",
+            Self::Hashed => "hashed",
+            Self::Deduped => "deduped",
+            Self::Staged => "staged",
+            Self::Archived => "archived",
+            Self::Unarchived => "unarchived",
+            Self::AtDestination => "at_destination",
+            Self::LinkAtDestination => "link_at_destination",
+        }
+    }
+
+    pub fn parse(raw: &str) -> crate::error::Result<Self> {
+        match raw {
+            "inventoried" => Ok(Self::Inventoried),
+            "hashed" => Ok(Self::Hashed),
+            "deduped" => Ok(Self::Deduped),
+            "staged" => Ok(Self::Staged),
+            "archived" => Ok(Self::Archived),
+            "unarchived" => Ok(Self::Unarchived),
+            "at_destination" => Ok(Self::AtDestination),
+            "link_at_destination" => Ok(Self::LinkAtDestination),
+            other => Err(crate::error::Error::Config(format!(
+                "unknown file phase: {other}"
+            ))),
+        }
+    }
+
+    pub fn is_archive_phase(self) -> bool {
+        matches!(
+            self,
+            Self::Inventoried
+                | Self::Hashed
+                | Self::Deduped
+                | Self::Staged
+                | Self::Archived
+        )
+    }
+
+    pub fn is_extract_phase(self) -> bool {
+        !self.is_archive_phase()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct DuplicateGroup {
-    pub sha1: [u8; 20],
-    pub size: u64,
     pub members: Vec<FileId>,
 }
 

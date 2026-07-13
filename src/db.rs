@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::config::RuntimeState;
+use crate::config::{ExtractRuntimeState, RuntimeState};
 use crate::db::types::{
     ArchiveSession, DuplicateGroup, FileId, FilePhase, FileRecord, NewFileRecord,
 };
@@ -12,9 +12,11 @@ pub mod types;
 
 mod archive;
 mod dedup;
+mod extract;
 mod hash;
 mod inventory;
 mod schema;
+pub mod content_id;
 
 pub struct Database {
     conn: Connection,
@@ -37,6 +39,14 @@ impl Database {
     pub fn get_file(&self, file_id: FileId) -> Result<Option<FileRecord>> {
         inventory::get_file(&self.conn, file_id)
     }
+    // TODO: Resolution does happen to single file which is not deterministic.
+    pub fn get_file_by_tar_path(&self, tar_path: &str) -> Result<Option<FileRecord>> {
+        inventory::get_file_by_tar_path(&self.conn, tar_path)
+    }
+
+    pub fn set_tar_path(&self, file_id: FileId, tar_path: &str) -> Result<()> {
+        inventory::set_tar_path(&self.conn, file_id, tar_path)
+    }
 
     pub fn count_files(&self) -> Result<u64> {
         inventory::count_files(&self.conn)
@@ -56,10 +66,6 @@ impl Database {
 
     pub fn duplicate_groups(&self) -> Result<Vec<DuplicateGroup>> {
         hash::duplicate_groups(&self.conn)
-    }
-
-    pub fn canonical_for(&self, sha1: [u8; 20], size: u64) -> Result<Option<FileId>> {
-        hash::canonical_for(&self.conn, sha1, size)
     }
 
     pub fn set_canonical(&self, file_id: FileId, canonical_id: FileId) -> Result<()> {
@@ -95,16 +101,8 @@ impl Database {
         archive::open_session(&self.conn)
     }
 
-    pub fn queue_archive_entry(&self, file_id: FileId, session_id: i64, tar_path: &str) -> Result<i64> {
-        archive::queue_entry(&self.conn, file_id, session_id, tar_path)
-    }
-
-    pub fn mark_entry_done(&self, entry_id: i64) -> Result<()> {
-        archive::mark_entry_done(&self.conn, entry_id)
-    }
-
-    pub fn abandon_archive_session(&self, session_id: i64) -> Result<()> {
-        archive::abandon_session(&self.conn, session_id)
+    pub fn reset_archive_state(&self) -> Result<()> {
+        archive::reset_archive_state(&self.conn)
     }
 
     pub fn sum_canonical_bytes_to_archive(&self) -> Result<u64> {
@@ -113,5 +111,52 @@ impl Database {
 
     pub fn sum_archived_canonical_bytes(&self) -> Result<u64> {
         archive::sum_archived_canonical_bytes(&self.conn)
+    }
+
+    pub fn checkpoint(&self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    // --- Extract pipeline ---
+
+    pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<()> {
+        extract::install_initial_manifest(snapshot_path, db_path)
+    }
+
+    pub fn apply_snapshot_archived_flags(&self, snapshot_path: &Path) -> Result<u64> {
+        extract::apply_snapshot_archived_flags(&self.conn, snapshot_path)
+    }
+
+    pub fn promote_cached_tar_member(&self, tar_path: &str) -> Result<()> {
+        extract::promote_cached_tar_member(&self.conn, tar_path)
+    }
+
+    pub fn count_unconfirmed_restored(&self) -> Result<u64> {
+        extract::count_unconfirmed_restored(&self.conn)
+    }
+
+    pub fn load_extract_runtime_state(&self) -> Result<Option<ExtractRuntimeState>> {
+        extract::load_extract_runtime_state(&self.conn)
+    }
+
+    pub fn save_extract_runtime_state(&self, state: &ExtractRuntimeState) -> Result<()> {
+        extract::save_extract_runtime_state(&self.conn, state)
+    }
+
+    pub fn record_snapshot_ingested(&self) -> Result<u32> {
+        extract::record_snapshot_ingested(&self.conn)
+    }
+
+    pub fn list_files_to_restore(&self) -> Result<Vec<FileRecord>> {
+        extract::list_files_to_restore(&self.conn)
+    }
+
+    pub fn tar_member_path(&self, record: &FileRecord) -> Result<String> {
+        extract::tar_member_path(&self.conn, record)
+    }
+
+    pub fn init_extract_runtime_state(&self) -> Result<()> {
+        extract::init_extract_runtime_state(&self.conn)
     }
 }
