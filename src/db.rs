@@ -16,6 +16,7 @@ mod extract;
 mod hash;
 mod inventory;
 mod schema;
+pub mod content_id;
 
 pub struct Database {
     conn: Connection,
