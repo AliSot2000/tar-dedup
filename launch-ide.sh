@@ -3,10 +3,10 @@ set -e
 
 case "$1" in
   rust-rover)
-    exec nix develop --command rust-rover .
+    exec nix develop --command rust-rover . &
     ;;
   cursor)
-    exec nix develop --command cursor .
+    exec nix develop --command cursor . &
     ;;
   *)
     echo "Usage: $0 [rust-rover|cursor]"
