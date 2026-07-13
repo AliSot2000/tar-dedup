@@ -1,4 +1,5 @@
-#!/bin/bash
+#! /usr/bin/env nix-shell
+#! nix-shell -i bash -p bash
 
 
 # CLI ARGS
@@ -12,7 +13,7 @@ while :
 do
 	case "$1" in
 		-t | --target-dir )
-		target_dir=$2
+		target_dir="${2}"
 		shift 2;
 		;;
 
@@ -40,37 +41,42 @@ then
   exit 1
 fi
 
-abs_tgt="$(readlink target_dir)"
+echo "Target: ${target_dir}"
+abs_tgt="$(readlink -m "${target_dir}")"
 echo "Creating directory: ${abs_tgt}"
 mkdir -p "${abs_tgt}"
 
+
 if $socket
 then
-  nc -lU "$abs_tgt/socket.sock" &
+  nc -lU "${abs_tgt}/socket.sock" &
   echo "Created nc instance listening on socket.sock"
   exit 0
 fi
 
 echo "Creating File..."
-touch "$abs_tgt/file.txt"
+touch "${abs_tgt}/file.txt"
 
 echo "Creating Directory..."
-mkdir -p "$abs_tgt/dir/"
+mkdir -p "${abs_tgt}/dir/"
 
 echo "Creating Symlink..."
-ln -s "$abs_tgt/file.txt" "$abs_tgt/symlink"
+ln -s "${abs_tgt}/file.txt" "${abs_tgt}/symlink"
 
 # INFO: The socket was already created earlier.
-echo "Following Directory Entries need to root rights or CAP_MKNOD"
+echo ""
+echo "The following Directory Entries need to root rights or CAP_MKNOD"
 echo "If this failes, consider adding your user to CAP_MKNOD or invoking this script with root"
+echo ""
 
 echo "Creating block device"
-mknod "$abs_tgt/block_dev" b 99 99
+mknod "${abs_tgt}/block_dev" b 99 99
 
 echo "Create character device"
-mknod "$abs_tgt/block_dev" c 99 99
+mknod "${abs_tgt}/block_dev" c 99 99
 
 echo "Creating fifo queue"
-mknod "$abs_tgt/fifo" p
+mknod "${abs_tgt}/fifo" p
 
+echo ""
 echo "Done crating files"
