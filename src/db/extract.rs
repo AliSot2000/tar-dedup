@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::config::{ExtractPipelinePhase, ExtractRuntimeState};
 use crate::db::inventory;
@@ -19,7 +19,10 @@ pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<
 /// Rows listed as `archived` in an ingested snapshot → `snapshot_archived = 1` (catalog confirmation).
 pub fn apply_snapshot_archived_flags(conn: &Connection, snapshot_path: &Path) -> Result<u64> {
     let path = snapshot_path.to_string_lossy();
-    conn.execute("ATTACH DATABASE ?1 AS snap", params![path.as_ref()])?;
+    conn.execute(
+        "ATTACH DATABASE :path AS snap",
+        named_params! { ":path": path.as_ref() },
+    )?;
     let flagged = conn.execute(
         "UPDATE files SET snapshot_archived = 1
          WHERE rel_path IN (SELECT rel_path FROM snap.files WHERE phase = 'archived')",
@@ -38,14 +41,14 @@ pub fn apply_snapshot_archived_flags(conn: &Connection, snapshot_path: &Path) ->
 /// Payload landed in extract cache → ready to place (`snapshot_archived` unchanged).
 pub fn promote_cached_tar_member(conn: &Connection, tar_path: &str) -> Result<()> {
     conn.execute(
-        "UPDATE files SET phase = 'unarchived' WHERE tar_path = ?1",
-        params![tar_path],
+        "UPDATE files SET phase = 'unarchived' WHERE tar_path = :tar_path",
+        named_params! { ":tar_path": tar_path },
     )?;
     conn.execute(
         "UPDATE files SET phase = 'unarchived'
          WHERE tar_path IS NULL
-           AND canonical_id = (SELECT id FROM files WHERE tar_path = ?1 LIMIT 1)",
-        params![tar_path],
+           AND canonical_id = (SELECT id FROM files WHERE tar_path = :tar_path LIMIT 1)",
+        named_params! { ":tar_path": tar_path },
     )?;
     Ok(())
 }
@@ -63,11 +66,11 @@ pub fn list_files_to_restore(conn: &Connection) -> Result<Vec<FileRecord>> {
 
 pub fn count_unconfirmed_restored(conn: &Connection) -> Result<u64> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM files
+        "SELECT COUNT(*) AS count FROM files
          WHERE phase IN ('unarchived', 'at_destination', 'link_at_destination')
            AND snapshot_archived = 0",
         [],
-        |row| row.get(0),
+        |row| row.get("count"),
     )?;
     Ok(count as u64)
 }
@@ -102,9 +105,9 @@ pub fn init_extract_runtime_state(conn: &Connection) -> Result<()> {
 pub fn load_extract_runtime_state(conn: &Connection) -> Result<Option<ExtractRuntimeState>> {
     let phase = conn
         .query_row(
-            "SELECT value FROM meta WHERE key = 'extract_phase'",
-            [],
-            |row| row.get::<_, String>(0),
+            "SELECT value FROM meta WHERE key = :key",
+            named_params! { ":key": "extract_phase" },
+            |row| row.get::<_, String>("value"),
         )
         .optional()?;
 
@@ -114,9 +117,9 @@ pub fn load_extract_runtime_state(conn: &Connection) -> Result<Option<ExtractRun
 
     let snapshots_ingested: u32 = conn
         .query_row(
-            "SELECT value FROM meta WHERE key = 'extract_snapshots_ingested'",
-            [],
-            |row| row.get::<_, String>(0),
+            "SELECT value FROM meta WHERE key = :key",
+            named_params! { ":key": "extract_snapshots_ingested" },
+            |row| row.get::<_, String>("value"),
         )?
         .parse()
         .map_err(|_| {
@@ -153,9 +156,12 @@ pub fn record_snapshot_ingested(conn: &Connection) -> Result<u32> {
 
 fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(
-        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+        "INSERT INTO meta (key, value) VALUES (:key, :value)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, value],
+        named_params! {
+            ":key": key,
+            ":value": value,
+        },
     )?;
     Ok(())
 }
