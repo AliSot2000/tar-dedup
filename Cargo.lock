@@ -1118,7 +1118,6 @@ name = "tar-dedup"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "base64",
  "bzip2",
  "chrono",
@@ -1130,7 +1129,6 @@ dependencies = [
  "lzma-sys",
  "nix",
  "num_cpus",
- "predicates",
  "rayon",
  "rusqlite",
  "serde",
@@ -1144,6 +1142,17 @@ dependencies = [
  "walkdir",
  "xz2",
  "zstd",
+]
+
+[[package]]
+name = "tar-dedup-cli"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "clap",
+ "predicates",
+ "tar-dedup",
+ "tracing-subscriber",
 ]
 
 [[package]]
