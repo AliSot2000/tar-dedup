@@ -221,7 +221,7 @@ fn apply_metadata(
     dest: &Path,
 ) -> Result<()> {
     if let Some(mtime) = record.mtime {
-        let ft = FileTime::from_unix_time(mtime, 0);
+        let ft = FileTime::from_unix_time(mtime.timestamp(), mtime.timestamp_subsec_nanos());
         let _ = set_file_mtime(dest, ft);
     }
 
