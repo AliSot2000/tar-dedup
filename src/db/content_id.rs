@@ -10,7 +10,7 @@ const HASH_B64_LEN: usize = 27;
 /// `u64` / `i64` → 8 bytes → 11 chars URL-safe base64 (no pad).
 const U64_B64_LEN: usize = 11;
 
-/// Staged/tar member name: `{hash_b64}_{fsize_b64}_{fid_b64}.ext`.
+/// Staged/tar member name: `{hash_b64}.{fsize_b64}.{fid_b64}.ext`.
 pub fn content_id_from_digest(
     digest: &[u8; 20],
     size: u64,
@@ -21,10 +21,10 @@ pub fn content_id_from_digest(
     let size_part = URL_SAFE_NO_PAD.encode(size.to_le_bytes());
     let fid_part = URL_SAFE_NO_PAD.encode(file_id.0.to_le_bytes());
     let ext = original_extension(rel_path);
-    ContentId(format!("{hash_part}_{size_part}_{fid_part}{ext}"))
+    ContentId(format!("{hash_part}.{size_part}.{fid_part}{ext}"))
 }
 
-/// Parse `{hash_b64}_{fsize_b64}_{fid_b64}.ext` back into `(digest, size, file_id, extension)`.
+/// Parse `{hash_b64}.{fsize_b64}.{fid_b64}.ext` back into `(digest, size, file_id, extension)`.
 pub fn parse_content_id(content_id: &str) -> Result<([u8; 20], u64, FileId, String)> {
     let ext = original_extension(Path::new(content_id));
     let stem = content_id
@@ -34,8 +34,8 @@ pub fn parse_content_id(content_id: &str) -> Result<([u8; 20], u64, FileId, Stri
     // Fixed layout: base64 URL-safe alphabet includes `_`, so do not split on `_`.
     let expected_stem = HASH_B64_LEN + 1 + U64_B64_LEN + 1 + U64_B64_LEN;
     if stem.len() != expected_stem
-        || stem.as_bytes()[HASH_B64_LEN] != b'_'
-        || stem.as_bytes()[HASH_B64_LEN + 1 + U64_B64_LEN] != b'_'
+        || stem.as_bytes()[HASH_B64_LEN] != b'.'
+        || stem.as_bytes()[HASH_B64_LEN + 1 + U64_B64_LEN] != b'.'
     {
         return Err(Error::Config(format!("invalid content id: {content_id}")));
     }
