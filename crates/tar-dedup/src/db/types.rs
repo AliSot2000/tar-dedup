@@ -1,6 +1,5 @@
-use std::path::PathBuf;
-
 use chrono::{DateTime, Utc};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileId(pub i64);
@@ -41,6 +40,118 @@ pub struct NewFileRecord {
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     pub mode: Option<u32>,
+}
+
+/// Enum represents all possible targets a symlink can have. `Unknown` is for dangling links that
+/// could not be resolved. Destination is to be understood as the transitive closure of any given
+/// length of symlinks i.e. A -> B -> C -> D Will lead to A,B,C all having the same link type even
+/// though only C points to LinkType and A,B point to symlinks themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkType {
+    File,
+    Directory,
+    Socket,
+    FIFO,
+    CharacterDevice,
+    BlockDevice,
+    Dangling,
+    Cycle,
+    /// Emitted if an error is encountered while accessing the file type.
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileType {
+    File,
+    Directory,
+    Socket,
+    FIFO,
+    CharacterDevice,
+    BlockDevice,
+    Symlink(LinkType),
+    /// Emitted if an error is encountered while accessing the file type.
+    Unknown,
+}
+
+impl LinkType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Directory => "dir",
+            Self::FIFO => "fifo",
+            Self::CharacterDevice => "char_dev",
+            Self::BlockDevice => "block_dev",
+            Self::Dangling => "dangling",
+            Self::Cycle => "cycle",
+            Self::Socket => "socket",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(raw: &str) -> crate::error::Result<Self> {
+        match raw {
+            "file" => Ok(Self::File),
+            "dir" => Ok(Self::Directory),
+            "fifo" => Ok(Self::FIFO),
+            "char_dev" => Ok(Self::CharacterDevice),
+            "block_dev" => Ok(Self::BlockDevice),
+            "dangling" => Ok(Self::Dangling),
+            "cycle" => Ok(Self::Cycle),
+            "socket" => Ok(Self::Socket),
+            "unknown" => Ok(Self::Unknown),
+            other => Err(crate::error::Error::Other(anyhow::anyhow!(
+                "unknown LinkType: {other}"
+            ))),
+        }
+    }
+}
+
+impl FileType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Directory => "dir",
+            Self::FIFO => "fifo",
+            Self::CharacterDevice => "char_dev",
+            Self::BlockDevice => "block_dev",
+            Self::Socket => "socket",
+            Self::Unknown => "unknown",
+            Self::Symlink(LinkType::File) => "symlink_file",
+            Self::Symlink(LinkType::Directory) => "symlink_dir",
+            Self::Symlink(LinkType::Socket) => "symlink_socket",
+            Self::Symlink(LinkType::FIFO) => "symlink_fifo",
+            Self::Symlink(LinkType::CharacterDevice) => "symlink_char_dev",
+            Self::Symlink(LinkType::BlockDevice) => "symlink_block_dev",
+            Self::Symlink(LinkType::Dangling) => "symlink_dangling",
+            Self::Symlink(LinkType::Cycle) => "symlink_cycle",
+            Self::Symlink(LinkType::Unknown) => "symlink_unknown",
+        }
+    }
+
+    pub fn parse(raw: &str) -> crate::error::Result<Self> {
+        match raw {
+            "file" => Ok(Self::File),
+            "dir" => Ok(Self::Directory),
+            "fifo" => Ok(Self::FIFO),
+            "char_dev" => Ok(Self::CharacterDevice),
+            "block_dev" => Ok(Self::BlockDevice),
+            "socket" => Ok(Self::Socket),
+            "unknown" => Ok(Self::Unknown),
+            // All Symlink variants.
+            "symlink_file" => Ok(Self::Symlink(LinkType::File)),
+            "symlink_dir" => Ok(Self::Symlink(LinkType::Directory)),
+            "symlink_socket" => Ok(Self::Symlink(LinkType::Socket)),
+            "symlink_fifo" => Ok(Self::Symlink(LinkType::FIFO)),
+            "symlink_char_dev" => Ok(Self::Symlink(LinkType::CharacterDevice)),
+            "symlink_block_dev" => Ok(Self::Symlink(LinkType::BlockDevice)),
+            "symlink_dangling" => Ok(Self::Symlink(LinkType::Dangling)),
+            "symlink_cycle" => Ok(Self::Symlink(LinkType::Cycle)),
+            "symlink_unknown" => Ok(Self::Symlink(LinkType::Unknown)),
+            other => Err(crate::error::Error::Other(anyhow::anyhow!(
+                "unknown FileType: {other}"
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
