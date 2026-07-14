@@ -16,10 +16,10 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let mut inserted = 0u64;
 
     for entry in WalkDir::new(&config.input_dir)
-        .follow_links(false) // Feature follow symlinks
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+            .follow_links(false) // Feature: follow symlinks
+            .into_iter()
+            .filter_map(|e| e.ok()) {
+
         shutdown.check_between_files()?;
         // TODO deal with special files.
         if !entry.file_type().is_file() {
