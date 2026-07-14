@@ -73,7 +73,7 @@ echo "Creating block device"
 mknod "${abs_tgt}/block_dev" b 99 99
 
 echo "Create character device"
-mknod "${abs_tgt}/block_dev" c 99 99
+mknod "${abs_tgt}/char_dev" c 99 99
 
 echo "Creating fifo queue"
 mknod "${abs_tgt}/fifo" p
