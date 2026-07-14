@@ -11,6 +11,7 @@ path = "src/main.rs"
 tar-dedup = { workspace = true }
 clap = { workspace = true }
 tracing-subscriber = { workspace = true }
+path-clean = "1.0.1"
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
