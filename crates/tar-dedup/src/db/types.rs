@@ -227,3 +227,52 @@ pub struct ArchiveSession {
     pub id: i64,
     pub archive_offset: u64,
 }
+
+//==================================================================================================
+// Testing
+//==================================================================================================
+
+#[test]
+fn link_type_as_str_roundtrip() {
+    let kinds = [
+        LinkType::File,
+        LinkType::Directory,
+        LinkType::Socket,
+        LinkType::FIFO,
+        LinkType::CharacterDevice,
+        LinkType::BlockDevice,
+        LinkType::Dangling,
+        LinkType::Cycle,
+        LinkType::Unknown,
+    ];
+
+    for kind in kinds {
+        assert_eq!(LinkType::parse(kind.as_str()).expect("parse"), kind);
+    }
+}
+
+#[test]
+fn file_type_as_str_roundtrip() {
+    let kinds = [
+        FileType::File,
+        FileType::Directory,
+        FileType::Socket,
+        FileType::FIFO,
+        FileType::CharacterDevice,
+        FileType::BlockDevice,
+        FileType::Unknown,
+        FileType::Symlink(LinkType::File),
+        FileType::Symlink(LinkType::Directory),
+        FileType::Symlink(LinkType::Socket),
+        FileType::Symlink(LinkType::FIFO),
+        FileType::Symlink(LinkType::CharacterDevice),
+        FileType::Symlink(LinkType::BlockDevice),
+        FileType::Symlink(LinkType::Dangling),
+        FileType::Symlink(LinkType::Cycle),
+        FileType::Symlink(LinkType::Unknown),
+    ];
+
+    for kind in kinds {
+        assert_eq!(FileType::parse(kind.as_str()).expect("parse"), kind);
+    }
+}
