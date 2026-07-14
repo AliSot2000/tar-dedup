@@ -102,6 +102,8 @@ Compression Algo extractions:
 - Character Devices (root!)
 - (Doors) - Solaris possible feature
 - (Whiteout) - BSD possible feature.
+- Doors and Whiteout are discontinued for the moment.
+- However, sockets will be indexed but not created in any capacity.
 
 # File System Metadata
 - xattrs
