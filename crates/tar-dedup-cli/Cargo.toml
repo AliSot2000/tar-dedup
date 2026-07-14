@@ -1,0 +1,17 @@
+[package]
+name = "tar-dedup-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "tar-dedup"
+path = "src/main.rs"
+
+[dependencies]
+tar-dedup = { workspace = true }
+clap = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
