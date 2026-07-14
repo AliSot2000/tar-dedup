@@ -44,11 +44,9 @@ fn main(){
         let is_socket = convert_bool(ft.is_socket());
         let is_fifo = convert_bool(ft.is_fifo());
 
-
-
         // let is_dir_symlink = convert_bool(ft.is_symlink_dir());
         // let is_file_symlink = convert_bool(ft.is_symlink_file());
 
-        println!("File Name: {file_name:10} File Type casting: file: {is_file}, dir: {is_dir}, is_sym: {is_symlink}, block device: {is_blockdev}, char device: {is_chardev}, fifo: {is_fifo}, socket: {is_socket}, Permissions: {:#0b}", metadata.mode());
+        println!("File Name: {file_name:10} File Type casting: file: {is_file}, dir: {is_dir}, is_sym: {is_symlink}, block device: {is_blockdev}, char device: {is_chardev}, fifo: {is_fifo}, socket: {is_socket}, Permissions: {:#0b}", metadata.mode() & 0o7777);
     }
 }
