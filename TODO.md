@@ -4,62 +4,67 @@
 - Sparse files (detect them ahead of time)
 - Sparsification of files before archive (build holes on os side)
 - Filter ACLS,
+- [ ] Support for Windows permissions
+- [ ] Only report Permission error / ... once (deduplicate the same error.)
 
 ## General:
-- Testing
-- Different Verbosities
-- Sequential / Parallel where possible
+- [ ] Testing
+- [ ] Different Verbosities
+- [ ] Sequential / Parallel where possible
+- [ ] Add Version of Tool to metadata
+- [ ] Add Platform to metadata
 
 ## Phases
 ### CLI:
-- Add all flags / subcommand to the cli parse
-- Add validation for all flags for the cli parser
-- Add basic CLI tests
+- [ ] Add all flags / subcommand to the cli parse
+- [ ] Add validation for all flags for the cli parser
+- [ ] Add basic CLI tests
 
 ### Inventory
-- Support arbitrary file types (file, dir, symlink, hardlink, socket, pipe, block device, char device)
-- Ignored types: (Doors (Solaris), Whiteout (BSD))
-- Add POSIX ACLS
-- Add XATTRS
-- Add SELinux permissions
-- Add birth_time and ctime
-- Add separate log stream
+- [X] Support arbitrary file types (file, dir, symlink, hardlink, socket, pipe, block device, char device)
+- ~~[ ] Weird types: (Doors (Solaris), Whiteout (BSD))~~
+- [ ] Add POSIX ACLS
+- [ ] Add XATTRS
+- [ ] Add SELinux permissions
+- [X] Add birth_time and ctime
+- [ ] Add separate log stream
+- [ ] Store ln -s target for windows (file/dir (recursively resolve softlinks until cycle or non-softlink file is reached))
 
 ### Hash
-- Docker style output (by default)
-- Check file for changes (based on times)
+- [ ] Docker style output (by default)
+- [ ] Check file for changes (based on times)
 
 ### Dedup
 Should be done?
-- Better logging?
+- [ ] Better logging?
 
 ### Staging
-- Basically done?
-- Materialize sparse files.
+- [ ] Basically done?
+- [ ] Materialize sparse files.
 
 ### Archive
-- Finish the FileEntry and ContentID structs
-- Finish the different compression algorithms
-- Finish plane
-- Finish shell-out
+- [ ] Finish the FileEntry and ContentID structs
+- [ ] Finish the different compression algorithms
+- [ ] Finish plane
+- [ ] Finish shell-out
 
 ### Scan/Extract
-- Live check the files
-- Potentially data driven file extraction
+- [ ] Live check the files
+- [ ] Potentially data driven file extraction
 
 ### Hash
-- Hash file on extraction
-- Hash eager (DDFE)
+- [ ] Hash file on extraction
+- [ ] Hash eager (DDFE)
 
 ### Move / Place
-- Move eager (DDFE)
-- Link into Place (!! Does not allow for apply permissions) => Do user vs read only
+- [ ] Move eager (DDFE)
+- [ ] Link into Place (!! Does not allow for apply permissions) => Do user vs read only
 
 ### Apply permissions
-- Apply permissions to the files (bottom up - in case the user does not have the same rights as the user creating the files initially)
-- Apply permissions eagerly (DDFE) + Warning might lock you out of file.
+- [ ] Apply permissions to the files (bottom up - in case the user does not have the same rights as the user creating the files initially)
+- [ ] Apply permissions eagerly (DDFE) + Warning might lock you out of file.
 
 ### Clear
-- Clean up database and stage dir, in case the dir was not cleared already
-- Emit any errors
-- Delete database if needed.
+- [ ] Clean up database and stage dir, in case the dir was not cleared already
+- [ ] Emit any errors
+- [ ] Delete database if needed.
