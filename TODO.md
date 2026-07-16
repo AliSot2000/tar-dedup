@@ -13,6 +13,7 @@
 - [ ] Sequential / Parallel where possible
 - [ ] Add Version of Tool to metadata
 - [ ] Add Platform to metadata
+- [ ] Exclude.
 
 ## Phases
 ### CLI:
@@ -23,9 +24,9 @@
 ### Inventory
 - [X] Support arbitrary file types (file, dir, symlink, hardlink, socket, pipe, block device, char device)
 - ~~[ ] Weird types: (Doors (Solaris), Whiteout (BSD))~~
-- [ ] Add POSIX ACLS
-- [ ] Add XATTRS
-- [ ] Add SELinux permissions
+- [X] Add POSIX ACLS
+- [X] Add XATTRS
+- [X] Add SELinux permissions
 - [X] Add birth_time and ctime
 - [ ] Add separate log stream
 - [ ] Store ln -s target for windows (file/dir (recursively resolve softlinks until cycle or non-softlink file is reached))
