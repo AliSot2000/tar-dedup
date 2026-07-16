@@ -1,9 +1,13 @@
+use std::iter::zip;
 use chrono::{DateTime, Utc};
+use nix::libc::{gid_t, uid_t};
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::config::{PipelinePhase, RuntimeState};
 use crate::db::types::{FileId, FilePhase, FileRecord, NewFileRecord};
 use crate::error::Result;
+use nix::unistd::{Gid, Group, Uid, User};
+
 
 const FILES_SELECT: &str =
     "id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path, snapshot_archived";
@@ -191,3 +195,102 @@ fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
     )?;
     Ok(())
 }
+
+fn get_all_uids(conn: &Connection) -> Result<Vec<u32>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT uid FROM files WHERE uid IS NOT NULL")?;
+    let rows = stmt.query_map([], |row| {
+        let uid: u32 = row.get(0)?;
+        Ok(uid)
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+fn get_all_gids(conn: &Connection) -> Result<Vec<u32>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT gid FROM files WHERE gid is NOT NULL")?;
+    let rows = stmt.query_map([], |row| {
+        let gid: u32 = row.get(0)?;
+        Ok(gid)
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+/// Update all rows where uid matches given `uid` and set username column to `uname`
+fn set_uname_from_uid(conn: &Connection, uid: &u32, uname: &str) -> Result<()> {
+    conn.execute("UPDATE files SET username = :username WHERE uid = :uid",
+                 named_params! {
+        ":uid": uid,
+        ":username": uname,
+    })?;
+    Ok(())
+}
+
+/// Update all rows where gid matches given `gid` and set groupname column to `gname`
+fn set_gname_from_gid(conn: &Connection, gid: &u32, gname: &str) -> Result<()> {
+    conn.execute("UPDATE files SET groupname = :groupname WHERE gid = :gid",
+                 named_params! {
+        ":gid": gid,
+        ":groupname": gname,
+    })?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
+    // Get all present uids and gids
+    let uids = get_all_uids(&conn)?;
+    let gids = get_all_gids(&conn)?;
+
+    // Resolve uids and gids.
+    let resolves_names: Vec<Option<String>> = uids
+        .iter()
+        .map(|uid| {
+            let resolved_user = match User::from_uid(Uid::from_raw(uid.clone() as uid_t)) {
+                Ok(u) => u.map(|u| u.name),
+                Err(e) => {
+                    println!("Error while resolving uid {uid}: {e}");
+                    None
+                },
+            };
+            resolved_user
+        }).collect();
+    let resolved_groups: Vec<Option<String>> = gids
+        .iter()
+        .map(|gid| {
+            let resolved_group = match Group::from_gid(Gid::from_raw(gid.clone() as gid_t)) {
+                Ok(g) => g.map(|g| g.name),
+                Err(e) => {
+                    println!("Error while resolving gid {gid}: {e}");
+                    None
+                }
+            };
+            resolved_group
+        }).collect();
+
+    // Set the names now from lookup array.
+    for (uid, o_uname) in zip(uids.iter(), resolves_names.iter()){
+        if o_uname.is_none() {
+            println!("Could not resolve {uid} to username");
+            continue;
+        }
+        set_uname_from_uid(&conn, uid, o_uname.as_ref().unwrap())?;
+    }
+    for (gid, o_gname) in zip(gids.iter(), resolved_groups.iter()){
+        if o_gname.is_none() {
+            println!("Could not resolve {gid} to groupname");
+            continue;
+        }
+        set_gname_from_gid(&conn, gid, o_gname.as_ref().unwrap())?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
+    Err("Resolve Numeric Ids not available on this platform")
+}
+
+
+// TODO more metadata commandd:
+//  Add the archive version + archiver version
+//  Add read out methods.
+//  Populate username, group name
