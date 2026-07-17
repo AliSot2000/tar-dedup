@@ -97,6 +97,9 @@ impl Config {
             exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             memlimit_compress,
             restore_owner: false,
+            do_xattrs: true,
+            do_posix_acl: true,
+            do_selinux: true,
         })
     }
 
@@ -130,6 +133,9 @@ impl Config {
             exit_after_stage: None,
             memlimit_compress: None,
             restore_owner: args.restore_owner,
+            do_xattrs: true,
+            do_posix_acl: true,
+            do_selinux: true,
         })
     }
 
