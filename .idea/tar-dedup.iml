@@ -9,6 +9,8 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/tar-dedup/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/tar-dedup/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/tar-dedup/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/sparse-cp/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/sparse-cp/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
