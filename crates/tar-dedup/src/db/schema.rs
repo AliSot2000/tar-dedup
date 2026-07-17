@@ -48,7 +48,6 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(sha1, size);
 CREATE INDEX IF NOT EXISTS idx_files_canonical ON files(canonical_id);
 CREATE INDEX IF NOT EXISTS idx_files_phase ON files(phase);
-CREATE INDEX IF NOT EXISTS idx_files_tar_path ON files(tar_path);
 
 CREATE TABLE IF NOT EXISTS archive_sessions (
     id             INTEGER PRIMARY KEY,
