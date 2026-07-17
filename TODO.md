@@ -29,7 +29,7 @@
 - [X] Add SELinux permissions
 - [X] Add birth_time and ctime
 - [ ] Add separate log stream
-- [ ] Store ln -s target for windows (file/dir (recursively resolve softlinks until cycle or non-softlink file is reached))
+- [X] Store ln -s target for windows (file/dir (recursively resolve softlinks until cycle or non-softlink file is reached))
 
 ### Hash
 - [ ] Docker style output (by default)
