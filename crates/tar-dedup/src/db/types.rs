@@ -37,9 +37,14 @@ pub struct NewFileRecord {
     pub size: u64,
     pub mtime: Option<DateTime<Utc>>,
     pub atime: Option<DateTime<Utc>>,
+    pub ctime: Option<DateTime<Utc>>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     pub mode: Option<u32>,
+    pub ftype: Option<FileType>,
+    pub xattrs: Option<String>,
+    pub posix_acl: Option<String>,
+    pub selinux_ctx: Option<Vec<u8>>
 }
 
 /// Enum represents all possible targets a symlink can have. `Unknown` is for dangling links that
