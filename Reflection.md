@@ -105,13 +105,9 @@ Compression Algo extractions:
 - Doors and Whiteout are discontinued for the moment.
 - However, sockets will be indexed but not created in any capacity.
 
-# File System Metadata
-- xattrs
-- nfsv4_acl (zfs)
-- nfs4xdr_acls
-
 # Compression Algo Overview
-```bash
+## bzip2
+```
 bzip2, a block-sorting file compressor.  Version 1.0.8, 13-Jul-2019.
 
    usage: bzip2 [flags and input files in any order]
@@ -139,7 +135,9 @@ bzip2, a block-sorting file compressor.  Version 1.0.8, 13-Jul-2019.
    If no file names are given, bzip2 compresses or decompresses
    from standard input to standard output.  You can combine
    short flags, so `-v -4' means the same as -v4 or -4v, &c.
-
+```
+## The xz command
+```
 Usage: xz [OPTION]... [FILE]...
 Compress or decompress FILEs in the .xz format.
 
@@ -168,7 +166,9 @@ With no FILE, or when FILE is -, read standard input.
 
 Report bugs to <xz@tukaani.org> (in English or Finnish).
 XZ Utils home page: <https://tukaani.org/xz/>
-
+```
+## The lzip command
+```
 Lzip is a lossless data compressor.
 
 Usage: lzip [options] [files]
@@ -197,9 +197,40 @@ Options:
 
 If no file names are given, or if a file is '-', lzip compresses or
 decompresses from standard input to standard output.
+```
+## The lzma command
+```
+Usage: lzma [OPTION]... [FILE]...
+Compress or decompress FILEs in the .xz format.
 
-=> LZMA = XZ
+Mandatory arguments to long options are mandatory for short options too.
 
+  -z, --compress      force compression
+  -d, --decompress    force decompression
+  -t, --test          test compressed file integrity
+  -l, --list          list information about .xz files
+  -k, --keep          keep (don't delete) input files
+  -f, --force         force overwrite of output file and (de)compress links
+  -c, --stdout        write to standard output and don't delete input files
+  -0 ... -9           compression preset; default is 6; take compressor *and*
+                      decompressor memory usage into account before using 7-9!
+  -e, --extreme       try to improve compression ratio by using more CPU time;
+                      does not affect decompressor memory requirements
+  -T, --threads=NUM   use at most NUM threads; the default is 0 which uses as
+                      many threads as there are processor cores
+  -q, --quiet         suppress warnings; specify twice to suppress errors too
+  -v, --verbose       be verbose; specify twice for even more verbose
+  -h, --help          display this short help and exit
+  -H, --long-help     display the long help (lists also the advanced options)
+  -V, --version       display the version number and exit
+
+With no FILE, or when FILE is -, read standard input.
+
+Report bugs to <xz@tukaani.org> (in English or Finnish).
+XZ Utils home page: <https://tukaani.org/xz/>
+```
+## The lzop command
+```
                           Lempel-Ziv-Oberhumer Packer
                            Copyright (C) 1996 - 2017
 lzop v1.04         Markus Franz Xaver Johannes Oberhumer         Aug 10th 2017
@@ -223,7 +254,9 @@ Options:
   -S.suf use suffix .suf on compressed files
   -U     delete input files after successful operation (like gzip and bzip2)
   file.. files to (de)compress. If none given, try standard input.
-
+```
+## The zstd command
+```
 Compress or decompress the INPUT file(s); reads from STDIN if INPUT is `-` or not provided.
 
 Usage: zstd [OPTIONS...] [INPUT... | -] [-o OUTPUT]
@@ -248,7 +281,9 @@ Options:
   -h                            Display short usage and exit.
   -H, --help                    Display full help and exit.
   -V, --version                 Display the program version and exit.
-
+```
+## The gzip command
+```
 Usage: gzip [OPTION]... [FILE]...
 Compress or uncompress FILEs (by default, compress FILES in-place).
 
@@ -277,7 +312,9 @@ Mandatory arguments to long options are mandatory for short options too.
 With no FILE, or when FILE is -, read standard input.
 
 Report bugs to <bug-gzip@gnu.org>.
-
+```
+## The compress command
+```
 Usage: compress [-dfhvcVr] [-b maxbits] [--] [path ...]
   --   Halt option processing and treat all remaining args as paths.
   -d   If given, decompression is done instead.
