@@ -51,6 +51,13 @@ pub struct Config {
     pub memlimit_compress: Option<u64>,
     /// Extract: restore uid/gid when possible.
     pub restore_owner: bool,
+
+    /// Capture xattrs
+    pub do_xattrs: bool,
+    /// Capture posix_acls
+    pub do_posix_acl: bool,
+    /// Capture SELinux context
+    pub do_selinux: bool,
 }
 
 impl Config {
