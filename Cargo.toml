@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/tar-dedup",
     "crates/tar-dedup-cli",
+    "crates/sparse-cp",
 ]
 
 [workspace.package]
@@ -11,6 +12,7 @@ edition = "2024"
 
 [workspace.dependencies]
 tar-dedup = { path = "crates/tar-dedup" }
+sparse-cp = { path = "crates/sparse-cp" }
 
 clap = { version = "4", features = ["derive"] }
 tar = "0.4"
