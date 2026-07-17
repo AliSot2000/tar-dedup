@@ -1,0 +1,18 @@
+[package]
+name = "sparse-cp"
+version.workspace = true
+edition.workspace = true
+description = "Sparse-aware file copy and zero-block scanner"
+
+[[bin]]
+name = "sparse-cp"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+anyhow = { workspace = true }
+filetime = { workspace = true }
+indicatif = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
