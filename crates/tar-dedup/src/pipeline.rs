@@ -4,7 +4,7 @@ mod extract;
 mod hash;
 mod inventory;
 mod stage;
-mod xattr;
+pub mod xattr;
 
 use std::fs::{self, OpenOptions};
 
