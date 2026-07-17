@@ -14,15 +14,33 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS files (
     id            INTEGER PRIMARY KEY,
     rel_path      TEXT NOT NULL UNIQUE,
+
+    -- File Attributes
     size          INTEGER NOT NULL,
     sha1          BLOB,
     mtime         TEXT,
     atime         TEXT,
+    ctime         TEXT,
     uid           INTEGER,
+    username      TEXT,
     gid           INTEGER,
+    groupname     TEXT,
     mode          INTEGER,
+
+    -- Extended File Attributes
+    xattr         TEXT,
+    acl           TEXT,
+    selinux       BLOB,
+
+    -- Extract Data
+    extract_mtime TEXT,
+    extract_atime TEXT,
+    extract_ctime TEXT,
+
+    -- Internal Stuff
+    sparse_count  INTEGER,
+    excluded      INTEGER,
     canonical_id  INTEGER REFERENCES files(id),
-    tar_path      TEXT,
     phase         TEXT NOT NULL DEFAULT 'inventoried',
     snapshot_archived INTEGER NOT NULL DEFAULT 0
 );
