@@ -1,15 +1,16 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use sparse_cp::{
     sparse_copy_with_progress, sparse_page_count, sparse_page_count_with_progress, SparseCopyStats,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verbosity {
     Quiet,
     Plain,
@@ -17,31 +18,89 @@ enum Verbosity {
     Pretty,
 }
 
+impl FromStr for Verbosity {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "0" | "quiet" => Ok(Self::Quiet),
+            "1" | "plain" => Ok(Self::Plain),
+            "2" | "verbose" => Ok(Self::Verbose),
+            "3" | "pretty" => Ok(Self::Pretty),
+            other => Err(format!(
+                "invalid verbosity `{other}` (expected 0|quiet, 1|plain, 2|verbose, 3|pretty)"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for Verbosity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Quiet => "quiet",
+            Self::Plain => "plain",
+            Self::Verbose => "verbose",
+            Self::Pretty => "pretty",
+        })
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "sparse-cp",
-    about = "Sparse-aware file copy, or scan an input for all-zero blocks"
+    about = "Sparse-aware file copy, or scan an input for all-zero blocks",
+    after_help = VERBOSITY_AFTER_HELP
 )]
 struct Args {
     /// Input file path.
     input: PathBuf,
 
-    /// Output file path (required unless `--list-only`).
+    /// Output file path (required unless `--list-only` / `-l`).
     #[arg(required_unless_present = "list_only")]
     output: Option<PathBuf>,
 
-    /// How much status to print.
-    #[arg(long, value_enum, default_value_t = Verbosity::Plain)]
+    /// Output detail: `quiet`/`0`, `plain`/`1`, `verbose`/`2`, `pretty`/`3`.
+    #[arg(
+        short = 'v',
+        long,
+        default_value = "pretty",
+        value_name = "LEVEL",
+        value_parser = clap::value_parser!(Verbosity),
+        long_help = VERBOSITY_LONG_HELP
+    )]
     verbosity: Verbosity,
 
     /// Block size in bytes used for zero detection / sparse seeks.
-    #[arg(long, default_value_t = 4096)]
+    #[arg(short = 'b', long, default_value_t = 4096, value_name = "BYTES")]
     block_size: u32,
 
     /// Only scan the input; print how many full zero blocks were found.
-    #[arg(long)]
+    #[arg(short = 'l', long = "list-only")]
     list_only: bool,
 }
+
+const VERBOSITY_LONG_HELP: &str = "\
+Output detail level. Accepts a name or an integer (usable as `-v2` or `-v 2`).
+
+  0 / quiet    No stdout; failures only via non-zero exit code
+  1 / plain    Short capturable summary (newlines only, no \\r)
+  2 / verbose  Progress as separate lines (tee-safe; no \\r)
+  3 / pretty   Progress bar via indicatif (uses \\r; TTY-oriented)
+
+Default: pretty";
+
+const VERBOSITY_AFTER_HELP: &str = "\
+Verbosity (-v / --verbosity):
+  0 quiet    silent success; errors on stderr + exit code
+  1 plain    minimal summary lines (script / tee friendly)
+  2 verbose  periodic progress lines without carriage returns
+  3 pretty   interactive progress bar (indicatif)
+
+Examples:
+  sparse-cp -l -b 4096 -v0 input.bin
+  sparse-cp -v2 input.bin output.bin
+  sparse-cp --verbosity plain input.bin output.bin
+";
 
 fn main() {
     if let Err(e) = try_main() {
@@ -105,7 +164,10 @@ fn run_list_only(args: &Args, block_size: usize) -> Result<()> {
             count
         }
     };
-    println!("Found {count} blocks of {block_size} of zeros.");
+
+    if args.verbosity != Verbosity::Quiet {
+        println!("Found {count} blocks of {block_size} of zeros.");
+    }
     Ok(())
 }
 
