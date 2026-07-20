@@ -127,6 +127,7 @@ fn try_main() -> Result<()> {
     }
 }
 
+/// Function performs sub action of list_only. Takes care of emitting output to stdout, ...
 fn run_list_only(args: &Args, block_size: usize) -> Result<()> {
     let input = &args.input;
     let size_in = std::fs::metadata(input)
@@ -171,6 +172,7 @@ fn run_list_only(args: &Args, block_size: usize) -> Result<()> {
     Ok(())
 }
 
+/// Function takes care of full sparse copy from a to b including progress reports.
 fn run_copy(args: &Args, output: &PathBuf, block_size: usize) -> Result<()> {
     let input = &args.input;
     let size_in = std::fs::metadata(input)
@@ -285,6 +287,7 @@ fn should_emit_verbose(read: u64, total: u64, last_reported: u64) -> bool {
     read.saturating_sub(last_reported) >= STEP
 }
 
+/// Convert number of bytes to human readable format.
 fn fmt_bytes(n: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = 1024.0 * 1024.0;
@@ -301,6 +304,7 @@ fn fmt_bytes(n: u64) -> String {
     }
 }
 
+/// Convert duration in to human-readable format.
 fn fmt_duration(d: Duration) -> String {
     let secs = d.as_secs();
     if secs < 60 {
@@ -317,6 +321,7 @@ fn fmt_duration(d: Duration) -> String {
     }
 }
 
+/// Format ETA to human-readable format.
 fn fmt_eta(read: u64, total: u64, elapsed: Duration) -> String {
     if read == 0 || total == 0 || read >= total {
         return "?".to_string();
