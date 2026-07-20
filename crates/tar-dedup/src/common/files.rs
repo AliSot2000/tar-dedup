@@ -3,15 +3,45 @@ use chrono::{DateTime, Utc};
 use std::io;
 use std::path::Path;
 
-/// Get all times associated with the file. Result is `(mtime, atime, ctime)`
-pub fn get_file_times(meta: &std::fs::Metadata)
-    -> (io::Result<DateTime<Utc>>,
-                   io::Result<DateTime<Utc>>,
-                   io::Result<DateTime<Utc>>) {
-    let file_mtime = file_mtime(&meta);
-    let file_atime = file_atime(&meta);
-    let file_ctime = file_ctime(&meta);
-    (file_mtime, file_atime, file_ctime)
+/// Iterator adapter: run `pre` on each item **immediately before** yielding it.
+///
+/// Paired with rayon `par_bridge()`, this means the check runs when a worker is
+/// about to take the item — not in a bulk scan hours before that file is hashed.
+pub struct PreYield<I, F> {
+    inner: I,
+    pre: F,
+}
+
+impl<I, F> PreYield<I, F> {
+    pub fn new(inner: I, pre: F) -> Self {
+        Self { inner, pre }
+    }
+}
+
+impl<I, F> Iterator for PreYield<I, F>
+where
+    I: Iterator,
+    F: FnMut(&I::Item),
+{
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.inner.next()?;
+        (self.pre)(&item);
+        Some(item)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<I, F> ExactSizeIterator for PreYield<I, F>
+where
+    I: ExactSizeIterator,
+    F: FnMut(&I::Item),
+{
+}
 
 /// Heuristic check: compare live timestamps to values captured at inventory.
 ///
