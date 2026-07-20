@@ -161,19 +161,32 @@ impl FileType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilePhase {
-    // Archive pipeline
+    // Archive pipeline - archive everything in the given directory.
+    /// File metadata has been captured (fsize, permissions, path)
     Inventoried,
+    /// File Content was scanned for deduplication and sparsification
     Hashed,
+    /// File inclusion/exclusion calculation is done
+    Filtered,
+    /// Based on the
     Deduped,
+    /// Create sparse copies of files with holes.
+    Sparsified,
+    /// Symlink created in stage
     Staged,
+    /// Files added to tar archived and compressed with given compression algorithm.
     Archived,
-    // Extract pipeline — placement at final rel_path
+
+    // Extract pipeline — restore everything to rel_path inside the archive
     /// Ready to restore (payload may already be in extract cache).
     Unarchived,
-    /// Regular file restored at its final rel_path.
+    /// An optional check to make sure there was no file corruption on the way.
+    Rehashed,
+    /// Any DirEntry successfully restored at destination.
     AtDestination,
-    /// Symlink (or link) restored at its final rel_path.
-    LinkAtDestination,
+    /// Permissions of the file were restored/attempted to restore.
+    PermissionsRestored,
+
 }
 
 impl FilePhase {
@@ -181,12 +194,16 @@ impl FilePhase {
         match self {
             Self::Inventoried => "inventoried",
             Self::Hashed => "hashed",
+            Self::Filtered => "filtered",
             Self::Deduped => "deduped",
+            Self::Sparsified => "sparsified",
             Self::Staged => "staged",
             Self::Archived => "archived",
+
             Self::Unarchived => "unarchived",
+            Self::Rehashed => "rehashed",
             Self::AtDestination => "at_destination",
-            Self::LinkAtDestination => "link_at_destination",
+            Self::PermissionsRestored => "permissions_restored",
         }
     }
 
@@ -194,12 +211,16 @@ impl FilePhase {
         match raw {
             "inventoried" => Ok(Self::Inventoried),
             "hashed" => Ok(Self::Hashed),
+            "filtered" => Ok(Self::Filtered),
             "deduped" => Ok(Self::Deduped),
+            "sparsified" => Ok(Self::Sparsified),
             "staged" => Ok(Self::Staged),
             "archived" => Ok(Self::Archived),
+
             "unarchived" => Ok(Self::Unarchived),
+            "rehashed" => Ok(Self::Rehashed),
             "at_destination" => Ok(Self::AtDestination),
-            "link_at_destination" => Ok(Self::LinkAtDestination),
+            "permissions_restored" => Ok(Self::PermissionsRestored),
             other => Err(crate::error::Error::Config(format!(
                 "unknown file phase: {other}"
             ))),
@@ -211,7 +232,9 @@ impl FilePhase {
             self,
             Self::Inventoried
                 | Self::Hashed
+                | Self::Filtered
                 | Self::Deduped
+                | Self::Sparsified
                 | Self::Staged
                 | Self::Archived
         )
