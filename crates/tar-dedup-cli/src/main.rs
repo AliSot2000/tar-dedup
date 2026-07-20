@@ -15,11 +15,11 @@ fn main() -> tar_dedup::error::Result<()> {
     match cli.command {
         Command::Archive(args) => {
             let config = Config::from_archive_args(&args)?;
-            tar_dedup::pipeline::run_archive(config, shutdown)
+            tar_dedup::archive::run(config, shutdown)
         }
         Command::Extract(args) => {
             let config = Config::from_extract_args(&args)?;
-            tar_dedup::pipeline::run_extract(config, shutdown)
+            tar_dedup::unarchive::run(config, shutdown)
         }
     }
 }

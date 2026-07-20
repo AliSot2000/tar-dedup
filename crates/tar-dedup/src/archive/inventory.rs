@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 
 use crate::config::Config;
 use crate::db::types::{FileType, LinkType, NewFileRecord};
-use crate::pipeline::xattr::{get_file_xattr, get_file_acl, get_file_selinux_data};
+use crate::common::xattr::{get_file_xattr, get_file_acl, get_file_selinux_data};
 use crate::db::Database;
 use crate::error::{FileStatError, Result};
 use crate::progress::CountProgress;
@@ -47,7 +47,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let ctime = strip_transpose(path, file_ctime(&meta), &mut enc_err);
         let uid = strip_transpose(path, file_uid(& path), &mut enc_err);
         let gid = strip_transpose(path, file_gid(&path), &mut enc_err);
-        let ftype = strip_transpose(path, determine_file_type(entry), &mut enc_err);
+        let ftype = strip_transpose(path, determine_file_type(&entry), &mut enc_err);
         let mode = file_mode(&meta);
 
         // Optional data
@@ -79,7 +79,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             uid,
             gid,
             ftype,
-            mode,
+            mode: Some(mode),
             xattrs,
             posix_acl,
             selinux_ctx,
@@ -162,9 +162,9 @@ fn file_mode(_meta: &std::fs::Metadata) -> u32 {
 /// If a link returns a NotFound Error, `Dangling` is returned
 /// If a link target cannot be resolved (any other error e.g. permission error), `Unknown` is return
 #[cfg(unix)]
-fn resolve_link(e: DirEntry) -> io::Result<LinkType> {
+fn resolve_link(e: &DirEntry) -> io::Result<LinkType> {
     let mut visited = HashSet::new();
-    let mut current = e.path();
+    let mut current = e.path().to_path_buf();
     assert!(current.is_symlink(), "INVARIANT: Non-Link DirEntry supplied");
     assert!(current.is_absolute(), "INVARIANT: Non-Absolute Path supplied");
 
@@ -180,7 +180,7 @@ fn resolve_link(e: DirEntry) -> io::Result<LinkType> {
                 let target = std::fs::read_link(&current);
                 match target {
                     Ok(pb) => {
-                        current = resolve_relative(current, pb.as_path()).as_path();
+                        current = resolve_relative(&current, pb.as_path());
                         continue;
                     }
                     Err(e) => {
@@ -208,6 +208,8 @@ fn resolve_link(e: DirEntry) -> io::Result<LinkType> {
             return Ok(LinkType::BlockDevice);
         } else if ft.is_socket() {
             return Ok(LinkType::Socket);
+        } else {
+            return Ok(LinkType::Unknown);
         }
     }
 }
@@ -230,15 +232,9 @@ fn resolve_relative(link_path: &Path, target: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn determine_file_type(e: DirEntry) -> io::Result<FileType> {
-    let ft = match e.file_type() {
-        Ok(o) => o,
-        Err(e) => {
-            println!("Failed to resolve file type {}", e);
-            return Ok(FileType::Unknown)
-        },
-    };
-    // Iterate through all possible file types
+fn determine_file_type(e: &DirEntry) -> io::Result<FileType> {
+    // walkdir::DirEntry::file_type() is infallible.
+    let ft = e.file_type();
     if ft.is_file() {
         Ok(FileType::File)
     } else if ft.is_dir() {
@@ -250,7 +246,7 @@ fn determine_file_type(e: DirEntry) -> io::Result<FileType> {
     } else if ft.is_char_device() {
         Ok(FileType::CharacterDevice)
     } else if ft.is_symlink() {
-        return Ok(FileType::Symlink(resolve_link(e)?));
+        Ok(FileType::Symlink(resolve_link(e)?))
     } else {
         Ok(FileType::Unknown)
     }

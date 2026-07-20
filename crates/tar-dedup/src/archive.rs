@@ -1,10 +1,10 @@
-mod archive;
+//! Archive (compress) pipeline: inventory → hash → dedup → stage → tar-writer.
+
 mod dedup;
-mod extract;
 mod hash;
 mod inventory;
 mod stage;
-pub mod xattr;
+mod tar_writer;
 
 use std::fs::{self, OpenOptions};
 
@@ -15,9 +15,7 @@ use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
-pub use extract::run as run_extract;
-
-pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
+pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
     let _lock = acquire_workdir_lock(&config)?;
 
     let db = Database::open(&config.db_path())?;
@@ -56,7 +54,7 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
     while state.phase != PipelinePhase::Done {
         shutdown.check_between_files()?;
 
-        tracing::info!(phase = state.phase.as_str(), "pipeline phase");
+        tracing::info!(phase = state.phase.as_str(), "archive phase");
         match run_phase(&state.phase, &config, &db, &shutdown) {
             Ok(()) => {}
             Err(Error::Interrupted) => {
@@ -98,10 +96,7 @@ pub fn run_archive(config: Config, shutdown: Shutdown) -> Result<()> {
         }
     }
 
-    eprintln!(
-        "archive written to {}",
-        config.archive_path.display()
-    );
+    eprintln!("archive written to {}", config.archive_path.display());
 
     if config.exit_after_stage == Some(crate::config::ExitAfterStage::Cleanup) {
         if !config.keep_stage {
@@ -174,7 +169,7 @@ fn run_phase(
         PipelinePhase::Hash => hash::run(config, db, shutdown),
         PipelinePhase::Dedup => dedup::run(config, db, shutdown),
         PipelinePhase::Stage => stage::run(config, db, shutdown),
-        PipelinePhase::Archive => archive::run(config, db, shutdown),
+        PipelinePhase::Archive => tar_writer::run(config, db, shutdown),
         PipelinePhase::Done => Ok(()),
     }
 }

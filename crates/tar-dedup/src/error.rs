@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use thiserror::Error;
-use crate::pipeline::xattr::PosixQualifierParserError;
+use crate::common::xattr::PosixQualifierParserError;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
