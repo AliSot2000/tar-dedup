@@ -60,8 +60,8 @@ impl Database {
         inventory::mark_phase(&self.conn, file_id, phase)
     }
 
-    pub fn set_sha1(&self, file_id: FileId, digest: [u8; 20]) -> Result<()> {
-        hash::set_sha1(&self.conn, file_id, digest)
+    pub fn update_file_inspection(&self, file_id: FileId, digest: [u8; 20], sparse_count: u64) -> Result<()> {
+        hash::update_file_inspection(&self.conn, file_id, digest, sparse_count)
     }
 
     pub fn duplicate_groups(&self) -> Result<Vec<DuplicateGroup>> {
