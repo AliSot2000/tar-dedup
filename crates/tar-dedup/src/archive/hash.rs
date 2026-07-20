@@ -8,8 +8,9 @@ use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use sha1::{Digest, Sha1};
 
+use crate::common::files::{warn_if_times_changed, PreYield};
 use crate::config::Config;
-use crate::db::types::FileId;
+use crate::db::types::{FileId, FileRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::progress::io_buffer;
@@ -54,9 +55,15 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     );
     bar.enable_steady_tick(std::time::Duration::from_millis(100));
 
+    // `PreYield` stats each file when `par_bridge` pulls it for a worker — just
+    // before that file is hashed, not in a bulk pass at the start of the stage.
+    let checked = PreYield::new(pending.iter(), |record: &&FileRecord| {
+        let path = input_dir.join(&record.rel_path);
         warn_if_times_changed(&path, record.mtime, record.atime, record.ctime);
+    });
+
     let parallel = pool.install(|| {
-        pending.par_iter().try_for_each(|record| {
+        checked.par_bridge().try_for_each(|record| {
             shutdown.check_between_files()?;
             let path = input_dir.join(&record.rel_path);
             let (digest, zero_blocks) = hash_file(&path, &shutdown)?;
