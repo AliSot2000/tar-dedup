@@ -1,29 +1,35 @@
 use std::iter::zip;
-use chrono::{DateTime, Utc};
 use nix::libc::{gid_t, uid_t};
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::config::{PipelinePhase, RuntimeState};
+use crate::db::common::{upsert_meta, FILES_SELECT, map_file_record};
 use crate::db::types::{FileId, FilePhase, FileRecord, NewFileRecord};
 use crate::error::Result;
 use nix::unistd::{Gid, Group, Uid, User};
 
-
-const FILES_SELECT: &str =
-    "id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path, snapshot_archived";
-
 pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
     let changed = conn.execute(
-        "INSERT OR IGNORE INTO files (rel_path, size, mtime, atime, uid, gid, mode, phase)
-         VALUES (:rel_path, :size, :mtime, :atime, :uid, :gid, :mode, 'inventoried')",
+        "INSERT OR IGNORE INTO files (
+             rel_path, size, mtime, atime, ctime, uid, gid, mode, ftype,
+             xattr, acl, selinux, phase
+         ) VALUES (
+             :rel_path, :size, :mtime, :atime, :ctime, :uid, :gid, :mode, :ftype,
+             :xattr, :acl, :selinux, 'inventoried'
+         )",
         named_params! {
             ":rel_path": record.rel_path.to_string_lossy(),
             ":size": record.size,
             ":mtime": record.mtime.as_ref().map(|t| t.to_rfc3339()),
             ":atime": record.atime.as_ref().map(|t| t.to_rfc3339()),
+            ":ctime": record.ctime.as_ref().map(|t| t.to_rfc3339()),
             ":uid": record.uid,
             ":gid": record.gid,
             ":mode": record.mode,
+            ":ftype": record.ftype.map(|t| t.as_str()),
+            ":xattr": record.xattrs.as_deref(),
+            ":acl": record.posix_acl.as_deref(),
+            ":selinux": record.selinux_ctx.as_deref(),
         },
     )?;
     Ok(changed > 0)
