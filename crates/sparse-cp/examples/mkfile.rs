@@ -1,4 +1,4 @@
-//! Build synthetic test files for `sparse-cp` (sparse zeros + optional dirty blocks).
+//! Build dense synthetic test files for `sparse-cp`.
 //!
 //! ```text
 //! cargo run -p sparse-cp --example mkfile -- \
@@ -8,8 +8,9 @@
 //! This is a **separate executable** from `sparse-cp` (Cargo `examples/` target).
 //! Prefer `src/bin/` + `[[bin]]` only if you want it installed next to `sparse-cp`.
 
+use std::collections::HashSet;
 use std::fs::OpenOptions;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
@@ -18,7 +19,7 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(
     name = "mkfile",
-    about = "Create a sparse test file with a chosen number of non-zero blocks"
+    about = "Create a dense test file with a chosen number of non-zero blocks"
 )]
 struct Args {
     /// Destination path.
@@ -32,7 +33,7 @@ struct Args {
     #[arg(long, default_value_t = 4096)]
     block_size: u32,
 
-    /// Number of full blocks filled with non-zero data (rest stay sparse holes / zeros).
+    /// Number of full blocks filled with non-zero data (all other bytes are written as 0x00).
     /// May be 0; must not exceed `file_size / block_size`.
     #[arg(long, default_value_t = 0)]
     non_zero: u64,
@@ -52,6 +53,7 @@ fn try_main() -> Result<()> {
     }
     let block_size = args.block_size as u64;
     let total_blocks = args.file_size / block_size;
+    let remainder = (args.file_size % block_size) as usize;
     if args.non_zero > total_blocks {
         bail!(
             "--non-zero ({}) exceeds total full blocks ({}) for file_size={} block_size={}",
@@ -62,33 +64,40 @@ fn try_main() -> Result<()> {
         );
     }
 
+    let mut seed = 0x5EED_u64 ^ args.file_size ^ block_size ^ args.non_zero;
+    let dirty: HashSet<usize> = if args.non_zero > 0 {
+        pick_unique_indices(args.non_zero as usize, total_blocks as usize, &mut seed)
+            .into_iter()
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(&args.output)
         .with_context(|| format!("create {}", args.output.display()))?;
-    file.set_len(args.file_size)
-        .with_context(|| format!("truncate {}", args.output.display()))?;
 
-    if args.non_zero > 0 {
-        let mut seed = 0x5EED_u64
-            ^ args.file_size
-            ^ block_size
-            ^ args.non_zero;
-        let indices = pick_unique_indices(args.non_zero as usize, total_blocks as usize, &mut seed);
-        let mut page = vec![0u8; block_size as usize];
-        for &idx in &indices {
-            fill_nonzero(&mut page, &mut seed);
-            let offset = idx as u64 * block_size;
-            file.seek(SeekFrom::Start(offset))?;
-            file.write_all(&page)?;
+    // Dense write: every byte is written (zeros or non-zeros). No set_len/seek holes.
+    let zero_page = vec![0u8; block_size as usize];
+    let mut dirty_page = vec![0u8; block_size as usize];
+    for idx in 0..total_blocks as usize {
+        if dirty.contains(&idx) {
+            fill_nonzero(&mut dirty_page, &mut seed);
+            file.write_all(&dirty_page)?;
+        } else {
+            file.write_all(&zero_page)?;
         }
+    }
+    if remainder > 0 {
+        file.write_all(&zero_page[..remainder])?;
     }
 
     file.sync_all()?;
     println!(
-        "wrote {} (logical {} B, {} full blocks, {} non-zero @ block_size {})",
+        "wrote dense {} ({} B, {} full blocks, {} non-zero @ block_size {})",
         args.output.display(),
         args.file_size,
         total_blocks,
