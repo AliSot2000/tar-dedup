@@ -18,11 +18,21 @@ pub struct FileRecord {
     #[allow(dead_code)]
     pub atime: Option<DateTime<Utc>>,
     #[allow(dead_code)]
+    pub ctime: Option<DateTime<Utc>>,
+    #[allow(dead_code)]
     pub uid: Option<u32>,
     #[allow(dead_code)]
     pub gid: Option<u32>,
     #[allow(dead_code)]
     pub mode: Option<u32>,
+    #[allow(dead_code)]
+    pub ftype: Option<FileType>,
+    #[allow(dead_code)]
+    pub xattrs: Option<String>,
+    #[allow(dead_code)]
+    pub posix_acl: Option<String>,
+    #[allow(dead_code)]
+    pub selinux_ctx: Option<Vec<u8>>,
     #[allow(dead_code)]
     pub canonical_id: Option<FileId>,
     /// Staged/tar member name (`content_id`); set for canonical files at stage time.
@@ -44,7 +54,7 @@ pub struct NewFileRecord {
     pub ftype: Option<FileType>,
     pub xattrs: Option<String>,
     pub posix_acl: Option<String>,
-    pub selinux_ctx: Option<Vec<u8>>
+    pub selinux_ctx: Option<Vec<u8>>,
 }
 
 /// Enum represents all possible targets a symlink can have. `Unknown` is for dangling links that

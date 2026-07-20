@@ -26,21 +26,18 @@ CREATE TABLE IF NOT EXISTS files (
     gid           INTEGER,
     groupname     TEXT,
     mode          INTEGER,
+    ftype         TEXT,
 
     -- Extended File Attributes
     xattr         TEXT,
     acl           TEXT,
     selinux       BLOB,
 
-    -- Extract Data
-    extract_mtime TEXT,
-    extract_atime TEXT,
-    extract_ctime TEXT,
-
     -- Internal Stuff
     sparse_count  INTEGER,
     excluded      INTEGER,
     canonical_id  INTEGER REFERENCES files(id),
+    tar_path      TEXT,
     phase         TEXT NOT NULL DEFAULT 'inventoried',
     snapshot_archived INTEGER NOT NULL DEFAULT 0
 );
