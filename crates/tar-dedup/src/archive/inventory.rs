@@ -1,15 +1,14 @@
 #[cfg(unix)]
-use walkdir::DirEntry;
-#[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
+#[cfg(unix)]
+use walkdir::DirEntry;
 
-use chrono::{DateTime, Utc};
 use walkdir::WalkDir;
 
+use crate::common::files::get_file_times;
+use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::Config;
 use crate::db::types::{FileType, LinkType, NewFileRecord};
-use crate::common::xattr::{get_file_xattr, get_file_acl, get_file_selinux_data};
-use crate::common::files::get_file_times;
 use crate::db::Database;
 use crate::error::{FileStatError, Result};
 use crate::progress::CountProgress;
