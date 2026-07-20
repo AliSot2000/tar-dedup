@@ -9,6 +9,7 @@ use serde_json::from_str as serdej_from_str;
 use std::collections::HashMap;
 use std::ffi::{CString, OsStr};
 use std::fmt::Display;
+use std::io;
 use std::path::Path;
 use thiserror::Error;
 use xattrs;
@@ -77,7 +78,7 @@ pub fn get_file_xattr(path: &Path) -> FileStatResult<String> {
             }
         };
 
-        let unpacked_val: BString = match user_xattr.get(unpacked_key) {
+        let unpacked_val: BString = match user_xattr.get(unpacked_key.clone()) {
             Ok(k) => k,
             Err(e) => {
                 println!("Error Processing xattrs for {printable_path}: {e}");
@@ -295,7 +296,10 @@ pub fn set_file_acl(path: &Path, raw_acl: &str) -> FileStatResult<()> {
 /// Apply stored raw security context. WARNING: No validation is performed. Assumption is,
 /// data originated from the above `get_file_selinux_data` and not anything else.
 pub fn set_file_selinux_data(path: &Path, raw_ctx: &[u8]) -> FileStatResult<()> {
-    let c_string = CString::new(raw_ctx)?;
+    let c_string = CString::new(raw_ctx).map_err(|e| FileStatError::Io {
+        path: path.to_path_buf(),
+        source: io::Error::new(io::ErrorKind::InvalidData, e),
+    })?;
     let parsed_ctx = SecurityContext::from_c_str(&c_string, true);
     parsed_ctx.set_for_path(&path, false, false)
         .map_err(|e| {FileStatError::SELinux {path: path.to_path_buf(), source: e}})?;

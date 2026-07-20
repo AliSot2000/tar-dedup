@@ -18,7 +18,7 @@ pub enum CompressionFormat {
 
 impl CompressionFormat {
     pub fn allows_resume(self) -> bool {
-        match Self {
+        match self {
             Self::Xz => true,
             Self::Gz => true,
             Self::Bz2 => true,
@@ -333,8 +333,12 @@ impl PipelinePhase {
 pub enum ExtractPipelinePhase {
     /// Scan tar stream into cache; ingest snapshot.sqlite copies into the extract work DB.
     ScanTar,
+    /// Recompute hashes to detect corruption (stub).
+    Rehash,
     /// Place extracted payloads / links at final rel_paths.
     Place,
+    /// Apply mode/owner/xattrs/ACLs/SELinux (stub).
+    Permissions,
     /// Remove temporary extract files and embedded snapshot copies.
     Cleanup,
     Done,
@@ -344,7 +348,9 @@ impl ExtractPipelinePhase {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ScanTar => "scan_tar",
+            Self::Rehash => "rehash",
             Self::Place => "place",
+            Self::Permissions => "permissions",
             Self::Cleanup => "cleanup",
             Self::Done => "done",
         }
@@ -353,7 +359,9 @@ impl ExtractPipelinePhase {
     pub fn parse(raw: &str) -> crate::error::Result<Self> {
         match raw {
             "scan_tar" => Ok(Self::ScanTar),
+            "rehash" => Ok(Self::Rehash),
             "place" => Ok(Self::Place),
+            "permissions" => Ok(Self::Permissions),
             "cleanup" => Ok(Self::Cleanup),
             "done" => Ok(Self::Done),
             other => Err(crate::error::Error::Config(format!(
@@ -364,8 +372,10 @@ impl ExtractPipelinePhase {
 
     pub fn next(self) -> Option<Self> {
         match self {
-            Self::ScanTar => Some(Self::Place),
-            Self::Place => Some(Self::Cleanup),
+            Self::ScanTar => Some(Self::Rehash),
+            Self::Rehash => Some(Self::Place),
+            Self::Place => Some(Self::Permissions),
+            Self::Permissions => Some(Self::Cleanup),
             Self::Cleanup => Some(Self::Done),
             Self::Done => None,
         }
