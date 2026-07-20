@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::common::files::warn_if_times_changed;
 use crate::config::Config;
 use crate::db::types::{FileId, FilePhase, FileRecord};
 use crate::db::Database;
@@ -63,6 +64,9 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         )
         .0;
         let source = config.stage_dir().join(&tar_name);
+        // Stage path is a symlink; compare inventory times against the real target.
+        let target = std::fs::canonicalize(&source).map_err(|e| Error::io(&source, e))?;
+        warn_if_times_changed(&target, record.mtime, record.atime, record.ctime);
 
         progress.set_file("archive", &record.rel_path);
 
