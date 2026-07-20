@@ -9,6 +9,7 @@ use walkdir::WalkDir;
 use crate::config::Config;
 use crate::db::types::{FileType, LinkType, NewFileRecord};
 use crate::common::xattr::{get_file_xattr, get_file_acl, get_file_selinux_data};
+use crate::common::files::get_file_times;
 use crate::db::Database;
 use crate::error::{FileStatError, Result};
 use crate::progress::CountProgress;
@@ -42,9 +43,10 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             .map_err(|e| crate::error::Error::io(path, e))?;
 
         // Extract times, retaining the errors.
-        let mtime = strip_transpose(path, file_mtime(&meta), &mut enc_err);
-        let atime = strip_transpose(path, file_atime(&meta), &mut enc_err);
-        let ctime = strip_transpose(path, file_ctime(&meta), &mut enc_err);
+        let times = get_file_times(&meta);
+        let mtime = strip_transpose(path, times.0, &mut enc_err);
+        let atime = strip_transpose(path, times.1, &mut enc_err);
+        let ctime = strip_transpose(path, times.2, &mut enc_err);
         let uid = strip_transpose(path, file_uid(& path), &mut enc_err);
         let gid = strip_transpose(path, file_gid(&path), &mut enc_err);
         let ftype = strip_transpose(path, determine_file_type(&entry), &mut enc_err);
@@ -103,19 +105,6 @@ fn strip_transpose<T>(path: &Path, source: io::Result<T>, errors: &mut Vec<FileS
             None},
         Ok(dt_utc) => Some(dt_utc),
     }
-}
-
-// TODO: Propagate errors.
-fn file_mtime(meta: &std::fs::Metadata) -> io::Result<DateTime<Utc>> {
-    Ok(DateTime::<Utc>::from(meta.modified()?))
-}
-
-fn file_atime(meta: &std::fs::Metadata) -> io::Result<DateTime<Utc>> {
-    Ok(DateTime::<Utc>::from(meta.accessed()?))
-}
-
-fn file_ctime(meta: &std::fs::Metadata) -> io::Result<DateTime<Utc>> {
-    Ok(DateTime::<Utc>::from(meta.created()?))
 }
 
 #[cfg(unix)]
