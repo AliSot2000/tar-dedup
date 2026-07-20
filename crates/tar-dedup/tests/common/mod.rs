@@ -17,9 +17,14 @@ pub fn insert_file(db: &Database, rel_path: &str, size: u64) -> FileId {
         size,
         mtime: None,
         atime: None,
+        ctime: None,
         uid: None,
         gid: None,
         mode: None,
+        ftype: None,
+        xattrs: None,
+        posix_acl: None,
+        selinux_ctx: None,
     })
     .expect("insert file");
 
