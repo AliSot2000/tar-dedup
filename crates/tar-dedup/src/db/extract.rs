@@ -3,7 +3,7 @@ use std::path::Path;
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::config::{ExtractPipelinePhase, ExtractRuntimeState};
-use crate::db::inventory;
+use crate::db::common::{self, upsert_meta, FILES_SELECT, map_file_record};
 use crate::db::types::FileRecord;
 use crate::error::Result;
 
@@ -54,13 +54,10 @@ pub fn promote_cached_tar_member(conn: &Connection, tar_path: &str) -> Result<()
 }
 
 pub fn list_files_to_restore(conn: &Connection) -> Result<Vec<FileRecord>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, rel_path, size, sha1, mtime, atime, uid, gid, mode, canonical_id, tar_path, snapshot_archived
-         FROM files
-         WHERE phase = 'unarchived'
-         ORDER BY id",
-    )?;
-    let rows = stmt.query_map([], inventory::map_file_record)?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {FILES_SELECT} FROM files WHERE phase = 'unarchived' ORDER BY id"
+    ))?;
+    let rows = stmt.query_map([], map_file_record)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
@@ -80,7 +77,7 @@ pub fn tar_member_path(conn: &Connection, record: &FileRecord) -> Result<String>
         return Ok(path.clone());
     }
     let canonical_id = record.canonical_id.unwrap_or(record.id);
-    let canonical = inventory::get_file(conn, canonical_id)?.ok_or_else(|| {
+    let canonical = common::get_file(conn, canonical_id)?.ok_or_else(|| {
         crate::error::Error::Config(format!(
             "missing canonical file id {} for {}",
             canonical_id.0,
@@ -152,16 +149,4 @@ pub fn record_snapshot_ingested(conn: &Connection) -> Result<u32> {
     };
     save_extract_runtime_state(conn, &next)?;
     Ok(next.snapshots_ingested)
-}
-
-fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {
-    conn.execute(
-        "INSERT INTO meta (key, value) VALUES (:key, :value)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        named_params! {
-            ":key": key,
-            ":value": value,
-        },
-    )?;
-    Ok(())
 }
