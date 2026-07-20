@@ -1,0 +1,37 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Page-1" id="-ocRp2Z7wXUWNZGLSN3K">
+    <mxGraphModel dx="578" dy="551" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="9DIhULYmHQovRsN-wWZa-6" edge="1" parent="1" source="9DIhULYmHQovRsN-wWZa-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="9DIhULYmHQovRsN-wWZa-2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="9DIhULYmHQovRsN-wWZa-1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Archived&lt;br&gt;&amp;lt;File in Tar Archive&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="320" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="9DIhULYmHQovRsN-wWZa-7" edge="1" parent="1" source="9DIhULYmHQovRsN-wWZa-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="9DIhULYmHQovRsN-wWZa-3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="9DIhULYmHQovRsN-wWZa-2" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Unarchived&lt;br&gt;&amp;lt;File extracted to extract stage&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="190" x="310" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="9DIhULYmHQovRsN-wWZa-9" edge="1" parent="1" source="9DIhULYmHQovRsN-wWZa-3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="9DIhULYmHQovRsN-wWZa-4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="9DIhULYmHQovRsN-wWZa-3" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Rehashed&lt;br&gt;&amp;lt;Recomputed sha1 for integrity&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="190" x="310" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="9DIhULYmHQovRsN-wWZa-10" edge="1" parent="1" source="9DIhULYmHQovRsN-wWZa-4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="9DIhULYmHQovRsN-wWZa-5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="9DIhULYmHQovRsN-wWZa-4" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="AtDestination&lt;br&gt;&amp;lt;Moved/Linked to Dest&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="190" x="310" y="330" as="geometry" />
+        </mxCell>
+        <mxCell id="9DIhULYmHQovRsN-wWZa-5" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="PermissionsRestored&lt;br&gt;&amp;lt;Select Perm. Restored.&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="190" x="310" y="410" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

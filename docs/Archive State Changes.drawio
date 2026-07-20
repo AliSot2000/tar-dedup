@@ -1,0 +1,91 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Page-1" id="1UnwdVD593VJQ-sf7WL8">
+    <mxGraphModel dx="1012" dy="964" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="?&lt;br&gt;&amp;lt;File Unknown to System&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="329" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-2" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Inventoried&lt;br&gt;&amp;lt;File Metadata Recorded&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="329" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-3" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Filtered&lt;br&gt;&amp;lt;Files via inclusion/exclusion&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="220" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-4" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Hashed&lt;br&gt;&amp;lt;Sha1 + Hole detection run&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="430" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-5" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-1" style="endArrow=classic;html=1;rounded=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="f4nLmq5aRwHxMmIOJSOs-2" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="360" y="560" as="sourcePoint" />
+            <mxPoint x="410" y="510" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-6" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-2" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;edgeStyle=orthogonalEdgeStyle;" target="f4nLmq5aRwHxMmIOJSOs-3" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <Array as="points">
+              <mxPoint x="414" y="200" />
+              <mxPoint x="305" y="200" />
+            </Array>
+            <mxPoint x="360" y="560" as="sourcePoint" />
+            <mxPoint x="410" y="510" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-7" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-2" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;edgeStyle=orthogonalEdgeStyle;" target="f4nLmq5aRwHxMmIOJSOs-4" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="420" y="190" as="sourcePoint" />
+            <mxPoint x="410" y="510" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-15" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="f4nLmq5aRwHxMmIOJSOs-14">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="305" y="380" />
+              <mxPoint x="414" y="380" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-8" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Hashed&lt;br&gt;&amp;lt;Sha1 + Hole detection run&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="220" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-16" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="f4nLmq5aRwHxMmIOJSOs-14">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-9" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Filtered&lt;br&gt;&amp;lt;Files via inclusion/exclusion&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="430" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-10" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-3" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="f4nLmq5aRwHxMmIOJSOs-8" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="400" y="430" as="sourcePoint" />
+            <mxPoint x="450" y="380" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-13" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.513;entryY=0.055;entryDx=0;entryDy=0;entryPerimeter=0;" target="f4nLmq5aRwHxMmIOJSOs-9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-18" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="f4nLmq5aRwHxMmIOJSOs-17">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-14" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="Deduplicated&lt;br&gt;&amp;lt;Hash results verified&amp;gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="329" y="400" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-20" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="f4nLmq5aRwHxMmIOJSOs-19">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-17" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="&lt;div&gt;Sparsified&lt;/div&gt;&lt;div&gt;&amp;lt;Holes Punched&amp;gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="329" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-22" edge="1" parent="1" source="f4nLmq5aRwHxMmIOJSOs-19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="f4nLmq5aRwHxMmIOJSOs-21">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-19" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1" value="&lt;div&gt;Staged&lt;/div&gt;&lt;div&gt;&amp;lt;Symlink in Stage&amp;gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="329" y="560" as="geometry" />
+        </mxCell>
+        <mxCell id="f4nLmq5aRwHxMmIOJSOs-21" parent="1" style="rounded=0;whiteSpace=wrap;html=1;" value="&lt;div&gt;Archived&lt;/div&gt;&lt;div&gt;&amp;lt;Successfully added to tar&amp;gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="60" width="170" x="329" y="640" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
