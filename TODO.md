@@ -46,7 +46,6 @@ Should be done?
 
 ### Staging
 - [ ] Basically done?
-- [ ] Materialize sparse files.
 
 ### Archive
 - [ ] Finish the FileEntry and ContentID structs
