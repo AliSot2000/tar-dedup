@@ -13,11 +13,8 @@ pub struct FileRecord {
     pub rel_path: PathBuf,
     pub size: u64,
     pub sha1: Option<[u8; 20]>,
-    #[allow(dead_code)]
     pub mtime: Option<DateTime<Utc>>,
-    #[allow(dead_code)]
     pub atime: Option<DateTime<Utc>>,
-    #[allow(dead_code)]
     pub ctime: Option<DateTime<Utc>>,
     #[allow(dead_code)]
     pub uid: Option<u32>,
