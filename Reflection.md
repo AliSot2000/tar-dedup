@@ -91,6 +91,12 @@ Compression Algo extractions:
 - `compress`
   None
 
+# tar-dedup specials
+- `` `--bridge` perform deduplication + link back into place
+- `?` `--eager-filter` perform the entire filter in the database before hash rather than after 
+- `?` `--sparsify <opt num>` make files sparse prior to encoding. If num, 
+- `?` `--block-size` file system page size (usually 4kib). Determines granularity of 
+
 # Filesystem Nodes supported
 - Regular File
 - Directory

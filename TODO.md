@@ -6,6 +6,7 @@
 - Filter ACLS,
 - [ ] Support for Windows permissions
 - [ ] Only report Permission error / ... once (deduplicate the same error.)
+- [ ] Integrated logs? (Capture relevant logs / warning to a separate table?)
 
 ## General:
 - [ ] Testing
@@ -34,10 +35,14 @@
 ### Hash
 - [ ] Docker style output (by default)
 - [ ] Check file for changes (based on times)
+- [X] Added sparse file check. 
 
 ### Dedup
 Should be done?
 - [ ] Better logging?
+
+### Sparsified
+- [ ] Create sparse files. 
 
 ### Staging
 - [ ] Basically done?
