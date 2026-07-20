@@ -54,6 +54,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     );
     bar.enable_steady_tick(std::time::Duration::from_millis(100));
 
+        warn_if_times_changed(&path, record.mtime, record.atime, record.ctime);
     let parallel = pool.install(|| {
         pending.par_iter().try_for_each(|record| {
             shutdown.check_between_files()?;

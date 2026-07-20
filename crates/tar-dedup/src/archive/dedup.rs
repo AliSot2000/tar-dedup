@@ -1,3 +1,4 @@
+use crate::common::files::warn_if_times_changed;
 use crate::config::Config;
 use crate::db::types::FileId;
 use crate::db::Database;
@@ -51,6 +52,8 @@ fn run_inner(
     for record in db.files_in_phase(crate::db::types::FilePhase::Hashed)? {
         shutdown.check_between_files()?;
         bar.set_file("dedup", &record.rel_path);
+        let path = config.input_dir.join(&record.rel_path);
+        warn_if_times_changed(&path, record.mtime, record.atime, record.ctime);
         db.mark_self_canonical(record.id)?;
         bar.inc(1);
     }
@@ -110,7 +113,9 @@ fn resolve_path(config: &Config, db: &Database, file_id: FileId) -> Result<std::
     let record = db
         .get_file(file_id)?
         .ok_or_else(|| crate::error::Error::Config(format!("missing file id {}", file_id.0)))?;
-    Ok(config.input_dir.join(record.rel_path))
+    let path = config.input_dir.join(&record.rel_path);
+    warn_if_times_changed(&path, record.mtime, record.atime, record.ctime);
+    Ok(path)
 }
 
 fn files_equal(

@@ -1,6 +1,7 @@
 use std::fs;
 use std::os::unix::fs::symlink;
 
+use crate::common::files::warn_if_times_changed;
 use crate::config::Config;
 use crate::db::content_id::content_id_from_digest;
 use crate::db::Database;
@@ -24,6 +25,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             content_id_from_digest(&digest, record.size, file_id, &record.rel_path);
         let tar_name = content_id.0.as_str();
         let source_rel = config.input_dir.join(&record.rel_path);
+        warn_if_times_changed(
+            &source_rel,
+            record.mtime,
+            record.atime,
+            record.ctime,
+        );
         let source = source_rel
             .canonicalize()
             .map_err(|e| crate::error::Error::io(&source_rel, e))?;
