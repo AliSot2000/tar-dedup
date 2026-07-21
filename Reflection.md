@@ -96,7 +96,8 @@ Compression Algo extractions:
 - `?` `--eager-filter` perform the entire filter in the database before hash rather than after 
 - `?` `--sparsify <opt num>` make files sparse prior to encoding. If num, 
 - `?` `--block-size` file system page size (usually 4kib). Determines granularity of 
-
+- `?` `--reset-phase <phase>` Reset all files s.t. this phase will be executed again. Useful in cases of hash, dedup or sparsify.
+- `?` `--fail-fast` ... needs more work. look at dedup (fail on any error, fail pair on error, fail group on error.)
 # Filesystem Nodes supported
 - Regular File
 - Directory
