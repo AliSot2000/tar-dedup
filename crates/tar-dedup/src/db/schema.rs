@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- Placeholder at the moment will be fully populated when filter stage is designed
+CREATE TABLE IF NOT EXISTS exclusion_reasons (
+    id     INTEGER PRIMARY KEY,
+);
 
 CREATE TABLE IF NOT EXISTS files (
     id            INTEGER PRIMARY KEY,
@@ -35,11 +39,10 @@ CREATE TABLE IF NOT EXISTS files (
 
     -- Internal Stuff
     sparse_count  INTEGER,
-    excluded      INTEGER,
+    exclusion_id  INTEGER REFERENCES exclusion_reasons(id),
     canonical_id  INTEGER REFERENCES files(id),
-    tar_path      TEXT,
     phase         TEXT NOT NULL DEFAULT 'inventoried',
-    snapshot_archived INTEGER NOT NULL DEFAULT 0
+    flags         INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(sha1, size);
