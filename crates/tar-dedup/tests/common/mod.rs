@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tar_dedup::db::types::{FileId, FilePhase, NewFileRecord};
+use tar_dedup::db::types::{FileId, FilePhase, NewFileRecord, StrippedRecord};
 use tar_dedup::db::Database;
 
 pub fn open_temp_db() -> (tempfile::TempDir, Database) {
@@ -28,7 +28,7 @@ pub fn insert_file(db: &Database, rel_path: &str, size: u64) -> FileId {
     })
     .expect("insert file");
 
-    db.files_in_phase(FilePhase::Inventoried)
+    db.files_in_phase::<StrippedRecord>(FilePhase::Inventoried)
         .expect("list inventoried")
         .into_iter()
         .find(|f| f.rel_path == Path::new(rel_path))
