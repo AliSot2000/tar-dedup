@@ -1,8 +1,13 @@
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use crate::db::flags::FileFlags;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(pub i64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExclusionId(pub i64);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentId(pub String);
@@ -31,11 +36,27 @@ pub struct FileRecord {
     #[allow(dead_code)]
     pub selinux_ctx: Option<Vec<u8>>,
     #[allow(dead_code)]
+    pub exclusion_id: Option<ExclusionId>,
+    #[allow(dead_code)]
     pub canonical_id: Option<FileId>,
-    /// Staged/tar member name (`content_id`); set for canonical files at stage time.
-    pub tar_path: Option<String>,
-    /// Set when an ingested snapshot lists this row (or its canonical) as `archived`.
-    pub snapshot_archived: bool,
+    pub flags: FileFlags,
+    pub phase: FilePhase,
+}
+
+/// Narrow file row for pipeline stages that do not need ownership/xattr payloads.
+#[derive(Debug, Clone)]
+pub struct StrippedRecord {
+    pub id: FileId,
+    pub rel_path: PathBuf,
+    pub size: u64,
+    pub sha1: Option<[u8; 20]>,
+    pub mtime: Option<DateTime<Utc>>,
+    pub atime: Option<DateTime<Utc>>,
+    pub ctime: Option<DateTime<Utc>>,
+    pub ftype: Option<FileType>,
+    pub canonical_id: Option<FileId>,
+    pub flags: FileFlags,
+    pub phase: FilePhase,
 }
 
 #[derive(Debug, Clone)]
