@@ -59,6 +59,27 @@ pub(crate) fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<(
     Ok(())
 }
 
+fn optional_sha1(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<[u8; 20]>> {
+    let sha1_blob: Option<Vec<u8>> = row.get("sha1")?;
+    Ok(sha1_blob
+        .and_then(|b| b.try_into().ok())
+        .map(|arr: [u8; 20]| arr))
+}
+
+fn parse_phase(row: &rusqlite::Row<'_>) -> rusqlite::Result<FilePhase> {
+    let raw: String = row.get("phase")?;
+    FilePhase::parse(&raw).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            )),
+        )
+    })
+}
+
 fn optional_rfc3339(
     row: &rusqlite::Row<'_>,
     column: &str,
