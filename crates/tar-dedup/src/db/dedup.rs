@@ -41,15 +41,6 @@ pub fn promote_to_deduped(conn: &Connection, file_id: FileId) -> Result<()> {
     Ok(())
 }
 
-/// Stub until a real filter stage exists: advance all hashed rows to filtered.
-pub fn promote_hashed_to_filtered(conn: &Connection) -> Result<u64> {
-    let n = conn.execute(
-        "UPDATE files SET phase = 'filtered' WHERE phase = 'hashed'",
-        [],
-    )?;
-    Ok(n as u64)
-}
-
 /// Non-regular / unknown types (and NULL ftype): nothing to byte-compare.
 pub fn promote_non_file_filtered_to_deduped(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
