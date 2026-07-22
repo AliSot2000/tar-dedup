@@ -50,6 +50,43 @@ pub fn promote_hashed_to_filtered(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+/// Non-regular / unknown types (and NULL ftype): nothing to byte-compare.
+pub fn promote_non_file_filtered_to_deduped(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files SET phase = 'deduped'
+         WHERE phase = 'filtered' AND (ftype IS NULL OR ftype != 'file')",
+        [],
+    )?;
+    Ok(n as u64)
+}
+
+/// Missing digest (e.g. unreadable at hash time): do not compare.
+pub fn promote_null_sha1_filtered_to_deduped(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files SET phase = 'deduped'
+         WHERE phase = 'filtered' AND sha1 IS NULL",
+        [],
+    )?;
+    Ok(n as u64)
+}
+
+/// Unique `(sha1, size)` content: no compare round.
+pub fn promote_singleton_filtered_to_deduped(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files SET phase = 'deduped'
+         WHERE phase = 'filtered'
+           AND sha1 IS NOT NULL
+           AND (sha1, size) IN (
+               SELECT sha1, size FROM files
+               WHERE sha1 IS NOT NULL
+               GROUP BY sha1, size
+               HAVING COUNT(*) = 1
+           )",
+        [],
+    )?;
+    Ok(n as u64)
+}
+
 pub fn list_canonical_files(conn: &Connection, phase: FilePhase) -> Result<Vec<FileId>> {
     let phase_str = match phase {
         FilePhase::Deduped => "deduped",
