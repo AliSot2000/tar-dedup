@@ -98,6 +98,7 @@ Compression Algo extractions:
 - `?` `--block-size` file system page size (usually 4kib). Determines granularity of 
 - `?` `--reset-phase <phase>` Reset all files s.t. this phase will be executed again. Useful in cases of hash, dedup or sparsify.
 - `?` `--fail-fast` ... needs more work. look at dedup (fail on any error, fail pair on error, fail group on error.)
+- `?` `--no-dup-shell-out` if no duplicates are detected, shell out to regular tar or use tar-dedup tar compression (sorted by file type could still yield better compression.)
 # Filesystem Nodes supported
 - Regular File
 - Directory
