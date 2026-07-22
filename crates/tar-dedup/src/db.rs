@@ -19,6 +19,8 @@ mod inventory;
 mod schema;
 pub mod content_id;
 
+pub use common::SqlFileRow;
+
 pub struct Database {
     conn: Connection,
 }
@@ -37,7 +39,7 @@ impl Database {
         inventory::insert_file(&self.conn, record)
     }
 
-    pub fn get_file(&self, file_id: FileId) -> Result<Option<FileRecord>> {
+    pub fn get_file<R: SqlFileRow>(&self, file_id: FileId) -> Result<Option<R>> {
         common::get_file(&self.conn, file_id)
     }
     // TODO: Resolution does happen to single file which is not deterministic.
@@ -53,7 +55,7 @@ impl Database {
         inventory::count_files(&self.conn)
     }
 
-    pub fn files_in_phase(&self, phase: FilePhase) -> Result<Vec<FileRecord>> {
+    pub fn files_in_phase<R: SqlFileRow>(&self, phase: FilePhase) -> Result<Vec<R>> {
         inventory::list_files_in_phase(&self.conn, phase)
     }
 
@@ -149,7 +151,7 @@ impl Database {
         extract::record_snapshot_ingested(&self.conn)
     }
 
-    pub fn list_files_to_restore(&self) -> Result<Vec<FileRecord>> {
+    pub fn list_files_to_restore<R: SqlFileRow>(&self) -> Result<Vec<R>> {
         extract::list_files_to_restore(&self.conn)
     }
 
