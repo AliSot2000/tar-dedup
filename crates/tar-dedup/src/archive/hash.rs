@@ -22,6 +22,7 @@ const ZERO_BLOCK_SIZE: usize = 4096;
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let total = db.count_files()?;
+    // TODO: needs to be customizable.
     let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Inventoried)?;
     let already_hashed = total.saturating_sub(pending.len() as u64);
     tracing::info!(
