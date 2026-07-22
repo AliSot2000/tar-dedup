@@ -58,6 +58,10 @@ pub struct Config {
     pub do_posix_acl: bool,
     /// Capture SELinux context
     pub do_selinux: bool,
+
+    /// When true, skip `ErrorWhileDedup` files as compare candidates each round.
+    /// Canonical election always skips errored files. No CLI wiring yet.
+    pub dedup_fail_fast: bool,
 }
 
 impl Config {
@@ -100,6 +104,7 @@ impl Config {
             do_xattrs: true,
             do_posix_acl: true,
             do_selinux: true,
+            dedup_fail_fast: false,
         })
     }
 
@@ -136,6 +141,7 @@ impl Config {
             do_xattrs: true,
             do_posix_acl: true,
             do_selinux: true,
+            dedup_fail_fast: false,
         })
     }
 
