@@ -34,6 +34,7 @@ pub struct Config {
     /// Path to archive being created or to archive being extracted filename.tar[.compression]
     pub archive_path: PathBuf,
 
+    // TODO: Convert to abs path immediately.
     /// Archive input root (`archive` subcommand only).
     pub input_dir: PathBuf,
 
