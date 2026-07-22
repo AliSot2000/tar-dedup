@@ -6,14 +6,14 @@ use std::path::{Component, Path, PathBuf};
 use filetime::{set_file_mtime, FileTime};
 
 use crate::config::Config;
-use crate::db::types::FilePhase;
+use crate::db::types::{FilePhase, FileRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
 use crate::shutdown::Shutdown;
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    let files = db.list_files_to_restore()?;
+    let files: Vec<FileRecord> = db.list_files_to_restore()?;
     let total_bytes: u64 = files.iter().map(|f| f.size).sum();
     let progress = ByteProgress::new("extract", total_bytes);
 
@@ -65,7 +65,7 @@ pub fn warn_catalog_uncertainty(db: &Database) -> Result<()> {
 
 fn apply_basic_metadata(
     config: &Config,
-    record: &crate::db::types::FileRecord,
+    record: &FileRecord,
     dest: &Path,
 ) -> Result<()> {
     if let Some(mtime) = record.mtime {
