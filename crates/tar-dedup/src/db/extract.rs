@@ -3,7 +3,8 @@ use std::path::Path;
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::config::{ExtractPipelinePhase, ExtractRuntimeState};
-use crate::db::common::{self, upsert_meta, FILES_SELECT, map_file_record};
+use crate::db::common::{self, upsert_meta, SqlFileRow};
+use crate::db::flags::FileFlag;
 use crate::db::types::FileRecord;
 use crate::error::Result;
 
@@ -16,29 +17,30 @@ pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<
     Ok(())
 }
 
-/// Rows listed as `archived` in an ingested snapshot → `snapshot_archived = 1` (catalog confirmation).
+/// Rows listed as `archived` in an ingested snapshot → set `SnapshotArchived` flag.
 pub fn apply_snapshot_archived_flags(conn: &Connection, snapshot_path: &Path) -> Result<u64> {
     let path = snapshot_path.to_string_lossy();
+    let bit = FileFlag::SnapshotArchived.mask_i64();
     conn.execute(
         "ATTACH DATABASE :path AS snap",
         named_params! { ":path": path.as_ref() },
     )?;
     let flagged = conn.execute(
-        "UPDATE files SET snapshot_archived = 1
+        "UPDATE files SET flags = flags | :bit
          WHERE rel_path IN (SELECT rel_path FROM snap.files WHERE phase = 'archived')",
-        [],
+        named_params! { ":bit": bit },
     )?;
     conn.execute(
-        "UPDATE files SET snapshot_archived = 1
-         WHERE snapshot_archived = 0
-           AND canonical_id IN (SELECT id FROM files WHERE snapshot_archived = 1)",
-        [],
+        "UPDATE files SET flags = flags | :bit
+         WHERE (flags & :bit) = 0
+           AND canonical_id IN (SELECT id FROM files WHERE (flags & :bit) != 0)",
+        named_params! { ":bit": bit },
     )?;
     conn.execute("DETACH DATABASE snap", [])?;
     Ok(flagged as u64)
 }
 
-/// Payload landed in extract cache → ready to place (`snapshot_archived` unchanged).
+/// Payload landed in extract cache → ready to place (`SnapshotArchived` unchanged).
 pub fn promote_cached_tar_member(conn: &Connection, tar_path: &str) -> Result<()> {
     conn.execute(
         "UPDATE files SET phase = 'unarchived' WHERE tar_path = :tar_path",
@@ -53,20 +55,22 @@ pub fn promote_cached_tar_member(conn: &Connection, tar_path: &str) -> Result<()
     Ok(())
 }
 
-pub fn list_files_to_restore(conn: &Connection) -> Result<Vec<FileRecord>> {
+pub fn list_files_to_restore<R: SqlFileRow>(conn: &Connection) -> Result<Vec<R>> {
+    let cols = R::sql_columns();
     let mut stmt = conn.prepare(&format!(
-        "SELECT {FILES_SELECT} FROM files WHERE phase = 'unarchived' ORDER BY id"
+        "SELECT {cols} FROM files WHERE phase = 'unarchived' ORDER BY id"
     ))?;
-    let rows = stmt.query_map([], map_file_record)?;
+    let rows = stmt.query_map([], R::from_row)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 pub fn count_unconfirmed_restored(conn: &Connection) -> Result<u64> {
+    let bit = FileFlag::SnapshotArchived.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
          WHERE phase IN ('unarchived', 'at_destination', 'link_at_destination')
-           AND snapshot_archived = 0",
-        [],
+           AND (flags & :bit) = 0",
+        named_params! { ":bit": bit },
         |row| row.get("count"),
     )?;
     Ok(count as u64)
@@ -77,7 +81,7 @@ pub fn tar_member_path(conn: &Connection, record: &FileRecord) -> Result<String>
         return Ok(path.clone());
     }
     let canonical_id = record.canonical_id.unwrap_or(record.id);
-    let canonical = common::get_file(conn, canonical_id)?.ok_or_else(|| {
+    let canonical = common::get_file::<FileRecord>(conn, canonical_id)?.ok_or_else(|| {
         crate::error::Error::Config(format!(
             "missing canonical file id {} for {}",
             canonical_id.0,
