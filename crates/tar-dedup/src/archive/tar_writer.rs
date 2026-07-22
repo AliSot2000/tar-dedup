@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::common::files::warn_if_times_changed;
 use crate::config::Config;
-use crate::db::types::{FileId, FilePhase, FileRecord};
+use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
@@ -49,7 +49,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             break;
         }
 
-        let Some(record) = db.get_file(file_id)? else {
+        let Some(record) = db.get_file::<StrippedRecord>(file_id)? else {
             continue;
         };
         if record.sha1.is_none() {
@@ -144,7 +144,7 @@ fn staged_canonical_sorted(db: &Database) -> Result<Vec<FileId>> {
     let ids = db.list_canonical_files(FilePhase::Staged)?;
     let mut items = Vec::with_capacity(ids.len());
     for id in ids {
-        let Some(record) = db.get_file(id)? else {
+        let Some(record) = db.get_file::<StrippedRecord>(id)? else {
             continue;
         };
         items.push((archive_sort_key(&record), id));
@@ -153,7 +153,7 @@ fn staged_canonical_sorted(db: &Database) -> Result<Vec<FileId>> {
     Ok(items.into_iter().map(|(_, id)| id).collect())
 }
 
-fn archive_sort_key(record: &FileRecord) -> (String, u64, i64) {
+fn archive_sort_key(record: &StrippedRecord) -> (String, u64, i64) {
     let ext = record
         .rel_path
         .extension()
