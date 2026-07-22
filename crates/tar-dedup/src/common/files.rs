@@ -84,6 +84,7 @@ pub fn warn_if_times_changed(
     }
 }
 
+/// Add the `name` to the `out` iff expected != live and both destruct correctly to Ok/Some.
 fn push_if_changed(
     out: &mut Vec<&'static str>,
     name: &'static str,
