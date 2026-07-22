@@ -273,11 +273,10 @@ impl FilePhase {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct DuplicateGroup {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GroupKey {
     pub sha1: [u8; 20],
     pub size: u64,
-    pub members: Vec<FileId>,
 }
 
 #[derive(Debug, Clone)]
