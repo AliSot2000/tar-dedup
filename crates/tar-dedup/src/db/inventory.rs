@@ -3,8 +3,8 @@ use nix::libc::{gid_t, uid_t};
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::config::{PipelinePhase, RuntimeState};
-use crate::db::common::{upsert_meta, FILES_SELECT, map_file_record};
-use crate::db::types::{FileId, FilePhase, FileRecord, NewFileRecord};
+use crate::db::common::{upsert_meta, SqlFileRow};
+use crate::db::types::{FileId, FilePhase, NewFileRecord};
 use crate::error::Result;
 use nix::unistd::{Gid, Group, Uid, User};
 
@@ -44,39 +44,43 @@ pub fn count_files(conn: &Connection) -> Result<u64> {
     Ok(count as u64)
 }
 
-pub fn list_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<Vec<FileRecord>> {
+pub fn list_files_in_phase<R: SqlFileRow>(
+    conn: &Connection,
+    phase: FilePhase,
+) -> Result<Vec<R>> {
+    let cols = R::sql_columns();
     let mut stmt = conn.prepare(&format!(
-        "SELECT {FILES_SELECT} FROM files WHERE phase = :phase ORDER BY id"
+        "SELECT {cols} FROM files WHERE phase = :phase ORDER BY id"
     ))?;
 
     let rows = stmt.query_map(
         named_params! { ":phase": phase.as_str() },
-        map_file_record,
+        R::from_row,
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
-pub fn get_file_by_tar_path(conn: &Connection, tar_path: &str) -> Result<Option<FileRecord>> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {FILES_SELECT} FROM files WHERE tar_path = :tar_path LIMIT 1"
-    ))?;
-    let mut rows = stmt.query(named_params! { ":tar_path": tar_path })?;
-    if let Some(row) = rows.next()? {
-        return Ok(Some(map_file_record(row)?));
-    }
-    Ok(None)
-}
+// pub fn get_file_by_tar_path(conn: &Connection, tar_path: &str) -> Result<Option<FileRecord>> {
+//     let mut stmt = conn.prepare(&format!(
+//         "SELECT {FILES_SELECT} FROM files WHERE tar_path = :tar_path LIMIT 1"
+//     ))?;
+//     let mut rows = stmt.query(named_params! { ":tar_path": tar_path })?;
+//     if let Some(row) = rows.next()? {
+//         return Ok(Some(map_file_record(row)?));
+//     }
+//     Ok(None)
+// }
 
-pub fn set_tar_path(conn: &Connection, file_id: FileId, tar_path: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE files SET tar_path = :tar_path WHERE id = :id",
-        named_params! {
-            ":tar_path": tar_path,
-            ":id": file_id.0,
-        },
-    )?;
-    Ok(())
-}
+// pub fn set_tar_path(conn: &Connection, file_id: FileId, tar_path: &str) -> Result<()> {
+//     conn.execute(
+//         "UPDATE files SET tar_path = :tar_path WHERE id = :id",
+//         named_params! {
+//             ":tar_path": tar_path,
+//             ":id": file_id.0,
+//         },
+//     )?;
+//     Ok(())
+// }
 
 pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
     conn.execute(
