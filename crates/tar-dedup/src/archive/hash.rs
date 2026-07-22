@@ -10,7 +10,7 @@ use sha1::{Digest, Sha1};
 
 use crate::common::files::{warn_if_times_changed, PreYield};
 use crate::config::Config;
-use crate::db::types::{FileId, FileRecord};
+use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::progress::io_buffer;
@@ -22,7 +22,7 @@ const ZERO_BLOCK_SIZE: usize = 4096;
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let total = db.count_files()?;
-    let pending = db.files_in_phase(crate::db::types::FilePhase::Inventoried)?;
+    let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Inventoried)?;
     let already_hashed = total.saturating_sub(pending.len() as u64);
     tracing::info!(
         files = pending.len(),
@@ -57,7 +57,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     // `PreYield` stats each file when `par_bridge` pulls it for a worker — just
     // before that file is hashed, not in a bulk pass at the start of the stage.
-    let checked = PreYield::new(pending.iter(), |record: &&FileRecord| {
+    let checked = PreYield::new(pending.iter(), |record: &&StrippedRecord| {
         let path = input_dir.join(&record.rel_path);
         warn_if_times_changed(&path, record.mtime, record.atime, record.ctime);
     });
