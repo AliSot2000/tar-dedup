@@ -19,24 +19,3 @@ pub fn update_file_inspection(
     )?;
     Ok(())
 }
-
-pub fn duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
-    let mut stmt = conn.prepare(
-        "SELECT sha1, size, GROUP_CONCAT(id) AS ids
-         FROM files
-         WHERE sha1 IS NOT NULL
-         GROUP BY sha1, size
-         HAVING COUNT(*) > 1",
-    )?;
-
-    let rows = stmt.query_map([], |row| {
-        let ids_csv: String = row.get("ids")?;
-        let members = ids_csv
-            .split(',')
-            .filter_map(|s| s.parse::<i64>().ok().map(FileId))
-            .collect();
-        Ok(DuplicateGroup { members })
-    })?;
-
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-}
