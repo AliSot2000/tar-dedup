@@ -97,6 +97,18 @@ impl Database {
         dedup::promote_hashed_to_filtered(&self.conn)
     }
 
+    pub fn promote_non_file_filtered_to_deduped(&self) -> Result<u64> {
+        dedup::promote_non_file_filtered_to_deduped(&self.conn)
+    }
+
+    pub fn promote_null_sha1_filtered_to_deduped(&self) -> Result<u64> {
+        dedup::promote_null_sha1_filtered_to_deduped(&self.conn)
+    }
+
+    pub fn promote_singleton_filtered_to_deduped(&self) -> Result<u64> {
+        dedup::promote_singleton_filtered_to_deduped(&self.conn)
+    }
+
     pub fn mark_active_canonical(&self, file_id: FileId) -> Result<()> {
         dedup::mark_active_canonical(&self.conn, file_id)
     }
