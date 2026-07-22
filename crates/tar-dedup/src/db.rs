@@ -3,11 +3,13 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use crate::config::{ExtractRuntimeState, RuntimeState};
+use crate::db::flags::{FileFlag, FileFlags};
 use crate::db::types::{
-    ArchiveSession, DuplicateGroup, FileId, FilePhase, FileRecord, NewFileRecord,
+    ArchiveSession, DuplicateGroup, FileId, FilePhase, NewFileRecord,
 };
 use crate::error::Result;
 
+pub mod flags;
 pub mod types;
 
 mod archive;
@@ -61,6 +63,22 @@ impl Database {
 
     pub fn mark_file_phase(&self, file_id: FileId, phase: FilePhase) -> Result<()> {
         inventory::mark_phase(&self.conn, file_id, phase)
+    }
+
+    pub fn get_flags(&self, file_id: FileId) -> Result<FileFlags> {
+        flags::get_flags(&self.conn, file_id)
+    }
+
+    pub fn set_flags(&self, file_id: FileId, value: FileFlags) -> Result<()> {
+        flags::set_flags(&self.conn, file_id, value)
+    }
+
+    pub fn get_flag(&self, file_id: FileId, flag: FileFlag) -> Result<bool> {
+        flags::get_flag(&self.conn, file_id, flag)
+    }
+
+    pub fn set_flag(&self, file_id: FileId, flag: FileFlag, on: bool) -> Result<()> {
+        flags::set_flag(&self.conn, file_id, flag, on)
     }
 
     pub fn update_file_inspection(&self, file_id: FileId, digest: [u8; 20], sparse_count: u64) -> Result<()> {
