@@ -1,6 +1,7 @@
 //! Archive (compress) pipeline: inventory → hash → dedup → stage → tar-writer.
 
 mod dedup;
+mod filter;
 mod hash;
 mod inventory;
 mod stage;

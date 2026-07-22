@@ -132,11 +132,7 @@ fn abs_path(config: &Config, record: &StrippedRecord) -> PathBuf {
 // =================================================================================================
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    // Stub filter stage: advance hashed → filtered before dedup.
-    let promoted = db.promote_hashed_to_filtered()?;
-    if promoted > 0 {
-        tracing::info!(count = promoted, "promoted hashed → filtered");
-    }
+    super::filter::run(db)?;
 
     let catalog = db.count_files()?;
     // Early promote db entries we do not process in this phase
