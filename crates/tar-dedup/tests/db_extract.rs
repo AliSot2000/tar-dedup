@@ -3,7 +3,8 @@ mod common;
 use std::path::PathBuf;
 
 use tar_dedup::config::ExtractRuntimeState;
-use tar_dedup::db::types::FilePhase;
+use tar_dedup::db::flags::FileFlag;
+use tar_dedup::db::types::{FilePhase, FileRecord};
 use tar_dedup::db::Database;
 
 #[test]
@@ -33,11 +34,14 @@ fn promote_cached_tar_member_marks_canonical_and_duplicates_unarchived() {
     db.promote_cached_tar_member("member-id")
         .expect("promote cached member");
 
-    for record in db.files_in_phase(FilePhase::Unarchived).expect("list") {
-        assert!(!record.snapshot_archived);
+    for record in db
+        .files_in_phase::<FileRecord>(FilePhase::Unarchived)
+        .expect("list")
+    {
+        assert!(!record.flags.get(FileFlag::SnapshotArchived));
     }
     assert_eq!(
-        db.files_in_phase(FilePhase::Unarchived)
+        db.files_in_phase::<FileRecord>(FilePhase::Unarchived)
             .expect("list")
             .len(),
         2
@@ -66,8 +70,8 @@ fn apply_snapshot_archived_flags_confirms_catalog_without_blocking_restore() {
     assert_eq!(flagged, 1);
 
     let canonical = db
-        .get_file(
-            db.files_in_phase(FilePhase::Unarchived)
+        .get_file::<FileRecord>(
+            db.files_in_phase::<FileRecord>(FilePhase::Unarchived)
                 .expect("list")
                 .into_iter()
                 .find(|f| f.rel_path == PathBuf::from("canonical.txt"))
@@ -77,8 +81,8 @@ fn apply_snapshot_archived_flags_confirms_catalog_without_blocking_restore() {
         .expect("get canonical")
         .expect("canonical exists");
     let duplicate = db
-        .get_file(
-            db.files_in_phase(FilePhase::Unarchived)
+        .get_file::<FileRecord>(
+            db.files_in_phase::<FileRecord>(FilePhase::Unarchived)
                 .expect("list")
                 .into_iter()
                 .find(|f| f.rel_path == PathBuf::from("duplicate.txt"))
@@ -88,10 +92,12 @@ fn apply_snapshot_archived_flags_confirms_catalog_without_blocking_restore() {
         .expect("get duplicate")
         .expect("duplicate exists");
 
-    assert!(canonical.snapshot_archived);
-    assert!(duplicate.snapshot_archived);
+    assert!(canonical.flags.get(FileFlag::SnapshotArchived));
+    assert!(duplicate.flags.get(FileFlag::SnapshotArchived));
     assert_eq!(
-        db.list_files_to_restore().expect("restore list").len(),
+        db.list_files_to_restore::<FileRecord>()
+            .expect("restore list")
+            .len(),
         2
     );
 }
