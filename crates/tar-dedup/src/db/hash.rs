@@ -1,6 +1,6 @@
 use rusqlite::{named_params, Connection};
 
-use crate::db::types::{DuplicateGroup, FileId};
+use crate::db::types::FileId;
 use crate::error::Result;
 
 pub fn update_file_inspection(
