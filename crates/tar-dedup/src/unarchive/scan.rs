@@ -88,7 +88,7 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
         ))
     })?;
 
-    let paths = db.list_files_to_restore()?.len();
+    let paths = db.list_files_to_restore::<crate::db::types::StrippedRecord>()?.len();
     eprintln!(
         "extract: manifest loaded, {paths} path(s) cached and unarchived, {snapshots} snapshot(s) seen"
     );
