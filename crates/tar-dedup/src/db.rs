@@ -85,10 +85,63 @@ impl Database {
         hash::update_file_inspection(&self.conn, file_id, digest, sparse_count)
     }
 
-    pub fn duplicate_groups(&self) -> Result<Vec<DuplicateGroup>> {
-        hash::duplicate_groups(&self.conn)
+    pub fn pending_duplicate_groups(&self) -> Result<Vec<DuplicateGroup>> {
+        dedup::pending_duplicate_groups(&self.conn)
     }
 
+    pub fn promote_hashed_to_filtered(&self) -> Result<u64> {
+        dedup::promote_hashed_to_filtered(&self.conn)
+    }
+
+    pub fn mark_active_canonical(&self, file_id: FileId) -> Result<()> {
+        dedup::mark_active_canonical(&self.conn, file_id)
+    }
+
+    pub fn promote_to_deduped(&self, file_id: FileId) -> Result<()> {
+        dedup::promote_to_deduped(&self.conn, file_id)
+    }
+
+    pub fn clear_check_with_canonical_completed(
+        &self,
+        sha1: &[u8; 20],
+        size: u64,
+    ) -> Result<()> {
+        dedup::clear_check_with_canonical_completed(&self.conn, sha1, size)
+    }
+
+    pub fn promote_errored_pending_to_deduped(
+        &self,
+        sha1: &[u8; 20],
+        size: u64,
+    ) -> Result<u64> {
+        dedup::promote_errored_pending_to_deduped(&self.conn, sha1, size)
+    }
+
+    pub fn count_check_with_canonical_completed(&self) -> Result<u64> {
+        dedup::count_check_with_canonical_completed(&self.conn)
+    }
+
+    pub fn count_active_canonicals(&self, sha1: &[u8; 20], size: u64) -> Result<u64> {
+        dedup::count_active_canonicals(&self.conn, sha1, size)
+    }
+
+    pub fn promote_active_canonical_in_group(&self, sha1: &[u8; 20], size: u64) {
+        dedup::promote_active_canonical_in_group(&self.conn, sha1, size)
+    }
+
+    pub fn count_electable_pending(&self, sha1: &[u8; 20], size: u64) -> Result<u64> {
+        dedup::count_electable_pending(&self.conn, sha1, size)
+    }
+
+    pub fn list_filtered_in_group<R: SqlFileRow>(
+        &self,
+        sha1: &[u8; 20],
+        size: u64,
+    ) -> Result<Vec<R>> {
+        dedup::list_filtered_in_group(&self.conn, sha1, size)
+    }
+
+    // TODO: Mark file and descendants in Phase
     pub fn set_canonical(&self, file_id: FileId, canonical_id: FileId) -> Result<()> {
         dedup::set_canonical(&self.conn, file_id, canonical_id)
     }
