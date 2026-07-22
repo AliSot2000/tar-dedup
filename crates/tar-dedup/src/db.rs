@@ -57,6 +57,10 @@ impl Database {
         inventory::count_files(&self.conn)
     }
 
+    pub fn count_files_in_phase(&self, phase: FilePhase) -> Result<u64> {
+        inventory::count_files_in_phase(&self.conn, phase)
+    }
+
     pub fn files_in_phase<R: SqlFileRow>(&self, phase: FilePhase) -> Result<Vec<R>> {
         inventory::list_files_in_phase(&self.conn, phase)
     }
