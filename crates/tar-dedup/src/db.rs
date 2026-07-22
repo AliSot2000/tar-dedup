@@ -45,13 +45,13 @@ impl Database {
         common::get_file(&self.conn, file_id)
     }
     // TODO: Resolution does happen to single file which is not deterministic.
-    pub fn get_file_by_tar_path(&self, tar_path: &str) -> Result<Option<FileRecord>> {
-        inventory::get_file_by_tar_path(&self.conn, tar_path)
-    }
+    // pub fn get_file_by_tar_path(&self, tar_path: &str) -> Result<Option<FileRecord>> {
+    //     inventory::get_file_by_tar_path(&self.conn, tar_path)
+    // }
 
-    pub fn set_tar_path(&self, file_id: FileId, tar_path: &str) -> Result<()> {
-        inventory::set_tar_path(&self.conn, file_id, tar_path)
-    }
+    // pub fn set_tar_path(&self, file_id: FileId, tar_path: &str) -> Result<()> {
+    //     inventory::set_tar_path(&self.conn, file_id, tar_path)
+    // }
 
     pub fn count_files(&self) -> Result<u64> {
         inventory::count_files(&self.conn)
@@ -149,9 +149,9 @@ impl Database {
         extract::apply_snapshot_archived_flags(&self.conn, snapshot_path)
     }
 
-    pub fn promote_cached_tar_member(&self, tar_path: &str) -> Result<()> {
-        extract::promote_cached_tar_member(&self.conn, tar_path)
-    }
+    // pub fn promote_cached_tar_member(&self, tar_path: &str) -> Result<()> {
+    //     extract::promote_cached_tar_member(&self.conn, tar_path)
+    // }
 
     pub fn count_unconfirmed_restored(&self) -> Result<u64> {
         extract::count_unconfirmed_restored(&self.conn)
@@ -173,9 +173,9 @@ impl Database {
         extract::list_files_to_restore(&self.conn)
     }
 
-    pub fn tar_member_path(&self, record: &FileRecord) -> Result<String> {
-        extract::tar_member_path(&self.conn, record)
-    }
+    // pub fn tar_member_path(&self, record: &FileRecord) -> Result<String> {
+    //     extract::tar_member_path(&self.conn, record)
+    // }
 
     pub fn init_extract_runtime_state(&self) -> Result<()> {
         extract::init_extract_runtime_state(&self.conn)
