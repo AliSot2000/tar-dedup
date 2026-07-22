@@ -2,7 +2,7 @@ use rusqlite::{named_params, Connection};
 
 use crate::db::common::SqlFileRow;
 use crate::db::flags::FileFlag;
-use crate::db::types::{DuplicateGroup, FileId, FilePhase};
+use crate::db::types::{FileId, FilePhase, GroupKey};
 use crate::error::Result;
 
 pub fn set_canonical(conn: &Connection, file_id: FileId, canonical_id: FileId) -> Result<()> {
@@ -69,7 +69,7 @@ pub fn list_canonical_files(conn: &Connection, phase: FilePhase) -> Result<Vec<F
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
-fn parse_duplicate_group_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DuplicateGroup> {
+fn parse_group_key_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupKey> {
     let sha1_blob: Vec<u8> = row.get("sha1")?;
     let sha1: [u8; 20] = sha1_blob.try_into().map_err(|b: Vec<u8>| {
         rusqlite::Error::FromSqlConversionFailure(
@@ -82,22 +82,13 @@ fn parse_duplicate_group_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Duplic
         )
     })?;
     let size = row.get::<_, i64>("size")? as u64;
-    let ids_csv: String = row.get("ids")?;
-    let members = ids_csv
-        .split(',')
-        .filter_map(|s| s.parse::<i64>().ok().map(FileId))
-        .collect();
-    Ok(DuplicateGroup {
-        sha1,
-        size,
-        members,
-    })
+    Ok(GroupKey { sha1, size })
 }
 
 /// `(sha1, size)` buckets with more than one member and at least one still in `filtered`.
-pub fn pending_duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
+pub fn pending_duplicate_groups(conn: &Connection) -> Result<Vec<GroupKey>> {
     let mut stmt = conn.prepare(
-        "SELECT sha1, size, GROUP_CONCAT(id) AS ids
+        "SELECT sha1, size
          FROM files
          WHERE sha1 IS NOT NULL
          GROUP BY sha1, size
@@ -105,7 +96,7 @@ pub fn pending_duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>
             AND SUM(CASE WHEN phase = 'filtered' THEN 1 ELSE 0 END) > 0",
     )?;
 
-    let rows = stmt.query_map([], parse_duplicate_group_row)?;
+    let rows = stmt.query_map([], parse_group_key_row)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
