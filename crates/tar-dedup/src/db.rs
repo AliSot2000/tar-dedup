@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::config::{ExtractRuntimeState, RuntimeState};
 use crate::db::flags::{FileFlag, FileFlags};
 use crate::db::types::{
-    ArchiveSession, DuplicateGroup, FileId, FilePhase, NewFileRecord,
+    ArchiveSession, FileId, FilePhase, GroupKey, NewFileRecord,
 };
 use crate::error::Result;
 
@@ -89,7 +89,7 @@ impl Database {
         hash::update_file_inspection(&self.conn, file_id, digest, sparse_count)
     }
 
-    pub fn pending_duplicate_groups(&self) -> Result<Vec<DuplicateGroup>> {
+    pub fn pending_duplicate_groups(&self) -> Result<Vec<GroupKey>> {
         dedup::pending_duplicate_groups(&self.conn)
     }
 
