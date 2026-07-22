@@ -44,6 +44,17 @@ pub fn count_files(conn: &Connection) -> Result<u64> {
     Ok(count as u64)
 }
 
+// TODO: select files explicitly
+pub fn count_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<u64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files WHERE phase = :phase",
+        named_params! { ":phase": phase.as_str() },
+        |row| row.get("count"),
+    )?;
+    Ok(count as u64)
+}
+
+// TODO: select files explicitly
 pub fn list_files_in_phase<R: SqlFileRow>(
     conn: &Connection,
     phase: FilePhase,
