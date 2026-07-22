@@ -15,6 +15,7 @@
 - [ ] Add Version of Tool to metadata
 - [ ] Add Platform to metadata
 - [ ] Exclude.
+- [ ] Good logging
 
 ## Phases
 ### CLI:
@@ -32,6 +33,10 @@
 - [ ] Add separate log stream
 - [X] Store ln -s target for windows (file/dir (recursively resolve softlinks until cycle or non-softlink file is reached))
 
+### Filter
+- [ ] Research Filtering options of tar
+- [ ] Implement filtering on top of paths in the database.
+
 ### Hash
 - [ ] Docker style output (by default)
 - [ ] Check file for changes (based on times)
@@ -40,6 +45,7 @@
 ### Dedup
 Should be done?
 - [ ] Better logging?
+- [ ] Run in parallel and do so very well
 
 ### Sparsified
 - [ ] Create sparse files. 
@@ -48,7 +54,7 @@ Should be done?
 - [ ] Basically done?
 
 ### Archive
-- [ ] Finish the FileEntry and ContentID structs
+- [X] Finish the FileEntry and ContentID structs
 - [ ] Finish the different compression algorithms
 - [ ] Finish plane
 - [ ] Finish shell-out
