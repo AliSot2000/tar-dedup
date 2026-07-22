@@ -35,6 +35,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
         let path = entry.path();
         let rel = path
+            .clean()
             .strip_prefix(&config.input_dir)
             .unwrap_or(path)
             .to_path_buf();
