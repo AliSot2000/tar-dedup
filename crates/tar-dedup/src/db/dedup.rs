@@ -78,6 +78,7 @@ pub fn promote_singleton_filtered_to_deduped(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+// TODO needs to go at least into common
 pub fn list_canonical_files(conn: &Connection, phase: FilePhase) -> Result<Vec<FileId>> {
     let phase_str = match phase {
         FilePhase::Deduped => "deduped",
