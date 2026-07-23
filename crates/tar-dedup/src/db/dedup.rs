@@ -81,6 +81,7 @@ pub fn promote_singleton_filtered_to_deduped(conn: &Connection) -> Result<u64> {
 pub fn list_canonical_files(conn: &Connection, phase: FilePhase) -> Result<Vec<FileId>> {
     let phase_str = match phase {
         FilePhase::Deduped => "deduped",
+        FilePhase::Sparsified => "sparsified",
         FilePhase::Staged => "staged",
         other => {
             return Err(crate::error::Error::Config(format!(

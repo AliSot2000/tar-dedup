@@ -111,6 +111,10 @@ impl Database {
         dedup::promote_singleton_filtered_to_deduped(&self.conn)
     }
 
+    pub fn promote_deduped_to_sparsified(&self) -> Result<u64> {
+        sparsify::promote_deduped_to_sparsified(&self.conn)
+    }
+
     pub fn mark_active_canonical(&self, file_id: FileId) -> Result<()> {
         dedup::mark_active_canonical(&self.conn, file_id)
     }
