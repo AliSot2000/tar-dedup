@@ -36,6 +36,7 @@ posix-acl = "1.2.0"
 xattrs = "0.1.0"
 selinux = "0.6.3"
 serde_json = "1.0.150"
+sparse-cp = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

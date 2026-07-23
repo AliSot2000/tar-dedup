@@ -1402,6 +1402,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "signal-hook",
+ "sparse-cp",
  "tar",
  "tempfile",
  "thiserror 1.0.69",
