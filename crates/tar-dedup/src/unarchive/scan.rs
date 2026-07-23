@@ -71,9 +71,16 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
             .unpack(&dest)
             .map_err(|e| Error::io(&dest, e))?;
 
-        db.as_ref()
-            .expect("manifest loaded")
-            .promote_cached_tar_member(&name)?;
+        // PRECONDITION: Path in tar file should match our format,
+        // so valid utf8 and be a valid filename
+        let basename = Path::new(&name).file_name().unwrap().to_str().unwrap();
+        let name_content = crate::db::content_id::parse_content_id(&basename)
+            .expect("Members of tar archive must have name matching the content_id format");
+
+        let (sha1, file_size, file_id, file_ext) = name_content;
+
+        // TODO: Update file to extracted
+        // TODO: Update children of file to extracted
     }
 
     if snapshots == 0 {
