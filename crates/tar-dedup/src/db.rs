@@ -115,6 +115,22 @@ impl Database {
         sparsify::promote_deduped_to_sparsified(&self.conn)
     }
 
+    pub fn promote_non_sparsify_candidates_to_sparsified(&self, min_pages: u64) -> Result<u64> {
+        sparsify::promote_non_sparsify_candidates_to_sparsified(&self.conn, min_pages)
+    }
+
+    pub fn list_sparsify_candidates<R: SqlFileRow>(&self, min_pages: u64) -> Result<Vec<R>> {
+        sparsify::list_sparsify_candidates(&self.conn, min_pages)
+    }
+
+    pub fn mark_sparsified_sparse(&self, file_id: FileId) -> Result<()> {
+        sparsify::mark_sparsified_sparse(&self.conn, file_id)
+    }
+
+    pub fn mark_sparsified_error(&self, file_id: FileId) -> Result<()> {
+        sparsify::mark_sparsified_error(&self.conn, file_id)
+    }
+
     pub fn mark_active_canonical(&self, file_id: FileId) -> Result<()> {
         dedup::mark_active_canonical(&self.conn, file_id)
     }
