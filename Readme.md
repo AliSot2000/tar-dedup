@@ -11,3 +11,6 @@ Features:
 - [ ] For debugging purposes, the `force-utf8-encoding` can be used for better readability of the database. However, 
 **if at any point a non-utf8 compliant byte is found, the binary will panic**. 
 - [ ] Something else
+
+Compile hints on Debian:  
+`sudo apt install libselinux-dev libclang-dev clang`
