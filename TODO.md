@@ -7,6 +7,7 @@
 - [ ] Support for Windows permissions
 - [ ] Only report Permission error / ... once (deduplicate the same error.)
 - [ ] Integrated logs? (Capture relevant logs / warning to a separate table?)
+- [ ] Retry errored files during tar step
 
 ## General:
 - [ ] Testing
