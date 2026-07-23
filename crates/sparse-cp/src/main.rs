@@ -7,7 +7,8 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use sparse_cp::{
-    sparse_copy_with_progress, sparse_page_count, sparse_page_count_with_progress, SparseCopyStats,
+    sparse_copy, sparse_copy_with_progress, sparse_page_count, sparse_page_count_with_progress,
+    SparseCopyStats,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,7 +143,7 @@ fn run_list_only(args: &Args, block_size: usize) -> Result<()> {
         }
         Verbosity::Verbose => {
             let mut last_reported = 0u64;
-            sparse_page_count_with_progress(input, block_size, &mut |read, total, elapsed| {
+            sparse_page_count_with_progress(input, block_size, |read, total, elapsed| {
                 if should_emit_verbose(read, total, last_reported) || read == total {
                     println!(
                         "read {} of {}, took {}, eta {}",
@@ -154,12 +155,14 @@ fn run_list_only(args: &Args, block_size: usize) -> Result<()> {
                     let _ = io::stdout().flush();
                     last_reported = read;
                 }
+                Ok::<(), io::Error>(())
             })?
         }
         Verbosity::Pretty => {
             let pb = progress_bar(size_in);
-            let count = sparse_page_count_with_progress(input, block_size, &mut |read, _, _| {
+            let count = sparse_page_count_with_progress(input, block_size, |read, _, _| {
                 pb.set_position(read);
+                Ok::<(), io::Error>(())
             })?;
             pb.finish_and_clear();
             count
@@ -181,10 +184,9 @@ fn run_copy(args: &Args, output: &PathBuf, block_size: usize) -> Result<()> {
 
     match args.verbosity {
         Verbosity::Quiet => {
-            sparse_copy_with_progress(input, output, block_size, &mut |_, _, _| {})
-                .with_context(|| {
-                    format!("sparse copy {} → {}", input.display(), output.display())
-                })?;
+            sparse_copy(input, output, block_size).with_context(|| {
+                format!("sparse copy {} → {}", input.display(), output.display())
+            })?;
         }
         Verbosity::Plain => {
             println!(
@@ -194,10 +196,9 @@ fn run_copy(args: &Args, output: &PathBuf, block_size: usize) -> Result<()> {
             );
             println!("Size in {}", fmt_bytes(size_in));
             println!("Copying...");
-            let stats = sparse_copy_with_progress(input, output, block_size, &mut |_, _, _| {})
-                .with_context(|| {
-                    format!("sparse copy {} → {}", input.display(), output.display())
-                })?;
+            let stats = sparse_copy(input, output, block_size).with_context(|| {
+                format!("sparse copy {} → {}", input.display(), output.display())
+            })?;
             print_copy_footer(&stats);
         }
         Verbosity::Verbose => {
@@ -209,24 +210,20 @@ fn run_copy(args: &Args, output: &PathBuf, block_size: usize) -> Result<()> {
             println!("Size in {}", fmt_bytes(size_in));
             println!("Copying...");
             let mut last_reported = 0u64;
-            let stats = sparse_copy_with_progress(
-                input,
-                output,
-                block_size,
-                &mut |read, total, elapsed| {
-                    if should_emit_verbose(read, total, last_reported) || read == total {
-                        println!(
-                            "read {} of {}, took {}, eta {}",
-                            fmt_bytes(read),
-                            fmt_bytes(total),
-                            fmt_duration(elapsed),
-                            fmt_eta(read, total, elapsed)
-                        );
-                        let _ = io::stdout().flush();
-                        last_reported = read;
-                    }
-                },
-            )
+            let stats = sparse_copy_with_progress(input, output, block_size, |read, total, elapsed| {
+                if should_emit_verbose(read, total, last_reported) || read == total {
+                    println!(
+                        "read {} of {}, took {}, eta {}",
+                        fmt_bytes(read),
+                        fmt_bytes(total),
+                        fmt_duration(elapsed),
+                        fmt_eta(read, total, elapsed)
+                    );
+                    let _ = io::stdout().flush();
+                    last_reported = read;
+                }
+                Ok::<(), io::Error>(())
+            })
             .with_context(|| format!("sparse copy {} → {}", input.display(), output.display()))?;
             print_copy_footer(&stats);
         }
@@ -239,8 +236,9 @@ fn run_copy(args: &Args, output: &PathBuf, block_size: usize) -> Result<()> {
             println!("Size in {}", fmt_bytes(size_in));
             println!("Copying...");
             let pb = progress_bar(size_in);
-            let stats = sparse_copy_with_progress(input, output, block_size, &mut |read, _, _| {
+            let stats = sparse_copy_with_progress(input, output, block_size, |read, _, _| {
                 pb.set_position(read);
+                Ok::<(), io::Error>(())
             })
             .with_context(|| format!("sparse copy {} → {}", input.display(), output.display()))?;
             pb.finish_and_clear();
