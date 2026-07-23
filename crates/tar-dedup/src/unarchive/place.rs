@@ -26,7 +26,9 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     for record in files {
         shutdown.check_between_files()?;
 
-        let tar_name = db.tar_member_path(&record)?;
+        let tar_name = record
+            .tar_member_name()
+            .expect("Invariant Error: FileRecord without sha1 found!");
         let cache_path = config.extract_cache_dir().join(&tar_name);
         if !cache_path.is_file() {
             return Err(Error::Config(format!(
