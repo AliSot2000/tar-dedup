@@ -46,7 +46,8 @@ pub fn seed_canonical_and_duplicate(
 ) -> (FileId, FileId) {
     let canonical_id = insert_file(db, canonical_rel, 10);
     db.mark_self_canonical(canonical_id).expect("self canonical");
-    db.set_tar_path(canonical_id, tar_path).expect("tar path");
+    // Fixme: just commented a function that no longer exists.
+    // db.set_tar_path(canonical_id, tar_path).expect("tar path");
 
     let duplicate_id = insert_file(db, duplicate_rel, 10);
     db.set_canonical(duplicate_id, canonical_id)
