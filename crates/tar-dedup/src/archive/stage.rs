@@ -1,12 +1,12 @@
-use std::fs;
-use std::os::unix::fs::symlink;
-use path_clean::PathClean;
 use crate::common::files::warn_if_times_changed;
 use crate::config::Config;
-use crate::db::flags::{FileFlag};
+use crate::db::flags::FileFlag;
 use crate::db::types::StrippedRecord;
-use crate::db::{Database, SqlFileRow};
+use crate::db::Database;
 use crate::error::Result;
+use path_clean::PathClean;
+use std::fs;
+use std::os::unix::fs::symlink;
 
 use crate::shutdown::Shutdown;
 
