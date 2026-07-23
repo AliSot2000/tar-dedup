@@ -67,6 +67,9 @@ Feat:
 - -I will be supported to support arbitrary compression algos.
 - `zstd, gzip, xz`
 
+### No, we don't!
+- We don't reincorporate failed files. Failed in Hash => Failed in Dedup => Failed in Sparse => Failed in Tar.
+
 Compression Algo extractions:
 - `bzip2`  
   `-s --small`          use less memory (at most 2500k)  
