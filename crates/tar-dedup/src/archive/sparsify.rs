@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-
+use path_clean::PathClean;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use sparse_cp::sparse_copy_with_progress;
@@ -154,7 +154,7 @@ fn run_pool(
             let name = record.sparse_member_name().expect(
                 "Invariant: sparsify candidates are self-canonical files with sha1",
             );
-            let dst = stage_dir.join(name);
+            let dst = stage_dir.join(name).clean();
             let tmp = TempSparseFile::new(dst);
 
             let copy_result =
