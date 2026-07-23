@@ -21,9 +21,6 @@ pub struct SparseCopyStats {
     pub zero_blocks: u64,
 }
 
-/// Progress callback: `(bytes_read, size_in, elapsed)`.
-pub type ProgressFn<'a> = dyn FnMut(u64, u64, Duration) + 'a;
-
 /// Count how many full `block_size` chunks of `path` are entirely `0x00`.
 ///
 /// A short final chunk that is all zeros is **not** counted (it is not a full block).
@@ -56,16 +53,23 @@ pub fn sparse_page_count(path: &Path, block_size: usize) -> io::Result<u64> {
 }
 
 /// Like [`sparse_page_count`], but reports progress via `on_progress`.
-pub fn sparse_page_count_with_progress(
+///
+/// `on_progress` may return `Err` to abort early. IO failures are converted with [`From::from`].
+pub fn sparse_page_count_with_progress<E, F>(
     path: &Path,
     block_size: usize,
-    on_progress: &mut ProgressFn<'_>,
-) -> io::Result<u64> {
+    mut on_progress: F,
+) -> Result<u64, E>
+where
+    F: FnMut(u64, u64, Duration) -> Result<(), E>,
+    E: From<io::Error>,
+{
     if block_size == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "block_size must be > 0",
-        ));
+        )
+        .into());
     }
 
     let size_in = fs::metadata(path)?.len();
@@ -74,7 +78,7 @@ pub fn sparse_page_count_with_progress(
     let mut count = 0u64;
     let mut pos = 0u64;
     let start = Instant::now();
-    on_progress(0, size_in, Duration::ZERO);
+    on_progress(0, size_in, Duration::ZERO)?;
 
     loop {
         let n = read_fullish(&mut file, &mut buf)?;
@@ -85,7 +89,7 @@ pub fn sparse_page_count_with_progress(
             count += 1;
         }
         pos += n as u64;
-        on_progress(pos, size_in, start.elapsed());
+        on_progress(pos, size_in, start.elapsed())?;
         if n < block_size {
             break;
         }
@@ -96,21 +100,29 @@ pub fn sparse_page_count_with_progress(
 
 /// Copy `src` → `dst` sparsely: metadata, truncate to size, write only non-zero blocks.
 pub fn sparse_copy(src: &Path, dst: &Path, block_size: usize) -> io::Result<SparseCopyStats> {
-    sparse_copy_with_progress(src, dst, block_size, &mut |_, _, _| {})
+    sparse_copy_with_progress(src, dst, block_size, |_, _, _| Ok::<(), io::Error>(()))
 }
 
 /// Same as [`sparse_copy`], with a progress callback after each block.
-pub fn sparse_copy_with_progress(
+///
+/// `on_progress` may return `Err` to abort early (partial `dst` may exist). IO failures are
+/// converted with [`From::from`].
+pub fn sparse_copy_with_progress<E, F>(
     src: &Path,
     dst: &Path,
     block_size: usize,
-    on_progress: &mut ProgressFn<'_>,
-) -> io::Result<SparseCopyStats> {
+    mut on_progress: F,
+) -> Result<SparseCopyStats, E>
+where
+    F: FnMut(u64, u64, Duration) -> Result<(), E>,
+    E: From<io::Error>,
+{
     if block_size == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "block_size must be > 0",
-        ));
+        )
+        .into());
     }
 
     let size_in = fs::metadata(src)?.len();
@@ -125,7 +137,7 @@ pub fn sparse_copy_with_progress(
     let mut zero_blocks = 0u64;
     let mut bytes_saved = 0u64;
     let start = Instant::now();
-    on_progress(0, size_in, Duration::ZERO);
+    on_progress(0, size_in, Duration::ZERO)?;
 
     loop {
         let n = read_fullish(&mut inp, &mut buf)?;
@@ -144,7 +156,7 @@ pub fn sparse_copy_with_progress(
             out.write_all(chunk)?;
             pos += n as u64;
         }
-        on_progress(pos, size_in, start.elapsed());
+        on_progress(pos, size_in, start.elapsed())?;
     }
 
     // Ensure logical size is exact even if last ops were seeks.
