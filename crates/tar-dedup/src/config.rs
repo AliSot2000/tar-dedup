@@ -63,6 +63,11 @@ pub struct Config {
     /// When true, skip `ErrorWhileDedup` files as compare candidates each round.
     /// Canonical election always skips errored files. No CLI wiring yet.
     pub dedup_fail_fast: bool,
+
+    /// Sparse/hash zero-page size in bytes.
+    pub page_size: usize,
+    /// Optional minimum empty-page count before a file is worth sparsifying (used by sparsify).
+    pub min_pages: Option<u64>,
 }
 
 impl Config {
@@ -106,6 +111,8 @@ impl Config {
             do_posix_acl: true,
             do_selinux: true,
             dedup_fail_fast: false,
+            page_size: args.page_size,
+            min_pages: args.min_pages,
         })
     }
 
@@ -143,6 +150,8 @@ impl Config {
             do_posix_acl: true,
             do_selinux: true,
             dedup_fail_fast: false,
+            page_size: 4096,
+            min_pages: Some(0),
         })
     }
 
@@ -255,6 +264,7 @@ pub enum ExitAfterStage {
     Scan,
     Hash,
     Dedup,
+    Sparsify,
     Stage,
     Tar,
     Cleanup,
@@ -266,6 +276,7 @@ impl From<ExitAfterStageArg> for ExitAfterStage {
             ExitAfterStageArg::Scan => Self::Scan,
             ExitAfterStageArg::Hash => Self::Hash,
             ExitAfterStageArg::Dedup => Self::Dedup,
+            ExitAfterStageArg::Sparsify => Self::Sparsify,
             ExitAfterStageArg::Stage => Self::Stage,
             ExitAfterStageArg::Tar => Self::Tar,
             ExitAfterStageArg::Cleanup => Self::Cleanup,
@@ -280,6 +291,7 @@ impl ExitAfterStage {
             Self::Scan => Some(PipelinePhase::Inventory),
             Self::Hash => Some(PipelinePhase::Hash),
             Self::Dedup => Some(PipelinePhase::Dedup),
+            Self::Sparsify => Some(PipelinePhase::Sparsify),
             Self::Stage => Some(PipelinePhase::Stage),
             Self::Tar => Some(PipelinePhase::Archive),
             Self::Cleanup => None,
@@ -292,6 +304,7 @@ pub enum PipelinePhase {
     Inventory,
     Hash,
     Dedup,
+    Sparsify,
     Stage,
     Archive,
     Done,
@@ -303,6 +316,7 @@ impl PipelinePhase {
             Self::Inventory => "inventory",
             Self::Hash => "hash",
             Self::Dedup => "dedup",
+            Self::Sparsify => "sparsify",
             Self::Stage => "stage",
             Self::Archive => "archive",
             Self::Done => "done",
@@ -313,7 +327,8 @@ impl PipelinePhase {
         match self {
             Self::Inventory => Some(Self::Hash),
             Self::Hash => Some(Self::Dedup),
-            Self::Dedup => Some(Self::Stage),
+            Self::Dedup => Some(Self::Sparsify),
+            Self::Sparsify => Some(Self::Stage),
             Self::Stage => Some(Self::Archive),
             Self::Archive => Some(Self::Done),
             Self::Done => None,
@@ -325,6 +340,7 @@ impl PipelinePhase {
             "inventory" => Ok(Self::Inventory),
             "hash" => Ok(Self::Hash),
             "dedup" => Ok(Self::Dedup),
+            "sparsify" => Ok(Self::Sparsify),
             "stage" => Ok(Self::Stage),
             "archive" => Ok(Self::Archive),
             "done" => Ok(Self::Done),
