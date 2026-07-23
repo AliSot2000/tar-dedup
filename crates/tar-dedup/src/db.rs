@@ -20,6 +20,7 @@ mod filter;
 mod hash;
 mod inventory;
 mod schema;
+mod sparsify;
 pub mod content_id;
 
 pub use common::SqlFileRow;
