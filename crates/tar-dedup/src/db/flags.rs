@@ -19,6 +19,8 @@ pub enum FileFlag {
     /// Read/compare failed during dedup. Sticky — never cleared on later success.
     /// Excludes the file from canonical election.
     ErrorWhileDedup = 4,
+    /// Sparse copy failed (permissions, IO, …). Sticky.
+    ErrorWhileSparsify = 5,
 
     // IO Error while indexing
     // XATTR Error while indexing
