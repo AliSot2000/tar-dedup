@@ -3,11 +3,15 @@ use std::os::unix::fs::symlink;
 use path_clean::PathClean;
 use crate::common::files::warn_if_times_changed;
 use crate::config::Config;
+use crate::db::flags::{FileFlag};
 use crate::db::types::StrippedRecord;
 use crate::db::{Database, SqlFileRow};
 use crate::error::Result;
 
 use crate::shutdown::Shutdown;
+
+const EXPECTED_SHA: &str = "stage: Expected only canonical files. \
+                            Got wrong file type or non-canonical file";
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     fs::create_dir_all(config.stage_dir())
@@ -15,22 +19,27 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     for file_id in db.list_canonical_files(crate::db::types::FilePhase::Deduped)? {
         shutdown.check_between_files()?;
+        
         let record = db.get_file::<StrippedRecord>(file_id)?
             .expect("File vanished from database.");
-        let content_id = record
-            .content_id()
-            .expect("stage: Expected only canonical files. \
-            Got wrong file type or non-canonical file");
-        let tar_name = content_id.0.as_str();
-        let source_rel = config.input_dir.join(&record.rel_path);
+        
+        // Determine the Source
+        let source_path = if record.flags.get(FileFlag::HasSparse) {
+            let sparse_name = record.sparse_member_name().expect(EXPECTED_SHA);
+            config.stage_dir().join(sparse_name).clean()
+        } else {
+            config.input_dir.join(&record.rel_path).clean()
+        };
+
+        // Determine the Destination
+        let tar_name = record.tar_member_name().expect(EXPECTED_SHA);
         warn_if_times_changed(
-            &source_rel,
+            &source_path,
             record.mtime,
             record.atime,
             record.ctime,
         );
-        // TODO: Need to handle sparse path.
-        let source = source_rel.clean();
+        let source = source_path.clean();
         let target = config.stage_dir().join(tar_name);
         if target.exists() {
             fs::remove_file(&target).map_err(|e| crate::error::Error::io(&target, e))?;
