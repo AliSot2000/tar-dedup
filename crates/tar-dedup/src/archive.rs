@@ -4,6 +4,7 @@ mod dedup;
 mod filter;
 mod hash;
 mod inventory;
+mod sparsify;
 mod stage;
 mod tar_writer;
 
@@ -169,6 +170,7 @@ fn run_phase(
         PipelinePhase::Inventory => inventory::run(config, db, shutdown),
         PipelinePhase::Hash => hash::run(config, db, shutdown),
         PipelinePhase::Dedup => dedup::run(config, db, shutdown),
+        PipelinePhase::Sparsify => sparsify::run(config, db, shutdown),
         PipelinePhase::Stage => stage::run(config, db, shutdown),
         PipelinePhase::Archive => tar_writer::run(config, db, shutdown),
         PipelinePhase::Done => Ok(()),
