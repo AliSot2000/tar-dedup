@@ -16,13 +16,13 @@ use crate::error::{Error, Result};
 use crate::progress::io_buffer;
 use crate::shutdown::Shutdown;
 
-/// Block size used when counting all-zero stretches during the hash pass.
-/// Independent of the I/O read buffer; CLI wiring comes later.
-const ZERO_BLOCK_SIZE: usize = 4096;
-
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    let page_size = config.page_size;
+    if page_size == 0 {
+        return Err(Error::Config("page_size must be greater than 0".into()));
+    }
+
     let total = db.count_files()?;
-    // TODO: needs to be customizable.
     let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Inventoried)?;
     let already_hashed = total.saturating_sub(pending.len() as u64);
     tracing::info!(
@@ -30,7 +30,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         total,
         already_hashed,
         jobs = config.jobs,
-        zero_block_size = ZERO_BLOCK_SIZE,
+        page_size,
         "hash pass"
     );
 
@@ -67,7 +67,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         checked.par_bridge().try_for_each(|record| {
             shutdown.check_between_files()?;
             let path = input_dir.join(&record.rel_path);
-            let (digest, zero_blocks) = hash_file(&path, &shutdown)?;
+            let (digest, zero_blocks) = hash_file(&path, page_size, &shutdown)?;
             results
                 .lock()
                 .expect("hash results lock")
@@ -104,22 +104,22 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     }
 }
 
-/// Single-pass SHA-1 and empty-block count.
+/// Single-pass SHA-1 and empty-page count.
 ///
 /// Bytes are hashed as read. Separately, the stream is partitioned into fixed
-/// [`ZERO_BLOCK_SIZE`] windows (independent of the I/O buffer). Only **full**
+/// `page_size` windows (independent of the I/O buffer). Only **full**
 /// all-zero windows count; a short trailing window does not (same rule as
 /// `sparse-cp::sparse_page_count`).
 ///
 /// Zero checks slice `read_buf` in place. Across a read boundary we only keep
 /// `carry_len` / `carry_zero` — never the leftover bytes themselves.
-fn hash_file(path: &Path, shutdown: &Shutdown) -> Result<([u8; 20], u64)> {
+fn hash_file(path: &Path, page_size: usize, shutdown: &Shutdown) -> Result<([u8; 20], u64)> {
     let mut file = File::open(path).map_err(|e| Error::io(path, e))?;
 
     let mut hasher = Sha1::new();
     let mut read_buf = io_buffer();
     let mut zero_blocks = 0u64;
-    // Incomplete block spanning the previous read: length so far, and whether
+    // Incomplete page spanning the previous read: length so far, and whether
     // those bytes were all zero. `carry_len > 0` is the "cut off by buffer" flag.
     let mut carry_len = 0usize;
     let mut carry_zero = true;
@@ -136,7 +136,7 @@ fn hash_file(path: &Path, shutdown: &Shutdown) -> Result<([u8; 20], u64)> {
 
         // Handle segmentation between read_bufs
         if carry_len > 0 {
-            let need = ZERO_BLOCK_SIZE - carry_len;
+            let need = page_size - carry_len;
             if n < need {
                 carry_zero &= is_all_zero(&read_buf[..n]);
                 carry_len += n;
@@ -151,14 +151,14 @@ fn hash_file(path: &Path, shutdown: &Shutdown) -> Result<([u8; 20], u64)> {
         }
 
         // Scan contiguous buffer
-        while i + ZERO_BLOCK_SIZE <= n {
-            if is_all_zero(&read_buf[i..i + ZERO_BLOCK_SIZE]) {
+        while i + page_size <= n {
+            if is_all_zero(&read_buf[i..i + page_size]) {
                 zero_blocks += 1;
             }
-            i += ZERO_BLOCK_SIZE;
+            i += page_size;
         }
 
-        // Scan remaining block for zeros.
+        // Scan remaining page for zeros.
         let rem = n - i;
         if rem > 0 {
             carry_len = rem;
