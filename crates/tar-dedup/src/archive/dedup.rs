@@ -307,7 +307,7 @@ fn prepare_round(
     }
 
     if pairs.is_empty() {
-        for key in &groups_needing_end {
+        for key in groups_needing_end {
             end_round(db, key)?;
             did_work = true;
         }
