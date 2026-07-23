@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use rusqlite::{named_params, Connection};
 
-use crate::db::content_id::content_id_from_digest;
+use crate::db::content_id::{content_id_from_digest, sparse_member_name};
 use crate::db::flags::FileFlags;
 use crate::db::types::{
     ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, StrippedRecord,
@@ -38,6 +38,54 @@ fn content_id_if_canonical(
     Some(content_id_from_digest(digest, size, id, rel_path))
 }
 
+impl FileRecord {
+    /// Self-canonical regular file with digest → content id.
+    pub fn content_id(&self) -> Option<ContentId> {
+        content_id_if_canonical(
+            self.id,
+            self.canonical_id,
+            self.sha1.as_ref(),
+            self.size,
+            &self.rel_path,
+            self.ftype?,
+        )
+    }
+
+    /// Tar/stage member basename (`{hash}.{size}.{fid}.ext`).
+    pub fn tar_member_name(&self) -> Option<String> {
+        self.content_id().map(|c| c.0)
+    }
+
+    /// Sparse rewrite basename (`sp.{content_id}`).
+    pub fn sparse_member_name(&self) -> Option<String> {
+        self.content_id().as_ref().map(sparse_member_name)
+    }
+}
+
+impl StrippedRecord {
+    /// Self-canonical regular file with digest → content id.
+    pub fn content_id(&self) -> Option<ContentId> {
+        content_id_if_canonical(
+            self.id,
+            self.canonical_id,
+            self.sha1.as_ref(),
+            self.size,
+            &self.rel_path,
+            self.ftype?,
+        )
+    }
+
+    /// Tar/stage member basename (`{hash}.{size}.{fid}.ext`).
+    pub fn tar_member_name(&self) -> Option<String> {
+        self.content_id().map(|c| c.0)
+    }
+
+    /// Sparse rewrite basename (`sp.{content_id}`).
+    pub fn sparse_member_name(&self) -> Option<String> {
+        self.content_id().as_ref().map(sparse_member_name)
+    }
+}
+
 impl SqlFileRow for FileRecord {
     fn sql_columns() -> &'static str {
         "id, rel_path, size, sha1, mtime, atime, ctime, \
@@ -68,16 +116,9 @@ impl SqlFileRow for FileRecord {
             phase: parse_phase(row)?,
         })
     }
-    // INFO: Hash will only operate on files. It is safe to flush ftype != File to None
+
     fn content_id(&self) -> Option<ContentId> {
-        content_id_if_canonical(
-            self.id,
-            self.canonical_id,
-            self.sha1.as_ref(),
-            self.size,
-            &self.rel_path,
-            self.ftype?,
-        )
+        FileRecord::content_id(self)
     }
 }
 
@@ -102,16 +143,8 @@ impl SqlFileRow for StrippedRecord {
         })
     }
 
-    // INFO: Hash will only operate on files. It is safe to flush ftype != File to None
     fn content_id(&self) -> Option<ContentId> {
-        content_id_if_canonical(
-            self.id,
-            self.canonical_id,
-            self.sha1.as_ref(),
-            self.size,
-            &self.rel_path,
-            self.ftype?,
-        )
+        StrippedRecord::content_id(self)
     }
 }
 

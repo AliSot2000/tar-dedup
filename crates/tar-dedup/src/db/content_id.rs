@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
@@ -22,6 +22,16 @@ pub fn content_id_from_digest(
     let fid_part = URL_SAFE_NO_PAD.encode(file_id.0.to_le_bytes());
     let ext = original_extension(rel_path);
     ContentId(format!("{hash_part}.{size_part}.{fid_part}{ext}"))
+}
+
+/// Sparse rewrite basename: `sp.{content_id}`.
+pub fn sparse_member_name(content_id: &ContentId) -> String {
+    format!("sp.{}", content_id.0)
+}
+
+/// `stage_dir/sp.{content_id}`.
+pub fn sparse_stage_path(stage_dir: &Path, content_id: &ContentId) -> PathBuf {
+    stage_dir.join(sparse_member_name(content_id))
 }
 
 /// Parse `{hash_b64}.{fsize_b64}.{fid_b64}.ext` back into `(digest, size, file_id, extension)`.
