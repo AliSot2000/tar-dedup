@@ -25,6 +25,7 @@
           pkgs.bzip2     # bzip2 for bzip2 crate
           pkgs.zstd      # zstd C lib for zstd crate
           pkgs.zlib      # zlib (used by flate2 in some configs)
+          pkgs.libselinux # headers + lib for selinux / selinux-sys crates
         ];
 
         # Ensures dynamically linked C libs are findable at runtime
@@ -33,6 +34,7 @@
           pkgs.bzip2
           pkgs.zstd
           pkgs.zlib
+          pkgs.libselinux
         ];
 
         # pkg-config paths so build scripts can find the libs
@@ -41,6 +43,7 @@
           pkgs.bzip2.dev
           pkgs.zstd.dev
           pkgs.zlib.dev
+          pkgs.libselinux.dev
         ];
 
         shellHook = ''
