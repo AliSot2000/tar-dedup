@@ -3,9 +3,8 @@ use std::path::Path;
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::config::{ExtractPipelinePhase, ExtractRuntimeState};
-use crate::db::common::{self, upsert_meta, SqlFileRow};
+use crate::db::common::{upsert_meta, SqlFileRow};
 use crate::db::flags::FileFlag;
-use crate::db::types::FileRecord;
 use crate::error::Result;
 
 /// Copy the first embedded snapshot into the extract work DB (initial manifest).
@@ -74,26 +73,6 @@ pub fn count_unconfirmed_restored(conn: &Connection) -> Result<u64> {
         |row| row.get("count"),
     )?;
     Ok(count as u64)
-}
-
-pub fn tar_member_path(conn: &Connection, record: &FileRecord) -> Result<String> {
-    if let Some(ref path) = record.tar_path {
-        return Ok(path.clone());
-    }
-    let canonical_id = record.canonical_id.unwrap_or(record.id);
-    let canonical = common::get_file::<FileRecord>(conn, canonical_id)?.ok_or_else(|| {
-        crate::error::Error::Config(format!(
-            "missing canonical file id {} for {}",
-            canonical_id.0,
-            record.rel_path.display()
-        ))
-    })?;
-    canonical.tar_path.ok_or_else(|| {
-        crate::error::Error::Config(format!(
-            "no tar member for {}",
-            record.rel_path.display()
-        ))
-    })
 }
 
 pub fn init_extract_runtime_state(conn: &Connection) -> Result<()> {
