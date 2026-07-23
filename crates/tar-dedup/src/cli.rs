@@ -63,8 +63,9 @@ pub struct ArchiveArgs {
     #[arg(long = "page-size", value_name = "BYTES", default_value_t = 4096)]
     pub page_size: usize,
 
+    // TODO: Added default of 0
     /// Minimum empty-page count before sparsify treats a file as worth rewriting.
-    #[arg(long = "min-pages", value_name = 0)]
+    #[arg(long = "min-pages", value_name = "PAGES")]
     pub min_pages: Option<u64>,
 }
 
