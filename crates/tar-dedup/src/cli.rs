@@ -51,13 +51,21 @@ pub struct ArchiveArgs {
     pub keep_stage: bool,
 
     /// Run through STAGE then exit cleanly (state saved). STAGE: scan, hash, dedup,
-    /// stage, tar, cleanup (and aliases inventory, archive).
+    /// sparsify, stage, tar, cleanup (and aliases inventory, archive).
     #[arg(long = "exit-after-stage", value_name = "STAGE", value_enum)]
     pub exit_after_stage: Option<ExitAfterStageArg>,
 
     /// Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`.
     #[arg(long = "memlimit-compress", value_name = "LIMIT")]
     pub memlimit_compress: Option<String>,
+
+    /// Page size in bytes for hash zero-page counting and sparsify (default 4096).
+    #[arg(long = "page-size", value_name = "BYTES", default_value_t = 4096)]
+    pub page_size: usize,
+
+    /// Minimum empty-page count before sparsify treats a file as worth rewriting.
+    #[arg(long = "min-pages", value_name = 0)]
+    pub min_pages: Option<u64>,
 }
 
 #[derive(Debug, Args, Default)]
@@ -115,6 +123,7 @@ pub enum ExitAfterStageArg {
     Scan,
     Hash,
     Dedup,
+    Sparsify,
     /// Symlink canonical files into the work-dir stage/.
     #[value(alias = "symlink")]
     Stage,
