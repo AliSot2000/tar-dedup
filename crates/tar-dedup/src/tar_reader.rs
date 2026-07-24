@@ -20,7 +20,6 @@ pub fn open_decompressed(path: &Path, format: CompressionFormat) -> Result<Box<d
             zstd::stream::read::Decoder::new(file)
                 .map_err(|e| Error::Other(anyhow::anyhow!("zstd decoder: {e}")))?,
         ),
-        CompressionFormat::PIPE => return Err(Error::Other(anyhow::anyhow!("Pipe not Implemented"))),
         CompressionFormat::None => Box::new(file),
     };
     Ok(reader)
