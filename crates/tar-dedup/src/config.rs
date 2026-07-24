@@ -12,7 +12,6 @@ pub enum CompressionFormat {
     Gz,
     Bz2,
     Zstd,
-    PIPE,
     None,
 }
 
@@ -23,7 +22,6 @@ impl CompressionFormat {
             Self::Gz => true,
             Self::Bz2 => true,
             Self::Zstd => true,
-            Self::PIPE => false,
             Self::None => true,
         }
     }
