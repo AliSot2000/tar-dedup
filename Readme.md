@@ -14,3 +14,9 @@ Features:
 
 Compile hints on Debian:  
 `sudo apt install libselinux-dev libclang-dev clang`
+
+The current offering of compression algorithms is due to both the availability of rust crates for the algorithms and 
+also a thought of recentness of the algorithm. The program will default to the most aggressive compression possible 
+(xz, cpu_count threads, extreme compression profile and no regard for RAM consumption) if the options of the command 
+exposes du not suite your needs, the command offers to write to a simple tar file you can compress yourself 
+(and also subsequently decompress if the format is not supported.)
