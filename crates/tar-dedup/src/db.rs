@@ -222,9 +222,13 @@ impl Database {
     }
 
     pub fn sum_archived_canonical_bytes(&self) -> Result<u64> {
-        archive::sum_archived_canonical_bytes(&self.conn)
+        tar_writer::sum_archived_canonical_bytes(&self.conn)
     }
 
+    pub fn promote_archive_candidates_to_archived(conn: &Connection, retry: bool) -> Result<u64> {
+        tar_writer::promote_archive_candidates_to_archived(conn, retry)
+    }
+    
     pub fn checkpoint(&self) -> Result<()> {
         self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
