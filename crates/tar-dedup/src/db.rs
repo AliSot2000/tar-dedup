@@ -46,14 +46,6 @@ impl Database {
     pub fn get_file<R: SqlFileRow>(&self, file_id: FileId) -> Result<Option<R>> {
         common::get_file(&self.conn, file_id)
     }
-    // TODO: Resolution does happen to single file which is not deterministic.
-    // pub fn get_file_by_tar_path(&self, tar_path: &str) -> Result<Option<FileRecord>> {
-    //     inventory::get_file_by_tar_path(&self.conn, tar_path)
-    // }
-
-    // pub fn set_tar_path(&self, file_id: FileId, tar_path: &str) -> Result<()> {
-    //     inventory::set_tar_path(&self.conn, file_id, tar_path)
-    // }
 
     pub fn count_files(&self) -> Result<u64> {
         inventory::count_files(&self.conn)
