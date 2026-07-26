@@ -101,7 +101,7 @@ impl TarWriter {
             }
             CompressionFormat::Zstd => CompressLayer::Zstd(
                 zstd::stream::write::Encoder::new(file, 19)
-                    .map_err(|e| crate::error::Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
+                    .map_err(|e| Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
             ),
             CompressionFormat::None => CompressLayer::Plain(file),
         };
@@ -129,7 +129,7 @@ impl TarWriter {
         let mut header = Header::new_gnu();
         header
             .set_path(tar_name)
-            .map_err(|e| crate::error::Error::Other(anyhow::anyhow!("{e}")))?;
+            .map_err(|e| Error::Other(anyhow::anyhow!("{e}")))?;
         header.set_size(len);
         header.set_cksum();
 
