@@ -11,13 +11,17 @@ const HASH_B64_LEN: usize = 27;
 const U64_B64_LEN: usize = 11;
 
 /// Staged/tar member name: `{hash_b64}.{fsize_b64}.{fid_b64}.ext`.
+/// If no digest is present, the 27 characters for the hash are filled with 27 `;` characters
 pub fn content_id_from_digest(
-    digest: &[u8; 20],
+    digest: Option<&[u8; 20]>,
     size: u64,
     file_id: FileId,
     rel_path: &Path,
 ) -> ContentId {
-    let hash_part = URL_SAFE_NO_PAD.encode(digest);
+    let hash_part = match digest {
+        Some(dg) => URL_SAFE_NO_PAD.encode(dg),
+        None => ";".repeat(HASH_B64_LEN)
+    };
     let size_part = URL_SAFE_NO_PAD.encode(size.to_le_bytes());
     let fid_part = URL_SAFE_NO_PAD.encode(file_id.0.to_le_bytes());
     let ext = original_extension(rel_path);
@@ -35,7 +39,7 @@ pub fn sparse_stage_path(stage_dir: &Path, content_id: &ContentId) -> PathBuf {
 }
 
 /// Parse `{hash_b64}.{fsize_b64}.{fid_b64}.ext` back into `(digest, size, file_id, extension)`.
-pub fn parse_content_id(content_id: &str) -> Result<([u8; 20], u64, FileId, String)> {
+pub fn parse_content_id(content_id: &str) -> Result<(Option<[u8; 20]>, u64, FileId, String)> {
     let ext = original_extension(Path::new(content_id));
     let stem = content_id
         .strip_suffix(&ext)
@@ -54,11 +58,16 @@ pub fn parse_content_id(content_id: &str) -> Result<([u8; 20], u64, FileId, Stri
     let size_part = &stem[HASH_B64_LEN + 1..HASH_B64_LEN + 1 + U64_B64_LEN];
     let fid_part = &stem[HASH_B64_LEN + 1 + U64_B64_LEN + 1..];
 
-    let digest: [u8; 20] = URL_SAFE_NO_PAD
+    let digest: Option<[u8; 20]> = if hash_part == ";".repeat(HASH_B64_LEN) {
+        None
+    } else {
+        let res: [u8; 20] = URL_SAFE_NO_PAD
         .decode(hash_part)
         .ok()
         .and_then(|b| b.try_into().ok())
         .ok_or_else(|| Error::Config(format!("invalid content id: {content_id}")))?;
+        Some(res)
+    };
     let size = u64::from_le_bytes(
         URL_SAFE_NO_PAD
             .decode(size_part)
