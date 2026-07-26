@@ -49,20 +49,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             break;
         }
 
-        let Some(record) = db.get_file::<StrippedRecord>(file_id)? else {
-            continue;
-        };
-        if record.sha1.is_none() {
-            continue;
-        }
-        let digest = record.sha1.unwrap();
-        let tar_name = crate::db::content_id::content_id_from_digest(
-            &digest,
-            record.size,
-            file_id,
-            &record.rel_path,
-        )
-        .0;
+        let record = db.get_file::<StrippedRecord>(file_id)?
+            .expect("File was present in db for listing, error in sql statement \
+            or database corrupted.");
+
+        let tar_name = record.tar_member_name()
+            .expect("Encoding to base64 failed or invalid record provided");
         let source = config.stage_dir().join(&tar_name);
         // Stage path is a symlink; compare inventory times against the real target.
         let target = std::fs::canonicalize(&source).map_err(|e| Error::io(&source, e))?;
