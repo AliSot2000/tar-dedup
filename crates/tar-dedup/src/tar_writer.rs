@@ -150,7 +150,7 @@ impl TarWriter {
                 .read(&mut buf[..chunk])
                 .map_err(|e| crate::error::Error::io(path, e))?;
             if n == 0 {
-                return Err(crate::error::Error::Other(anyhow::anyhow!(
+                return Err(Error::Other(anyhow::anyhow!(
                     "unexpected EOF reading {}",
                     path.display()
                 )));
