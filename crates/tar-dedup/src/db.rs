@@ -12,7 +12,7 @@ use crate::error::Result;
 pub mod flags;
 pub mod types;
 
-mod archive;
+mod tar_writer;
 mod common;
 mod dedup;
 mod extract;
@@ -201,24 +201,24 @@ impl Database {
     }
 
     pub fn begin_archive_session(&self, archive_offset: u64) -> Result<i64> {
-        let stream_index = archive::next_stream_index(&self.conn)?;
-        archive::begin_session(&self.conn, stream_index, archive_offset)
+        let stream_index = tar_writer::next_stream_index(&self.conn)?;
+        tar_writer::begin_session(&self.conn, stream_index, archive_offset)
     }
 
     pub fn finalize_archive_session(&self, session_id: i64, bytes_in: u64, bytes_out: u64) -> Result<()> {
-        archive::finalize_session(&self.conn, session_id, bytes_in, bytes_out)
+        tar_writer::finalize_session(&self.conn, session_id, bytes_in, bytes_out)
     }
 
     pub fn open_archive_session(&self) -> Result<Option<ArchiveSession>> {
-        archive::open_session(&self.conn)
+        tar_writer::open_session(&self.conn)
     }
 
     pub fn reset_archive_state(&self) -> Result<()> {
-        archive::reset_archive_state(&self.conn)
+        tar_writer::reset_archive_state(&self.conn)
     }
 
     pub fn sum_canonical_bytes_to_archive(&self) -> Result<u64> {
-        archive::sum_canonical_bytes_to_archive(&self.conn)
+        tar_writer::sum_canonical_bytes_to_archive(&self.conn)
     }
 
     pub fn sum_archived_canonical_bytes(&self) -> Result<u64> {
