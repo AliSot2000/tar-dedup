@@ -1,8 +1,7 @@
-use chrono::Utc;
-use rusqlite::{named_params, Connection, OptionalExtension};
-
 use crate::db::types::ArchiveSession;
 use crate::error::Result;
+use chrono::Utc;
+use rusqlite::{named_params, Connection, OptionalExtension};
 
 pub fn begin_session(conn: &Connection, stream_index: i64, archive_offset: u64) -> Result<i64> {
     conn.execute(
@@ -85,4 +84,17 @@ pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
         |row| row.get("total"),
     )?;
     Ok(total as u64)
+}
+
+pub fn promote_archive_candidates_to_archived(conn: &Connection, retry: bool) -> Result<u64> {
+    let filter_sha = if (retry) { "OR sha1 IS NULL" } else { "" };
+    let stmt = format!("UPDATE files SET phase = 'archived'
+         WHERE phase = 'staged'
+           AND (
+                canonical_id IS NULL OR canonical_id != id
+             OR ftype IS NULL OR ftype != 'file'
+             {filter_sha} --optionally also add sha1 back into.
+           )");
+    let n = conn.execute(&stmt, {})?;
+    Ok(n as u64)
 }
