@@ -1,10 +1,10 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use path_clean::PathClean;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use sparse_cp::sparse_copy_with_progress;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::common::files::{warn_if_times_changed, PreYield};
 use crate::config::Config;
