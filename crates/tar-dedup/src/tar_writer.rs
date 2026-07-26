@@ -126,6 +126,7 @@ impl TarWriter {
             .map_err(|e| crate::error::Error::io(path, e))?
             .len();
 
+        // TODO easy support for old style headers.
         let mut header = Header::new_gnu();
         header
             .set_path(tar_name)
