@@ -20,6 +20,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let total_bytes = db.sum_canonical_bytes_to_archive()?;
     let already_archived = db.sum_archived_canonical_bytes()?;
 
+    // TODO fix up the eta.
     let progress = ByteProgress::new("archive", total_bytes);
     progress.set_position(already_archived);
 
