@@ -125,10 +125,9 @@ fn force_abort_without_writer(config: &Config, db: &Database) -> Result<()> {
 }
 
 fn remove_archive_file(config: &Config) -> Result<()> {
-    if config.archive_path.is_file() {
-        std::fs::remove_file(&config.archive_path)
-            .map_err(|e| crate::error::Error::io(&config.archive_path, e))?;
-    }
+    assert!(config.archive_path.is_file(), "Error in CLI parsing. Archive path expected to be file!");
+    std::fs::remove_file(&config.archive_path)
+        .map_err(|e| crate::error::Error::io(&config.archive_path, e))?;
     Ok(())
 }
 
