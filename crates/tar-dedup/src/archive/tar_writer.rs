@@ -177,8 +177,11 @@ fn end_session(
     session_id: i64,
     write_tar_eof: bool,
 ) -> Result<()> {
-    progress.set_message("archive writing snapshot.sqlite (progress)");
-    if let Err(e) = append_snapshot(&mut writer, config, db, shutdown) {
+
+    progress.set_message(format!("archive writing {SNAPSHOT_TAR_NAME} (progress)").as_str());
+
+    if let Err(e) = append_snapshot(&mut writer, config, db, shutdown, false) {
+        // Need to handle internal writer.append_snapshot() -> Interrup
         if e.is_interrupted() && shutdown.is_force() {
             return force_abort_session(writer, db, progress);
         }
@@ -194,6 +197,7 @@ fn end_session(
     };
 
     match result {
+        // TODO no members, work based on the flag ArchiveSessionPending, no need for membersw
         Ok((bytes_in, bytes_out, members)) => {
             db.mark_files_archived(&members)?;
             db.finalize_archive_session(session_id, bytes_in, bytes_out)?;
