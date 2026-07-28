@@ -43,7 +43,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         append_snapshot(&mut writer, config, db, shutdown, true)?;
     }
 
-    let to_archive = staged_canonical_sorted(db)?;
+    // TODO Config should control argument
+    let to_archive = db.list_staged_canonical_ordered(true)?;
     if to_archive.is_empty() && already_archived == 0 {
         tracing::warn!("no staged files to archive");
     }
