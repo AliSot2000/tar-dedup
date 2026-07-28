@@ -150,28 +150,6 @@ fn force_abort_session(
     Err(Error::Interrupted)
 }
 
-fn staged_canonical_sorted(db: &Database) -> Result<Vec<FileId>> {
-    let ids = db.list_canonical_files(FilePhase::Staged)?;
-    let mut items = Vec::with_capacity(ids.len());
-    for id in ids {
-        let Some(record) = db.get_file::<StrippedRecord>(id)? else {
-            continue;
-        };
-        items.push((archive_sort_key(&record), id));
-    }
-    items.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(items.into_iter().map(|(_, id)| id).collect())
-}
-
-fn archive_sort_key(record: &StrippedRecord) -> (String, u64, i64) {
-    let ext = record
-        .rel_path
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    (ext, record.size, record.id.0)
-}
-
 fn append_snapshot(
     writer: &mut TarWriter,
     config: &Config,
