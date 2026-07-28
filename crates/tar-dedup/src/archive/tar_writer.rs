@@ -142,6 +142,7 @@ fn force_abort_session(
     db: &Database,
     progress: &ByteProgress,
 ) -> Result<()> {
+
     writer.abandon();
     // Ensure pending flags + open session are durable before exit.
     db.checkpoint()?;
