@@ -37,6 +37,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         shutdown.clone(),
     )?;
 
+    // Fresh start into archiving.
     if already_archived == 0 {
         progress.set_message("archive writing manifest.sqlite (baseline)");
         append_snapshot(&mut writer, config, db, shutdown, true)?;
@@ -89,10 +90,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         }
     }
 
+    // Fast exit on force
     if stopped && shutdown.is_force() {
         return force_abort_session(writer, db, &progress);
     }
 
+    // Perform Graceful cleanup.
     end_session(
         writer,
         config,
