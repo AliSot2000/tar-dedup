@@ -49,6 +49,10 @@ CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(sha1, size);
 CREATE INDEX IF NOT EXISTS idx_files_canonical ON files(canonical_id);
 CREATE INDEX IF NOT EXISTS idx_files_phase ON files(phase);
 
+-- finalized:
+-- 0 = open/interrupted,
+-- 1 = stream closed successfully,
+-- 2 = recovered/aborted
 CREATE TABLE IF NOT EXISTS archive_sessions (
     id             INTEGER PRIMARY KEY,
     stream_index   INTEGER NOT NULL,

@@ -34,8 +34,7 @@ fn content_id_if_canonical(
     if ftype != FileType::File {
         return None;
     }
-    let digest = sha1?;
-    Some(content_id_from_digest(digest, size, id, rel_path))
+    Some(content_id_from_digest(sha1, size, id, rel_path))
 }
 
 impl FileRecord {

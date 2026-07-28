@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::common::files::warn_if_times_changed;
 use crate::config::Config;
-use crate::db::types::{FileId, FilePhase, StrippedRecord};
+use crate::db::types::{ArchiveSession, FileId, FilePhase, StrippedRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
@@ -12,14 +12,15 @@ use crate::tar_writer::TarWriter;
 const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    // Crash / force leftover: truncate incomplete stream C, keep finished A..B.
+    recover_incomplete_session(config, db)?;
+
     let archive_offset = archive_file_len(&config.archive_path);
-    let (session_id, _session_start_offset) = match db.open_archive_session()? {
-        Some(open) => (open.id, open.archive_offset),
-        None => (db.begin_archive_session(archive_offset)?, archive_offset),
-    };
+    let session_id = db.begin_archive_session(archive_offset)?;
     let total_bytes = db.sum_canonical_bytes_to_archive()?;
     let already_archived = db.sum_archived_canonical_bytes()?;
 
+    // TODO update eta only when write to buff occurs.
     let progress = ByteProgress::new("archive", total_bytes);
     progress.set_position(already_archived);
 
@@ -42,104 +43,108 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     }
 
     let mut stopped = false;
+    let mut final_archive = true;
 
     for file_id in to_archive {
         if shutdown.check_between_files().is_err() {
             stopped = true;
+            final_archive = false;
             break;
         }
 
-        let Some(record) = db.get_file::<StrippedRecord>(file_id)? else {
-            continue;
-        };
-        if record.sha1.is_none() {
-            continue;
-        }
-        let digest = record.sha1.unwrap();
-        let tar_name = crate::db::content_id::content_id_from_digest(
-            &digest,
-            record.size,
-            file_id,
-            &record.rel_path,
-        )
-        .0;
+        let record = db
+            .get_file::<StrippedRecord>(file_id)?
+            .expect(
+                "File was present in db for listing, error in sql statement \
+            or database corrupted.",
+            );
+
+        let tar_name = record
+            .tar_member_name()
+            .expect("Encoding to base64 failed or invalid record provided");
         let source = config.stage_dir().join(&tar_name);
-        // Stage path is a symlink; compare inventory times against the real target.
         let target = std::fs::canonicalize(&source).map_err(|e| Error::io(&source, e))?;
         warn_if_times_changed(&target, record.mtime, record.atime, record.ctime);
 
         progress.set_file("archive", &record.rel_path);
 
-        match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
-            Ok(()) => {}
+        match writer.append_path(&source, &tar_name, Some(file_id), shutdown, |n| {
+            progress.inc(n)
+        }) {
+            Ok(()) => {
+                // Durable until finalize (→ archived) or startup recover (cleared).
+                db.mark_archive_session_pending(file_id)?;
+            }
             Err(e) if e.is_interrupted() => {
                 stopped = true;
+                final_archive = false;
                 break;
             }
             Err(e) => return Err(e),
         }
-
-        db.mark_file_phase(file_id, FilePhase::Archived)?;
     }
 
-    if stopped {
-        if shutdown.is_force() {
-            return force_abort_archive(writer, config, db, &progress);
-        }
+    if stopped && shutdown.is_force() {
+        return force_abort_session(writer, db, &progress);
+    }
 
-        end_session(
-            writer,
-            config,
-            db,
-            shutdown,
-            &progress,
-            session_id,
-        )?;
+    end_session(
+        writer,
+        config,
+        db,
+        shutdown,
+        &progress,
+        session_id,
+        final_archive,
+    )?;
+
+    if stopped {
         progress.abandon();
         return Err(Error::Interrupted);
     }
 
-    end_session(writer, config, db, shutdown, &progress, session_id)?;
     progress.finish("archive complete");
     Ok(())
 }
 
-fn force_abort_archive(
-    writer: TarWriter,
+/// Truncate archive to the incomplete session's start offset, mark session aborted,
+/// and clear [`crate::db::flags::FileFlag::ArchiveSessionPending`].
+/// Prior finalized sessions (and their archived files) stay intact.
+fn abort_session_at(
     config: &Config,
     db: &Database,
-    progress: &ByteProgress,
+    session: &ArchiveSession,
 ) -> Result<()> {
-    writer.abandon();
-    remove_archive_file(config)?;
-    db.reset_archive_state()?;
+    let offset = session.archive_offset;
+    db.abort_incomplete_archive_session(&config.archive_path, session)?;
     eprintln!(
-        "removed archive {}; archive progress reset in work directory",
+        "recovered incomplete archive session at offset {offset} ({})",
         config.archive_path.display()
     );
-    progress.abandon();
-    Err(Error::Interrupted)
+    Ok(())
 }
 
-fn force_abort_without_writer(config: &Config, db: &Database) -> Result<()> {
-    remove_archive_file(config)?;
-    db.reset_archive_state()?;
-    eprintln!(
-        "removed archive {}; archive progress reset in work directory",
-        config.archive_path.display()
-    );
-    Err(Error::Interrupted)
-}
-
-fn remove_archive_file(config: &Config) -> Result<()> {
-    if config.archive_path.is_file() {
-        std::fs::remove_file(&config.archive_path)
-            .map_err(|e| crate::error::Error::io(&config.archive_path, e))?;
+fn recover_incomplete_session(config: &Config, db: &Database) -> Result<()> {
+    if let Some(open) = db.open_archive_session()? {
+        abort_session_at(config, db, &open)?;
     }
     Ok(())
 }
 
-/// Canonical staged files: extension (asc), size (asc), id (asc).
+/// Force abort: abandon the writer in place. Leave session `finalized = 0` and
+/// pending file flags; next run's startup recovery truncates and marks aborted.
+fn force_abort_session(
+    writer: TarWriter,
+    db: &Database,
+    progress: &ByteProgress,
+) -> Result<()> {
+    writer.abandon();
+    // Ensure pending flags + open session are durable before exit.
+    db.checkpoint()?;
+    progress.abandon();
+    Err(Error::Interrupted)
+}
+
 fn staged_canonical_sorted(db: &Database) -> Result<Vec<FileId>> {
     let ids = db.list_canonical_files(FilePhase::Staged)?;
     let mut items = Vec::with_capacity(ids.len());
@@ -168,11 +173,12 @@ fn append_snapshot(
     db: &Database,
     shutdown: &Shutdown,
 ) -> Result<()> {
+
     db.checkpoint()?;
     let src = config.db_path();
     let staging = config.work_dir.join(".snapshot-for-tar.sqlite");
     std::fs::copy(&src, &staging).map_err(|e| crate::error::Error::io(&staging, e))?;
-    let result = writer.append_path(&staging, SNAPSHOT_TAR_NAME, shutdown, |_| ());
+    let result = writer.append_path(&staging, SNAPSHOT_TAR_NAME, None, shutdown, |_| ());
     let _ = std::fs::remove_file(&staging);
     result
 }
@@ -184,23 +190,37 @@ fn end_session(
     shutdown: &Shutdown,
     progress: &ByteProgress,
     session_id: i64,
+    write_tar_eof: bool,
 ) -> Result<()> {
     progress.set_message("archive writing snapshot.sqlite (progress)");
     if let Err(e) = append_snapshot(&mut writer, config, db, shutdown) {
         if e.is_interrupted() && shutdown.is_force() {
-            writer.abandon();
-            return force_abort_without_writer(config, db);
+            return force_abort_session(writer, db, progress);
         }
         return Err(e);
     }
 
     progress.set_message("archive finalizing compression stream");
-    match writer.finalize_session(shutdown) {
-        Ok((bytes_in, bytes_out)) => {
+    // TODO makes no sense.
+    let result = if write_tar_eof {
+        writer.finalize_archive(shutdown)
+    } else {
+        writer.finalize_session(shutdown)
+    };
+
+    match result {
+        Ok((bytes_in, bytes_out, members)) => {
+            db.mark_files_archived(&members)?;
             db.finalize_archive_session(session_id, bytes_in, bytes_out)?;
             Ok(())
         }
-        Err(e) if e.is_interrupted() && shutdown.is_force() => force_abort_without_writer(config, db),
+        Err(e) if e.is_interrupted() && shutdown.is_force() => {
+            // Writer already dropped mid-finalize; leave open session + pending for
+            // next startup recovery (same as force abort / crash).
+            db.checkpoint()?;
+            progress.abandon();
+            Err(Error::Interrupted)
+        }
         Err(e) => Err(e),
     }
 }

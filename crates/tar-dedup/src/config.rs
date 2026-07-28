@@ -12,19 +12,17 @@ pub enum CompressionFormat {
     Gz,
     Bz2,
     Zstd,
-    PIPE,
     None,
 }
 
 impl CompressionFormat {
-    pub fn allows_resume(self) -> bool {
+    pub fn does_compress(self) -> bool {
         match self {
             Self::Xz => true,
             Self::Gz => true,
             Self::Bz2 => true,
             Self::Zstd => true,
-            Self::PIPE => false,
-            Self::None => true,
+            Self::None => false,
         }
     }
 }
