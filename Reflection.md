@@ -102,6 +102,9 @@ Compression Algo extractions:
 - `?` `--reset-phase <phase>` Reset all files s.t. this phase will be executed again. Useful in cases of hash, dedup or sparsify.
 - `?` `--fail-fast` ... needs more work. look at dedup (fail on any error, fail pair on error, fail group on error.)
 - `?` `--no-dup-shell-out` if no duplicates are detected, shell out to regular tar or use tar-dedup tar compression (sorted by file type could still yield better compression.)
+- `-O` `--to-stdout` extract files to standard output
+- `?` `--retry-missing-sha` attempt to add files to tar even if they have no sha -> likely errored out.
+
 # Filesystem Nodes supported
 - Regular File
 - Directory

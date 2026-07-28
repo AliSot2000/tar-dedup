@@ -157,8 +157,8 @@ fn file_mode(_meta: &std::fs::Metadata) -> u32 {
 fn resolve_link(e: &DirEntry) -> io::Result<LinkType> {
     let mut visited = HashSet::new();
     let mut current = e.path().to_path_buf();
-    assert!(current.is_symlink(), "INVARIANT: Non-Link DirEntry supplied");
-    assert!(current.is_absolute(), "INVARIANT: Non-Absolute Path supplied");
+    debug_assert!(current.is_symlink(), "INVARIANT: Non-Link DirEntry supplied");
+    debug_assert!(current.is_absolute(), "INVARIANT: Non-Absolute Path supplied");
 
     loop {
         // Cycle prevention.

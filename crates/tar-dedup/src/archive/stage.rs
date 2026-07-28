@@ -17,6 +17,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     fs::create_dir_all(config.stage_dir())
         .map_err(|e| crate::error::Error::io(&config.stage_dir(), e))?;
 
+    // TODO: Mark non-canonical
+
     for file_id in db.list_canonical_files(crate::db::types::FilePhase::Deduped)? {
         shutdown.check_between_files()?;
         
@@ -49,7 +51,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         db.mark_file_phase(file_id, crate::db::types::FilePhase::Staged)?;
     }
 
-    // TODO mark remaining entries as in phase too.
+    // TODO sanity check that we don't have 
 
     copy_database(config)?;
     Ok(())

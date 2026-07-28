@@ -12,7 +12,7 @@ use crate::error::Result;
 pub mod flags;
 pub mod types;
 
-mod archive;
+mod tar_writer;
 mod common;
 mod dedup;
 mod extract;
@@ -46,14 +46,6 @@ impl Database {
     pub fn get_file<R: SqlFileRow>(&self, file_id: FileId) -> Result<Option<R>> {
         common::get_file(&self.conn, file_id)
     }
-    // TODO: Resolution does happen to single file which is not deterministic.
-    // pub fn get_file_by_tar_path(&self, tar_path: &str) -> Result<Option<FileRecord>> {
-    //     inventory::get_file_by_tar_path(&self.conn, tar_path)
-    // }
-
-    // pub fn set_tar_path(&self, file_id: FileId, tar_path: &str) -> Result<()> {
-    //     inventory::set_tar_path(&self.conn, file_id, tar_path)
-    // }
 
     pub fn count_files(&self) -> Result<u64> {
         inventory::count_files(&self.conn)
@@ -201,30 +193,62 @@ impl Database {
     }
 
     pub fn begin_archive_session(&self, archive_offset: u64) -> Result<i64> {
-        let stream_index = archive::next_stream_index(&self.conn)?;
-        archive::begin_session(&self.conn, stream_index, archive_offset)
+        let stream_index = tar_writer::next_stream_index(&self.conn)?;
+        tar_writer::begin_session(&self.conn, stream_index, archive_offset)
     }
 
     pub fn finalize_archive_session(&self, session_id: i64, bytes_in: u64, bytes_out: u64) -> Result<()> {
-        archive::finalize_session(&self.conn, session_id, bytes_in, bytes_out)
+        tar_writer::finalize_session(&self.conn, session_id, bytes_in, bytes_out)
+    }
+
+    pub fn mark_archive_session_aborted(&self, session_id: i64) -> Result<()> {
+        tar_writer::mark_session_aborted(&self.conn, session_id)
+    }
+
+    pub fn abort_incomplete_archive_session(
+        &self,
+        path: &Path,
+        session: &ArchiveSession,
+    ) -> Result<()> {
+        tar_writer::abort_incomplete_session(&self.conn, path, session)
+    }
+
+    pub fn mark_files_archived(&self, file_ids: &[FileId]) -> Result<()> {
+        tar_writer::mark_files_archived(&self.conn, file_ids)
+    }
+
+    pub fn mark_archive_session_pending(&self, file_id: FileId) -> Result<()> {
+        tar_writer::mark_archive_session_pending(&self.conn, file_id)
+    }
+
+    pub fn clear_archive_session_pending(&self) -> Result<u64> {
+        tar_writer::clear_archive_session_pending(&self.conn)
+    }
+
+    pub fn truncate_archive_at(&self, path: &Path, offset: u64) -> Result<()> {
+        tar_writer::truncate_archive_at(path, offset)
     }
 
     pub fn open_archive_session(&self) -> Result<Option<ArchiveSession>> {
-        archive::open_session(&self.conn)
+        tar_writer::open_session(&self.conn)
     }
 
     pub fn reset_archive_state(&self) -> Result<()> {
-        archive::reset_archive_state(&self.conn)
+        tar_writer::reset_archive_state(&self.conn)
     }
 
     pub fn sum_canonical_bytes_to_archive(&self) -> Result<u64> {
-        archive::sum_canonical_bytes_to_archive(&self.conn)
+        tar_writer::sum_canonical_bytes_to_archive(&self.conn)
     }
 
     pub fn sum_archived_canonical_bytes(&self) -> Result<u64> {
-        archive::sum_archived_canonical_bytes(&self.conn)
+        tar_writer::sum_archived_canonical_bytes(&self.conn)
     }
 
+    pub fn promote_archive_candidates_to_archived(conn: &Connection, retry: bool) -> Result<u64> {
+        tar_writer::promote_archive_candidates_to_archived(conn, retry)
+    }
+    
     pub fn checkpoint(&self) -> Result<()> {
         self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
