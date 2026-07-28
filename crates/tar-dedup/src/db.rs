@@ -201,6 +201,34 @@ impl Database {
         tar_writer::finalize_session(&self.conn, session_id, bytes_in, bytes_out)
     }
 
+    pub fn mark_archive_session_aborted(&self, session_id: i64) -> Result<()> {
+        tar_writer::mark_session_aborted(&self.conn, session_id)
+    }
+
+    pub fn abort_incomplete_archive_session(
+        &self,
+        path: &Path,
+        session: &ArchiveSession,
+    ) -> Result<()> {
+        tar_writer::abort_incomplete_session(&self.conn, path, session)
+    }
+
+    pub fn mark_files_archived(&self, file_ids: &[FileId]) -> Result<()> {
+        tar_writer::mark_files_archived(&self.conn, file_ids)
+    }
+
+    pub fn mark_archive_session_pending(&self, file_id: FileId) -> Result<()> {
+        tar_writer::mark_archive_session_pending(&self.conn, file_id)
+    }
+
+    pub fn clear_archive_session_pending(&self) -> Result<u64> {
+        tar_writer::clear_archive_session_pending(&self.conn)
+    }
+
+    pub fn truncate_archive_at(&self, path: &Path, offset: u64) -> Result<()> {
+        tar_writer::truncate_archive_at(path, offset)
+    }
+
     pub fn open_archive_session(&self) -> Result<Option<ArchiveSession>> {
         tar_writer::open_session(&self.conn)
     }
