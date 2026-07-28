@@ -2,10 +2,11 @@ use std::fs::OpenOptions;
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{named_params, Connection, OptionalExtension};
+use rusqlite::{named_params, params, Connection, OptionalExtension};
 
+use crate::db::content_id::original_extension;
 use crate::db::flags::FileFlag;
-use crate::db::types::ArchiveSession;
+use crate::db::types::{ArchiveSession, FileId};
 use crate::error::{Error, Result};
 
 /// `archive_sessions.finalized` values.
@@ -122,6 +123,62 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection) -> Result<u64> {
         |row| row.get("total"),
     )?;
     Ok(total as u64)
+}
+
+/// Staged self-canonical file ids, ordered for packing: extension, size, id.
+///
+/// Extension matches [`original_extension`] (Rust/`Path`), which SQLite cannot
+/// mirror reliably — so we stage `(file_id, ext, size)` in a temp table, then
+/// `ORDER BY` and return ids only. Callers re-fetch rows in the write loop so
+/// they see up-to-date DB state (and do not keep a full snapshot in RAM).
+/// `filter_sha` determines if we filter sha1 IS NOT NULL too. 
+pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Result<Vec<FileId>> {
+    let tx = conn.unchecked_transaction()?;
+
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS temp.archive_order;
+         CREATE TEMP TABLE archive_order (
+             file_id INTEGER PRIMARY KEY NOT NULL,
+             ext TEXT NOT NULL,
+             size INTEGER NOT NULL
+         );",
+    )?;
+
+    {
+        let check = if filter_sha { " AND sha1 IS NOT NULL" } else { "" };
+        let mut select = tx.prepare(
+            format!("SELECT id, rel_path, size FROM files \
+            WHERE canonical_id = id AND phase = 'staged' {check}").as_str(),
+        )?;
+        let mut insert = tx.prepare(
+            "INSERT INTO archive_order (file_id, ext, size) VALUES (?1, ?2, ?3)",
+        )?;
+        let rows = select.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, rel_path, size) = row?;
+            let ext = original_extension(Path::new(&rel_path));
+            insert.execute(params![id, ext, size])?;
+        }
+    }
+
+    let out = {
+        let mut stmt = tx.prepare(
+            "SELECT file_id FROM archive_order
+             ORDER BY ext ASC, size ASC, file_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    tx.execute_batch("DROP TABLE IF EXISTS temp.archive_order;")?;
+    tx.commit()?;
+    Ok(out)
 }
 
 pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {

@@ -245,6 +245,11 @@ impl Database {
         tar_writer::sum_archived_canonical_bytes(&self.conn)
     }
 
+    /// Staged canonical ids ordered by extension / size / id for the archive pass.
+    pub fn list_staged_canonical_ordered(&self, filter_sha: bool) -> Result<Vec<FileId>> {
+        tar_writer::list_staged_canonical_ordered(&self.conn, filter_sha)
+    }
+
     pub fn promote_archive_candidates_to_archived(conn: &Connection, retry: bool) -> Result<u64> {
         tar_writer::promote_archive_candidates_to_archived(conn, retry)
     }
