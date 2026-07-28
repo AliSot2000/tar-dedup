@@ -86,7 +86,8 @@ pub fn parse_content_id(content_id: &str) -> Result<(Option<[u8; 20]>, u64, File
     Ok((digest, size, file_id, ext))
 }
 
-fn original_extension(path: &Path) -> String {
+/// Extension with leading dot (e.g. `.txt`), or empty if none / non-UTF-8.
+pub(crate) fn original_extension(path: &Path) -> String {
     path.extension()
         .and_then(|ext| ext.to_str())
         .filter(|ext| !ext.is_empty())
