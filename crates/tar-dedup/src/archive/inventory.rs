@@ -17,6 +17,7 @@ use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::db::types::FileType::File;
 use path_clean::PathClean;
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
@@ -51,6 +52,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let gid = strip_transpose(path, file_gid(&path), &mut enc_err);
         let ftype = strip_transpose(path, determine_file_type(&entry), &mut enc_err);
         let mode = file_mode(&meta);
+
+        // TODO: Need to capture link target
 
         // Optional data
         let xattrs = if config.do_xattrs {
