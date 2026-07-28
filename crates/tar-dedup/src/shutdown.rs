@@ -59,7 +59,8 @@ impl Shutdown {
     pub fn check_between_files(&self) -> Result<()> {
         match self.mode.load(Ordering::SeqCst) {
             MODE_RUNNING => Ok(()),
-            MODE_GRACEFUL | MODE_FORCE | _ => Err(Error::Interrupted),
+            MODE_GRACEFUL | MODE_FORCE => Err(Error::Interrupted),
+            v => panic!("Got unexpected Shutdown Value of {v}")
         }
     }
 
