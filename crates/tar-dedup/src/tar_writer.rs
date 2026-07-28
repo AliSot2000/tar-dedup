@@ -1,21 +1,159 @@
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use tar::Header;
+use tar::Builder;
 
 use crate::compression::InterruptibleXzEncoder;
 use crate::config::CompressionFormat;
+use crate::db::types::FileId;
 use crate::error::{Error, Result};
-use crate::progress::archive_io_buffer;
 use crate::shutdown::Shutdown;
 
-pub struct TarWriter {
-    archive_path: PathBuf,
+/// Two 512-byte zero blocks — ustar end-of-archive marker.
+const TAR_EOF_LEN: usize = 1024;
+
+/// Hold back trailing bytes so we can drop Builder's tar EOF without sniffing
+/// individual `write` shapes.
+///
+/// `tar::Builder::{finish,into_inner,Drop}` always emits EOF; we cannot skip that
+/// call. Instead we keep the last [`TAR_EOF_LEN`] bytes uncommitted. Anything older
+/// is flushed as real tar payload (so a final member that ends in zeros is not lost
+/// when EOF is appended). After Builder teardown, [`TarSink::resolve_trailing_eof`]
+/// either commits the hold (final session) or drops it if it is an all-zero trailer
+/// (graceful multi-session).
+struct TarSink {
+    inner: BufferedCompress,
+    pending: Vec<u8>,
+    allow_tar_eof: bool,
+}
+
+impl TarSink {
+    fn drain_pending_excess(&mut self) -> io::Result<()> {
+        if self.pending.len() <= TAR_EOF_LEN {
+            return Ok(());
+        }
+        let release = self.pending.len() - TAR_EOF_LEN;
+        self.inner.write_all(&self.pending[..release])?;
+        self.pending.drain(..release);
+        Ok(())
+    }
+
+    /// After `Builder::into_inner` (EOF already written into `pending`): commit or drop.
+    fn resolve_trailing_eof(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let drop_eof = !self.allow_tar_eof
+            && self.pending.len() <= TAR_EOF_LEN
+            && self.pending.iter().all(|&b| b == 0);
+        if drop_eof {
+            self.pending.clear();
+        } else {
+            self.inner.write_all(&self.pending)?;
+            self.pending.clear();
+        }
+        Ok(())
+    }
+}
+
+impl Write for TarSink {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        if data.is_empty() {
+            return Ok(0);
+        }
+        self.pending.extend_from_slice(data);
+        self.drain_pending_excess()?;
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        // Do not flush `pending` — it may still be / become the EOF trailer.
+        self.inner.flush()
+    }
+}
+
+/// Intermediate buffer between tar framing and the compressor (~4 MiB).
+struct BufferedCompress {
+    buf: Vec<u8>,
     layer: CompressLayer,
-    bytes_in: u64,
+    shutdown: Shutdown,
+}
+
+impl BufferedCompress {
+    fn new(layer: CompressLayer, shutdown: Shutdown) -> Self {
+        const BUF: usize = 4 * 1024 * 1024;
+        Self {
+            buf: Vec::with_capacity(BUF),
+            layer,
+            shutdown,
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        4 * 1024 * 1024
+    }
+
+    fn flush_buf(&mut self) -> io::Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        let mut offset = 0;
+        while offset < self.buf.len() {
+            self.shutdown
+                .check_in_flight()
+                .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "interrupted"))?;
+            let n = self.layer.write(&self.buf[offset..])?;
+            if n == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "compress output stalled",
+                ));
+            }
+            offset += n;
+        }
+        self.buf.clear();
+        Ok(())
+    }
+
+    fn into_layer(mut self) -> io::Result<CompressLayer> {
+        self.flush_buf()?;
+        self.layer.flush()?;
+        Ok(self.layer)
+    }
+}
+
+impl Write for BufferedCompress {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        if data.is_empty() {
+            return Ok(0);
+        }
+        let mut input = data;
+        while !input.is_empty() {
+            self.shutdown
+                .check_in_flight()
+                .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "interrupted"))?;
+            let space = self.capacity().saturating_sub(self.buf.len());
+            if space == 0 {
+                self.flush_buf()?;
+                continue;
+            }
+            let n = space.min(input.len());
+            self.buf.extend_from_slice(&input[..n]);
+            input = &input[n..];
+            if self.buf.len() >= self.capacity() {
+                self.flush_buf()?;
+            }
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buf()?;
+        self.layer.flush()
+    }
 }
 
 enum CompressLayer {
@@ -48,25 +186,24 @@ impl Write for CompressLayer {
     }
 }
 
-struct ShutdownWrite<'a, W> {
-    inner: &'a mut W,
-    shutdown: Shutdown,
+impl CompressLayer {
+    fn finish(self) -> io::Result<File> {
+        match self {
+            Self::Xz(w) => w.finish(),
+            Self::Gz(w) => w.finish(),
+            Self::Bz(w) => w.finish(),
+            Self::Zstd(w) => w.finish(),
+            Self::Plain(w) => Ok(w),
+        }
+    }
 }
 
-impl<W: Write> Write for ShutdownWrite<'_, W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.shutdown
-            .check_in_flight()
-            .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "interrupted"))?;
-        self.inner.write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.shutdown
-            .check_in_flight()
-            .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "interrupted"))?;
-        self.inner.flush()
-    }
+pub struct TarWriter {
+    archive_path: PathBuf,
+    builder: Option<Builder<TarSink>>,
+    /// Members written in this compression session (marked archived only on finalize).
+    session_members: Vec<FileId>,
+    bytes_in: u64,
 }
 
 impl TarWriter {
@@ -83,14 +220,16 @@ impl TarWriter {
             .create(true)
             .append(true)
             .open(&archive_path)
-            .map_err(|e| crate::error::Error::io(&archive_path, e))?;
+            .map_err(|e| Error::io(&archive_path, e))?;
 
         let layer = match format {
             CompressionFormat::Xz => {
                 let (encoder, threads) =
                     InterruptibleXzEncoder::new(file, jobs, memlimit_compress, shutdown.clone())?;
                 let hw = InterruptibleXzEncoder::<File>::hardware_threads();
-                eprintln!("xz encoder: {threads} worker thread(s) active ({hw} CPU threads available)");
+                eprintln!(
+                    "xz encoder: {threads} worker thread(s) active ({hw} CPU threads available)"
+                );
                 CompressLayer::Xz(encoder)
             }
             CompressionFormat::Gz => {
@@ -106,133 +245,133 @@ impl TarWriter {
             CompressionFormat::None => CompressLayer::Plain(file),
         };
 
+        let sink = TarSink {
+            inner: BufferedCompress::new(layer, shutdown),
+            pending: Vec::with_capacity(TAR_EOF_LEN),
+            allow_tar_eof: false,
+        };
+        let mut builder = Builder::new(sink);
+        // Stage entries are content-id symlinks; pack the target file bytes.
+        builder.follow_symlinks(true);
+
         Ok(Self {
             archive_path,
-            layer,
+            builder: Some(builder),
+            session_members: Vec::new(),
             bytes_in: 0,
         })
+    }
+
+    pub fn session_members(&self) -> &[FileId] {
+        &self.session_members
     }
 
     pub fn append_path(
         &mut self,
         path: &Path,
         tar_name: &str,
+        file_id: Option<FileId>,
         shutdown: &Shutdown,
         mut on_input_bytes: impl FnMut(u64),
     ) -> Result<()> {
-        let mut file = File::open(path).map_err(|e| crate::error::Error::io(path, e))?;
-        let len = file
-            .metadata()
-            .map_err(|e| crate::error::Error::io(path, e))?
-            .len();
+        shutdown.check_in_flight()?;
+        let meta = std::fs::metadata(path).map_err(|e| Error::io(path, e))?;
+        let len = meta.len();
 
-        // TODO easy support for old style headers.
-        let mut header = Header::new_gnu();
-        header
-            .set_path(tar_name)
-            .map_err(|e| Error::Other(anyhow::anyhow!("{e}")))?;
-        header.set_size(len);
-        header.set_cksum();
-
-        let mut out = ShutdownWrite {
-            inner: &mut self.layer,
-            shutdown: shutdown.clone(),
-        };
-
-        out.write_all(header.as_bytes())
+        let builder = self.builder.as_mut().expect("tar builder active");
+        // Builder writes through TarSink → buffer → xz; progress is approximate by size.
+        builder
+            .append_path_with_name(path, tar_name)
             .map_err(|e| Error::io(&self.archive_path, e))?;
 
-        let mut buf = archive_io_buffer();
-        let mut remaining = len;
-        while remaining > 0 {
-            shutdown.check_in_flight()?;
-            let chunk = std::cmp::min(buf.len() as u64, remaining) as usize;
-            let n = file
-                .read(&mut buf[..chunk])
-                .map_err(|e| crate::error::Error::io(path, e))?;
-            if n == 0 {
-                return Err(Error::Other(anyhow::anyhow!(
-                    "unexpected EOF reading {}",
-                    path.display()
-                )));
-            }
-            out.write_all(&buf[..n])
-                .map_err(|e| Error::io(&self.archive_path, e))?;
-            on_input_bytes(n as u64);
-            remaining -= n as u64;
-        }
-
-        let pad = (512 - (len % 512)) % 512;
-        if pad > 0 {
-            shutdown.check_in_flight()?;
-            out.write_all(&vec![0u8; pad as usize])
-                .map_err(|e| Error::io(&self.archive_path, e))?;
-        }
-
+        on_input_bytes(len);
         self.bytes_in += len;
+        if let Some(id) = file_id {
+            self.session_members.push(id);
+        }
         Ok(())
     }
 
-    pub fn finalize_session(self, shutdown: &Shutdown) -> Result<(u64, u64)> {
+    /// Graceful session end: flush tar (no EOF), finish compression stream.
+    pub fn finalize_session(mut self, shutdown: &Shutdown) -> Result<(u64, u64, Vec<FileId>)> {
         shutdown.check_in_flight()?;
         let bytes_in = self.bytes_in;
+        let members = std::mem::take(&mut self.session_members);
         let archive_path = self.archive_path.clone();
-        let bytes_out = match self.layer {
-            CompressLayer::Xz(w) => {
-                w.finish()
-                    .map_err(|e| Error::io(&archive_path, e))?
-                    .metadata()
-                    .map_err(|e| Error::io(&archive_path, e))?
-                    .len()
-            }
-            CompressLayer::Gz(w) => {
-                w.finish()
-                    .map_err(|e| Error::io(&archive_path, e))?
-                    .metadata()
-                    .map_err(|e| Error::io(&archive_path, e))?
-                    .len()
-            }
-            CompressLayer::Bz(w) => {
-                w.finish()
-                    .map_err(|e| Error::io(&archive_path, e))?
-                    .metadata()
-                    .map_err(|e| Error::io(&archive_path, e))?
-                    .len()
-            }
-            CompressLayer::Zstd(w) => {
-                w.finish()
-                    .map_err(|e| Error::io(&archive_path, e))?
-                    .metadata()
-                    .map_err(|e| Error::io(&archive_path, e))?
-                    .len()
-            }
-            CompressLayer::Plain(mut w) => {
-                w.flush()
-                    .map_err(|e| Error::io(&archive_path, e))?;
-                w.metadata()
-                    .map_err(|e| Error::io(&archive_path, e))?
-                    .len()
-            }
-        };
-        Ok((bytes_in, bytes_out))
+
+        let mut sink = self.take_sink(false)?;
+        sink.resolve_trailing_eof()
+            .map_err(|e| Error::io(&archive_path, e))?;
+        sink.flush().map_err(|e| Error::io(&archive_path, e))?;
+        let file = sink
+            .inner
+            .into_layer()
+            .map_err(|e| Error::io(&archive_path, e))?
+            .finish()
+            .map_err(|e| Error::io(&archive_path, e))?;
+        let bytes_out = file
+            .metadata()
+            .map_err(|e| Error::io(&archive_path, e))?
+            .len();
+        Ok((bytes_in, bytes_out, members))
     }
 
-    /// Force-abort: release the output file without finalizing compression.
-    pub fn abandon(self) {
-        match self.layer {
-            CompressLayer::Xz(w) => {
-                w.abandon();
+    /// Final archive close: emit tar EOF, then finish compression.
+    pub fn finalize_archive(mut self, shutdown: &Shutdown) -> Result<(u64, u64, Vec<FileId>)> {
+        shutdown.check_in_flight()?;
+        let bytes_in = self.bytes_in;
+        let members = std::mem::take(&mut self.session_members);
+        let archive_path = self.archive_path.clone();
+
+        let mut sink = self.take_sink(true)?;
+        sink.resolve_trailing_eof()
+            .map_err(|e| Error::io(&archive_path, e))?;
+        sink.flush().map_err(|e| Error::io(&archive_path, e))?;
+        let file = sink
+            .inner
+            .into_layer()
+            .map_err(|e| Error::io(&archive_path, e))?
+            .finish()
+            .map_err(|e| Error::io(&archive_path, e))?;
+        let bytes_out = file
+            .metadata()
+            .map_err(|e| Error::io(&archive_path, e))?
+            .len();
+        Ok((bytes_in, bytes_out, members))
+    }
+
+    /// Force-abort: drop incomplete compression stream (no footer). Recovery truncates.
+    pub fn abandon(mut self) {
+        if let Ok(mut sink) = self.take_sink(false) {
+            // Session will be truncated; drop held trailer / last block without compressing further.
+            sink.pending.clear();
+            match sink.inner.into_layer() {
+                Ok(CompressLayer::Xz(w)) => {
+                    w.abandon();
+                }
+                Ok(CompressLayer::Gz(w)) => {
+                    std::mem::forget(w);
+                }
+                Ok(CompressLayer::Bz(w)) => {
+                    std::mem::forget(w);
+                }
+                Ok(CompressLayer::Zstd(w)) => {
+                    std::mem::forget(w);
+                }
+                Ok(CompressLayer::Plain(_)) | Err(_) => {}
             }
-            CompressLayer::Gz(w) => {
-                std::mem::forget(w);
-            }
-            CompressLayer::Bz(w) => {
-                std::mem::forget(w);
-            }
-            CompressLayer::Zstd(w) => {
-                std::mem::forget(w);
-            }
-            CompressLayer::Plain(_) => {}
         }
+    }
+
+    fn take_sink(&mut self, allow_tar_eof: bool) -> Result<TarSink> {
+        let mut builder = self
+            .builder
+            .take()
+            .ok_or_else(|| Error::Config("tar builder already consumed".into()))?;
+        builder.get_mut().allow_tar_eof = allow_tar_eof;
+        // `into_inner` always calls `finish` → writes EOF into the sink hold-back.
+        builder
+            .into_inner()
+            .map_err(|e| Error::io(&self.archive_path, e))
     }
 }
