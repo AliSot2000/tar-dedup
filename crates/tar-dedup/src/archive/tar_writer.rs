@@ -58,16 +58,14 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             break;
         }
 
-        let record = db
-            .get_file::<StrippedRecord>(file_id)?
-            .expect(
-                "File was present in db for listing, error in sql statement \
-            or database corrupted.",
-            );
-
-        let tar_name = record
-            .tar_member_name()
-            .expect("Encoding to base64 failed or invalid record provided");
+        // Fetch Record etc
+        let record = db.get_file::<StrippedRecord>(file_id)?.expect(
+            "File was present in db for listing; missing row means SQL/list bug or DB corruption",
+        );
+        let tar_name = record.tar_member_name().expect(
+            "INVARIANT ERROR: Members to be encoded must have a symlink in the \
+            staging directory.",
+        );
         let source = config.stage_dir().join(&tar_name);
         let target = std::fs::canonicalize(&source).map_err(|e| Error::io(&source, e))?;
         warn_if_times_changed(&target, record.mtime, record.atime, record.ctime);
