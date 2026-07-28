@@ -68,18 +68,15 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             staging directory.",
         );
         let source = config.stage_dir().join(&tar_name);
+
+        // Stage path is a symlink; compare inventory times against the real target.
         let target = std::fs::canonicalize(&source).map_err(|e| Error::io(&source, e))?;
         warn_if_times_changed(&target, record.mtime, record.atime, record.ctime);
 
         progress.set_file("archive", &record.rel_path);
 
-        match writer.append_path(&source, &tar_name, Some(file_id), shutdown, |n| {
-            progress.inc(n)
-        }) {
-            Ok(()) => {
-                // Durable until finalize (→ archived) or startup recover (cleared).
-                db.mark_archive_session_pending(file_id)?;
-            }
+        match writer.append_path(&source, &tar_name, Some(file_id), shutdown, |n| progress.inc(n)) {
+            Ok(()) => {}
             Err(e) if e.is_interrupted() => {
                 stopped = true;
                 final_archive = false;
