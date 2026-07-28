@@ -2,13 +2,14 @@ use std::path::Path;
 
 use crate::common::files::warn_if_times_changed;
 use crate::config::Config;
-use crate::db::types::{ArchiveSession, FileId, FilePhase, StrippedRecord};
+use crate::db::types::{ArchiveSession, StrippedRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
 use crate::shutdown::Shutdown;
 use crate::tar_writer::TarWriter;
 
+const SNAPSHOT_INIT_TAR_NAME: &str = "manifest.sqlite";
 const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
@@ -33,8 +34,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     )?;
 
     if already_archived == 0 {
-        progress.set_message("archive writing snapshot.sqlite (baseline)");
-        append_snapshot(&mut writer, config, db, shutdown)?;
+        progress.set_message("archive writing manifest.sqlite (baseline)");
+        append_snapshot(&mut writer, config, db, shutdown, true)?;
     }
 
     let to_archive = staged_canonical_sorted(db)?;
@@ -172,13 +173,15 @@ fn append_snapshot(
     config: &Config,
     db: &Database,
     shutdown: &Shutdown,
+    is_init: bool,
 ) -> Result<()> {
 
     db.checkpoint()?;
     let src = config.db_path();
     let staging = config.work_dir.join(".snapshot-for-tar.sqlite");
     std::fs::copy(&src, &staging).map_err(|e| crate::error::Error::io(&staging, e))?;
-    let result = writer.append_path(&staging, SNAPSHOT_TAR_NAME, None, shutdown, |_| ());
+    let tar_dst = if is_init { SNAPSHOT_INIT_TAR_NAME } else { SNAPSHOT_TAR_NAME };
+    let result = writer.append_path(&staging, tar_dst, None, shutdown, |_| ());
     let _ = std::fs::remove_file(&staging);
     result
 }
