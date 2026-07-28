@@ -16,8 +16,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // Crash / force leftover: truncate incomplete stream C, keep finished A..B.
     recover_incomplete_session(config, db)?;
 
+    // TODO really? Is there a case when there's an offset we want to keep from the physical?
     let archive_offset = archive_file_len(&config.archive_path);
-    let session_id = db.begin_archive_session(archive_offset)?;
+    let (session_id, _session_start_offset) = match db.open_archive_session()? {
+        Some(open) => (open.id, open.archive_offset),
+        None => (db.begin_archive_session(archive_offset)?, archive_offset),
+    };
     let total_bytes = db.sum_canonical_bytes_to_archive()?;
     let already_archived = db.sum_archived_canonical_bytes()?;
 
