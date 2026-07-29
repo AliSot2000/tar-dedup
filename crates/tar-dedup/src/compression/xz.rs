@@ -6,19 +6,21 @@ use xz2::stream::{Action, Check, MtStreamBuilder, Status, Stream};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
-/// LZMA2 preset passed to liblzma (`xz -9`).
-pub const PRESET: u32 = 9;
+/// LZMA2 preset level bits (`xz -0`…`-9`). Extreme is ORed in by callers.
+pub const PRESET_LEVEL_MASK: u32 = lzma_sys::LZMA_PRESET_LEVEL_MASK;
+/// `xz --extreme` / `-e`.
+pub const PRESET_EXTREME: u32 = lzma_sys::LZMA_PRESET_EXTREME;
 /// Return from `process` periodically so shutdown can be polled during archive.
 const TIMEOUT_MS: u32 = 1000;
 /// `0` = liblzma default block size (3× dict or 1 MiB); matches `xz -9 -T16`.
 const BLOCK_SIZE: u64 = 0;
 
 /// Approximate RAM for multithreaded xz encoder (same API `xz -vv` uses).
-pub fn mt_memusage(threads: u32) -> u64 {
+pub fn mt_memusage(threads: u32, preset: u32) -> u64 {
     let mut builder = MtStreamBuilder::new();
     builder
         .threads(threads.max(1))
-        .preset(PRESET)
+        .preset(preset)
         .timeout_ms(TIMEOUT_MS)
         .block_size(BLOCK_SIZE)
         .check(Check::Crc64);
@@ -26,15 +28,17 @@ pub fn mt_memusage(threads: u32) -> u64 {
 }
 
 /// Pick thread count, optionally clamping to `--memlimit-compress` like the xz CLI.
-pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>) -> Result<u32> {
+pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) -> Result<u32> {
+    let level = preset & PRESET_LEVEL_MASK;
     let requested = requested.max(1) as u32;
     let mut threads = requested;
-    let mut memusage = mt_memusage(threads);
+    let mut memusage = mt_memusage(threads, preset);
 
     eprintln!(
-        "xz: {} of memory is required for preset -{} with {} thread(s).",
+        "xz: {} of memory is required for preset -{}{} with {} thread(s).",
         format_mib(memusage),
-        PRESET,
+        level,
+        if preset & PRESET_EXTREME != 0 { "e" } else { "" },
         threads
     );
 
@@ -42,12 +46,13 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>) -> Result<u32
         eprintln!("xz: the memory limit is {}.", format_mib(limit));
         while memusage > limit && threads > 1 {
             threads -= 1;
-            memusage = mt_memusage(threads);
+            memusage = mt_memusage(threads, preset);
         }
         if memusage > limit {
             return Err(Error::Config(format!(
-                "xz preset -{PRESET} needs at least {} ({} thread(s)); \
+                "xz preset -{level}{} needs at least {} ({} thread(s)); \
                  raise --memlimit-compress or lower --jobs",
+                if preset & PRESET_EXTREME != 0 { "e" } else { "" },
                 format_mib(memusage),
                 threads
             )));
@@ -76,6 +81,7 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>) -> Result<u32
         block_size = BLOCK_SIZE,
         memusage,
         memlimit = ?memlimit,
+        preset,
         "xz multithreaded encoder"
     );
 
@@ -118,14 +124,15 @@ impl<W: Write> InterruptibleXzEncoder<W> {
         file: W,
         jobs: usize,
         memlimit: Option<u64>,
+        preset: u32,
         shutdown: Shutdown,
     ) -> Result<(Self, u32)> {
-        let threads = resolve_xz_threads(jobs, memlimit)?;
+        let threads = resolve_xz_threads(jobs, memlimit, preset)?;
 
         let mut builder = MtStreamBuilder::new();
         builder
             .threads(threads)
-            .preset(PRESET)
+            .preset(preset)
             .timeout_ms(TIMEOUT_MS)
             .block_size(BLOCK_SIZE)
             .check(Check::Crc64);
