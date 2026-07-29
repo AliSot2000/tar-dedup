@@ -70,6 +70,10 @@ pub struct Config {
     /// When true, append seekable sqlite footer after a finished archive stream.
     /// Internal/test knob — not wired to CLI.
     pub write_archive_footer: bool,
+
+    /// When true, stage attempts to link files that failed to be hashed into stage and archive
+    /// pass will subsequently attempt to add those files to the archive.
+    pub retry_missing_sha: bool,
 }
 
 impl Config {
