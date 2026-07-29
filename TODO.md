@@ -8,6 +8,7 @@
 - [ ] Only report Permission error / ... once (deduplicate the same error.)
 - [ ] Integrated logs? (Capture relevant logs / warning to a separate table?)
 - [ ] Retry errored files during tar step
+- [ ] Parallel compression (Dedup, Sparsify, Stage, Archive)
 
 ## General:
 - [ ] Testing
@@ -40,25 +41,25 @@
 
 ### Hash
 - [ ] Docker style output (by default)
-- [ ] Check file for changes (based on times)
+- [X] Check file for changes (based on times)
 - [X] Added sparse file check. 
 
 ### Dedup
 Should be done?
 - [ ] Better logging?
-- [ ] Run in parallel and do so very well
+- [X] Run in parallel and do so very well
 
 ### Sparsified
-- [ ] Create sparse files. 
+- [X] Create sparse files. 
 
 ### Staging
-- [ ] Basically done?
+- [X] Basically done?
 
 ### Archive
 - [X] Finish the FileEntry and ContentID structs
-- [ ] Finish the different compression algorithms
-- [ ] Finish plane
-- [ ] Finish shell-out
+- [X] Finish the different compression algorithms
+- [X] Finish plane
+- ~~[ ] Finish shell-out use plain for that.~~
 
 ### Scan/Extract
 - [ ] Live check the files
