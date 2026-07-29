@@ -7,6 +7,7 @@ mod inventory;
 mod sparsify;
 mod stage;
 mod tar_writer;
+mod cleanup;
 
 use std::fs::{self, OpenOptions};
 
