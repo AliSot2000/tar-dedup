@@ -13,13 +13,6 @@ const TIMEOUT_MS: u32 = 1000;
 /// `0` = liblzma default block size (3× dict or 1 MiB); matches `xz -9 -T16`.
 const BLOCK_SIZE: u64 = 0;
 
-pub struct InterruptibleXzEncoder<W: Write> {
-    stream: Stream,
-    obj: Option<W>,
-    buf: Vec<u8>,
-    shutdown: Shutdown,
-}
-
 /// Approximate RAM for multithreaded xz encoder (same API `xz -vv` uses).
 pub fn mt_memusage(threads: u32) -> u64 {
     let mut builder = MtStreamBuilder::new();
@@ -111,6 +104,13 @@ fn physical_ram_bytes() -> Option<u64> {
         .to_string();
     let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
     Some(kib * 1024)
+}
+
+pub struct InterruptibleXzEncoder<W: Write> {
+    stream: Stream,
+    obj: Option<W>,
+    buf: Vec<u8>,
+    shutdown: Shutdown,
 }
 
 impl<W: Write> InterruptibleXzEncoder<W> {
