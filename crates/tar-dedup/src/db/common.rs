@@ -87,7 +87,7 @@ impl StrippedRecord {
 
 impl SqlFileRow for FileRecord {
     fn sql_columns() -> &'static str {
-        "id, rel_path, size, sha1, mtime, atime, ctime, \
+        "id, rel_path, ext, size, sha1, mtime, atime, ctime, \
          uid, gid, mode, ftype, xattr, acl, selinux, exclusion_id, canonical_id, flags, phase"
     }
 
@@ -95,6 +95,7 @@ impl SqlFileRow for FileRecord {
         Ok(FileRecord {
             id: FileId(row.get("id")?),
             rel_path: row.get::<_, String>("rel_path")?.into(),
+            ext: row.get("ext")?,
             size: row.get::<_, i64>("size")? as u64,
             sha1: optional_sha1(row)?,
             mtime: optional_rfc3339(row, "mtime")?,
@@ -123,13 +124,14 @@ impl SqlFileRow for FileRecord {
 
 impl SqlFileRow for StrippedRecord {
     fn sql_columns() -> &'static str {
-        "id, rel_path, size, sha1, mtime, atime, ctime, ftype, canonical_id, flags, phase"
+        "id, rel_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, flags, phase"
     }
 
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(StrippedRecord {
             id: FileId(row.get("id")?),
             rel_path: row.get::<_, String>("rel_path")?.into(),
+            ext: row.get("ext")?,
             size: row.get::<_, i64>("size")? as u64,
             sha1: optional_sha1(row)?,
             mtime: optional_rfc3339(row, "mtime")?,

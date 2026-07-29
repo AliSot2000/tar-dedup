@@ -5,7 +5,7 @@ use walkdir::DirEntry;
 
 use walkdir::WalkDir;
 
-use crate::common::files::get_file_times;
+use crate::common::files::{get_file_times, original_extension};
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::Config;
 use crate::db::types::{FileType, LinkType, NewFileRecord};
@@ -76,7 +76,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         } else { None };
 
         if db.insert_file(&NewFileRecord {
-            rel_path: rel,
+            rel_path: rel.clone(),
+            ext: original_extension(&rel),
             size: meta.len(),
             mtime,
             atime,
