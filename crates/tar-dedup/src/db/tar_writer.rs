@@ -129,11 +129,19 @@ pub fn reset_archive_state(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub fn sum_canonical_bytes_to_archive(conn: &Connection) -> Result<u64> {
-    let total: i64 = conn.query_row(
+pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Result<u64> {
+    let filter = if filter_sha {
+        " AND sha1 IS NOT NULL"
+    } else {
+        ""
+    };
+    let total: i64 = conn.query_row(&format!(
         "SELECT COALESCE(SUM(size), 0) AS total
          FROM files
-         WHERE canonical_id = id AND phase IN ('staged', 'archived')",
+         WHERE canonical_id = id 
+            AND phase IN ('staged', 'archived') 
+            {filter} 
+            AND NOT (ftype IS NULL OR ftype != 'file')"),
         [],
         |row| row.get("total"),
     )?;
@@ -149,18 +157,29 @@ pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Res
     };
     let mut stmt = conn.prepare(&format!(
         "SELECT id FROM files
-         WHERE canonical_id = id AND phase = 'staged'{filter}
+         WHERE canonical_id = id 
+            AND phase = 'staged' 
+            {filter} 
+            AND NOT (ftype IS NULL OR ftype != 'file')
          ORDER BY ext ASC, size ASC, id ASC"
     ))?;
     let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId))?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
-pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
-    let total: i64 = conn.query_row(
+pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Result<u64> {
+    let filter = if filter_sha {
+        " AND sha1 IS NOT NULL"
+    } else {
+        ""
+    };
+    let total: i64 = conn.query_row(&format!(
         "SELECT COALESCE(SUM(size), 0) AS total
          FROM files
-         WHERE canonical_id = id AND phase = 'archived'",
+         WHERE canonical_id = id 
+            AND phase = 'archived' 
+            {filter}
+            AND NOT (ftype IS NULL OR ftype != 'file')"),
         [],
         |row| row.get("total"),
     )?;
