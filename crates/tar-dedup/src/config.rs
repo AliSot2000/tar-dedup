@@ -25,6 +25,79 @@ impl CompressionFormat {
             Self::None => false,
         }
     }
+
+    /// Allowed `--level` range for this filter (`None` if uncompressed).
+    pub fn level_range(self) -> Option<(u32, u32)> {
+        match self {
+            Self::Gz | Self::Bz2 => Some((1, 9)),
+            Self::Xz => Some((0, 9)),
+            Self::Zstd => Some((1, 19)),
+            Self::None => None,
+        }
+    }
+
+    /// Default level when `--level` is omitted (previous hard-coded maxima).
+    pub fn default_level(self) -> Option<u32> {
+        self.level_range().map(|(_, max)| max)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Xz => "xz",
+            Self::Gz => "gzip",
+            Self::Bz2 => "bzip2",
+            Self::Zstd => "zstd",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompressionSettings {
+    pub format: CompressionFormat,
+    /// Compression level for the active filter (ignored when `format` is None).
+    pub level: u32,
+    /// xz `-e` / `--extreme` (preset extreme bit).
+    pub xz_extreme: bool,
+    /// bzip2 `-s` (small blocks ≈ level 1).
+    pub bzip_small: bool,
+    /// Max RAM for xz MT encoder (`None` = no limit, like default `xz`).
+    pub memlimit_compress: Option<u64>,
+}
+
+impl CompressionSettings {
+    /// Validate CLI compression options and build settings for archive creation.
+    pub fn from_archive_args(format: CompressionFormat, args: &ArchiveArgs) -> Result<Self> {
+        let (level, xz_extreme, bzip_small) = resolve_compress_options(format, args)?;
+        let memlimit_compress = args
+            .memlimit_compress
+            .as_deref()
+            .map(parse_memlimit)
+            .transpose()?;
+        if memlimit_compress.is_some() && format != CompressionFormat::Xz {
+            return Err(Error::Config(
+                "--memlimit-compress is only valid with xz compression".into(),
+            ));
+        }
+        Ok(Self {
+            format,
+            level,
+            xz_extreme,
+            bzip_small,
+            memlimit_compress,
+        })
+    }
+
+    /// Defaults for extract: format-default level, no extreme/small/memlimit.
+    pub fn for_extract(format: CompressionFormat) -> Self {
+        Self {
+            format,
+            level: format.default_level().unwrap_or(0),
+            xz_extreme: false,
+            bzip_small: false,
+            memlimit_compress: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,14 +113,12 @@ pub struct Config {
     pub output_dir: PathBuf,
 
     pub work_dir: PathBuf,
-    pub compression: CompressionFormat,
+    pub compression: CompressionSettings,
     pub jobs: usize,
     pub resume: bool,
     pub fresh: bool,
     pub keep_stage: bool,
     pub exit_after_stage: Option<ExitAfterStage>,
-    /// Max RAM for xz MT encoder (`None` = no limit, like default `xz`).
-    pub memlimit_compress: Option<u64>,
     /// Extract: restore uid/gid when possible.
     pub restore_owner: bool,
 
@@ -92,13 +163,9 @@ impl Config {
         };
         std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
 
-        let compression = resolve_compression(&args.compression, &archive_path)?;
+        let format = resolve_compression(&args.compression, &archive_path)?;
+        let compression = CompressionSettings::from_archive_args(format, args)?;
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
-        let memlimit_compress = args
-            .memlimit_compress
-            .as_deref()
-            .map(parse_memlimit)
-            .transpose()?;
 
         Ok(Self {
             archive_path,
@@ -111,7 +178,6 @@ impl Config {
             fresh: args.fresh,
             keep_stage: args.keep_stage,
             exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
-            memlimit_compress,
             restore_owner: false,
             do_xattrs: true,
             do_posix_acl: true,
@@ -120,6 +186,7 @@ impl Config {
             page_size: args.page_size,
             min_pages: args.min_pages,
             write_archive_footer: true,
+            retry_missing_sha: false,
         })
     }
 
@@ -138,20 +205,19 @@ impl Config {
         let work_dir = default_extract_work_dir(&archive_path);
         std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
 
-        let compression = infer_compression_from_suffix(&archive_path);
+        let format = infer_compression_from_suffix(&archive_path);
 
         Ok(Self {
             archive_path,
             input_dir: PathBuf::new(),
             output_dir,
             work_dir,
-            compression,
+            compression: CompressionSettings::for_extract(format),
             jobs: 1,
             resume: false,
             fresh: args.fresh,
             keep_stage: false,
             exit_after_stage: None,
-            memlimit_compress: None,
             restore_owner: args.restore_owner,
             do_xattrs: true,
             do_posix_acl: true,
@@ -160,6 +226,7 @@ impl Config {
             page_size: 4096,
             min_pages: Some(0),
             write_archive_footer: true,
+            retry_missing_sha: false,
         })
     }
 
@@ -217,6 +284,54 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
     }
 
     Ok(CompressionFormat::None)
+}
+
+/// Validate `--level` / `--xz-extreme` / `--bzip-small` against the resolved filter.
+fn resolve_compress_options(
+    format: CompressionFormat,
+    args: &ArchiveArgs,
+) -> Result<(u32, bool, bool)> {
+    if args.xz_extreme && format != CompressionFormat::Xz {
+        return Err(Error::Config(
+            "--xz-extreme is only valid with xz compression (-J / .tar.xz)".into(),
+        ));
+    }
+    if args.bzip_small && format != CompressionFormat::Bz2 {
+        return Err(Error::Config(
+            "--bzip-small is only valid with bzip2 compression (-j / .tar.bz2)".into(),
+        ));
+    }
+    if format == CompressionFormat::None {
+        if args.level.is_some() {
+            return Err(Error::Config(
+                "--level requires a compression filter (archive is uncompressed)".into(),
+            ));
+        }
+        return Ok((0, false, false));
+    }
+
+    let (min, max) = format
+        .level_range()
+        .expect("compressing format has a level range");
+    let mut level = args.level.unwrap_or_else(|| format.default_level().unwrap());
+    if level < min || level > max {
+        return Err(Error::Config(format!(
+            "--level {level} is out of range for {} (allowed {min}–{max})",
+            format.as_str()
+        )));
+    }
+
+    if args.bzip_small {
+        // bzip2 CLI `-s` uses 100k blocks (level 1 memory profile).
+        if args.level.is_some() && level != 1 {
+            return Err(Error::Config(
+                "--bzip-small implies 100k blocks (level 1); omit --level or use --level 1".into(),
+            ));
+        }
+        level = 1;
+    }
+
+    Ok((level, args.xz_extreme, args.bzip_small))
 }
 
 pub fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
