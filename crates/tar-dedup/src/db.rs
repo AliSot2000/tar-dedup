@@ -288,10 +288,6 @@ impl Database {
         extract::apply_snapshot_archived_flags(&self.conn, snapshot_path)
     }
 
-    // pub fn promote_cached_tar_member(&self, tar_path: &str) -> Result<()> {
-    //     extract::promote_cached_tar_member(&self.conn, tar_path)
-    // }
-
     pub fn count_unconfirmed_restored(&self) -> Result<u64> {
         extract::count_unconfirmed_restored(&self.conn)
     }
