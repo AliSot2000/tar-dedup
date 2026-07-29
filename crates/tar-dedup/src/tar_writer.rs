@@ -7,7 +7,7 @@ use flate2::Compression;
 use tar::Builder;
 
 use crate::compression::InterruptibleXzEncoder;
-use crate::config::CompressionFormat;
+use crate::config::{CompressionFormat, CompressionSettings};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
