@@ -3,6 +3,15 @@ use chrono::{DateTime, Utc};
 use std::io;
 use std::path::Path;
 
+/// Extension with leading dot (e.g. `.txt`), or empty if none / non-UTF-8.
+pub fn original_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .filter(|ext| !ext.is_empty())
+        .map(|ext| format!(".{ext}"))
+        .unwrap_or_default()
+}
+
 /// Iterator adapter: run `pre` on each item **immediately before** yielding it.
 ///
 /// Paired with rayon `par_bridge()`, this means the check runs when a worker is
