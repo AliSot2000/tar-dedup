@@ -34,7 +34,7 @@ pub struct ArchiveArgs {
     #[command(flatten)]
     pub compression: CompressionFlags,
 
-    /// Compression level (0–19). Max depends on filter: gzip/bzip2/xz ≤ 9, zstd ≤ 19.
+    /// Compression level. Allowed range depends on filter: gzip/bzip2 1–9, xz 0–9, zstd 1–19.
     #[arg(long = "level", value_name = "N")]
     pub level: Option<u32>,
 
