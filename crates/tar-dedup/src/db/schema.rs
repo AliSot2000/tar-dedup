@@ -56,9 +56,6 @@ CREATE INDEX IF NOT EXISTS idx_files_phase ON files(phase);
 -- 2 = recovered/aborted
 CREATE TABLE IF NOT EXISTS archive_sessions (
     id             INTEGER PRIMARY KEY,
-    stream_index   INTEGER NOT NULL,
-    bytes_in       INTEGER NOT NULL DEFAULT 0,
-    bytes_out      INTEGER NOT NULL DEFAULT 0,
     archive_offset INTEGER NOT NULL DEFAULT 0,
     finalized      INTEGER NOT NULL DEFAULT 0,
     started_at     TEXT NOT NULL,

@@ -2,12 +2,15 @@ use std::fs::OpenOptions;
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{named_params, params, Connection, OptionalExtension};
+use rusqlite::{named_params, Connection, OptionalExtension};
 
-use crate::db::content_id::original_extension;
+use crate::db::common::{get_meta, upsert_meta};
 use crate::db::flags::FileFlag;
 use crate::db::types::{ArchiveSession, FileId};
 use crate::error::{Error, Result};
+
+const META_BYTES_IN: &str = "archive_bytes_in";
+const META_BYTES_OUT: &str = "archive_bytes_out";
 
 /// `archive_sessions.finalized` values.
 pub mod session_status {
@@ -19,12 +22,11 @@ pub mod session_status {
     pub const ABORTED: i64 = 2;
 }
 
-pub fn begin_session(conn: &Connection, stream_index: i64, archive_offset: u64) -> Result<i64> {
+pub fn begin_session(conn: &Connection, archive_offset: u64) -> Result<i64> {
     conn.execute(
-        "INSERT INTO archive_sessions (stream_index, archive_offset, started_at, finalized)
-         VALUES (:stream_index, :archive_offset, :started_at, :finalized)",
+        "INSERT INTO archive_sessions (archive_offset, started_at, finalized)
+         VALUES (:archive_offset, :started_at, :finalized)",
         named_params! {
-            ":stream_index": stream_index,
             ":archive_offset": archive_offset as i64,
             ":started_at": Utc::now().to_rfc3339(),
             ":finalized": session_status::OPEN,
@@ -33,15 +35,13 @@ pub fn begin_session(conn: &Connection, stream_index: i64, archive_offset: u64) 
     Ok(conn.last_insert_rowid())
 }
 
-pub fn finalize_session(conn: &Connection, session_id: i64, bytes_in: u64, bytes_out: u64) -> Result<()> {
+/// Tentative `finished_at` while session remains OPEN (for in-tar snapshot).
+pub fn stamp_session_finished_at(conn: &Connection, session_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE archive_sessions
-         SET finalized = :finalized, bytes_in = :bytes_in, bytes_out = :bytes_out, finished_at = :finished_at
+         SET finished_at = :finished_at
          WHERE id = :id AND finalized = :open",
         named_params! {
-            ":finalized": session_status::FINALIZED,
-            ":bytes_in": bytes_in as i64,
-            ":bytes_out": bytes_out as i64,
             ":finished_at": Utc::now().to_rfc3339(),
             ":id": session_id,
             ":open": session_status::OPEN,
@@ -50,13 +50,20 @@ pub fn finalize_session(conn: &Connection, session_id: i64, bytes_in: u64, bytes
     Ok(())
 }
 
-pub fn next_stream_index(conn: &Connection) -> Result<i64> {
-    conn.query_row(
-        "SELECT COALESCE(MAX(stream_index), -1) + 1 AS next_index FROM archive_sessions",
-        [],
-        |row| row.get("next_index"),
-    )
-    .map_err(Into::into)
+/// Mark session finalized after the compression stream has closed.
+pub fn finalize_session(conn: &Connection, session_id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE archive_sessions
+         SET finalized = :finalized, finished_at = :finished_at
+         WHERE id = :id AND finalized = :open",
+        named_params! {
+            ":finalized": session_status::FINALIZED,
+            ":finished_at": Utc::now().to_rfc3339(),
+            ":id": session_id,
+            ":open": session_status::OPEN,
+        },
+    )?;
+    Ok(())
 }
 
 pub fn open_session(conn: &Connection) -> Result<Option<ArchiveSession>> {
@@ -74,6 +81,15 @@ pub fn open_session(conn: &Connection) -> Result<Option<ArchiveSession>> {
     )
     .optional()
     .map_err(Into::into)
+}
+
+pub fn has_finalized_session(conn: &Connection) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM archive_sessions WHERE finalized = :finalized",
+        named_params! { ":finalized": session_status::FINALIZED },
+        |row| row.get(0),
+    )?;
+    Ok(n > 0)
 }
 
 /// Mark an open session as recovered/aborted (audit row; not deleted).
@@ -126,59 +142,19 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection) -> Result<u64> {
 }
 
 /// Staged self-canonical file ids, ordered for packing: extension, size, id.
-///
-/// Extension matches [`original_extension`] (Rust/`Path`), which SQLite cannot
-/// mirror reliably — so we stage `(file_id, ext, size)` in a temp table, then
-/// `ORDER BY` and return ids only. Callers re-fetch rows in the write loop so
-/// they see up-to-date DB state (and do not keep a full snapshot in RAM).
-/// `filter_sha` determines if we filter sha1 IS NOT NULL too. 
 pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Result<Vec<FileId>> {
-    let tx = conn.unchecked_transaction()?;
-
-    tx.execute_batch(
-        "DROP TABLE IF EXISTS temp.archive_order;
-         CREATE TEMP TABLE archive_order (
-             file_id INTEGER PRIMARY KEY NOT NULL,
-             ext TEXT NOT NULL,
-             size INTEGER NOT NULL
-         );",
-    )?;
-
-    {
-        let check = if filter_sha { " AND sha1 IS NOT NULL" } else { "" };
-        let mut select = tx.prepare(
-            format!("SELECT id, rel_path, size FROM files \
-            WHERE canonical_id = id AND phase = 'staged' {check}").as_str(),
-        )?;
-        let mut insert = tx.prepare(
-            "INSERT INTO archive_order (file_id, ext, size) VALUES (?1, ?2, ?3)",
-        )?;
-        let rows = select.query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })?;
-        for row in rows {
-            let (id, rel_path, size) = row?;
-            let ext = original_extension(Path::new(&rel_path));
-            insert.execute(params![id, ext, size])?;
-        }
-    }
-
-    let out = {
-        let mut stmt = tx.prepare(
-            "SELECT file_id FROM archive_order
-             ORDER BY ext ASC, size ASC, file_id ASC",
-        )?;
-        let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    let filter = if filter_sha {
+        " AND sha1 IS NOT NULL"
+    } else {
+        ""
     };
-
-    tx.execute_batch("DROP TABLE IF EXISTS temp.archive_order;")?;
-    tx.commit()?;
-    Ok(out)
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id FROM files
+         WHERE canonical_id = id AND phase = 'staged'{filter}
+         ORDER BY ext ASC, size ASC, id ASC"
+    ))?;
+    let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
@@ -207,25 +183,21 @@ pub fn promote_archive_candidates_to_archived(conn: &Connection, retry: bool) ->
     Ok(n as u64)
 }
 
-pub fn mark_files_archived(conn: &Connection, file_ids: &[crate::db::types::FileId]) -> Result<()> {
+/// Promote all `ArchiveSessionPending` rows to `archived` and clear the flag.
+pub fn promote_pending_archived(conn: &Connection) -> Result<u64> {
     let pending = FileFlag::ArchiveSessionPending.mask_i64();
-    for id in file_ids {
-        conn.execute(
-            "UPDATE files
-             SET phase = 'archived',
-                 flags = flags & ~:pending
-             WHERE id = :id",
-            named_params! {
-                ":pending": pending,
-                ":id": id.0,
-            },
-        )?;
-    }
-    Ok(())
+    let n = conn.execute(
+        "UPDATE files
+         SET phase = 'archived',
+             flags = flags & ~:pending
+         WHERE (flags & :pending) != 0",
+        named_params! { ":pending": pending },
+    )?;
+    Ok(n as u64)
 }
 
 /// Mark members written into the open session (durable across crash until finalize/abort).
-pub fn mark_archive_session_pending(conn: &Connection, file_id: crate::db::types::FileId) -> Result<()> {
+pub fn mark_archive_session_pending(conn: &Connection, file_id: FileId) -> Result<()> {
     let bit = FileFlag::ArchiveSessionPending.mask_i64();
     conn.execute(
         "UPDATE files SET flags = flags | :bit WHERE id = :id",
@@ -245,6 +217,37 @@ pub fn clear_archive_session_pending(conn: &Connection) -> Result<u64> {
         named_params! { ":bit": bit },
     )?;
     Ok(n as u64)
+}
+
+pub fn get_archive_bytes_in(conn: &Connection) -> Result<u64> {
+    parse_meta_u64(conn, META_BYTES_IN)
+}
+
+pub fn get_archive_bytes_out(conn: &Connection) -> Result<Option<u64>> {
+    match get_meta(conn, META_BYTES_OUT)? {
+        None => Ok(None),
+        Some(s) => s
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|e| Error::Config(format!("invalid meta {META_BYTES_OUT}: {e}"))),
+    }
+}
+
+pub fn set_archive_bytes_in(conn: &Connection, value: u64) -> Result<()> {
+    upsert_meta(conn, META_BYTES_IN, &value.to_string())
+}
+
+pub fn set_archive_bytes_out(conn: &Connection, value: u64) -> Result<()> {
+    upsert_meta(conn, META_BYTES_OUT, &value.to_string())
+}
+
+fn parse_meta_u64(conn: &Connection, key: &str) -> Result<u64> {
+    match get_meta(conn, key)? {
+        None => Ok(0),
+        Some(s) => s
+            .parse::<u64>()
+            .map_err(|e| Error::Config(format!("invalid meta {key}: {e}"))),
+    }
 }
 
 /// Truncate archive to `offset` (end of previous finished stream / start of incomplete one).
