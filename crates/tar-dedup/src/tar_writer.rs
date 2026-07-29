@@ -73,8 +73,17 @@ impl TarWriter {
 
         let layer = match format {
             CompressionFormat::Xz => {
-                let (encoder, threads) =
-                    InterruptibleXzEncoder::new(file, jobs, memlimit_compress, shutdown.clone())?;
+                let mut preset = compress_level;
+                if xz_extreme {
+                    preset |= 1u32 << 31; // LZMA_PRESET_EXTREME
+                }
+                let (encoder, threads) = InterruptibleXzEncoder::new(
+                    file,
+                    jobs,
+                    memlimit_compress,
+                    preset,
+                    shutdown.clone(),
+                )?;
                 let hw = InterruptibleXzEncoder::<File>::hardware_threads();
                 eprintln!(
                     "xz encoder: {threads} worker thread(s) active ({hw} CPU threads available)"
@@ -82,13 +91,16 @@ impl TarWriter {
                 CompressLayer::Xz(encoder)
             }
             CompressionFormat::Gz => {
-                CompressLayer::Gz(GzEncoder::new(file, Compression::best()))
+                CompressLayer::Gz(GzEncoder::new(file, Compression::new(compress_level)))
             }
             CompressionFormat::Bz2 => {
-                CompressLayer::Bz(bzip2::write::BzEncoder::new(file, bzip2::Compression::best()))
+                CompressLayer::Bz(bzip2::write::BzEncoder::new(
+                    file,
+                    bzip2::Compression::new(compress_level),
+                ))
             }
             CompressionFormat::Zstd => CompressLayer::Zstd(
-                zstd::stream::write::Encoder::new(file, 19)
+                zstd::stream::write::Encoder::new(file, compress_level as i32)
                     .map_err(|e| Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
             ),
             CompressionFormat::None => CompressLayer::Plain(file),
