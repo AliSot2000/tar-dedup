@@ -136,10 +136,14 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     let catalog = db.count_files()?;
     // Early promote db entries we do not process in this phase
-    // TODO: on sha1 missing ignore, fill in where sha1 is missing content_id = id
     let skipped_non_file = db.promote_non_file_filtered_to_deduped()?;
     let skipped_null_sha1 = db.promote_null_sha1_filtered_to_deduped()?;
     let skipped_singleton = db.promote_singleton_filtered_to_deduped()?;
+    // INFO: Valid files:
+    //  - NOT (ftype IS NULL OR ftype != 'file')
+    //  - sha1 IS NOT NULL
+    //  - phase = ?
+
     // Get actual number of our candidates.
     let candidates = db.count_files_in_phase(FilePhase::Filtered)?;
 
