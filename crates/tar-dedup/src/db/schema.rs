@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS exclusion_reasons (
 CREATE TABLE IF NOT EXISTS files (
     id            INTEGER PRIMARY KEY,
     rel_path      TEXT NOT NULL UNIQUE,
+    ext           TEXT NOT NULL,
 
     -- File Attributes
     size          INTEGER NOT NULL,
