@@ -8,7 +8,6 @@ use tar::Builder;
 
 use crate::compression::InterruptibleXzEncoder;
 use crate::config::CompressionFormat;
-use crate::db::types::FileId;
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
@@ -202,8 +201,6 @@ impl CompressLayer
 pub struct TarWriter {
     archive_path: PathBuf,
     builder: Option<Builder<TarSink>>,
-    /// Members written in this compression session (marked archived only on finalize).
-    session_members: Vec<FileId>,
     bytes_in: u64,
 }
 
@@ -258,20 +255,14 @@ impl TarWriter {
         Ok(Self {
             archive_path,
             builder: Some(builder),
-            session_members: Vec::new(),
             bytes_in: 0,
         })
-    }
-
-    pub fn session_members(&self) -> &[FileId] {
-        &self.session_members
     }
 
     pub fn append_path(
         &mut self,
         path: &Path,
         tar_name: &str,
-        file_id: Option<FileId>,
         shutdown: &Shutdown,
         mut on_input_bytes: impl FnMut(u64),
     ) -> Result<()> {
@@ -287,17 +278,13 @@ impl TarWriter {
 
         on_input_bytes(len);
         self.bytes_in += len;
-        if let Some(id) = file_id {
-            self.session_members.push(id);
-        }
         Ok(())
     }
 
     /// Graceful session end: flush tar (no EOF), finish compression stream.
-    pub fn finalize_session(mut self, shutdown: &Shutdown) -> Result<(u64, u64, Vec<FileId>)> {
+    pub fn finalize_session(mut self, shutdown: &Shutdown) -> Result<(u64, u64)> {
         shutdown.check_in_flight()?;
         let bytes_in = self.bytes_in;
-        let members = std::mem::take(&mut self.session_members);
         let archive_path = self.archive_path.clone();
 
         let mut sink = self.take_sink(false)?;
@@ -314,14 +301,13 @@ impl TarWriter {
             .metadata()
             .map_err(|e| Error::io(&archive_path, e))?
             .len();
-        Ok((bytes_in, bytes_out, members))
+        Ok((bytes_in, bytes_out))
     }
 
     /// Final archive close: emit tar EOF, then finish compression.
-    pub fn finalize_archive(mut self, shutdown: &Shutdown) -> Result<(u64, u64, Vec<FileId>)> {
+    pub fn finalize_archive(mut self, shutdown: &Shutdown) -> Result<(u64, u64)> {
         shutdown.check_in_flight()?;
         let bytes_in = self.bytes_in;
-        let members = std::mem::take(&mut self.session_members);
         let archive_path = self.archive_path.clone();
 
         let mut sink = self.take_sink(true)?;
@@ -338,7 +324,7 @@ impl TarWriter {
             .metadata()
             .map_err(|e| Error::io(&archive_path, e))?
             .len();
-        Ok((bytes_in, bytes_out, members))
+        Ok((bytes_in, bytes_out))
     }
 
     /// Force-abort: drop incomplete compression stream (no footer). Recovery truncates.
