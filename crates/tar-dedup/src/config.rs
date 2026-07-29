@@ -66,6 +66,10 @@ pub struct Config {
     pub page_size: usize,
     /// Optional minimum empty-page count before a file is worth sparsifying (used by sparsify).
     pub min_pages: Option<u64>,
+
+    /// When true, append seekable sqlite footer after a finished archive stream.
+    /// Internal/test knob — not wired to CLI.
+    pub write_archive_footer: bool,
 }
 
 impl Config {
@@ -111,6 +115,7 @@ impl Config {
             dedup_fail_fast: false,
             page_size: args.page_size,
             min_pages: args.min_pages,
+            write_archive_footer: true,
         })
     }
 
@@ -150,6 +155,7 @@ impl Config {
             dedup_fail_fast: false,
             page_size: 4096,
             min_pages: Some(0),
+            write_archive_footer: true,
         })
     }
 
