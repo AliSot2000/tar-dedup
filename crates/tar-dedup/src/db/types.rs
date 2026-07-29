@@ -16,6 +16,7 @@ pub struct ContentId(pub String);
 pub struct FileRecord {
     pub id: FileId,
     pub rel_path: PathBuf,
+    pub ext: String,
     pub size: u64,
     pub sha1: Option<[u8; 20]>,
     pub mtime: Option<DateTime<Utc>>,
@@ -48,6 +49,7 @@ pub struct FileRecord {
 pub struct StrippedRecord {
     pub id: FileId,
     pub rel_path: PathBuf,
+    pub ext: String,
     pub size: u64,
     pub sha1: Option<[u8; 20]>,
     pub mtime: Option<DateTime<Utc>>,
@@ -62,6 +64,7 @@ pub struct StrippedRecord {
 #[derive(Debug, Clone)]
 pub struct NewFileRecord {
     pub rel_path: PathBuf,
+    pub ext: String,
     pub size: u64,
     pub mtime: Option<DateTime<Utc>>,
     pub atime: Option<DateTime<Utc>>,
