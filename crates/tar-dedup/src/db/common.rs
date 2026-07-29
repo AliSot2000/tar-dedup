@@ -171,6 +171,17 @@ pub(crate) fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<(
     Ok(())
 }
 
+pub(crate) fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT value FROM meta WHERE key = :key",
+        named_params! { ":key": key },
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
 fn optional_sha1(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<[u8; 20]>> {
     let sha1_blob: Option<Vec<u8>> = row.get("sha1")?;
     Ok(sha1_blob
