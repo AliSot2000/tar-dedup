@@ -32,12 +32,37 @@ impl TarWriter {
     /// Open a new TarWriter (and other buffer objects)
     pub fn open(
         archive_path: PathBuf,
-        format: CompressionFormat,
+        settings: &CompressionSettings,
         jobs: usize,
-        memlimit_compress: Option<u64>,
         shutdown: Shutdown,
     ) -> Result<Self> {
-        // INFO: Print the warning
+        let format = settings.format;
+        let compress_level = settings.level;
+        let xz_extreme = settings.xz_extreme;
+        let bzip_small = settings.bzip_small;
+        let memlimit_compress = settings.memlimit_compress;
+
+        // CLI already validated level / format-specific flags.
+        debug_assert!(
+            match format.level_range() {
+                None => true,
+                Some((min, max)) => compress_level >= min && compress_level <= max,
+            },
+            "compress_level {compress_level} out of range for {format:?}"
+        );
+        debug_assert!(
+            !xz_extreme || matches!(format, CompressionFormat::Xz),
+            "xz_extreme set for non-xz format"
+        );
+        debug_assert!(
+            !bzip_small || matches!(format, CompressionFormat::Bz2),
+            "bzip_small set for non-bzip2 format"
+        );
+        debug_assert!(
+            !bzip_small || compress_level == 1,
+            "bzip_small requires level 1"
+        );
+
         crate::compression::warn_on_start(format);
 
         let file = OpenOptions::new()
