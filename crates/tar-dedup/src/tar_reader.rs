@@ -27,5 +27,5 @@ pub fn open_decompressed(path: &Path, format: CompressionFormat) -> Result<Box<d
 
 pub fn open_tar_archive(path: &Path, format: CompressionFormat) -> Result<tar::Archive<BufReader<Box<dyn Read>>>> {
     let raw = open_decompressed(path, format)?;
-    Ok(tar::Archive::new(BufReader::with_capacity(1024 * 1024, raw)))
+    Ok(tar::Archive::new(BufReader::with_capacity(4 * 1024 * 1024, raw)))
 }
