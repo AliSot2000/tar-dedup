@@ -24,7 +24,8 @@ pub enum FileFlag {
     /// Payload was written into the current open archive session (not finalized yet).
     /// Cleared when the session finalizes (phase → archived) or after abort/truncate.
     ArchiveSessionPending = 6,
-
+    /// `append_path` failed during the archive process.
+    ErrorWhileArchive = 7,
     // IO Error while indexing
     // XATTR Error while indexing
     // POSIX_ACL Error while indexing
