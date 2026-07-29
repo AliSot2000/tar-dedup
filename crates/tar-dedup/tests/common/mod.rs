@@ -12,8 +12,11 @@ pub fn open_temp_db() -> (tempfile::TempDir, Database) {
 }
 
 pub fn insert_file(db: &Database, rel_path: &str, size: u64) -> FileId {
+    use tar_dedup::common::files::original_extension;
+    let path = PathBuf::from(rel_path);
     db.insert_file(&NewFileRecord {
-        rel_path: PathBuf::from(rel_path),
+        ext: original_extension(&path),
+        rel_path: path,
         size,
         mtime: None,
         atime: None,
