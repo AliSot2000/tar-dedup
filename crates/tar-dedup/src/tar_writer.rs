@@ -186,6 +186,19 @@ impl Write for CompressLayer {
     }
 }
 
+impl CompressLayer
+{
+    fn finish(self) -> io::Result<File> {
+        match self {
+            Self::Xz(w) => w.finish(),
+            Self::Gz(w) => w.finish(),
+            Self::Bz(w) => w.finish(),
+            Self::Zstd(w) => w.finish(),
+            Self::Plain(w) => Ok(w),
+        }
+    }
+}
+
 pub struct TarWriter {
     archive_path: PathBuf,
     builder: Option<Builder<TarSink>>,
