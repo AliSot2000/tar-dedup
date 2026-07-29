@@ -34,6 +34,18 @@ pub struct ArchiveArgs {
     #[command(flatten)]
     pub compression: CompressionFlags,
 
+    /// Compression level (0–19). Max depends on filter: gzip/bzip2/xz ≤ 9, zstd ≤ 19.
+    #[arg(long = "level", value_name = "N")]
+    pub level: Option<u32>,
+
+    /// xz `--extreme` / `-e` (OR into LZMA preset). Only valid with xz.
+    #[arg(long = "xz-extreme")]
+    pub xz_extreme: bool,
+
+    /// bzip2 `-s` (small / 100k blocks). Only valid with bzip2.
+    #[arg(long = "bzip-small")]
+    pub bzip_small: bool,
+
     /// Maximum concurrent workers.
     #[arg(long = "jobs", value_name = "N")]
     pub jobs: Option<usize>,
