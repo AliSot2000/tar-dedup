@@ -198,11 +198,11 @@ fn run_pool(
 /// Sanity check that we have files left in the dedup phase.
 fn sanity_no_deduped(db: &Database) -> Result<()> {
     let leftover = db.count_files_in_phase(FilePhase::Deduped)?;
-    // TODO: This should be some InvariantError or Similar or a panic.
     if leftover != 0 {
-        return Err(Error::Config(format!(
-            "sparsify finished with {leftover} file(s) still in deduped (expected 0)"
-        )));
+        panic!(format!(
+            "INVARIANT ERROR: \
+            sparsify finished with {leftover} file(s) still in deduped (expected 0)"
+        ));
     }
     Ok(())
 }
