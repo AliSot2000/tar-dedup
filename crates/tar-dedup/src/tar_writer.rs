@@ -14,6 +14,201 @@ use crate::shutdown::Shutdown;
 /// Two 512-byte zero blocks — ustar end-of-archive marker.
 const TAR_EOF_LEN: usize = 1024;
 
+pub struct TarWriter {
+    archive_path: PathBuf,
+    /// Needed to have option for solid tear-down ownership.
+    builder: Option<Builder<TarSink>>,
+    bytes_in: u64,
+}
+
+/// # Tar writer pipeline:
+/// - `TarWriter` writes into
+/// - `Builder` writes into
+/// - `TarSink` writes into
+/// - `BufferedCompress` writes into
+/// - `CompressionLayer` (XZ, Gzip, Zlib Bzip2, None) writes into
+/// - `File`
+impl TarWriter {
+    /// Open a new TarWriter (and other buffer objects)
+    pub fn open(
+        archive_path: PathBuf,
+        format: CompressionFormat,
+        jobs: usize,
+        memlimit_compress: Option<u64>,
+        shutdown: Shutdown,
+    ) -> Result<Self> {
+        // INFO: Print the warning
+        crate::compression::warn_on_start(format);
+
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&archive_path)
+            .map_err(|e| Error::io(&archive_path, e))?;
+
+        let layer = match format {
+            CompressionFormat::Xz => {
+                let (encoder, threads) =
+                    InterruptibleXzEncoder::new(file, jobs, memlimit_compress, shutdown.clone())?;
+                let hw = InterruptibleXzEncoder::<File>::hardware_threads();
+                eprintln!(
+                    "xz encoder: {threads} worker thread(s) active ({hw} CPU threads available)"
+                );
+                CompressLayer::Xz(encoder)
+            }
+            CompressionFormat::Gz => {
+                CompressLayer::Gz(GzEncoder::new(file, Compression::best()))
+            }
+            CompressionFormat::Bz2 => {
+                CompressLayer::Bz(bzip2::write::BzEncoder::new(file, bzip2::Compression::best()))
+            }
+            CompressionFormat::Zstd => CompressLayer::Zstd(
+                zstd::stream::write::Encoder::new(file, 19)
+                    .map_err(|e| Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
+            ),
+            CompressionFormat::None => CompressLayer::Plain(file),
+        };
+
+        let sink = TarSink {
+            inner: BufferedCompress::new(layer, shutdown),
+            pending: Vec::with_capacity(TAR_EOF_LEN),
+            allow_tar_eof: false,
+        };
+        // TODO: sparse
+        // TODO: mode
+        let mut builder = Builder::new(sink);
+        // Stage entries are content-id symlinks; pack the target file bytes.
+        builder.follow_symlinks(true);
+
+        Ok(Self {
+            archive_path,
+            builder: Some(builder),
+            bytes_in: 0,
+        })
+    }
+
+    pub fn append_path(
+        &mut self,
+        path: &Path,
+        tar_name: &str,
+        shutdown: &Shutdown,
+        mut on_input_bytes: impl FnMut(u64),
+    ) -> Result<()> {
+        shutdown.check_in_flight()?;
+        let meta = std::fs::metadata(path).map_err(|e| Error::io(path, e))?;
+        let len = meta.len();
+
+        let builder = self.builder.as_mut().expect("tar builder active");
+        // Builder writes through TarSink → buffer → xz; progress is approximate by size.
+        builder
+            .append_path_with_name(path, tar_name)
+            .map_err(|e| Error::io(&self.archive_path, e))?;
+
+        on_input_bytes(len);
+        self.bytes_in += len;
+        Ok(())
+    }
+
+    /// Graceful session end: flush tar (no EOF), finish compression stream.
+    pub fn finalize_session(mut self, shutdown: &Shutdown) -> Result<(u64, u64)> {
+        shutdown.check_in_flight()?;
+
+        let bytes_in = self.bytes_in;
+        let archive_path = self.archive_path.clone();
+        let error_factory = |e| Error::io(&archive_path, e);
+        let err_fac = error_factory; // Info: Alias for convenience.
+
+        let mut sink = self.take_sink(false)?;
+
+        sink
+            .resolve_trailing_eof()
+            .map_err(err_fac)?;
+        sink
+            .flush()
+            .map_err(err_fac)?;
+
+        let bytes_out = sink
+            .inner
+            .into_layer()
+            .map_err(err_fac)?
+            .finish()
+            .map_err(err_fac)?
+            .metadata()
+            .map_err(err_fac)?
+            .len();
+        Ok((bytes_in, bytes_out))
+    }
+
+    /// Final archive close: emit tar EOF, then finish compression.
+    pub fn finalize_archive(mut self, shutdown: &Shutdown) -> Result<(u64, u64)> {
+        shutdown.check_in_flight()?;
+
+        let bytes_in = self.bytes_in;
+        let archive_path = self.archive_path.clone();
+        let error_factory = |e| Error::io(&archive_path, e);
+        let err_fac = error_factory; // Info: Alias for convenience.
+
+        let mut sink = self.take_sink(true)?;
+        sink
+            .resolve_trailing_eof()
+            .map_err(err_fac)?;
+        sink
+            .flush()
+            .map_err(err_fac)?;
+
+        let bytes_out = sink
+            .inner
+            .into_layer()
+            .map_err(err_fac)?
+            .finish()
+            .map_err(err_fac)?
+            .metadata()
+            .map_err(err_fac)?
+            .len();
+        Ok((bytes_in, bytes_out))
+    }
+
+    /// Force-abort: drop incomplete compression stream (no footer). Recovery truncates.
+    pub fn abandon(mut self) {
+        if let Ok(mut sink) = self.take_sink(false) {
+            // Session will be truncated; drop held trailer / last block without compressing further.
+            sink.pending.clear();
+            match sink.inner.into_layer() {
+                Ok(CompressLayer::Xz(w)) => {
+                    w.abandon();
+                }
+                Ok(CompressLayer::Gz(w)) => {
+                    std::mem::forget(w);
+                }
+                Ok(CompressLayer::Bz(w)) => {
+                    std::mem::forget(w);
+                }
+                Ok(CompressLayer::Zstd(w)) => {
+                    std::mem::forget(w);
+                }
+                Ok(CompressLayer::Plain(_)) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Remove Some(Builder) from the struct and then returns the inner TarSink
+    /// Hint, it is needed that the Object that is written into is owned by the Builder.
+    fn take_sink(&mut self, allow_tar_eof: bool) -> Result<TarSink> {
+        // Function removes Some(Builder)
+        let mut builder = self
+            .builder
+            .take()
+            .ok_or_else(|| Error::Config("tar builder already consumed".into()))?;
+
+        builder.get_mut().allow_tar_eof = allow_tar_eof;
+
+        // `into_inner` always calls `finish` → writes EOF into the sink hold-back.
+        builder
+            .into_inner()
+            .map_err(|e| Error::io(&self.archive_path, e))
+    }
+}
+
 /// Hold back trailing bytes so we can drop Builder's tar EOF without sniffing
 /// individual `write` shapes.
 ///
@@ -75,6 +270,7 @@ impl Write for TarSink {
 }
 
 /// Intermediate buffer between tar framing and the compressor (~4 MiB).
+/// We use this to ensure that we can have enough checks for SIGINT.
 struct BufferedCompress {
     buf: Vec<u8>,
     layer: CompressLayer,
@@ -100,6 +296,8 @@ impl BufferedCompress {
             return Ok(());
         }
         let mut offset = 0;
+        // Loop should be technically not be executed multiple times. Technically only once.
+        // Used to deal with the compression layer not accepting everything
         while offset < self.buf.len() {
             self.shutdown
                 .check_in_flight()
@@ -130,9 +328,12 @@ impl Write for BufferedCompress {
             return Ok(0);
         }
         let mut input = data;
+        // Loop is used to consume the full buffer in batches and then propagate into
+        // the compression buffer.
         while !input.is_empty() {
             self.shutdown
                 .check_in_flight()
+                // TODO better error capture.
                 .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "interrupted"))?;
             let space = self.capacity().saturating_sub(self.buf.len());
             if space == 0 {
@@ -195,170 +396,5 @@ impl CompressLayer
             Self::Zstd(w) => w.finish(),
             Self::Plain(w) => Ok(w),
         }
-    }
-}
-
-pub struct TarWriter {
-    archive_path: PathBuf,
-    builder: Option<Builder<TarSink>>,
-    bytes_in: u64,
-}
-
-impl TarWriter {
-    pub fn open(
-        archive_path: PathBuf,
-        format: CompressionFormat,
-        jobs: usize,
-        memlimit_compress: Option<u64>,
-        shutdown: Shutdown,
-    ) -> Result<Self> {
-        crate::compression::warn_on_start(format);
-
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&archive_path)
-            .map_err(|e| Error::io(&archive_path, e))?;
-
-        let layer = match format {
-            CompressionFormat::Xz => {
-                let (encoder, threads) =
-                    InterruptibleXzEncoder::new(file, jobs, memlimit_compress, shutdown.clone())?;
-                let hw = InterruptibleXzEncoder::<File>::hardware_threads();
-                eprintln!(
-                    "xz encoder: {threads} worker thread(s) active ({hw} CPU threads available)"
-                );
-                CompressLayer::Xz(encoder)
-            }
-            CompressionFormat::Gz => {
-                CompressLayer::Gz(GzEncoder::new(file, Compression::best()))
-            }
-            CompressionFormat::Bz2 => {
-                CompressLayer::Bz(bzip2::write::BzEncoder::new(file, bzip2::Compression::best()))
-            }
-            CompressionFormat::Zstd => CompressLayer::Zstd(
-                zstd::stream::write::Encoder::new(file, 19)
-                    .map_err(|e| Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
-            ),
-            CompressionFormat::None => CompressLayer::Plain(file),
-        };
-
-        let sink = TarSink {
-            inner: BufferedCompress::new(layer, shutdown),
-            pending: Vec::with_capacity(TAR_EOF_LEN),
-            allow_tar_eof: false,
-        };
-        let mut builder = Builder::new(sink);
-        // Stage entries are content-id symlinks; pack the target file bytes.
-        builder.follow_symlinks(true);
-
-        Ok(Self {
-            archive_path,
-            builder: Some(builder),
-            bytes_in: 0,
-        })
-    }
-
-    pub fn append_path(
-        &mut self,
-        path: &Path,
-        tar_name: &str,
-        shutdown: &Shutdown,
-        mut on_input_bytes: impl FnMut(u64),
-    ) -> Result<()> {
-        shutdown.check_in_flight()?;
-        let meta = std::fs::metadata(path).map_err(|e| Error::io(path, e))?;
-        let len = meta.len();
-
-        let builder = self.builder.as_mut().expect("tar builder active");
-        // Builder writes through TarSink → buffer → xz; progress is approximate by size.
-        builder
-            .append_path_with_name(path, tar_name)
-            .map_err(|e| Error::io(&self.archive_path, e))?;
-
-        on_input_bytes(len);
-        self.bytes_in += len;
-        Ok(())
-    }
-
-    /// Graceful session end: flush tar (no EOF), finish compression stream.
-    pub fn finalize_session(mut self, shutdown: &Shutdown) -> Result<(u64, u64)> {
-        shutdown.check_in_flight()?;
-        let bytes_in = self.bytes_in;
-        let archive_path = self.archive_path.clone();
-
-        let mut sink = self.take_sink(false)?;
-        sink.resolve_trailing_eof()
-            .map_err(|e| Error::io(&archive_path, e))?;
-        sink.flush().map_err(|e| Error::io(&archive_path, e))?;
-        let file = sink
-            .inner
-            .into_layer()
-            .map_err(|e| Error::io(&archive_path, e))?
-            .finish()
-            .map_err(|e| Error::io(&archive_path, e))?;
-        let bytes_out = file
-            .metadata()
-            .map_err(|e| Error::io(&archive_path, e))?
-            .len();
-        Ok((bytes_in, bytes_out))
-    }
-
-    /// Final archive close: emit tar EOF, then finish compression.
-    pub fn finalize_archive(mut self, shutdown: &Shutdown) -> Result<(u64, u64)> {
-        shutdown.check_in_flight()?;
-        let bytes_in = self.bytes_in;
-        let archive_path = self.archive_path.clone();
-
-        let mut sink = self.take_sink(true)?;
-        sink.resolve_trailing_eof()
-            .map_err(|e| Error::io(&archive_path, e))?;
-        sink.flush().map_err(|e| Error::io(&archive_path, e))?;
-        let file = sink
-            .inner
-            .into_layer()
-            .map_err(|e| Error::io(&archive_path, e))?
-            .finish()
-            .map_err(|e| Error::io(&archive_path, e))?;
-        let bytes_out = file
-            .metadata()
-            .map_err(|e| Error::io(&archive_path, e))?
-            .len();
-        Ok((bytes_in, bytes_out))
-    }
-
-    /// Force-abort: drop incomplete compression stream (no footer). Recovery truncates.
-    pub fn abandon(mut self) {
-        if let Ok(mut sink) = self.take_sink(false) {
-            // Session will be truncated; drop held trailer / last block without compressing further.
-            sink.pending.clear();
-            match sink.inner.into_layer() {
-                Ok(CompressLayer::Xz(w)) => {
-                    w.abandon();
-                }
-                Ok(CompressLayer::Gz(w)) => {
-                    std::mem::forget(w);
-                }
-                Ok(CompressLayer::Bz(w)) => {
-                    std::mem::forget(w);
-                }
-                Ok(CompressLayer::Zstd(w)) => {
-                    std::mem::forget(w);
-                }
-                Ok(CompressLayer::Plain(_)) | Err(_) => {}
-            }
-        }
-    }
-
-    fn take_sink(&mut self, allow_tar_eof: bool) -> Result<TarSink> {
-        let mut builder = self
-            .builder
-            .take()
-            .ok_or_else(|| Error::Config("tar builder already consumed".into()))?;
-        builder.get_mut().allow_tar_eof = allow_tar_eof;
-        // `into_inner` always calls `finish` → writes EOF into the sink hold-back.
-        builder
-            .into_inner()
-            .map_err(|e| Error::io(&self.archive_path, e))
     }
 }
