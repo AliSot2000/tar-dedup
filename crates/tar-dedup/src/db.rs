@@ -213,7 +213,7 @@ impl Database {
         path: &Path,
         session: &ArchiveSession,
     ) -> Result<()> {
-        tar_writer::abort_incomplete_session(&self.conn, path, session)
+        tar_writer::abort_incomplete_session(&self.conn, session)
     }
 
     pub fn promote_pending_archived(&self) -> Result<u64> {
@@ -226,10 +226,6 @@ impl Database {
 
     pub fn clear_archive_session_pending(&self) -> Result<u64> {
         tar_writer::clear_archive_session_pending(&self.conn)
-    }
-
-    pub fn truncate_archive_at(&self, path: &Path, offset: u64) -> Result<()> {
-        tar_writer::truncate_archive_at(path, offset)
     }
 
     pub fn open_archive_session(&self) -> Result<Option<ArchiveSession>> {

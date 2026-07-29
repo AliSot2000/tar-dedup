@@ -108,9 +108,8 @@ pub fn mark_session_aborted(conn: &Connection, session_id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Startup recovery: truncate incomplete stream, mark session aborted, clear pending flags.
-pub fn abort_incomplete_session(conn: &Connection, path: &Path, session: &ArchiveSession) -> Result<()> {
-    truncate_archive_at(path, session.archive_offset)?;
+/// Startup recovery: mark session aborted, clear pending flags.
+pub fn abort_incomplete_session(conn: &Connection, session: &ArchiveSession) -> Result<()> {
     mark_session_aborted(conn, session.id)?;
     clear_archive_session_pending(conn)?;
     Ok(())
@@ -248,23 +247,4 @@ fn parse_meta_u64(conn: &Connection, key: &str) -> Result<u64> {
             .parse::<u64>()
             .map_err(|e| Error::Config(format!("invalid meta {key}: {e}"))),
     }
-}
-
-/// Truncate archive to `offset` (end of previous finished stream / start of incomplete one).
-pub fn truncate_archive_at(path: &Path, offset: u64) -> Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let file = OpenOptions::new()
-        .write(true)
-        .open(path)
-        .map_err(|e| Error::io(path, e))?;
-    file.set_len(offset).map_err(|e| Error::io(path, e))?;
-    file.sync_all().map_err(|e| Error::io(path, e))?;
-    if offset == 0 {
-        // Empty archive file: remove so next session starts clean.
-        drop(file);
-        let _ = std::fs::remove_file(path);
-    }
-    Ok(())
 }
