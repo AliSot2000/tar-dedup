@@ -193,12 +193,15 @@ impl Database {
     }
 
     pub fn begin_archive_session(&self, archive_offset: u64) -> Result<i64> {
-        let stream_index = tar_writer::next_stream_index(&self.conn)?;
-        tar_writer::begin_session(&self.conn, stream_index, archive_offset)
+        tar_writer::begin_session(&self.conn, archive_offset)
     }
 
-    pub fn finalize_archive_session(&self, session_id: i64, bytes_in: u64, bytes_out: u64) -> Result<()> {
-        tar_writer::finalize_session(&self.conn, session_id, bytes_in, bytes_out)
+    pub fn stamp_archive_session_finished_at(&self, session_id: i64) -> Result<()> {
+        tar_writer::stamp_session_finished_at(&self.conn, session_id)
+    }
+
+    pub fn finalize_archive_session(&self, session_id: i64) -> Result<()> {
+        tar_writer::finalize_session(&self.conn, session_id)
     }
 
     pub fn mark_archive_session_aborted(&self, session_id: i64) -> Result<()> {
@@ -213,8 +216,8 @@ impl Database {
         tar_writer::abort_incomplete_session(&self.conn, path, session)
     }
 
-    pub fn mark_files_archived(&self, file_ids: &[FileId]) -> Result<()> {
-        tar_writer::mark_files_archived(&self.conn, file_ids)
+    pub fn promote_pending_archived(&self) -> Result<u64> {
+        tar_writer::promote_pending_archived(&self.conn)
     }
 
     pub fn mark_archive_session_pending(&self, file_id: FileId) -> Result<()> {
@@ -231,6 +234,10 @@ impl Database {
 
     pub fn open_archive_session(&self) -> Result<Option<ArchiveSession>> {
         tar_writer::open_session(&self.conn)
+    }
+
+    pub fn has_finalized_archive_session(&self) -> Result<bool> {
+        tar_writer::has_finalized_session(&self.conn)
     }
 
     pub fn reset_archive_state(&self) -> Result<()> {
@@ -250,8 +257,24 @@ impl Database {
         tar_writer::list_staged_canonical_ordered(&self.conn, filter_sha)
     }
 
-    pub fn promote_archive_candidates_to_archived(conn: &Connection, retry: bool) -> Result<u64> {
-        tar_writer::promote_archive_candidates_to_archived(conn, retry)
+    pub fn get_archive_bytes_in(&self) -> Result<u64> {
+        tar_writer::get_archive_bytes_in(&self.conn)
+    }
+
+    pub fn get_archive_bytes_out(&self) -> Result<Option<u64>> {
+        tar_writer::get_archive_bytes_out(&self.conn)
+    }
+
+    pub fn set_archive_bytes_in(&self, value: u64) -> Result<()> {
+        tar_writer::set_archive_bytes_in(&self.conn, value)
+    }
+
+    pub fn set_archive_bytes_out(&self, value: u64) -> Result<()> {
+        tar_writer::set_archive_bytes_out(&self.conn, value)
+    }
+
+    pub fn promote_archive_candidates_to_archived(&self, retry: bool) -> Result<u64> {
+        tar_writer::promote_archive_candidates_to_archived(&self.conn, retry)
     }
     
     pub fn checkpoint(&self) -> Result<()> {
