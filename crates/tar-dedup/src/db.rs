@@ -240,12 +240,12 @@ impl Database {
         tar_writer::reset_archive_state(&self.conn)
     }
 
-    pub fn sum_canonical_bytes_to_archive(&self) -> Result<u64> {
-        tar_writer::sum_canonical_bytes_to_archive(&self.conn)
+    pub fn sum_canonical_bytes_to_archive(&self, filter_sha: bool) -> Result<u64> {
+        tar_writer::sum_canonical_bytes_to_archive(&self.conn, filter_sha)
     }
 
-    pub fn sum_archived_canonical_bytes(&self) -> Result<u64> {
-        tar_writer::sum_archived_canonical_bytes(&self.conn)
+    pub fn sum_archived_canonical_bytes(&self, filter_sha: bool) -> Result<u64> {
+        tar_writer::sum_archived_canonical_bytes(&self.conn, filter_sha)
     }
 
     /// Staged canonical ids ordered by extension / size / id for the archive pass.
