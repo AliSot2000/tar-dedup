@@ -17,7 +17,7 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
     fs::create_dir_all(config.extract_cache_dir())
         .map_err(|e| Error::io(&config.extract_cache_dir(), e))?;
 
-    let mut archive = open_tar_archive(&config.archive_path, config.compression)?;
+    let mut archive = open_tar_archive(&config.archive_path, config.compression.format)?;
     let snapshot_tmp = config.work_dir.join(".snapshot-ingest.tmp");
     let mut manifest_loaded = db_path.is_file();
     let mut snapshots = 0u32;

@@ -35,9 +35,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     let mut writer = TarWriter::open(
         config.archive_path.clone(),
-        config.compression,
+        &config.compression,
         config.jobs,
-        config.memlimit_compress,
         shutdown.clone(),
     )?;
 
