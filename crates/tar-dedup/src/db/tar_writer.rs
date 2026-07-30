@@ -149,6 +149,7 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Re
 }
 
 /// Staged self-canonical file ids, ordered for packing: extension, size, id.
+/// When `filter_sha` is true, rows with `sha1 IS NULL` are omitted.
 pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Result<Vec<FileId>> {
     let filter = if filter_sha {
         " AND sha1 IS NOT NULL"
@@ -186,29 +187,49 @@ pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Resu
     Ok(total as u64)
 }
 
-pub fn promote_archive_candidates_to_archived(conn: &Connection, retry: bool) -> Result<u64> {
-    let filter_sha = if retry { "OR sha1 IS NULL" } else { "" };
+/// Move staged rows that will never be tar payloads to `archived`.
+///
+/// Ineligible: non-self-canonical, non-file types, and (when `filter_sha`) missing `sha1`.
+/// Does not touch outcome flags — phase is flow only.
+pub fn promote_ineligible_to_archived(conn: &Connection, filter_sha: bool) -> Result<u64> {
+    let sha_clause = if filter_sha {
+        " OR sha1 IS NULL"
+    } else {
+        ""
+    };
     let stmt = format!(
         "UPDATE files SET phase = 'archived'
          WHERE phase = 'staged'
            AND (
                 canonical_id IS NULL OR canonical_id != id
              OR ftype IS NULL OR ftype != 'file'
-             {filter_sha}
+             {sha_clause}
            )"
     );
     let n = conn.execute(&stmt, {})?;
     Ok(n as u64)
 }
 
-/// Promote all `ArchiveSessionPending` rows to `archived` and clear the flag.
+/// After every eligible file has been considered (written or flagged error), advance
+/// remaining flow to `archived`. Does not clear or set outcome flags.
+pub fn promote_remainder_to_archived(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files SET phase = 'archived' WHERE phase != 'archived'",
+        [],
+    )?;
+    Ok(n as u64)
+}
+
+/// Promote all `AppendedPath` rows to `archived`.
+/// Leaves `AppendedPath` set (sticky proof the payload was written); abort recovery
+/// only clears the flag for rows that are still not `archived`.
 pub fn promote_pending_archived(conn: &Connection) -> Result<u64> {
     let pending = FileFlag::AppendedPath.mask_i64();
     let n = conn.execute(
         "UPDATE files
-         SET phase = 'archived',
-             flags = flags & ~:pending
-         WHERE (flags & :pending) != 0",
+         SET phase = 'archived'
+         WHERE (flags & :pending) != 0
+           AND phase != 'archived'",
         named_params! { ":pending": pending },
     )?;
     Ok(n as u64)
@@ -227,11 +248,15 @@ pub fn mark_archive_session_pending(conn: &Connection, file_id: FileId) -> Resul
     Ok(())
 }
 
-/// After truncate/abort: clear pending; files stay `staged` for rewrite.
+/// After truncate/abort: clear pending on non-archived rows; files stay `staged` for rewrite.
+/// Does not touch `AppendedPath` on rows already promoted to `archived`.
 pub fn clear_archive_session_pending(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::AppendedPath.mask_i64();
     let n = conn.execute(
-        "UPDATE files SET flags = flags & ~:bit WHERE (flags & :bit) != 0",
+        "UPDATE files
+         SET flags = flags & ~:bit
+         WHERE (flags & :bit) != 0
+           AND phase != 'archived'",
         named_params! { ":bit": bit },
     )?;
     Ok(n as u64)
