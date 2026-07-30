@@ -27,7 +27,7 @@ pub struct ArchiveArgs {
     #[arg(short = 'i')]
     pub input: PathBuf,
 
-    /// Working directory for sqlite/staging (defaults to `.NAME.work` next to the archive).
+    /// Working directory for sqlite/staging (defaults to `{stem}.astage` next to the archive).
     #[arg(short = 'C')]
     pub work_dir: Option<PathBuf>,
 
@@ -50,16 +50,20 @@ pub struct ArchiveArgs {
     #[arg(long = "jobs", value_name = "N")]
     pub jobs: Option<usize>,
 
-    /// Resume from existing state in the work directory (auto-detected if omitted).
-    #[arg(long)]
+    /// Resume from incomplete work in the stage directory (error if nothing to resume).
+    #[arg(long, conflicts_with = "fresh")]
     pub resume: bool,
 
-    /// Ignore saved state and restart from inventory.
+    /// Wipe stage work and restart from inventory.
     #[arg(long, conflicts_with = "resume")]
     pub fresh: bool,
 
-    /// Keep work-dir snapshot.sqlite and stage/ after a successful archive.
-    #[arg(long)]
+    /// After success, keep a timestamped copy of snapshot.sqlite next to the archive.
+    #[arg(long = "keep-db")]
+    pub keep_db: bool,
+
+    /// After success, keep the `{stem}.astage` work directory.
+    #[arg(long = "keep-stage")]
     pub keep_stage: bool,
 
     /// Run through STAGE then exit cleanly (state saved). STAGE: scan, hash, dedup,
@@ -122,9 +126,21 @@ pub struct ExtractArgs {
     #[arg(long)]
     pub restore_owner: bool,
 
-    /// Ignore saved extract state and start over.
-    #[arg(long)]
+    /// Resume from incomplete extract work (error if nothing to resume).
+    #[arg(long, conflicts_with = "fresh")]
+    pub resume: bool,
+
+    /// Wipe extract stage work and start over.
+    #[arg(long, conflicts_with = "resume")]
     pub fresh: bool,
+
+    /// After success, keep a timestamped copy of snapshot.sqlite in the output directory.
+    #[arg(long = "keep-db")]
+    pub keep_db: bool,
+
+    /// After success, keep the `{stem}.estage` work directory.
+    #[arg(long = "keep-stage")]
+    pub keep_stage: bool,
 }
 
 /// Pipeline stop point for `--exit-after-stage`.
@@ -137,12 +153,12 @@ pub enum ExitAfterStageArg {
     Hash,
     Dedup,
     Sparsify,
-    /// Symlink canonical files into the work-dir stage/.
+    /// Symlink canonical files into the `{stem}.astage` work directory.
     #[value(alias = "symlink")]
     Stage,
     /// Write the compressed tar archive.
     #[value(alias = "archive")]
     Tar,
-    /// Full pipeline then remove the work directory (unless `--keep-stage`).
+    /// Full pipeline then clean the work directory (honours `--keep-db` / `--keep-stage`).
     Cleanup,
 }
