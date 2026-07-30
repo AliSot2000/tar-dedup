@@ -269,8 +269,12 @@ impl Database {
         tar_writer::set_archive_bytes_out(&self.conn, value)
     }
 
-    pub fn promote_archive_candidates_to_archived(&self, retry: bool) -> Result<u64> {
-        tar_writer::promote_archive_candidates_to_archived(&self.conn, retry)
+    pub fn promote_ineligible_to_archived(&self, filter_sha: bool) -> Result<u64> {
+        tar_writer::promote_ineligible_to_archived(&self.conn, filter_sha)
+    }
+
+    pub fn promote_remainder_to_archived(&self) -> Result<u64> {
+        tar_writer::promote_remainder_to_archived(&self.conn)
     }
     
     pub fn checkpoint(&self) -> Result<()> {

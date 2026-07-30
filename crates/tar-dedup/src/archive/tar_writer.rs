@@ -25,9 +25,13 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     debug_assert!(db.open_archive_session()?.is_none());
     let session_id = db.begin_archive_session(archive_offset)?;
 
+    // Require sha1 unless retry_missing_sha asks to include unhashed files.
+    let filter_sha = !config.retry_missing_sha;
+    db.promote_ineligible_to_archived(filter_sha)?;
+
     let bytes_in_base = db.get_archive_bytes_in()?;
-    let total_bytes = db.sum_canonical_bytes_to_archive(config.retry_missing_sha)?;
-    let already_archived = db.sum_archived_canonical_bytes(config.retry_missing_sha)?;
+    let total_bytes = db.sum_canonical_bytes_to_archive(filter_sha)?;
+    let already_archived = db.sum_archived_canonical_bytes(filter_sha)?;
 
     // TODO update eta only when write to buff occurs.
     let progress = ByteProgress::new("archive", total_bytes);
@@ -48,7 +52,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         append_snapshot(&mut writer, config, db, shutdown, true)?;
     }
 
-    let to_archive = db.list_staged_canonical_ordered(config.retry_missing_sha)?;
+    let to_archive = db.list_staged_canonical_ordered(filter_sha)?;
     if to_archive.is_empty() && already_archived == 0 {
         tracing::warn!("no staged files to archive");
     }
@@ -223,6 +227,10 @@ fn end_session(
     write_tar_eof: bool,
 ) -> Result<()> {
     db.promote_pending_archived()?;
+    // Full archive pass only: every remaining row has been considered (or was ineligible).
+    if write_tar_eof {
+        db.promote_remainder_to_archived()?;
+    }
     db.stamp_archive_session_finished_at(session_id)?;
 
     progress.set_message(format!("archive writing {SNAPSHOT_TAR_NAME} (progress)").as_str());
