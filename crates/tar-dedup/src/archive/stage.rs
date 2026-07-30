@@ -51,16 +51,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         db.mark_file_phase(file_id, crate::db::types::FilePhase::Staged)?;
     }
 
-    // TODO sanity check that we don't have 
-
-    copy_database(config)?;
-    Ok(())
-}
-
-// TODO is this correct? Don't we need to commit?
-fn copy_database(config: &Config) -> Result<()> {
-    let src = config.db_path();
-    let dst = config.stage_dir().join("snapshot.sqlite");
-    fs::copy(&src, &dst).map_err(|e| crate::error::Error::io(&dst, e))?;
+    // Live DB already lives in the flat work dir (`snapshot.sqlite`); tar-writer
+    // stages a copy via `.snapshot-for-tar.sqlite` when appending to the archive.
     Ok(())
 }
