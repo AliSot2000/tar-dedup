@@ -80,7 +80,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
         // TODO deal with the error by continuing.
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
-            Ok(()) => db.set_flag(record.id, FileFlag::ArchiveSessionPending, true)?,
+            Ok(()) => db.set_flag(record.id, FileFlag::AppendedPath, true)?,
             Err(e) if e.is_interrupted() => {
                 stopped = true;
                 final_archive = false;
@@ -133,7 +133,7 @@ fn check_archive_bytes_out(db: &Database, archive_len: u64) -> Result<()> {
 }
 
 /// Truncate archive to the incomplete session's start offset, mark session aborted,
-/// and clear [`crate::db::flags::FileFlag::ArchiveSessionPending`].
+/// and clear [`crate::db::flags::FileFlag::AppendedPath`].
 /// Prior finalized sessions (and their archived files) stay intact.
 fn recover_incomplete_session(config: &Config, db: &Database) -> Result<()> {
     let open_session = match db.open_archive_session()? {

@@ -23,7 +23,7 @@ pub enum FileFlag {
     ErrorWhileSparsify = 5,
     /// Payload was written into the current open archive session (not finalized yet).
     /// Cleared when the session finalizes (phase → archived) or after abort/truncate.
-    ArchiveSessionPending = 6,
+    AppendedPath = 6,
     /// `append_path` failed during the archive process.
     ErrorWhileArchive = 7,
     // IO Error while indexing
@@ -142,20 +142,20 @@ mod tests {
         flags.set(FileFlag::HasSparse, true);
         flags.set(FileFlag::CheckWithCanonicalCompleted, true);
         flags.set(FileFlag::ErrorWhileDedup, true);
-        flags.set(FileFlag::ArchiveSessionPending, true);
+        flags.set(FileFlag::AppendedPath, true);
         assert!(flags.get(FileFlag::SnapshotArchived));
         assert!(!flags.get(FileFlag::Modified));
         assert!(flags.get(FileFlag::HasSparse));
         assert!(flags.get(FileFlag::CheckWithCanonicalCompleted));
         assert!(flags.get(FileFlag::ErrorWhileDedup));
-        assert!(flags.get(FileFlag::ArchiveSessionPending));
+        assert!(flags.get(FileFlag::AppendedPath));
         assert_eq!(
             FileFlags::from_i64(flags.to_i64()).bits(),
             FileFlag::SnapshotArchived.mask()
                 | FileFlag::HasSparse.mask()
                 | FileFlag::CheckWithCanonicalCompleted.mask()
                 | FileFlag::ErrorWhileDedup.mask()
-                | FileFlag::ArchiveSessionPending.mask()
+                | FileFlag::AppendedPath.mask()
         );
     }
 }

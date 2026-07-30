@@ -117,7 +117,7 @@ pub fn abort_incomplete_session(conn: &Connection, session: &ArchiveSession) -> 
 
 /// Nuclear reset: every archived canonical → staged, wipe all sessions.
 pub fn reset_archive_state(conn: &Connection) -> Result<()> {
-    let pending = FileFlag::ArchiveSessionPending.mask_i64();
+    let pending = FileFlag::AppendedPath.mask_i64();
     conn.execute(
         "UPDATE files
          SET phase = 'staged',
@@ -203,7 +203,7 @@ pub fn promote_archive_candidates_to_archived(conn: &Connection, retry: bool) ->
 
 /// Promote all `ArchiveSessionPending` rows to `archived` and clear the flag.
 pub fn promote_pending_archived(conn: &Connection) -> Result<u64> {
-    let pending = FileFlag::ArchiveSessionPending.mask_i64();
+    let pending = FileFlag::AppendedPath.mask_i64();
     let n = conn.execute(
         "UPDATE files
          SET phase = 'archived',
@@ -216,7 +216,7 @@ pub fn promote_pending_archived(conn: &Connection) -> Result<u64> {
 
 /// Mark members written into the open session (durable across crash until finalize/abort).
 pub fn mark_archive_session_pending(conn: &Connection, file_id: FileId) -> Result<()> {
-    let bit = FileFlag::ArchiveSessionPending.mask_i64();
+    let bit = FileFlag::AppendedPath.mask_i64();
     conn.execute(
         "UPDATE files SET flags = flags | :bit WHERE id = :id",
         named_params! {
@@ -229,7 +229,7 @@ pub fn mark_archive_session_pending(conn: &Connection, file_id: FileId) -> Resul
 
 /// After truncate/abort: clear pending; files stay `staged` for rewrite.
 pub fn clear_archive_session_pending(conn: &Connection) -> Result<u64> {
-    let bit = FileFlag::ArchiveSessionPending.mask_i64();
+    let bit = FileFlag::AppendedPath.mask_i64();
     let n = conn.execute(
         "UPDATE files SET flags = flags & ~:bit WHERE (flags & :bit) != 0",
         named_params! { ":bit": bit },
