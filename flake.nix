@@ -26,6 +26,8 @@
           pkgs.zstd      # zstd C lib for zstd crate
           pkgs.zlib      # zlib (used by flate2 in some configs)
           pkgs.libselinux # headers + lib for selinux / selinux-sys crates
+          pkgs.llvmPackages.libclang # needed by bindgen (selinux-sys build script)
+          pkgs.llvmPackages.clang    # optional, but useful to have the driver too
         ];
 
         # Ensures dynamically linked C libs are findable at runtime
@@ -35,6 +37,7 @@
           pkgs.zstd
           pkgs.zlib
           pkgs.libselinux
+          pkgs.llvmPackages.libclang
         ];
 
         # pkg-config paths so build scripts can find the libs
@@ -45,6 +48,9 @@
           pkgs.zlib.dev
           pkgs.libselinux.dev
         ];
+
+        # bindgen needs this to dlopen libclang at build time
+        LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
         shellHook = ''
           echo "🦀 tar-dedup dev shell — $(rustc --version)"
