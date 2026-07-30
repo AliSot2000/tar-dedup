@@ -274,7 +274,7 @@ pub fn set_file_acl(path: &Path, raw_acl: &str) -> FileStatResult<()> {
     for (key, value) in parsed_json {
         // To deal with possible duplicate 'undefined' values, we append a -int suffix to
         // distinguish them to prevent key collisions in the json subject that stores the acl
-        let qual_str = if let Some(suffix) = key.strip_prefix("undefined-") {
+        let qual_str = if let Some(_suffix) = key.strip_prefix("undefined-") {
             "undefined"
         } else {
             key.as_str()
