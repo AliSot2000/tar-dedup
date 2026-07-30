@@ -1,4 +1,6 @@
 //! Shared helpers used by both archive and unarchive pipelines.
 
-pub mod xattr;
+pub mod cleanup;
 pub mod files;
+pub mod start;
+pub mod xattr;
