@@ -100,6 +100,29 @@ impl CompressionSettings {
     }
 }
 
+/// Where extract places `{stem}.estage` (config-only; not wired to CLI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExtractStageLocation {
+    /// `{archive_path.parent}/{stem}.estage`
+    #[default]
+    BesideArchive,
+    /// `{output_dir.parent()}/{stem}.estage`
+    BesideOutput,
+}
+
+/// Post-success keep flags for the work directory / retained DB.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CleanupSettings {
+    pub keep_db: bool,
+    pub keep_stage: bool,
+}
+
+impl CleanupSettings {
+    pub fn from_flags(keep_db: bool, keep_stage: bool) -> Self {
+        Self { keep_db, keep_stage }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Path to archive being created or to archive being extracted filename.tar[.compression]
@@ -112,12 +135,14 @@ pub struct Config {
     /// Extract output root (`extract` subcommand `-C`).
     pub output_dir: PathBuf,
 
+    /// `.astage` / `.estage` work directory (DB + payloads live directly here).
     pub work_dir: PathBuf,
     pub compression: CompressionSettings,
     pub jobs: usize,
-    pub resume: bool,
-    pub fresh: bool,
-    pub keep_stage: bool,
+    pub start_policy: crate::common::start::StartPolicy,
+    pub cleanup: CleanupSettings,
+    /// Extract only: parent directory for `.estage` (default beside archive).
+    pub extract_stage_location: ExtractStageLocation,
     pub exit_after_stage: Option<ExitAfterStage>,
     /// Extract: restore uid/gid when possible.
     pub restore_owner: bool,
@@ -165,6 +190,7 @@ impl Config {
 
         let format = resolve_compression(&args.compression, &archive_path)?;
         let compression = CompressionSettings::from_archive_args(format, args)?;
+        let start_policy = crate::common::start::StartPolicy::from_flags(args.resume, args.fresh)?;
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
 
         Ok(Self {
@@ -174,9 +200,9 @@ impl Config {
             work_dir,
             compression,
             jobs,
-            resume: args.resume,
-            fresh: args.fresh,
-            keep_stage: args.keep_stage,
+            start_policy,
+            cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
+            extract_stage_location: ExtractStageLocation::BesideArchive,
             exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             restore_owner: false,
             do_xattrs: true,
@@ -202,10 +228,12 @@ impl Config {
         let output_dir = resolve_user_path(&args.output_dir)?;
         std::fs::create_dir_all(&output_dir).map_err(|e| Error::io(&output_dir, e))?;
 
-        let work_dir = default_extract_work_dir(&archive_path);
+        let extract_stage_location = ExtractStageLocation::BesideArchive;
+        let work_dir = default_extract_work_dir(&archive_path, &output_dir, extract_stage_location);
         std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
 
         let format = infer_compression_from_suffix(&archive_path);
+        let start_policy = crate::common::start::StartPolicy::from_flags(args.resume, args.fresh)?;
 
         Ok(Self {
             archive_path,
@@ -214,9 +242,9 @@ impl Config {
             work_dir,
             compression: CompressionSettings::for_extract(format),
             jobs: 1,
-            resume: false,
-            fresh: args.fresh,
-            keep_stage: false,
+            start_policy,
+            cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
+            extract_stage_location,
             exit_after_stage: None,
             restore_owner: args.restore_owner,
             do_xattrs: true,
@@ -234,23 +262,18 @@ impl Config {
         self.work_dir.join("snapshot.sqlite")
     }
 
+    /// Archive payload directory — same as `work_dir` (flat `.astage`).
     pub fn stage_dir(&self) -> PathBuf {
-        self.work_dir.join("stage")
+        self.work_dir.clone()
     }
 
+    /// Extract payload directory — same as `work_dir` (flat `.estage`).
     pub fn extract_cache_dir(&self) -> PathBuf {
-        self.work_dir.join("cache")
+        self.work_dir.clone()
     }
 }
 
 pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Result<CompressionFormat> {
-    if let Some(prog) = &flags.use_compress_program {
-        return Err(Error::Config(format!(
-            "external compress program is not implemented yet: {}",
-            prog.display()
-        )));
-    }
-
     let mut chosen = None;
     let mut pick = |name: &str, format: CompressionFormat| -> Result<()> {
         if chosen.is_some() {
@@ -358,11 +381,8 @@ pub fn resolve_user_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
-fn default_extract_work_dir(archive_path: &Path) -> PathBuf {
-    let parent = archive_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+/// Archive basename with compound compression / `.tar` suffixes stripped.
+pub fn archive_stem(archive_path: &Path) -> String {
     let name = archive_path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -380,6 +400,42 @@ fn default_work_dir(archive_path: &Path) -> PathBuf {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "archive".into());
     parent.join(format!(".{name}.work"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn archive_stem_strips_compound_suffixes() {
+        assert_eq!(archive_stem(Path::new("backup.tar.gz")), "backup");
+        assert_eq!(archive_stem(Path::new("/tmp/x.tar.xz")), "x");
+        assert_eq!(archive_stem(Path::new("a.tgz")), "a");
+        assert_eq!(archive_stem(Path::new("n.tar")), "n");
+    }
+
+    #[test]
+    fn default_dirs_use_astage_estage() {
+        let arch = Path::new("/data/foo.tar.gz");
+        assert_eq!(default_work_dir(arch), PathBuf::from("/data/foo.astage"));
+        assert_eq!(
+            default_extract_work_dir(arch, Path::new("/out"), ExtractStageLocation::BesideArchive),
+            PathBuf::from("/data/foo.estage")
+        );
+        assert_eq!(
+            default_extract_work_dir(arch, Path::new("/out/tree"), ExtractStageLocation::BesideOutput),
+            PathBuf::from("/out/foo.estage")
+        );
+    }
+
+    #[test]
+    fn path_parent_keeps_filesystem_root() {
+        assert_eq!(path_parent(Path::new("/foo.tar.gz")), Path::new("/"));
+        assert_eq!(path_parent(Path::new("/")), Path::new("/"));
+        assert_eq!(path_parent(Path::new("foo.tar.gz")), Path::new("."));
+        assert_eq!(path_parent(Path::new("/data/foo.tar.gz")), Path::new("/data"));
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
