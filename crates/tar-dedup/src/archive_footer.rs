@@ -41,8 +41,27 @@ pub fn write_footer(archive_path: &Path, sqlite_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// True when `archive_path` exists and carries a valid seekable sqlite footer.
+pub fn has_valid_footer(archive_path: &Path) -> bool {
+    if !archive_path.is_file() {
+        return false;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!(
+        "tar-dedup-footer-check-{}-{nanos}.sqlite",
+        std::process::id()
+    ));
+    let ok = read_footer(archive_path, &tmp).is_ok();
+    let _ = std::fs::remove_file(&tmp);
+    ok
+}
+
 /// Extract the footer sqlite to `dest` if a valid footer is present.
 pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
+    // Get file length and check if it's long enough for valid footer.
     let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
     let len = file
         .metadata()
@@ -57,6 +76,7 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
+    // Read the offset and sanity check size.
     file.seek(SeekFrom::End(-8))
         .map_err(|e| Error::io(archive_path, e))?;
     let mut off_buf = [0u8; 8];
@@ -70,6 +90,7 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
+    // Check for the presence of the magic string
     file.seek(SeekFrom::Start(offset))
         .map_err(|e| Error::io(archive_path, e))?;
     let mut magic = vec![0u8; FOOTER_MAGIC.len()];
@@ -82,6 +103,7 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
+    // Lift db
     let db_len = len
         .checked_sub(offset + magic_len + 20 + magic_len + 8)
         .ok_or_else(|| Error::Config("footer size underflow".into()))?;
@@ -89,6 +111,7 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
     file.read_exact(&mut db_bytes)
         .map_err(|e| Error::io(archive_path, e))?;
 
+    // Check hash of db
     let mut digest = [0u8; 20];
     file.read_exact(&mut digest)
         .map_err(|e| Error::io(archive_path, e))?;
@@ -100,6 +123,7 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
+    // Check second footer
     file.read_exact(&mut magic)
         .map_err(|e| Error::io(archive_path, e))?;
     if magic != FOOTER_MAGIC {
@@ -109,6 +133,7 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
+    // Write DB to file
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
     }
