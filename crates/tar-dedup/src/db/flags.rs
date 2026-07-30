@@ -21,8 +21,10 @@ pub enum FileFlag {
     ErrorWhileDedup = 4,
     /// Sparse copy failed (permissions, IO, …). Sticky.
     ErrorWhileSparsify = 5,
-    /// Payload was written into the current open archive session (not finalized yet).
-    /// Cleared when the session finalizes (phase → archived) or after abort/truncate.
+    /// Payload was written into an archive session.
+    /// Set on successful `append_path`. Left standing when the session finalizes
+    /// (`phase` → `archived`). Cleared only on abort/truncate for rows that are
+    /// still not `archived` (incomplete session rewrite).
     AppendedPath = 6,
     /// `append_path` failed during the archive process.
     ErrorWhileArchive = 7,
