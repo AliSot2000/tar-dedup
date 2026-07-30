@@ -95,7 +95,7 @@ Compression Algo extractions:
   None
 
 # tar-dedup specials
-- `` `--bridge` perform deduplication + link back into place
+- `?` `--bridge` perform deduplication + link back into place
 - `?` `--eager-filter` perform the entire filter in the database before hash rather than after 
 - `?` `--sparsify <opt num>` make files sparse prior to encoding. If num, 
 - `?` `--block-size` file system page size (usually 4kib). Determines granularity of 
@@ -104,6 +104,8 @@ Compression Algo extractions:
 - `?` `--no-dup-shell-out` if no duplicates are detected, shell out to regular tar or use tar-dedup tar compression (sorted by file type could still yield better compression.)
 - `-O` `--to-stdout` extract files to standard output
 - `?` `--retry-missing-sha` attempt to add files to tar even if they have no sha -> likely errored out.
+- `?` `--link-in-place` rebuild the directory tree with symlinks and leave a stage directory (at some determinable location to )
+- `?` `--link-type` when `--link-in-place` is provided, specify if hard or soft links are desired.
 
 # Filesystem Nodes supported
 - Regular File
