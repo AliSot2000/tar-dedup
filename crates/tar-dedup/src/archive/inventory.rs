@@ -8,14 +8,14 @@ use walkdir::WalkDir;
 use crate::common::files::{get_file_times, original_extension};
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::Config;
-use crate::db::types::{FileType, LinkType, NewFileRecord};
 use crate::db::Database;
+use crate::db::types::{FileType, LinkType, NewFileRecord};
 use crate::error::{FileStatError, Result};
 use crate::progress::CountProgress;
 use crate::shutdown::Shutdown;
 use std::collections::HashSet;
-use std::{fs, io};
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use crate::db::types::FileType::File;
 use path_clean::PathClean;
