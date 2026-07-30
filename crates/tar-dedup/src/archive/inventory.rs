@@ -17,7 +17,6 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use crate::db::types::FileType::File;
 use path_clean::PathClean;
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
