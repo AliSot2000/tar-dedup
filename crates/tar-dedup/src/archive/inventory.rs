@@ -53,7 +53,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let ftype = strip_transpose(path, determine_file_type(&entry), &mut enc_err);
         let mode = file_mode(&meta);
 
-        let link_dst: Option<PathBuf> = if matches!(ftype, FileType::Symlink(_)) {
+        let link_dst: Option<PathBuf> = if matches!(ftype, Some(FileType::Symlink(_))) {
             strip_transpose(path, fs::read_link(path), &mut enc_err)
         } else {
             None
