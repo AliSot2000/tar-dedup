@@ -77,7 +77,7 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
         let name_content = crate::db::content_id::parse_content_id(&basename)
             .expect("Members of tar archive must have name matching the content_id format");
 
-        let (sha1, file_size, file_id, file_ext) = name_content;
+        let (_, _, file_id, _) = name_content;
 
         // TODO: Update file to extracted
         // TODO: Update children of file to extracted
