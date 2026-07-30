@@ -153,7 +153,7 @@ fn recover_incomplete_session(config: &Config, db: &Database) -> Result<()> {
     };
 
     truncate_archive_at(&config.archive_path, open_session.archive_offset)?;
-    db.abort_incomplete_archive_session(&config.archive_path, &open_session)?;
+    db.abort_incomplete_archive_session(&open_session)?;
 
     eprintln!(
         "recovered incomplete archive session at offset {} ({})",
