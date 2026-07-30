@@ -78,7 +78,6 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
         progress.set_file("archive", &record.rel_path);
 
-        // TODO deal with the error by continuing.
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
             Ok(()) => db.set_flag(record.id, FileFlag::AppendedPath, true)?,
             Err(e) if e.is_interrupted() => {
@@ -86,7 +85,15 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
                 final_archive = false;
                 break;
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                tracing::error!(
+                    path = record.rel_path.display(),
+                    error = e,
+                    "archive append_path failed; marking ErrorWhileArchive and continuing"
+                );
+                db.set_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
+                // Do not set AppendedPath — member was not successfully written.
+            }
         }
     }
 
