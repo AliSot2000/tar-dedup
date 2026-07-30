@@ -7,51 +7,72 @@ mod inventory;
 mod sparsify;
 mod stage;
 mod tar_writer;
-mod cleanup;
 
-use std::fs::{self, OpenOptions};
+use std::fs::OpenOptions;
 
 use fs4::fs_std::FileExt;
 
+use crate::archive_footer;
+use crate::common::cleanup::{self, CleanupMode};
+use crate::common::start::{
+    resolve_start, ProductPresence, StartAction, StartPolicy, WorkPresence,
+};
 use crate::config::{Config, PipelinePhase, RuntimeState};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
 pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
-    let _lock = acquire_workdir_lock(&config)?;
+    let product = if archive_footer::has_valid_footer(&config.archive_path) {
+        ProductPresence::Finished
+    } else {
+        ProductPresence::Absent
+    };
 
-    let db = Database::open(&config.db_path())?;
-    let saved = db.load_runtime_state()?;
-
-    if let Some(state) = saved.as_ref() {
-        if state.phase == PipelinePhase::Done && !config.fresh {
-            eprintln!(
-                "archive already complete: {}",
-                config.archive_path.display()
-            );
-            return Ok(());
-        }
+    if config.start_policy == StartPolicy::Fresh {
+        let _ = cleanup::reset_workdir(&config);
+        std::fs::create_dir_all(&config.work_dir).map_err(|e| Error::io(&config.work_dir, e))?;
     }
 
-    let mut state = if config.fresh {
-        let state = RuntimeState::new(config.jobs);
-        db.save_runtime_state(&state)?;
-        state
-    } else if should_resume(saved.as_ref()) {
-        let mut state = saved.expect("checked above");
-        eprintln!("resuming from phase `{}`", state.phase.as_str());
-        state.max_workers = config.jobs;
-        db.save_runtime_state(&state)?;
-        state
-    } else if config.resume {
-        return Err(Error::Config(
-            "no saved state to resume in work directory (omit --resume or use --fresh)".into(),
-        ));
+    let lock = acquire_workdir_lock(&config)?;
+
+    let db_path = config.db_path();
+    let work = if db_path.is_file() {
+        let probe = Database::open(&db_path)?;
+        match probe.load_runtime_state()? {
+            Some(state) if state.phase != PipelinePhase::Done => WorkPresence::Incomplete,
+            _ => WorkPresence::Absent,
+        }
     } else {
-        let state = RuntimeState::new(config.jobs);
-        db.save_runtime_state(&state)?;
-        state
+        WorkPresence::Absent
+    };
+
+    let action = resolve_start(config.start_policy, work, product)?;
+    if action == StartAction::AlreadyDone {
+        eprintln!(
+            "archive already complete: {}",
+            config.archive_path.display()
+        );
+        return Ok(());
+    }
+
+    let db = Database::open(&db_path)?;
+    let saved = db.load_runtime_state()?;
+
+    let mut state = match action {
+        StartAction::Resume => {
+            let mut state = saved.expect("incomplete work checked above");
+            eprintln!("resuming from phase `{}`", state.phase.as_str());
+            state.max_workers = config.jobs;
+            db.save_runtime_state(&state)?;
+            state
+        }
+        StartAction::RunFresh => {
+            let state = RuntimeState::new(config.jobs);
+            db.save_runtime_state(&state)?;
+            state
+        }
+        StartAction::AlreadyDone => unreachable!(),
     };
 
     while state.phase != PipelinePhase::Done {
@@ -99,57 +120,27 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
         }
     }
 
+    drop(db);
+    drop(lock);
+
     eprintln!("archive written to {}", config.archive_path.display());
 
-    if config.exit_after_stage == Some(crate::config::ExitAfterStage::Cleanup) {
-        if !config.keep_stage {
-            cleanup_workdir(&config)?;
-            eprintln!("exit-after-stage `cleanup`: work directory removed");
-        } else {
-            eprintln!(
-                "exit-after-stage `cleanup`: keeping work dir (--keep-stage): {}",
-                config.work_dir.display()
-            );
-        }
-        return Ok(());
-    }
-
-    if !config.keep_stage {
-        cleanup_workdir(&config)?;
-    } else {
+    cleanup::cleanup_workdir(&config, CleanupMode::Archive)?;
+    if config.cleanup.keep_stage {
         eprintln!(
-            "keeping work dir (--keep-stage): {}",
+            "keeping stage (--keep-stage): {}",
             config.work_dir.display()
         );
     }
+    if config.exit_after_stage == Some(crate::config::ExitAfterStage::Cleanup) {
+        eprintln!("exit-after-stage `cleanup`: finished");
+    }
 
-    Ok(())
-}
-
-fn should_resume(saved: Option<&RuntimeState>) -> bool {
-    match saved {
-        Some(state) => state.phase != PipelinePhase::Done,
-        None => false,
-    }
-}
-
-fn cleanup_workdir(config: &Config) -> Result<()> {
-    let stage = config.stage_dir();
-    if stage.is_dir() {
-        fs::remove_dir_all(&stage).map_err(|e| Error::io(&stage, e))?;
-    }
-    let db_path = config.db_path();
-    if db_path.is_file() {
-        fs::remove_file(&db_path).map_err(|e| Error::io(&db_path, e))?;
-    }
-    let lock = config.work_dir.join(".lock");
-    if lock.is_file() {
-        let _ = fs::remove_file(&lock);
-    }
     Ok(())
 }
 
 fn acquire_workdir_lock(config: &Config) -> Result<std::fs::File> {
+    std::fs::create_dir_all(&config.work_dir).map_err(|e| Error::io(&config.work_dir, e))?;
     let lock_path = config.work_dir.join(".lock");
     let lock = OpenOptions::new()
         .create(true)
