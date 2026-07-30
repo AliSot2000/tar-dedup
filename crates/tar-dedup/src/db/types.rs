@@ -36,7 +36,7 @@ pub struct FileRecord {
     pub posix_acl: Option<String>,
     #[allow(dead_code)]
     pub selinux_ctx: Option<Vec<u8>>,
-    #[allow(dead_code)]
+    pub link_dst: Option<PathBuf>,
     pub exclusion_id: Option<ExclusionId>,
     #[allow(dead_code)]
     pub canonical_id: Option<FileId>,
@@ -76,6 +76,7 @@ pub struct NewFileRecord {
     pub xattrs: Option<String>,
     pub posix_acl: Option<String>,
     pub selinux_ctx: Option<Vec<u8>>,
+    pub link_dst: Option<PathBuf>,
 }
 
 /// Enum represents all possible targets a symlink can have. `Unknown` is for dangling links that

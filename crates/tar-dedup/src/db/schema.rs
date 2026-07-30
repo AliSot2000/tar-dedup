@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS files (
     xattr         TEXT,
     acl           TEXT,
     selinux       BLOB,
+    link_dst      TEXT,
 
     -- Internal Stuff
     sparse_count  INTEGER,

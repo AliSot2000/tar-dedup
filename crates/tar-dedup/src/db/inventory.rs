@@ -12,10 +12,10 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
     let changed = conn.execute(
         "INSERT OR IGNORE INTO files (
              rel_path, ext, size, mtime, atime, ctime, uid, gid, mode, ftype,
-             xattr, acl, selinux, phase
+             xattr, acl, selinux, phase, link_dst
          ) VALUES (
              :rel_path, :ext, :size, :mtime, :atime, :ctime, :uid, :gid, :mode, :ftype,
-             :xattr, :acl, :selinux, 'inventoried'
+             :xattr, :acl, :selinux, 'inventoried', :link_dst
          )",
         named_params! {
             ":rel_path": record.rel_path.to_string_lossy(),
@@ -31,6 +31,7 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
             ":xattr": record.xattrs.as_deref(),
             ":acl": record.posix_acl.as_deref(),
             ":selinux": record.selinux_ctx.as_deref(),
+            ":link_dst": record.link_dst.unwrap().to_string_lossy(),
         },
     )?;
     Ok(changed > 0)
