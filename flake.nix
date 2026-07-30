@@ -52,7 +52,11 @@
         # bindgen needs this to dlopen libclang at build time
         LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
+        # tells bindgen's clang instance where glibc headers actually live
+        BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.glibc.dev}/include";
+
         shellHook = ''
+          export PATH="${rust}/bin:$PATH"
           echo "🦀 tar-dedup dev shell — $(rustc --version)"
         '';
       };
