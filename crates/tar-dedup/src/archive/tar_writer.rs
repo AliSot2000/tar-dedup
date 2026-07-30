@@ -144,8 +144,8 @@ fn check_archive_bytes_out(db: &Database, archive_len: u64) -> Result<()> {
 }
 
 /// Truncate archive to the incomplete session's start offset, mark session aborted,
-/// and clear [`crate::db::flags::FileFlag::AppendedPath`].
-/// Prior finalized sessions (and their archived files) stay intact.
+/// and clear [`FileFlag::AppendedPath`] on non-`archived` rows only.
+/// Prior finalized sessions (and their archived files, including sticky `AppendedPath`) stay intact.
 fn recover_incomplete_session(config: &Config, db: &Database) -> Result<()> {
     let open_session = match db.open_archive_session()? {
         None => return Ok(()),
