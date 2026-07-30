@@ -1,8 +1,5 @@
-use std::fs::OpenOptions;
-use std::path::Path;
-
 use chrono::Utc;
-use rusqlite::{named_params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, named_params};
 
 use crate::db::common::{get_meta, upsert_meta};
 use crate::db::flags::FileFlag;
