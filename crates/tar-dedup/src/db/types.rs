@@ -22,23 +22,15 @@ pub struct FileRecord {
     pub mtime: Option<DateTime<Utc>>,
     pub atime: Option<DateTime<Utc>>,
     pub ctime: Option<DateTime<Utc>>,
-    #[allow(dead_code)]
     pub uid: Option<u32>,
-    #[allow(dead_code)]
     pub gid: Option<u32>,
-    #[allow(dead_code)]
     pub mode: Option<u32>,
-    #[allow(dead_code)]
     pub ftype: Option<FileType>,
-    #[allow(dead_code)]
     pub xattrs: Option<String>,
-    #[allow(dead_code)]
     pub posix_acl: Option<String>,
-    #[allow(dead_code)]
     pub selinux_ctx: Option<Vec<u8>>,
     pub link_dst: Option<PathBuf>,
     pub exclusion_id: Option<ExclusionId>,
-    #[allow(dead_code)]
     pub canonical_id: Option<FileId>,
     pub flags: FileFlags,
     pub phase: FilePhase,
