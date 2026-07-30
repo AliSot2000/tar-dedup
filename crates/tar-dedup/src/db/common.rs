@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{named_params, Connection};
@@ -114,7 +114,9 @@ impl SqlFileRow for FileRecord {
             canonical_id: row.get::<_, Option<i64>>("canonical_id")?.map(FileId),
             flags: FileFlags::from_i64(row.get::<_, i64>("flags")?),
             phase: parse_phase(row)?,
-            link_dst: row.get::<_, String>("link_dst")?.into()
+            link_dst: row
+                .get::<_, Option<String>>("link_dst")?
+                .map(PathBuf::from),
         })
     }
 
