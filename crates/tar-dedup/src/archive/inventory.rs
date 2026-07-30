@@ -14,7 +14,7 @@ use crate::error::{FileStatError, Result};
 use crate::progress::CountProgress;
 use crate::shutdown::Shutdown;
 use std::collections::HashSet;
-use std::io;
+use std::{fs, io};
 use std::path::{Path, PathBuf};
 
 use crate::db::types::FileType::File;
@@ -53,8 +53,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let ftype = strip_transpose(path, determine_file_type(&entry), &mut enc_err);
         let mode = file_mode(&meta);
 
-        // TODO: Need to capture link target
-
+        let link_dst: Option<PathBuf> = if matches!(ftype, FileType::Symlink(_)) {
+            strip_transpose(path, fs::read_link(path), &mut enc_err)
+        } else {
+            None
+        };
+        
         // Optional data
         let xattrs = if config.do_xattrs {
             match get_file_xattr(path) {
@@ -89,6 +93,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             xattrs,
             posix_acl,
             selinux_ctx,
+            link_dst,
         })? {
             inserted += 1;
             progress.inc(1);
