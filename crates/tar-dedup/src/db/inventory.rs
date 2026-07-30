@@ -31,7 +31,10 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
             ":xattr": record.xattrs.as_deref(),
             ":acl": record.posix_acl.as_deref(),
             ":selinux": record.selinux_ctx.as_deref(),
-            ":link_dst": record.link_dst.unwrap().to_string_lossy(),
+            ":link_dst": record
+                .link_dst
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
         },
     )?;
     Ok(changed > 0)
