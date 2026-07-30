@@ -387,19 +387,66 @@ pub fn archive_stem(archive_path: &Path) -> String {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "archive".into());
-    parent.join(format!(".{name}.extract.work"))
+    let lower = name.to_ascii_lowercase();
+    let strip_len = if lower.ends_with(".tar.xz") {
+        ".tar.xz".len()
+    } else if lower.ends_with(".tar.gz") {
+        ".tar.gz".len()
+    } else if lower.ends_with(".tar.bz2") {
+        ".tar.bz2".len()
+    } else if lower.ends_with(".tar.zst") {
+        ".tar.zst".len()
+    } else if lower.ends_with(".txz") {
+        ".txz".len()
+    } else if lower.ends_with(".tgz") {
+        ".tgz".len()
+    } else if lower.ends_with(".tbz2") {
+        ".tbz2".len()
+    } else if lower.ends_with(".tbz") {
+        ".tbz".len()
+    } else if lower.ends_with(".tzst") {
+        ".tzst".len()
+    } else if lower.ends_with(".tar") {
+        ".tar".len()
+    } else {
+        // Fall back to file_stem behavior for unknown suffixes.
+        return archive_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or(name);
+    };
+    name[..name.len() - strip_len].to_string()
+}
+
+/// Parent directory for placing siblings of `path`.
+///
+/// - `/data/foo.tar.gz` → `/data`
+/// - `/foo.tar.gz` → `/`
+/// - `/` → `/`
+/// - `foo.tar.gz` (relative) → `.`
+pub(crate) fn path_parent(path: &Path) -> &Path {
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        // `Path::parent` of `/` (and similar) yields `Some("")`; keep the root.
+        Some(_) if path.has_root() => Path::new("/"),
+        _ => Path::new("."),
+    }
+}
+
+fn default_extract_work_dir(
+    archive_path: &Path,
+    output_dir: &Path,
+    location: ExtractStageLocation,
+) -> PathBuf {
+    let parent = match location {
+        ExtractStageLocation::BesideArchive => path_parent(archive_path),
+        ExtractStageLocation::BesideOutput => path_parent(output_dir),
+    };
+    parent.join(format!("{}.estage", archive_stem(archive_path)))
 }
 
 fn default_work_dir(archive_path: &Path) -> PathBuf {
-    let parent = archive_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let name = archive_path
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "archive".into());
-    parent.join(format!(".{name}.work"))
+    path_parent(archive_path).join(format!("{}.astage", archive_stem(archive_path)))
 }
 
 #[cfg(test)]
