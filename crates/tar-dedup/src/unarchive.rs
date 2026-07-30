@@ -1,6 +1,5 @@
 //! Unarchive (extract) pipeline: scan → rehash → place → permissions → cleanup.
 
-mod cleanup;
 mod permissions;
 mod place;
 mod rehash;
@@ -8,25 +7,42 @@ mod scan;
 
 use std::path::Path;
 
+use crate::common::cleanup::{self, CleanupMode};
+use crate::common::start::{
+    resolve_start, ProductPresence, StartAction, StartPolicy, WorkPresence,
+};
 use crate::config::{Config, ExtractPipelinePhase, ExtractRuntimeState};
 use crate::db::Database;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
 pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
-    if config.fresh {
-        cleanup::reset_extract_work(&config)?;
+    // Extract never short-circuits on “already extracted”.
+    let product = ProductPresence::Absent;
+
+    if config.start_policy == StartPolicy::Fresh {
+        let _ = cleanup::reset_workdir(&config);
     }
+    std::fs::create_dir_all(&config.work_dir).map_err(|e| Error::io(&config.work_dir, e))?;
 
     let db_path = config.db_path();
     let mut state = load_extract_state(&db_path)?;
 
-    if state.phase == ExtractPipelinePhase::Done {
-        eprintln!(
-            "extract already complete: {}",
-            config.output_dir.display()
-        );
-        return Ok(());
+    let work = if db_path.is_file() && state.phase != ExtractPipelinePhase::Done {
+        WorkPresence::Incomplete
+    } else {
+        WorkPresence::Absent
+    };
+
+    let action = resolve_start(config.start_policy, work, product)?;
+    match action {
+        StartAction::RunFresh => {
+            state = ExtractRuntimeState::new();
+        }
+        StartAction::Resume => {
+            eprintln!("resuming extract from phase `{}`", state.phase.as_str());
+        }
+        StartAction::AlreadyDone => unreachable!("extract product is always Absent"),
     }
 
     while state.phase != ExtractPipelinePhase::Done {
@@ -52,7 +68,20 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
                 permissions::run(&config, &db, &shutdown)?;
             }
             ExtractPipelinePhase::Cleanup => {
-                cleanup::run(&config)?;
+                // Persist Done before deleting / relocating the DB.
+                state.phase = ExtractPipelinePhase::Done;
+                {
+                    let db = Database::open(&db_path)?;
+                    db.save_extract_runtime_state(&state)?;
+                }
+                cleanup::cleanup_workdir(&config, CleanupMode::Extract)?;
+                if config.cleanup.keep_stage {
+                    eprintln!(
+                        "keeping stage (--keep-stage): {}",
+                        config.work_dir.display()
+                    );
+                }
+                break;
             }
             ExtractPipelinePhase::Done => break,
         }
