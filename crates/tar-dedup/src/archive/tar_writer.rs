@@ -91,8 +91,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             }
             Err(e) => {
                 tracing::error!(
-                    path = &record.rel_path.to_string_lossy(),
-                    error = e,
+                    path = %record.rel_path.to_string_lossy(),
+                    error = %e,
                     "archive append_path failed; marking ErrorWhileArchive and continuing"
                 );
                 db.set_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
