@@ -210,7 +210,6 @@ impl Database {
 
     pub fn abort_incomplete_archive_session(
         &self,
-        path: &Path,
         session: &ArchiveSession,
     ) -> Result<()> {
         tar_writer::abort_incomplete_session(&self.conn, session)
