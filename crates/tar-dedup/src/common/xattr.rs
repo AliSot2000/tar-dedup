@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::from_str as serdej_from_str;
 use std::collections::HashMap;
 use std::ffi::{CString, OsStr};
-use std::fmt::Display;
 use std::io;
 use std::path::Path;
 use thiserror::Error;
