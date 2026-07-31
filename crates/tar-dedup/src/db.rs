@@ -311,10 +311,6 @@ impl Database {
         extract::list_files_to_restore(&self.conn)
     }
 
-    // pub fn tar_member_path(&self, record: &FileRecord) -> Result<String> {
-    //     extract::tar_member_path(&self.conn, record)
-    // }
-
     pub fn init_extract_runtime_state(&self) -> Result<()> {
         extract::init_extract_runtime_state(&self.conn)
     }
