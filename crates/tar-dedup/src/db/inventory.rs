@@ -76,28 +76,6 @@ pub fn list_files_in_phase<R: SqlFileRow>(
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
-// pub fn get_file_by_tar_path(conn: &Connection, tar_path: &str) -> Result<Option<FileRecord>> {
-//     let mut stmt = conn.prepare(&format!(
-//         "SELECT {FILES_SELECT} FROM files WHERE tar_path = :tar_path LIMIT 1"
-//     ))?;
-//     let mut rows = stmt.query(named_params! { ":tar_path": tar_path })?;
-//     if let Some(row) = rows.next()? {
-//         return Ok(Some(map_file_record(row)?));
-//     }
-//     Ok(None)
-// }
-
-// pub fn set_tar_path(conn: &Connection, file_id: FileId, tar_path: &str) -> Result<()> {
-//     conn.execute(
-//         "UPDATE files SET tar_path = :tar_path WHERE id = :id",
-//         named_params! {
-//             ":tar_path": tar_path,
-//             ":id": file_id.0,
-//         },
-//     )?;
-//     Ok(())
-// }
-
 pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
     conn.execute(
         "UPDATE files SET phase = :phase WHERE id = :id",
