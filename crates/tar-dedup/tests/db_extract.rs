@@ -23,7 +23,7 @@ fn install_initial_manifest_copies_embedded_snapshot() {
 #[test]
 fn promote_cached_tar_member_marks_canonical_and_duplicates_unarchived() {
     let (_dir, db) = common::open_temp_db();
-    common::seed_canonical_and_duplicate(
+    let (canonical_id, _) = common::seed_canonical_and_duplicate(
         &db,
         "canonical.txt",
         "duplicate.txt",
@@ -31,9 +31,8 @@ fn promote_cached_tar_member_marks_canonical_and_duplicates_unarchived() {
         FilePhase::Archived,
     );
 
-    // TODO use newer method 
-    // db.promote_cached_tar_member("member-id")
-    //     .expect("promote cached member");
+    db.promote_cached_tar_member(canonical_id, false)
+        .expect("promote cached member");
 
     for record in db
         .files_in_phase::<FileRecord>(FilePhase::Unarchived)
@@ -50,18 +49,39 @@ fn promote_cached_tar_member_marks_canonical_and_duplicates_unarchived() {
 }
 
 #[test]
-fn apply_snapshot_archived_flags_confirms_catalog_without_blocking_restore() {
-    let (dir, db) = common::open_temp_db();
-    common::seed_canonical_and_duplicate(
+fn promote_cached_tar_member_with_footer_sets_snapshot_archived() {
+    let (_dir, db) = common::open_temp_db();
+    let (canonical_id, _) = common::seed_canonical_and_duplicate(
         &db,
         "canonical.txt",
         "duplicate.txt",
         "member-id",
         FilePhase::Archived,
     );
-    // Fixme: Use the newer function for this prupose
-    // db.promote_cached_tar_member("member-id")
-    //     .expect("promote cached member");
+
+    db.promote_cached_tar_member(canonical_id, true)
+        .expect("promote with footer trust");
+
+    for record in db
+        .files_in_phase::<FileRecord>(FilePhase::Unarchived)
+        .expect("list")
+    {
+        assert!(record.flags.get(FileFlag::SnapshotArchived));
+    }
+}
+
+#[test]
+fn apply_snapshot_archived_flags_confirms_catalog_without_blocking_restore() {
+    let (dir, db) = common::open_temp_db();
+    let (canonical_id, _) = common::seed_canonical_and_duplicate(
+        &db,
+        "canonical.txt",
+        "duplicate.txt",
+        "member-id",
+        FilePhase::Archived,
+    );
+    db.promote_cached_tar_member(canonical_id, false)
+        .expect("promote cached member");
 
     let snapshot_path = dir.path().join("progress.sqlite");
     common::write_archived_snapshot(&snapshot_path, &["canonical.txt"]);
