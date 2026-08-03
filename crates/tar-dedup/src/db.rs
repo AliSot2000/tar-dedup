@@ -63,6 +63,10 @@ impl Database {
         inventory::mark_phase(&self.conn, file_id, phase)
     }
 
+    pub fn resolve_numeric_ids(&self) -> Result<()> {
+        inventory::resolve_numeric_ids(&self.conn)
+    }
+
     pub fn get_flags(&self, file_id: FileId) -> Result<FileFlags> {
         flags::get_flags(&self.conn, file_id)
     }
