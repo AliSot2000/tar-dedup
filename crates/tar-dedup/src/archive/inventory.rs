@@ -98,7 +98,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             progress.inc(1);
         }
     }
-
+    db.resolve_numeric_ids()?;
     progress.finish("inventory complete");
     tracing::info!(inserted, total = db.count_files()?, "inventory indexed");
     Ok(())

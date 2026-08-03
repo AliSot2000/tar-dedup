@@ -175,7 +175,7 @@ fn set_gname_from_gid(conn: &Connection, gid: &u32, gname: &str) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
+pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
     // Get all present uids and gids
     let uids = get_all_uids(&conn)?;
     let gids = get_all_gids(&conn)?;
