@@ -225,7 +225,8 @@ pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
+pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
+    // TODO Emmit to tracing, stderr
     Err("Resolve Numeric Ids not available on this platform")
 }
 
