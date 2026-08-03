@@ -28,6 +28,7 @@ pub fn insert_file(db: &Database, rel_path: &str, size: u64) -> FileId {
         xattrs: None,
         posix_acl: None,
         selinux_ctx: None,
+        link_dst: None,
     })
     .expect("insert file");
 
@@ -44,7 +45,7 @@ pub fn seed_canonical_and_duplicate(
     db: &Database,
     canonical_rel: &str,
     duplicate_rel: &str,
-    tar_path: &str,
+    _tar_path: &str,
     phase: FilePhase,
 ) -> (FileId, FileId) {
     let canonical_id = insert_file(db, canonical_rel, 10);
