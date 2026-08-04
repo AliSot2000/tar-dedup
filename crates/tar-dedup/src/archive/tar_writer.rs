@@ -257,6 +257,7 @@ fn end_session(
             db.set_archive_bytes_out(bytes_out)?;
 
             if write_tar_eof && config.write_archive_footer {
+                // TODO promote all entries to snapshotARchived flag
                 db.checkpoint()?;
                 archive_footer::write_footer(&config.archive_path, &config.db_path())?;
             }
