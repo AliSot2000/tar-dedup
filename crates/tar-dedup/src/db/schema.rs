@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 -- Placeholder at the moment will be fully populated when filter stage is designed
 CREATE TABLE IF NOT EXISTS exclusion_reasons (
-    id     INTEGER PRIMARY KEY,
+    id     INTEGER PRIMARY KEY
 );
 
 CREATE TABLE IF NOT EXISTS files (
