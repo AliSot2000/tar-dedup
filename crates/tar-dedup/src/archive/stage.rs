@@ -10,7 +10,7 @@ use std::os::unix::fs::symlink;
 
 use crate::shutdown::Shutdown;
 
-const EXPECTED_SHA: &str = "stage: Expected only canonical files. \
+const EXPECTED_CANONICAL: &str = "stage: Expected only canonical files. \
                             Got wrong file type or non-canonical file";
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
@@ -27,14 +27,14 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         
         // Determine the Source
         let source_path = if record.flags.get(FileFlag::HasSparse) {
-            let sparse_name = record.sparse_member_name().expect(EXPECTED_SHA);
+            let sparse_name = record.sparse_member_name().expect(EXPECTED_CANONICAL);
             config.stage_dir().join(sparse_name).clean()
         } else {
             config.input_dir.join(&record.rel_path).clean()
         };
 
         // Determine the Destination
-        let tar_name = record.tar_member_name().expect(EXPECTED_SHA);
+        let tar_name = record.tar_member_name().expect(EXPECTED_CANONICAL);
         warn_if_times_changed(
             &source_path,
             record.mtime,
