@@ -112,7 +112,6 @@ impl TarWriter {
             allow_tar_eof: false,
         };
         // TODO: sparse
-        // TODO: mode
         let mut builder = Builder::new(sink);
         // Stage entries are content-id symlinks; pack the target file bytes.
         builder.follow_symlinks(true);
