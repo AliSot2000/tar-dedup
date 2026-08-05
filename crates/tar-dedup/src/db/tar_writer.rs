@@ -1,13 +1,10 @@
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, named_params};
 
-use crate::db::common::{get_meta, upsert_meta};
 use crate::db::flags::FileFlag;
+use crate::db::meta;
 use crate::db::types::{ArchiveSession, FileId};
-use crate::error::{Error, Result};
-
-const META_BYTES_IN: &str = "archive_bytes_in";
-const META_BYTES_OUT: &str = "archive_bytes_out";
+use crate::error::Result;
 
 /// `archive_sessions.finalized` values.
 pub mod session_status {
@@ -260,32 +257,17 @@ pub fn clear_archive_session_pending(conn: &Connection) -> Result<u64> {
 }
 
 pub fn get_archive_bytes_in(conn: &Connection) -> Result<u64> {
-    parse_meta_u64(conn, META_BYTES_IN)
+    Ok(meta::get_tar_writer_bytes_in(conn)?.unwrap_or(0))
 }
 
 pub fn get_archive_bytes_out(conn: &Connection) -> Result<Option<u64>> {
-    match get_meta(conn, META_BYTES_OUT)? {
-        None => Ok(None),
-        Some(s) => s
-            .parse::<u64>()
-            .map(Some)
-            .map_err(|e| Error::Config(format!("invalid meta {META_BYTES_OUT}: {e}"))),
-    }
+    meta::get_tar_writer_bytes_out(conn)
 }
 
 pub fn set_archive_bytes_in(conn: &Connection, value: u64) -> Result<()> {
-    upsert_meta(conn, META_BYTES_IN, &value.to_string())
+    meta::set_tar_writer_bytes_in(conn, value)
 }
 
 pub fn set_archive_bytes_out(conn: &Connection, value: u64) -> Result<()> {
-    upsert_meta(conn, META_BYTES_OUT, &value.to_string())
-}
-
-fn parse_meta_u64(conn: &Connection, key: &str) -> Result<u64> {
-    match get_meta(conn, key)? {
-        None => Ok(0),
-        Some(s) => s
-            .parse::<u64>()
-            .map_err(|e| Error::Config(format!("invalid meta {key}: {e}"))),
-    }
+    meta::set_tar_writer_bytes_out(conn, value)
 }
