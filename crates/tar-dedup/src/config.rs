@@ -272,7 +272,7 @@ impl Config {
     }
 
     pub fn db_path(&self) -> PathBuf {
-        self.work_dir.join("snapshot.sqlite")
+        self.work_dir.join("tar-dedup.sqlite")
     }
 
     /// Archive payload directory — same as `work_dir` (flat `.astage`).
