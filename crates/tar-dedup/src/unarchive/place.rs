@@ -55,11 +55,11 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 }
 
 pub fn warn_catalog_uncertainty(db: &Database) -> Result<()> {
-    let unconfirmed = db.count_unconfirmed_restored()?;
+    let unconfirmed = db.count_unconfirmed_extracted()?;
     if unconfirmed > 0 {
-        eprintln!(
-            "warning: {unconfirmed} restored file(s) were never listed as `archived` in an \
-             ingested snapshot (archive may be incomplete or interrupted)"
+        tracing::warn!(
+            "{unconfirmed} extracted file(s) were never promoted to `unarchived` \
+             (archive may be incomplete or interrupted)"
         );
     }
     Ok(())
