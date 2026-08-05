@@ -9,6 +9,7 @@ use xz2::read::XzDecoder;
 use crate::config::CompressionFormat;
 use crate::error::{Error, Result};
 
+// TODO Seek capabilities for regular tar stream
 /// Decompressed byte stream for a tar-dedup archive (handles concatenated xz/gzip streams).
 pub fn open_decompressed(path: &Path, format: CompressionFormat) -> Result<Box<dyn Read>> {
     let file = File::open(path).map_err(|e| Error::io(path, e))?;
