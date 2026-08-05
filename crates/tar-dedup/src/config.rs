@@ -441,8 +441,8 @@ pub fn archive_stem(archive_path: &Path) -> String {
 pub(crate) fn path_parent(path: &Path) -> &Path {
     match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
-        // `Path::parent` of `/` (and similar) yields `Some("")`; keep the root.
-        Some(_) if path.has_root() => Path::new("/"),
+        // `Path::parent` of a bare root yields `None`, of `"foo"` yields `Some("")`.
+        _ if path.has_root() => Path::new("/"),
         _ => Path::new("."),
     }
 }
