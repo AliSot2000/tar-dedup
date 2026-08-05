@@ -26,6 +26,12 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
     std::fs::create_dir_all(&config.work_dir).map_err(|e| Error::io(&config.work_dir, e))?;
 
     let db_path = config.db_path();
+    if db_path.is_file() {
+        let db = Database::open(&db_path)?;
+        if config.clear_archive_meta {
+            db.clear_archive_meta()?;
+        }
+    }
     let mut state = load_extract_state(&db_path)?;
 
     let work = if db_path.is_file() && state.phase != ExtractPipelinePhase::Done {
