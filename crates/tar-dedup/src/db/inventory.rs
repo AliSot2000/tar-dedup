@@ -1,9 +1,10 @@
-use std::iter::zip;
 use nix::libc::{gid_t, uid_t};
-use rusqlite::{named_params, Connection, OptionalExtension};
+use rusqlite::{Connection, named_params};
+use std::iter::zip;
 
-use crate::config::{PipelinePhase, RuntimeState};
-use crate::db::common::{upsert_meta, SqlFileRow};
+use crate::config::RuntimeState;
+use crate::db::common::SqlFileRow;
+use crate::db::meta;
 use crate::db::types::{FileId, FilePhase, NewFileRecord};
 use crate::error::Result;
 use nix::unistd::{Gid, Group, Uid, User};
@@ -88,52 +89,30 @@ pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Resul
 }
 
 pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
-    let phase = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = :key",
-            named_params! { ":key": "phase" },
-            |row| row.get::<_, String>("value"),
-        )
-        .optional()?;
-
-    let Some(phase_raw) = phase else {
+    let Some(phase) = meta::get_archive_phase(conn)? else {
         return Ok(None);
     };
-
-    let max_workers: usize = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = :key",
-            named_params! { ":key": "max_workers" },
-            |row| row.get::<_, String>("value"),
-        )?
-        .parse()
-        .map_err(|_| {
-            crate::error::Error::Config("invalid max_workers in meta".into())
-        })?;
-
-    let snapshot_taken_at = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = :key",
-            named_params! { ":key": "snapshot_taken_at" },
-            |row| row.get::<_, String>("value"),
-        )?
-        .parse()
-        .map_err(|_| {
-            crate::error::Error::Config("invalid snapshot_taken_at in meta".into())
-        })?;
+    let max_workers = meta::get_archive_max_workers(conn)?.ok_or_else(|| {
+        crate::error::Error::Config("missing archive_max_workers in meta".into())
+    })?;
+    let snapshot_taken_at = meta::get_archive_snapshot_taken_at(conn)?.ok_or_else(|| {
+        crate::error::Error::Config("missing archive_snapshot_taken_at in meta".into())
+    })?;
 
     Ok(Some(RuntimeState {
         snapshot_taken_at,
-        phase: PipelinePhase::parse(&phase_raw)?,
+        phase,
         max_workers,
     }))
 }
 
 pub fn save_runtime_state(conn: &Connection, state: &RuntimeState) -> Result<()> {
-    upsert_meta(conn, "phase", state.phase.as_str())?;
-    upsert_meta(conn, "snapshot_taken_at", &state.snapshot_taken_at.to_rfc3339())?;
-    upsert_meta(conn, "max_workers", &state.max_workers.to_string())?;
-    Ok(())
+    meta::with_meta_txn(conn, |conn| {
+        meta::set_archive_phase(conn, state.phase)?;
+        meta::set_archive_snapshot_taken_at(conn, state.snapshot_taken_at)?;
+        meta::set_archive_max_workers(conn, state.max_workers)?;
+        Ok(())
+    })
 }
 
 fn get_all_uids(conn: &Connection) -> Result<Vec<u32>> {
