@@ -58,3 +58,28 @@ Note on the returned file. The file is a valid archive with an appended footer. 
 The returned file can be opened by associated compressor or the tar archive. The footer will most likely be ignored 
 by the compression algorithm and the tar stream and the contents can be viewed and used as is. A warning is also 
 possible.
+
+
+### Archive Content
+The tool expects to encounter canonical files or databases. It will refuse to proceed, if it encounters any file that 
+does not match the established contract.
+
+#### Canonical Files
+The tool saves storage by only storing one copy per file cluster. These unique or canonical files have special naming 
+pattern to ensure they can be correctly mapped to the database and the metadata.
+```
+{hash_b64}.{fsize_b64}.{fid_b64}.ext
+```
+All values are encoded using base64 with an url-safe alphabet.
+
+#### Databases
+Besides the files themselves there are at least two but possibly more databases inside the archive. The first file in 
+the archive should always be `manifest.sqlite`. This database is used during decompression to keep track of the files 
+seen in the archive. Every time the archive process was stopped (regardless whether it was because there were no more 
+canonical files to add or because the user sent a graceful interrupt) a `snapshot.sqlite` is added to the database. 
+This `snapshot.sqlite` confirms to the extractor that, up to here, the files marked as `Archived` inside the database
+were added to the archive. Since a rescan of the archive / the removal of the last appended `snapshot.sqlite` is not
+efficiently possible, the tool opts to just add another `snapshot.sqlite` when it halts the next time. This design 
+choice was intentional for data security but with frequent stops and starts of the tool, this will lead to bloat. 
+`snapshot.sqlite` databases have no positional requirements. However, an archive with `manifest.sqlite` not in first 
+position are considered invalid and will not be processed.
