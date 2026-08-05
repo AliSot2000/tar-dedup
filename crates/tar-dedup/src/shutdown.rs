@@ -51,6 +51,18 @@ impl Shutdown {
         Ok(Self { mode })
     }
 
+    /// Handle without signal handlers, for embedding and tests.
+    pub fn detached() -> Self {
+        Self {
+            mode: Arc::new(AtomicU8::new(MODE_RUNNING)),
+        }
+    }
+
+    /// Request a graceful stop (finish in-flight work, stop between files).
+    pub fn request_graceful(&self) {
+        self.mode.store(MODE_GRACEFUL, Ordering::SeqCst);
+    }
+
     pub fn is_force(&self) -> bool {
         self.mode.load(Ordering::SeqCst) == MODE_FORCE
     }
