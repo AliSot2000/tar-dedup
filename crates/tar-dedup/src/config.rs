@@ -591,7 +591,7 @@ impl PipelinePhase {
     }
 }
 
-/// Extract pipeline driver phase (persisted in meta `extract_phase`).
+/// Extract pipeline driver phase (persisted in meta as `extract_phase`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExtractPipelinePhase {
     /// Scan tar stream into cache; ingest snapshot.sqlite copies into the extract work DB.
