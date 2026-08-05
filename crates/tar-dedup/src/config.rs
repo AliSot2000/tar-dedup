@@ -193,7 +193,7 @@ impl Config {
 
         let work_dir = match &args.work_dir {
             Some(path) => resolve_user_path(path)?,
-            None => default_work_dir(&archive_path),
+            None => default_archive_work_dir(&archive_path),
         };
         std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
 
@@ -458,7 +458,7 @@ fn default_extract_work_dir(
     parent.join(format!("{}.estage", archive_stem(archive_path)))
 }
 
-fn default_work_dir(archive_path: &Path) -> PathBuf {
+fn default_archive_work_dir(archive_path: &Path) -> PathBuf {
     path_parent(archive_path).join(format!("{}.astage", archive_stem(archive_path)))
 }
 
@@ -478,7 +478,7 @@ mod tests {
     #[test]
     fn default_dirs_use_astage_estage() {
         let arch = Path::new("/data/foo.tar.gz");
-        assert_eq!(default_work_dir(arch), PathBuf::from("/data/foo.astage"));
+        assert_eq!(default_archive_work_dir(arch), PathBuf::from("/data/foo.astage"));
         assert_eq!(
             default_extract_work_dir(arch, Path::new("/out"), ExtractStageLocation::BesideArchive),
             PathBuf::from("/data/foo.estage")
