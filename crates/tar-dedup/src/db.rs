@@ -19,11 +19,14 @@ mod extract;
 mod filter;
 mod hash;
 mod inventory;
+pub mod meta;
 mod schema;
 mod sparsify;
 pub mod content_id;
 
 pub use common::SqlFileRow;
+pub use extract::ExtractScanState;
+pub use meta::{dump_meta, MetaDump, MetaEntry, MetaKey};
 
 pub struct Database {
     conn: Connection,
@@ -243,6 +246,14 @@ impl Database {
         tar_writer::reset_archive_state(&self.conn)
     }
 
+    pub fn clear_archive_meta(&self) -> Result<()> {
+        meta::clear_archive_meta(&self.conn)
+    }
+
+    pub fn dump_meta(&self) -> Result<meta::MetaDump> {
+        meta::dump_meta(&self.conn)
+    }
+
     pub fn sum_canonical_bytes_to_archive(&self, filter_sha: bool) -> Result<u64> {
         tar_writer::sum_canonical_bytes_to_archive(&self.conn, filter_sha)
     }
@@ -291,12 +302,52 @@ impl Database {
         extract::install_initial_manifest(snapshot_path, db_path)
     }
 
-    pub fn apply_snapshot_archived_flags(&self, snapshot_path: &Path) -> Result<u64> {
-        extract::apply_snapshot_archived_flags(&self.conn, snapshot_path)
+    pub fn normalize_installed_catalog(&self) -> Result<()> {
+        extract::normalize_installed_catalog(&self.conn)
     }
 
-    pub fn count_unconfirmed_restored(&self) -> Result<u64> {
-        extract::count_unconfirmed_restored(&self.conn)
+    pub fn apply_snapshot_promote_unarchived(&self, snapshot_path: &Path) -> Result<u64> {
+        extract::apply_snapshot_promote_unarchived(&self.conn, snapshot_path)
+    }
+
+    pub fn mark_file_extracted(&self, file_id: FileId) -> Result<()> {
+        extract::mark_file_extracted(&self.conn, file_id)
+    }
+
+    pub fn promote_extracted_to_unarchived(&self) -> Result<u64> {
+        extract::promote_extracted_to_unarchived(&self.conn)
+    }
+
+    pub fn flush_cached_payloads(&self, cache_dir: &Path) -> Result<u64> {
+        extract::flush_cached_payloads(&self.conn, cache_dir)
+    }
+
+    pub fn count_missing_payloads(&self) -> Result<u64> {
+        extract::count_missing_payloads(&self.conn)
+    }
+
+    pub fn count_unconfirmed_extracted(&self) -> Result<u64> {
+        extract::count_unconfirmed_extracted(&self.conn)
+    }
+
+    pub fn count_extracted_canonical(&self) -> Result<u64> {
+        extract::count_extracted_canonical(&self.conn)
+    }
+
+    pub fn count_extracted_paths(&self) -> Result<u64> {
+        extract::count_extracted_paths(&self.conn)
+    }
+
+    pub fn count_non_appended_by_ftype(&self) -> Result<Vec<(String, u64)>> {
+        extract::count_non_appended_by_ftype(&self.conn)
+    }
+
+    pub fn load_extract_scan_state(&self) -> Result<extract::ExtractScanState> {
+        extract::load_extract_scan_state(&self.conn)
+    }
+
+    pub fn save_extract_scan_state(&self, state: &extract::ExtractScanState) -> Result<()> {
+        extract::save_extract_scan_state(&self.conn, state)
     }
 
     pub fn load_extract_runtime_state(&self) -> Result<Option<ExtractRuntimeState>> {
