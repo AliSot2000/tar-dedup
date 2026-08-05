@@ -2,6 +2,7 @@
 name = "sparse-cp"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Sparse-aware file copy and zero-block scanner"
 
 [[bin]]
