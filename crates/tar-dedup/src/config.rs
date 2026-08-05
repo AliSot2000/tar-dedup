@@ -381,6 +381,7 @@ pub fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
     } else if name.ends_with(".tar.zst") || name.ends_with(".tzst") {
         CompressionFormat::Zstd
     } else {
+        // TODO different resolution
         CompressionFormat::None
     }
 }
