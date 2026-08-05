@@ -7,8 +7,9 @@ use crate::error::Result;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum FileFlag {
-    /// Catalog confirmed this row as archived in an ingested snapshot.
-    SnapshotArchived = 0,
+    /// Payload for this content landed in the extract cache (canonical row only).
+    /// Set after a successful `unpack`; cleared on catalog install normalization.
+    FileExtracted = 0,
     /// File changed while the archive pipeline was touching it.
     Modified = 1,
     /// Sparse rewrite exists; stage/archive should use the sparsified target.
@@ -139,13 +140,13 @@ mod tests {
     #[test]
     fn flag_round_trip_bits() {
         let mut flags = FileFlags::default();
-        assert!(!flags.get(FileFlag::SnapshotArchived));
-        flags.set(FileFlag::SnapshotArchived, true);
+        assert!(!flags.get(FileFlag::FileExtracted));
+        flags.set(FileFlag::FileExtracted, true);
         flags.set(FileFlag::HasSparse, true);
         flags.set(FileFlag::CheckWithCanonicalCompleted, true);
         flags.set(FileFlag::ErrorWhileDedup, true);
         flags.set(FileFlag::AppendedPath, true);
-        assert!(flags.get(FileFlag::SnapshotArchived));
+        assert!(flags.get(FileFlag::FileExtracted));
         assert!(!flags.get(FileFlag::Modified));
         assert!(flags.get(FileFlag::HasSparse));
         assert!(flags.get(FileFlag::CheckWithCanonicalCompleted));
@@ -153,7 +154,7 @@ mod tests {
         assert!(flags.get(FileFlag::AppendedPath));
         assert_eq!(
             FileFlags::from_i64(flags.to_i64()).bits(),
-            FileFlag::SnapshotArchived.mask()
+            FileFlag::FileExtracted.mask()
                 | FileFlag::HasSparse.mask()
                 | FileFlag::CheckWithCanonicalCompleted.mask()
                 | FileFlag::ErrorWhileDedup.mask()
