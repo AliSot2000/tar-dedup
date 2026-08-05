@@ -174,6 +174,16 @@ pub(crate) fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<(
     Ok(())
 }
 
+/// Remove a key. `meta.value` is `NOT NULL`, so an absent row is how a value that has
+/// no meaning yet is represented.
+pub(crate) fn delete_meta(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM meta WHERE key = :key",
+        named_params! { ":key": key },
+    )?;
+    Ok(())
+}
+
 pub(crate) fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
     use rusqlite::OptionalExtension;
     conn.query_row(
