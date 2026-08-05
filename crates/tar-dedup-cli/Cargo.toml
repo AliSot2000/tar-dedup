@@ -2,6 +2,7 @@
 name = "tar-dedup-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [[bin]]
 name = "tar-dedup"
