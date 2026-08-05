@@ -170,7 +170,16 @@ pub struct Config {
     /// When true, stage attempts to link files that failed to be hashed into stage and archive
     /// pass will subsequently attempt to add those files to the archive.
     pub retry_missing_sha: bool,
-}
+
+    /// Force the scan of a tar archive that does contain content-ids but that does not start with
+    /// a manifest. Errors will still be produced, if a file does not match the nomenclature
+    pub force_scan: bool,
+    
+    /// When true removes the metadata that was added to the database to execute the archival 
+    /// process. This will be done at the very end of the archive process or at the very beginning 
+    /// of the extraction process.
+    pub clear_archive_meta: bool,
+}   
 
 impl Config {
     pub fn from_archive_args(args: &ArchiveArgs) -> Result<Self> {
@@ -213,6 +222,8 @@ impl Config {
             min_pages: args.min_pages,
             write_archive_footer: true,
             retry_missing_sha: false,
+            force_scan: false, // TODO CLI ARg
+            clear_archive_meta: false // TODO CLI Arg
         })
     }
 
@@ -255,6 +266,8 @@ impl Config {
             min_pages: Some(0),
             write_archive_footer: true,
             retry_missing_sha: false,
+            force_scan: false, // TODO Add CLI Arg
+            clear_archive_meta: false // TODO CLI Arg
         })
     }
 
