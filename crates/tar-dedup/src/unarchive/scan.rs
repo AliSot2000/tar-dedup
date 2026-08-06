@@ -170,6 +170,9 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
     } else {
         "stream manifest"
     };
+
+    // TODO Promote all
+
     tracing::info!(
         unarchived = paths,
         last_member_index = ?scan.last_member_index,
@@ -337,9 +340,10 @@ fn report_scan_completeness(
         );
         if force_scan { tracing::warn!("{msg}"); } else { return Err(Error::Config(msg)); }
     }
-
+    // INFO: rows FileExtracted = True || parent i.e. id = canonical_id has FileExtracted = True
     let unconfirmed = db.count_unconfirmed_extracted()?;
     let confirmed = db.count_files_in_phase(FilePhase::Unarchived)?;
+    // TODO Sanity Check confirmed I.e. no extracted where
     if unconfirmed > 0 {
         if from_footer {
             tracing::warn!(
@@ -358,8 +362,9 @@ fn report_scan_completeness(
             );
         }
     }
-
+    // INFO: ONLY canonical_id = id, FileExtracted = truer
     let canonical = db.count_extracted_canonical()?;
+    // INFO: Select FileExtracted = true or parent (where canonical_id = id)
     let paths = db.count_extracted_paths()?;
     tracing::info!(
         canonical,
