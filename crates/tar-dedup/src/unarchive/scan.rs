@@ -23,6 +23,14 @@ const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at 
 // TODO Fail fast option for - what if extract fails.
 // TODO progress bar / spinner when we have a long decompress skip on resume.
 
+// INFO: State Model for a File and its associated canonical row in the db:
+//    0. File seen in the stream
+//    1. File finished extracting successfully => FileExtracted = True
+//    2. Snapshot Encountered => All files with phase='archived' in snapshot && FileExtracted => phase='unarchived'
+//       <Report File Counts>
+//    4. Promote all FileExtracted = True && phase= 'sparsified' | 'archived' => phase='unarchived'
+//    5. Promote remaining entries in DB to 'unarchived'
+
 /// Walk the tar stream: load catalog (footer or leading manifest), cache payloads, promote.
 pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Database> {
     fs::create_dir_all(config.extract_cache_dir())
