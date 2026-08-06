@@ -70,13 +70,9 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
     // Snapshots seen in this pass are derived from the cumulative total, so there is
     // no second counter that can drift away from the database.
     let snapshots_before = scan.snapshots_ingested;
-    // `last_member_index` is written only once a member is fully handled, so a member
-    // interrupted midway is redone. That is safe — unpacking and flagging are both
-    // idempotent.
-    let resume_from = match (resume_db, scan.last_member_index) {
-        (true, Some(index)) => index + 1,
-        _ => 0,
-    };
+    let should_skip = resume_db && scan.last_member_index.is_some();
+    let resume_from =
+        if should_skip { scan.last_member_index.expect("Should be defined here") } else { 0 };
 
     let mut stopped = false;
     let mut archive =
