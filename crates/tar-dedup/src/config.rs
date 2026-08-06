@@ -225,8 +225,9 @@ impl Config {
             min_pages: args.min_pages,
             write_archive_footer: true,
             retry_missing_sha: false,
-            force_scan: false, // TODO CLI ARg
-            clear_archive_meta: false // TODO CLI Arg
+            force_scan: false, // TODO CLI Arg
+            clear_archive_meta: false, // TODO CLI Arg
+            rehash: true, // TODO CLI Arg
         })
     }
 
@@ -270,7 +271,8 @@ impl Config {
             write_archive_footer: true,
             retry_missing_sha: false,
             force_scan: false, // TODO Add CLI Arg
-            clear_archive_meta: false // TODO CLI Arg
+            clear_archive_meta: false, // TODO CLI Arg
+            rehash: true, // TODO CLI Arg
         })
     }
 
