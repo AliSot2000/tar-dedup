@@ -366,6 +366,10 @@ impl Database {
         extract::list_files_to_restore(&self.conn)
     }
 
+    pub fn skip_rehash(&self) -> Result<u64> {
+        extract::skip_rehash(&self.conn)
+    }
+
     pub fn init_extract_runtime_state(&self) -> Result<()> {
         extract::init_extract_runtime_state(&self.conn)
     }
