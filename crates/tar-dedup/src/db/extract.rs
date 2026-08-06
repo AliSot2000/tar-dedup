@@ -170,7 +170,8 @@ pub fn list_files_to_restore<R: SqlFileRow>(conn: &Connection) -> Result<Vec<R>>
 
 /// Promote every `unarchived` row to `rehashed` without verifying payloads.
 pub fn skip_rehash(conn: &Connection) -> Result<u64> {
-    let n = conn.execute(
+    // INFO: Technically, there should not be any file that is not 'unarchived' or 'rehashed'
+    let n = conn.execute(  
         "UPDATE files SET phase = 'rehashed' WHERE phase = 'unarchived'",
         [],
     )?;
