@@ -1,41 +1,49 @@
-//! Rehash: recompute content hashes to detect corruption (stub).
+//! Rehash: verify extract-cache payloads against catalog SHA-1 digests.
 
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
 
-use indicatif::{ProgressBar, ProgressStyle};
-use rayon::prelude::*;
-use rayon::ThreadPoolBuilder;
-use sha1::{Digest, Sha1};
-
-use crate::common::files::{warn_if_times_changed, PreYield};
 use crate::config::Config;
-use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::db::Database;
+use crate::db::flags::FileFlag;
+use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::error::{Error, Result};
 use crate::progress::io_buffer;
 use crate::shutdown::Shutdown;
+use indicatif::{ProgressBar, ProgressStyle};
+use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
+use sha1::{Digest, Sha1};
+
+#[derive(Debug, Clone)]
+enum RehashOutcome {
+    /// Digest matches catalog `sha1` (or no payload to verify — duplicate row).
+    Match(FileId),
+    /// Digest differs from catalog `sha1`.
+    Mismatch(FileId),
+    /// IO / missing cache / missing expected digest.
+    Error(FileId),
+}
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // TODO promote all files that aren't elected to rehash
-    let total = db.count_files()?; // TODO accurate number
-    let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?; // TODO accurate number.
-    let already_hashed = total.saturating_sub(pending.len() as u64);
+    let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?;
+    let total = pending.len() as u64;
+    let already_hashed= 0;
 
     let do_skip = if config.rehash { "" } else { "skip " };
-
     tracing::info!(
         files = pending.len(),
-        total,
-        already_hashed,
         jobs = config.jobs,
         "{do_skip}rehash pass"
     );
 
     if !config.rehash {
-        db.skip_rehash()?; // TODO implement
+        let n = db.skip_rehash()?;
+        tracing::info!(promoted = n, "rehash skipped; unarchived → rehashed");
+        return Ok(());
     }
 
     if pending.is_empty() {
@@ -47,12 +55,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
-    let source_dir= config.stage_dir().clone();
+    let stage_dir = config.stage_dir();
     let shutdown = shutdown.clone();
-    let results = Mutex::new(Vec::<(FileId, [u8; 20], u64)>::new());
+    let results = Mutex::new(Vec::<RehashOutcome>::new());
 
     let bar = ProgressBar::new(total);
-    bar.set_position(already_hashed);
+    bar.set_position(already_hashed); // TODO we need proper informatino
     bar.set_style(
         ProgressStyle::with_template("{spinner} rehash [{bar:40.cyan/blue}] {pos}/{len}")
             .unwrap()
@@ -61,58 +69,124 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     bar.enable_steady_tick(std::time::Duration::from_millis(100));
 
     let parallel = pool.install(|| {
+        pending.par_iter().try_for_each(|record| -> Result<()> {
             shutdown.check_between_files()?;
-            let path = source_dir.join(&record.rel_path);
-            let digest = hash_file(&path, &shutdown)?;
+
+            let outcome = rehash_one(&stage_dir, record, &shutdown);
             results
                 .lock()
-                .expect("hash results lock")
-                .push((record.id, digest, zero_blocks));
+                .expect("rehash results lock")
+                .push(outcome);
             bar.inc(1);
             Ok(())
-
+        })
     });
 
-    let hashed = results.lock().expect("hash results lock").clone();
-    for (id, digest, zero_blocks) in &hashed {
-        db.update_file_inspection(*id, *digest, *zero_blocks)?;
-    }
+    let outcomes = results.lock().expect("rehash results lock").clone();
+    let counts = stat_and_apply_outcomes(db, &outcomes)?;
 
     let force = shutdown.is_force();
-
     match parallel {
         Ok(()) => {
-            bar.finish_with_message(format!("hash complete ({total}/{total})"));
-            tracing::info!(count = hashed.len(), "hash complete");
+            bar.finish_with_message(format!("rehash complete ({total}/{total})"));
+            let (matches, mismatches, errors) = counts;
+            tracing::info!(matches, mismatches, errors, "rehash complete");
+            if mismatches > 0 {
+                tracing::warn!(mismatches, "rehash digest mismatch(es) recorded");
+            }
+            if errors > 0 {
+                tracing::warn!(errors, "rehash error(s) recorded");
+            }
             Ok(())
         }
         Err(Error::Interrupted) if force => {
             bar.abandon();
-            tracing::warn!("hash force-aborted; in-flight progress discarded");
+            tracing::warn!("rehash force-aborted; in-flight progress discarded");
             Err(Error::Interrupted)
         }
         Err(Error::Interrupted) => {
             bar.abandon();
-            tracing::warn!(saved = hashed.len(), "hash stopped; completed files saved");
+            tracing::warn!(
+                saved = outcomes.len(),
+                "rehash stopped; completed files saved"
+            );
             Err(Error::Interrupted)
         }
         Err(e) => Err(e),
     }
 }
 
-/// Single-pass SHA-1
-///
-/// Bytes are hashed as read.
+fn rehash_one(stage_dir: &Path, record: &StrippedRecord, shutdown: &Shutdown) -> RehashOutcome {
+    let id = record.id;
+
+    // Duplicates share the canonical cache payload; nothing to hash for this row.
+    let Some(member) = record.tar_member_name() else {
+        return RehashOutcome::Match(id);
+    };
+
+    let path = stage_dir.join(&member);
+    let digest = match hash_file(&path, shutdown) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(
+                file_id = id.0,
+                path = %path.display(),
+                error = %e,
+                "rehash failed"
+            );
+            return RehashOutcome::Error(id);
+        }
+    };
+
+    let Some(expected) = record.sha1 else {
+        tracing::warn!(file_id = id.0, "rehash: catalog row has no sha1");
+        return RehashOutcome::Error(id);
+    };
+
+    if digest == expected {
+        RehashOutcome::Match(id)
+    } else {
+        RehashOutcome::Mismatch(id)
+    }
+}
+
+fn stat_and_apply_outcomes(db: &Database, outcomes: &[RehashOutcome]) -> Result<(u64, u64, u64)> {
+    let mut matches = 0u64;
+    let mut mismatches = 0u64;
+    let mut errors = 0u64;
+    for outcome in outcomes {
+        match outcome {
+            RehashOutcome::Match(id) => {
+                db.mark_file_phase(*id, FilePhase::Rehashed)?;
+                matches += 1;
+            }
+            RehashOutcome::Mismatch(id) => {
+                db.set_flag(*id, FileFlag::RehashMismatch, true)?;
+                db.mark_file_phase(*id, FilePhase::Rehashed)?;
+                mismatches += 1;
+            }
+            RehashOutcome::Error(id) => {
+                db.set_flag(*id, FileFlag::ErrorWhileRehashing, true)?;
+                db.mark_file_phase(*id, FilePhase::Rehashed)?;
+                errors += 1;
+            }
+        }
+    }
+    Ok((matches, mismatches, errors))
+}
+
+/// SHA-1 only (no sparse / hole accounting).
 fn hash_file(path: &Path, shutdown: &Shutdown) -> Result<[u8; 20]> {
     let mut file = File::open(path).map_err(|e| Error::io(path, e))?;
-
     let mut hasher = Sha1::new();
     let mut read_buf = io_buffer();
 
     loop {
         shutdown.check_in_flight()?;
         let n = file.read(&mut read_buf).map_err(|e| Error::io(path, e))?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&read_buf[..n]);
     }
 
