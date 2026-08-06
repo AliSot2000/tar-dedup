@@ -162,7 +162,7 @@ pub fn flush_cached_payloads(conn: &Connection, cache_dir: &Path) -> Result<u64>
 pub fn list_files_to_restore<R: SqlFileRow>(conn: &Connection) -> Result<Vec<R>> {
     let cols = R::sql_columns();
     let mut stmt = conn.prepare(&format!(
-        "SELECT {cols} FROM files WHERE phase = 'unarchived' ORDER BY id"
+        "SELECT {cols} FROM files WHERE phase = 'rehashed' ORDER BY id"
     ))?;
     let rows = stmt.query_map([], R::from_row)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
