@@ -239,7 +239,7 @@ fn process_entry(
                      bypass available with --force-scan"
                 )));
             }
-            // PRECONDITION: either force_scan & no db is true or we saw at least one member.
+            // PRECONDITION: either force_scan && no db is true or we saw at least one member.
             let entry_dst = local_dst.join(name);
             entry.unpack(&entry_dst).map_err(|e| Error::io(&entry_dst, e))?;
 
