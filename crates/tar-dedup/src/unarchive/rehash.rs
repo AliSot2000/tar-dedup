@@ -60,7 +60,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let results = Mutex::new(Vec::<RehashOutcome>::new());
 
     let bar = ProgressBar::new(total);
-    bar.set_position(already_hashed); // TODO we need proper informatino
+    bar.set_position(already_hashed); // TODO we need proper information
     bar.set_style(
         ProgressStyle::with_template("{spinner} rehash [{bar:40.cyan/blue}] {pos}/{len}")
             .unwrap()
