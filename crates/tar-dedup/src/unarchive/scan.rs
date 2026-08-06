@@ -322,16 +322,13 @@ fn report_scan_completeness(
     from_footer: bool,
     force_scan: bool,
 ) -> Result<()> {
+    // INFO: AppendedPath = true, FileExtracted = false
     let missing = db.count_missing_payloads()?;
     if missing > 0 {
         let msg = format!(
             "{missing} canonical file(s) have AppendedPath but were not extracted from the archive"
         );
-        if force_scan {
-            tracing::warn!("{msg}");
-        } else {
-            return Err(Error::Config(msg));
-        }
+        if force_scan { tracing::warn!("{msg}"); } else { return Err(Error::Config(msg)); }
     }
 
     let unconfirmed = db.count_unconfirmed_extracted()?;
