@@ -3,9 +3,8 @@ use rusqlite::{Connection, named_params};
 use std::iter::zip;
 
 use crate::config::RuntimeState;
-use crate::db::common::SqlFileRow;
 use crate::db::meta;
-use crate::db::types::{FileId, FilePhase, NewFileRecord};
+use crate::db::types::NewFileRecord;
 use crate::error::Result;
 use nix::unistd::{Gid, Group, Uid, User};
 
@@ -39,53 +38,6 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
         },
     )?;
     Ok(changed > 0)
-}
-
-pub fn count_files(conn: &Connection) -> Result<u64> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) AS count FROM files",
-        [],
-        |row| row.get("count"),
-    )?;
-    Ok(count as u64)
-}
-
-// TODO: select files explicitly
-pub fn count_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<u64> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) AS count FROM files WHERE phase = :phase",
-        named_params! { ":phase": phase.as_str() },
-        |row| row.get("count"),
-    )?;
-    Ok(count as u64)
-}
-
-// TODO: select files explicitly
-pub fn list_files_in_phase<R: SqlFileRow>(
-    conn: &Connection,
-    phase: FilePhase,
-) -> Result<Vec<R>> {
-    let cols = R::sql_columns();
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {cols} FROM files WHERE phase = :phase ORDER BY id"
-    ))?;
-
-    let rows = stmt.query_map(
-        named_params! { ":phase": phase.as_str() },
-        R::from_row,
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-}
-
-pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
-    conn.execute(
-        "UPDATE files SET phase = :phase WHERE id = :id",
-        named_params! {
-            ":phase": phase.as_str(),
-            ":id": file_id.0,
-        },
-    )?;
-    Ok(())
 }
 
 pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
