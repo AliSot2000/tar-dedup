@@ -22,7 +22,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         return Err(Error::Config("page_size must be greater than 0".into()));
     }
 
-    let total = db.count_files()?;
+    let total = db.count_files()?; // TODO update to new selection
     let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Inventoried)?;
     let already_hashed = total.saturating_sub(pending.len() as u64);
     tracing::info!(
