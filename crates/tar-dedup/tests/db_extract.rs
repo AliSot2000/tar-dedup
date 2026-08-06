@@ -105,6 +105,12 @@ fn apply_snapshot_promotes_extracted_canonical_and_duplicates() {
     assert!(canonical.flags.get(FileFlag::FileExtracted));
     assert!(!duplicate.flags.get(FileFlag::FileExtracted));
     assert_eq!(
+        db.count_files_in_phase(FilePhase::Unarchived)
+            .expect("unarchived count"),
+        2
+    );
+    assert_eq!(db.skip_rehash().expect("skip rehash"), 2);
+    assert_eq!(
         db.list_files_to_restore::<FileRecord>()
             .expect("restore list")
             .len(),
