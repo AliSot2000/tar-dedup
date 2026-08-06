@@ -103,6 +103,7 @@ pub fn sparse_copy(src: &Path, dst: &Path, block_size: usize) -> io::Result<Spar
     sparse_copy_with_progress(src, dst, block_size, |_, _, _| Ok::<(), io::Error>(()))
 }
 
+// TODO do this with arbitrary read/write+seek trait object.
 /// Same as [`sparse_copy`], with a progress callback after each block.
 ///
 /// `on_progress` may return `Err` to abort early (partial `dst` may exist). IO failures are
