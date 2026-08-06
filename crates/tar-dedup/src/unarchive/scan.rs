@@ -78,6 +78,7 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
     let mut archive =
         open_tar_archive(&config.archive_path, config.compression.format)?;
 
+    // FEATURE: Switch to seek for tar
     for (member_index, entry) in archive
         .entries()
         .map_err(|e| Error::io(&config.archive_path, e))?
