@@ -20,6 +20,7 @@
 
         packages = [
           rust
+          pkgs.rustup
           pkgs.pkg-config
           pkgs.xz        # liblzma for xz2
           pkgs.bzip2     # bzip2 for bzip2 crate
