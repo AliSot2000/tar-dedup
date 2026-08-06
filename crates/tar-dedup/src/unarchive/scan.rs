@@ -1,12 +1,10 @@
 //! Scan/untar: footer-first catalog, else leading `manifest.sqlite`; cache payloads.
 
 use std::fs;
-use std::io::{copy, BufReader, ErrorKind, Read};
+use std::io::{BufReader, Read, copy};
 use std::path::Path;
 
-use path_clean::PathClean;
-use tar::Entry;
-use crate::archive_footer::{has_valid_footer, read_footer};
+use crate::archive_footer::read_footer;
 use crate::config::Config;
 use crate::db::content_id::parse_content_id;
 use crate::db::types::{FileId, FilePhase};
@@ -14,6 +12,8 @@ use crate::db::{Database, ExtractScanState};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
+use path_clean::PathClean;
+use tar::Entry;
 
 const SNAPSHOT_INIT_TAR_NAME: &str = "manifest.sqlite";
 const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
