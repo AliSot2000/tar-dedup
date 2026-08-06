@@ -51,19 +51,19 @@ impl Database {
     }
 
     pub fn count_files(&self) -> Result<u64> {
-        inventory::count_files(&self.conn)
+        common::count_files(&self.conn)
     }
 
     pub fn count_files_in_phase(&self, phase: FilePhase) -> Result<u64> {
-        inventory::count_files_in_phase(&self.conn, phase)
+        common::count_files_in_phase(&self.conn, phase)
     }
 
     pub fn files_in_phase<R: SqlFileRow>(&self, phase: FilePhase) -> Result<Vec<R>> {
-        inventory::list_files_in_phase(&self.conn, phase)
+        common::list_files_in_phase(&self.conn, phase)
     }
 
     pub fn mark_file_phase(&self, file_id: FileId, phase: FilePhase) -> Result<()> {
-        inventory::mark_phase(&self.conn, file_id, phase)
+        common::mark_phase(&self.conn, file_id, phase)
     }
 
     pub fn resolve_numeric_ids(&self) -> Result<()> {
@@ -292,8 +292,7 @@ impl Database {
     }
     
     pub fn checkpoint(&self) -> Result<()> {
-        self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-        Ok(())
+        common::checkpoint(&self.conn)
     }
 
     // --- Extract pipeline ---
@@ -327,7 +326,7 @@ impl Database {
     }
 
     pub fn count_unconfirmed_extracted(&self) -> Result<u64> {
-        extract::count_unconfirmed_extracted(&self.conn)
+        common::count_unconfirmed_extracted(&self.conn)
     }
 
     pub fn count_extracted_canonical(&self) -> Result<u64> {

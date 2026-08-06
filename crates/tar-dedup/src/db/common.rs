@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{named_params, Connection};
 
 use crate::db::content_id::{content_id_from_digest, sparse_member_name};
-use crate::db::flags::FileFlags;
+use crate::db::flags::{FileFlag, FileFlags};
 use crate::db::types::{
     ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, StrippedRecord,
 };
@@ -160,6 +160,76 @@ pub fn get_file<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Result<Opt
         return Ok(Some(R::from_row(row)?));
     }
     Ok(None)
+}
+
+pub fn count_files(conn: &Connection) -> Result<u64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files",
+        [],
+        |row| row.get("count"),
+    )?;
+    Ok(count as u64)
+}
+
+// TODO: select files explicitly
+pub fn count_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<u64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files WHERE phase = :phase",
+        named_params! { ":phase": phase.as_str() },
+        |row| row.get("count"),
+    )?;
+    Ok(count as u64)
+}
+
+// TODO: select files explicitly
+pub fn list_files_in_phase<R: SqlFileRow>(
+    conn: &Connection,
+    phase: FilePhase,
+) -> Result<Vec<R>> {
+    let cols = R::sql_columns();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {cols} FROM files WHERE phase = :phase ORDER BY id"
+    ))?;
+
+    let rows = stmt.query_map(
+        named_params! { ":phase": phase.as_str() },
+        R::from_row,
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
+    conn.execute(
+        "UPDATE files SET phase = :phase WHERE id = :id",
+        named_params! {
+            ":phase": phase.as_str(),
+            ":id": file_id.0,
+        },
+    )?;
+    Ok(())
+}
+
+pub fn checkpoint(conn: &Connection) -> Result<()> {
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    Ok(())
+}
+
+/// Rows still `archived` whose canonical has `FileExtracted` (awaiting confirmation).
+pub fn count_unconfirmed_extracted(conn: &Connection) -> Result<u64> {
+    let bit = FileFlag::FileExtracted.mask_i64();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files
+         WHERE phase = 'archived'
+           AND (
+                 (flags & :bit) != 0
+              OR canonical_id IN (
+                     SELECT id FROM files WHERE (flags & :bit) != 0
+                 )
+           )",
+        named_params! { ":bit": bit },
+        |row| row.get("count"),
+    )?;
+    Ok(count as u64)
 }
 
 pub(crate) fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<()> {

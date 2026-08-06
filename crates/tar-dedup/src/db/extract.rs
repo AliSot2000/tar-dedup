@@ -196,24 +196,6 @@ pub fn count_missing_payloads(conn: &Connection) -> Result<u64> {
     Ok(count as u64)
 }
 
-/// Rows still `archived` whose canonical has `FileExtracted` (awaiting confirmation).
-pub fn count_unconfirmed_extracted(conn: &Connection) -> Result<u64> {
-    let bit = FileFlag::FileExtracted.mask_i64();
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) AS count FROM files
-         WHERE phase = 'archived'
-           AND (
-                 (flags & :bit) != 0
-              OR canonical_id IN (
-                     SELECT id FROM files WHERE (flags & :bit) != 0
-                 )
-           )",
-        named_params! { ":bit": bit },
-        |row| row.get("count"),
-    )?;
-    Ok(count as u64)
-}
-
 /// Canonical rows carrying `FileExtracted`.
 pub fn count_extracted_canonical(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
