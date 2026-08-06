@@ -549,6 +549,7 @@ mod tests {
             write_archive_footer: false,
             retry_missing_sha: false,
             force_scan: false,
+            clear_archive_meta: false,
         };
         (config, member)
     }
