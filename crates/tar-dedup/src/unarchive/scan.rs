@@ -22,31 +22,32 @@ const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at 
 
 // TODO Fail fast option for - what if extract fails.
 // TODO progress bar / spinner when we have a long decompress skip on resume.
-// TODO seek-based skipping for uncompressed archives (open_tar_archive erases Seek).
 
 /// Walk the tar stream: load catalog (footer or leading manifest), cache payloads, promote.
 pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Database> {
     fs::create_dir_all(config.extract_cache_dir())
         .map_err(|e| Error::io(&config.extract_cache_dir(), e))?;
 
-    // TODO: Extracting footer twice redundant.
     let resume_db = db_path.is_file();
     // Only a first pass installs the footer catalog; later passes inherit the fact
     // that it came from a footer through `ExtractScanState::from_footer`.
-    let footer_this_pass = !resume_db && has_valid_footer(&config.archive_path);
+    let opt_db = read_footer(&config.temp_db(), db_path);
+    let footer_this_pass = !resume_db && opt_db.is_ok();
 
     let mut db = if resume_db {
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
+        fs::remove_file(&config.temp_db())?;
         Some(opened)
     } else if footer_this_pass {
-        read_footer(&config.archive_path, db_path)?;
+        fs::rename(&config.temp_db(), db_path)?;
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
         // TODO: Normalization should already have taken place. Check should be here.k
         opened.normalize_installed_catalog()?;
         Some(opened)
     } else {
+        fs::remove_file(&config.temp_db())?;
         None
     };
 
