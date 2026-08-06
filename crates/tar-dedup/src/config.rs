@@ -179,6 +179,9 @@ pub struct Config {
     /// process. This will be done at the very end of the archive process or at the very beginning 
     /// of the extraction process.
     pub clear_archive_meta: bool,
+
+    /// After extracting, recompute the sha1 of each file to ensure it is correct.
+    pub rehash: bool,
 }   
 
 impl Config {
