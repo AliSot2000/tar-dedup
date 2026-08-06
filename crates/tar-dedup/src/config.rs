@@ -275,6 +275,8 @@ impl Config {
         self.work_dir.join("tar-dedup.sqlite")
     }
 
+    pub fn temp_db(&self) -> PathBuf { self.work_dir.join("temp-tar-dedup.sqlite")}
+
     /// Archive payload directory — same as `work_dir` (flat `.astage`).
     pub fn stage_dir(&self) -> PathBuf {
         self.work_dir.clone()
