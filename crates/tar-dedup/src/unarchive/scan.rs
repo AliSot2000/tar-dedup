@@ -84,16 +84,13 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
         .map_err(|e| Error::io(&config.archive_path, e))?
         .enumerate()
     {
+        let member_index = member_index as u64;
         if shutdown.check_between_files().is_err() {
             stopped = true;
             break;
         }
 
-        let member_index = member_index as u64;
-
-        // Resume: skip already-processed members by index (archive assumed unchanged).
-        // The header is still parsed so stream errors surface; `tar` skips the body
-        // itself when the iterator advances past a dropped entry.
+        // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
         if member_index < resume_from {
             entry.map_err(|e| Error::io(&config.archive_path, e))?;
             continue;
