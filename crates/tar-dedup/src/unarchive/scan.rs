@@ -120,13 +120,9 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
     // Persist observations before any early return / interrupt propagation.
     store_progress_in_db(&mut db, &scan)?;
 
-    if stopped {
-        return Err(Error::Interrupted);
-    }
+    if stopped { return Err(Error::Interrupted); }
 
-    if !scan.saw_any_members {
-        return Err(Error::Config("Archive is Empty".to_string()));
-    }
+    if !scan.saw_any_members { return Err(Error::Config("Archive is Empty".to_string())); }
 
     if db.is_none() {
         if config.force_scan {
