@@ -168,6 +168,15 @@ pub fn list_files_to_restore<R: SqlFileRow>(conn: &Connection) -> Result<Vec<R>>
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
+/// Promote every `unarchived` row to `rehashed` without verifying payloads.
+pub fn skip_rehash(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files SET phase = 'rehashed' WHERE phase = 'unarchived'",
+        [],
+    )?;
+    Ok(n as u64)
+}
+
 /// Canonical rows with `AppendedPath` but without `FileExtracted`.
 pub fn count_missing_payloads(conn: &Connection) -> Result<u64> {
     let appended = FileFlag::AppendedPath.mask_i64();
