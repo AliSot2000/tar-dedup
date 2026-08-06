@@ -51,7 +51,6 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
         fs::rename(&config.temp_db(), db_path)?;
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
-        // TODO: Normalization should already have taken place. Check should be here.k
         opened.normalize_installed_catalog()?;
         Some(opened)
     } else {
