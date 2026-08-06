@@ -136,9 +136,8 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
         );
     }
 
-    // PRECONDITION: Archive contained at least one element and at least a database.
-    // All four inputs are cumulative over passes, so a resumed pass that happens to
-    // see no catalog members of its own still reports on the whole archive.
+    // PRECONDITION: Archive contained at least one element and at least a database and we
+    //   fully consumed teh archive.
     validate_result(&scan, resume_db)?;
 
     let sdb = db.expect(OPT_DB_ERROR);
