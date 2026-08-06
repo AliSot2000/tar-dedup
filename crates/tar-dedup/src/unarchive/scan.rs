@@ -562,6 +562,7 @@ mod tests {
             retry_missing_sha: false,
             force_scan: false,
             clear_archive_meta: false,
+            rehash: true,
         };
         (config, member)
     }
