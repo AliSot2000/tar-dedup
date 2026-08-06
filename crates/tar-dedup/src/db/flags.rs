@@ -5,7 +5,7 @@ use crate::error::Result;
 
 /// Bit index into [`FileFlags`] (not the mask itself).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
+#[repr(u16)]
 pub enum FileFlag {
     /// Payload for this content landed in the extract cache (canonical row only).
     /// Set after a successful `unpack`; cleared on catalog install normalization.
@@ -29,10 +29,17 @@ pub enum FileFlag {
     AppendedPath = 6,
     /// `append_path` failed during the archive process.
     ErrorWhileArchive = 7,
-    // IO Error while indexing
-    // XATTR Error while indexing
-    // POSIX_ACL Error while indexing
-    // SELinux Error while indexing
+    /// Rehashing Encountered a mismatch
+    RehashMismatch = 8,
+    /// While attempting the rehash, an error occurred
+    ErrorWhileRehashing = 9,
+
+    // TODO
+    //  Error while unarchiving
+    //  IO Error while indexing
+    //  XATTR Error while indexing
+    //  POSIX_ACL Error while indexing
+    //  SELinux Error while indexing
 }
 
 impl FileFlag {
