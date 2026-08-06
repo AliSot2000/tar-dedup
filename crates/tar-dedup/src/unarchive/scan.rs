@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io::{BufReader, Read, copy};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::archive_footer::read_footer;
 use crate::config::Config;
@@ -45,16 +45,16 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
     let mut db = if resume_db {
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
-        fs::remove_file(&config.temp_db())?;
+        remove_temp_db(&config.temp_db());
         Some(opened)
     } else if footer_this_pass {
-        fs::rename(&config.temp_db(), db_path)?;
+        fs::rename(config.temp_db(), db_path).map_err(|e| Error::io(db_path, e))?;
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
         opened.normalize_installed_catalog()?;
         Some(opened)
     } else {
-        fs::remove_file(&config.temp_db())?;
+        remove_temp_db(&config.temp_db());
         None
     };
 
@@ -377,6 +377,20 @@ fn report_scan_completeness(
     }
 
     Ok(())
+}
+
+/// Remove temp database and handle errors. If database does not exist, now error is emitted.
+fn remove_temp_db(temp_db: &PathBuf) -> () {
+    if !temp_db.exists() {
+        return ();
+    }
+
+    let res = fs::remove_file(temp_db);
+    if res.is_err() {
+        let err = res.err().expect("MUST BE ERROR HERE");
+        tracing::warn!("Failed to remove temp database with error: {err}");
+    }
+
 }
 
 /// Store progress in db
