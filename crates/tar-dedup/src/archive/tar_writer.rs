@@ -15,6 +15,8 @@ use crate::tar_writer::TarWriter;
 const SNAPSHOT_INIT_TAR_NAME: &str = "manifest.sqlite";
 const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
 
+// TODO Consider the transition state of the files that are ingested.
+
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // Crash / force leftover: truncate incomplete stream C, keep finished A..B.
     recover_incomplete_session(config, db)?;
