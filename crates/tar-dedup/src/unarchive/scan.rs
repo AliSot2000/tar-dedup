@@ -261,6 +261,8 @@ fn process_entry(
     Ok(())
 }
 
+/// Check if the returned state at the end of scanning the archive matches our exectations and add
+/// associated errors if something is unexpected.
 fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
     match (
         scan.saw_manifest_db,
@@ -271,6 +273,7 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
         (false, false, false, false) => {
             panic!("INVARIANT ERROR: Loop exited successfully without a database.");
         }
+        // INFO: DB present from restart!
         (false, false, false, true) => {
             tracing::warn!(
                 "resumed extract over a work DB that has no recorded manifest, \
