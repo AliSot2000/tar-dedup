@@ -292,7 +292,10 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
                 scan.snapshots_ingested
             );
         }
-        (false, true, true, _) => {}
+        (false, true, true, _) => {
+            tracing::warn!("footer and {} snapshot(s) but no manifest. Truncated Archive? ",
+                scan.snapshots_ingested);
+        }
         (true, false, false, _) => {
             tracing::warn!("manifest present, no snapshot ingested. Truncated archive?");
         }
@@ -300,7 +303,7 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
             tracing::warn!(
                 "footer present with manifest but no snapshot.sqlite; \
                  archive truncated or corrupt? \
-                 a footer should only be appended after a finishing snapshot"
+                 => a footer should only be appended after a finishing snapshot!"
             );
         }
         (true, true, footer, _) => {
