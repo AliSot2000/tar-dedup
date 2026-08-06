@@ -118,18 +118,7 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
     }
 
     // Persist observations before any early return / interrupt propagation.
-    if let Some(ref d) = db {
-        let mut persisted = d.load_extract_scan_state()?;
-        persisted.saw_manifest_db |= scan.saw_manifest_db;
-        persisted.saw_any_members |= scan.saw_any_members;
-        persisted.scan_complete = scan.scan_complete;
-        // `None` sorts below every `Some`, so this keeps the furthest point reached.
-        persisted.last_member_index = persisted.last_member_index.max(scan.last_member_index);
-        persisted.from_footer |= scan.from_footer;
-        // snapshots_ingested already updated via record_snapshot_ingested.
-        d.save_extract_scan_state(&persisted)?;
-        d.checkpoint()?;
-    }
+    store_progress_in_db(&mut db, &scan)?;
 
     if stopped {
         return Err(Error::Interrupted);
@@ -377,6 +366,23 @@ fn report_scan_completeness(
         tracing::info!(count, "extract: non-AppendedPath entries ftype={ftype}");
     }
 
+    Ok(())
+}
+
+/// Store progress in db
+fn store_progress_in_db(db: &mut Option<Database>, scan: &ExtractScanState) -> Result<()> {
+    if let Some(d) = db {
+        let mut persisted = d.load_extract_scan_state()?;
+        persisted.saw_manifest_db |= scan.saw_manifest_db;
+        persisted.saw_any_members |= scan.saw_any_members;
+        persisted.scan_complete = scan.scan_complete;
+        // `None` sorts below every `Some`, so this keeps the furthest point reached.
+        persisted.last_member_index = persisted.last_member_index.max(scan.last_member_index);
+        persisted.from_footer |= scan.from_footer;
+        // snapshots_ingested already updated via record_snapshot_ingested.
+        d.save_extract_scan_state(&persisted)?;
+        d.checkpoint()?;
+    }
     Ok(())
 }
 
