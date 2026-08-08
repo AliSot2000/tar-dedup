@@ -95,17 +95,18 @@ Compression Algo extractions:
   None
 
 # tar-dedup specials
-- `?` `--bridge` perform deduplication + link back into place
-- `?` `--eager-filter` perform the entire filter in the database before hash rather than after 
-- `?` `--sparsify <opt num>` make files sparse prior to encoding. If num, 
-- `?` `--block-size` file system page size (usually 4kib). Determines granularity of 
-- `?` `--reset-phase <phase>` Reset all files s.t. this phase will be executed again. Useful in cases of hash, dedup or sparsify.
-- `?` `--fail-fast` ... needs more work. look at dedup (fail on any error, fail pair on error, fail group on error.)
-- `?` `--no-dup-shell-out` if no duplicates are detected, shell out to regular tar or use tar-dedup tar compression (sorted by file type could still yield better compression.)
-- `-O` `--to-stdout` extract files to standard output
-- `?` `--retry-missing-sha` attempt to add files to tar even if they have no sha -> likely errored out.
-- `?` `--link-in-place` rebuild the directory tree with symlinks and leave a stage directory (at some determinable location to )
-- `?` `--link-type` when `--link-in-place` is provided, specify if hard or soft links are desired.
+- `?`   `--bridge` perform deduplication + link back into place
+- `?`   `--eager-filter` perform the entire filter in the database before hash rather than after 
+- `?`   `--sparsify <opt num>` make files sparse prior to encoding. If num, 
+- `?`   `--block-size` file system page size (usually 4kib). Determines granularity of 
+- `?`   `--reset-phase <phase>` Reset all files s.t. this phase will be executed again. Useful in cases of hash, dedup or sparsify.
+- `?`   `--fail-fast` ... needs more work. look at dedup (fail on any error, fail pair on error, fail group on error.)
+- `?`   `--no-dup-shell-out` if no duplicates are detected, shell out to regular tar or use tar-dedup tar compression (sorted by file type could still yield better compression.)
+- `-O`  `--to-stdout` extract files to standard output
+- `?`   `--retry-missing-sha` attempt to add files to tar even if they have no sha -> likely errored out.
+- `?`   `--link-in-place` rebuild the directory tree with symlinks and leave a stage directory (at some determinable location to )
+- `?`   `--link-type` when `--link-in-place` is provided, specify if hard or soft links are desired.
+- `-W ` `--verify` | `rehash` used to add the rehash pass.
 
 # Filesystem Nodes supported
 - Regular File
