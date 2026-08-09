@@ -54,6 +54,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         append_snapshot(&mut writer, config, db, shutdown, true)?;
     }
 
+    // TODO change ordering.
     let to_archive = db.list_staged_canonical_ordered(filter_sha)?;
     if to_archive.is_empty() && already_archived == 0 {
         tracing::warn!("no staged files to archive");
