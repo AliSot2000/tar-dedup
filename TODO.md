@@ -17,8 +17,8 @@
 - [ ] Sequential / Parallel where possible
 - [ ] Add Version of Tool to metadata
 - [ ] Add Platform to metadata
-- [ ] Exclude.
 - [ ] Good logging
+- [ ] need to add source root -i flag to the metadata
 
 ## Phases
 ### CLI:
