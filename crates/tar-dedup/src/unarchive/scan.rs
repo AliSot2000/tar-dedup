@@ -521,6 +521,8 @@ mod tests {
             posix_acl: None,
             selinux_ctx: None,
             link_dst: None,
+            device_id: None,
+            inode_id: None,
         })
         .expect("insert");
 
