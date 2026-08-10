@@ -36,7 +36,7 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## Main operation mode
+## Main operation mode <=
 
 | shortopt | longopt                       | implement   | description                                      | comment                                                   | phase[s] / command |
 |----------|-------------------------------|-------------|--------------------------------------------------|-----------------------------------------------------------|--------------------|
@@ -52,7 +52,7 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## Operation modifiers
+## Operation modifiers <=
 
 | shortopt | longopt                          | implement            | description                                                       | comment                                                                                                             | phase[s] / command |
 |----------|----------------------------------|----------------------|-------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|--------------------|
@@ -73,7 +73,7 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## Local file name selection
+## Local file name selection <=
 
 | shortopt | longopt                           | implement   | description                                                                             | comment                                                                              | phase[s] / command  |
 |----------|-----------------------------------|-------------|-----------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------|---------------------|
@@ -104,7 +104,7 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## File name matching options (affect both exclude and include patterns)
+## File name matching options (affect both exclude and include patterns) <=
 
 | shortopt | longopt                      | implement | description                                          | comment                         | phase[s] / command |
 |----------|------------------------------|-----------|------------------------------------------------------|---------------------------------|--------------------|
@@ -119,26 +119,26 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## Overwrite control
+## Overwrite control <=
 
-| shortopt | longopt                    | implement    | description                                                           | comment                                                                                                                                | phase[s] / command |
-|----------|----------------------------|--------------|-----------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-|          | `--keep-directory-symlink` | FEATURE      | preserve existing symlinks to directories when extracting             | if path is symlink `name -> something`. defualt `rm name && mkdir name` flag changes to follow symlink instead.                        | place / extract    |
-|          | `--keep-newer-files`       | FEATURE      | don't replace existing files that are newer than their archive copies | Aligns with extract mtime-only update notes.                                                                                           | place / extract    |
-| `-k`     | `--keep-old-files`         | FEATURE      | don't replace existing files when extracting, treat them as errors    |                                                                                                                                        | place / extract    |
-|          | `--no-overwrite-dir`       | FEATURE      | preserve metadata of existing directories                             |                                                                                                                                        | place / extract    |
-|          | `--one-top-level[=DIR]`    | FEATURE      | create a subdirectory to avoid having loose files extracted           | In tar, if a loose file without dir starts archive, create tarname as defualt or DIR if arg provided. Related to master/ layout ideas. | place / extract    |
-|          | `--overwrite`              | TO_IMPLEMENT | overwrite existing files when extracting                              | Place currently copies; policy flags not wired.                                                                                        | place / extract    |
-|          | `--overwrite-dir`          | TO_IMPLEMENT | overwrite metadata of existing directories when extracting (default)  |                                                                                                                                        | place / extract    |
-|          | `--recursive-unlink`       | FEATURE      | empty hierarchies prior to extracting directory                       | If we extract /foo/bar/baz and baz already exists, with this option rm -rf /foo/bar/baz/* is called and files extracted into later.    | place / extract    |
-|          | `--remove-files`           | DISCARDED    | remove files after adding them to the archive                         | Dangerous; not a tar-dedup goal.                                                                                                       | -                  |
-|          | `--skip-old-files`         | FEATURE      | don't replace existing files when extracting, silently skip over them |                                                                                                                                        | place / extract    |
-| `-U`     | `--unlink-first`           | FEATURE      | remove each file prior to extracting over it                          | call rm on file first and wirte into fresh file. (prevent hardlink issues)                                                             | place / extract    |
-| `-W`     | `--verify`                 | DISCARDED    | attempt to verify the archive after writing it                        | Hash/rehash on extract is closer to our model.                                                                                         | -                  |
+| shortopt | longopt                    | implement    | description                                                           | comment                                                                                                                                | phase[s] / command    |
+|----------|----------------------------|--------------|-----------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|-----------------------|
+|          | `--keep-directory-symlink` | FEATURE      | preserve existing symlinks to directories when extracting             | if path is symlink `name -> something`. defualt `rm name && mkdir name` flag changes to follow symlink instead.                        | place / extract       |
+|          | `--keep-newer-files`       | FEATURE      | don't replace existing files that are newer than their archive copies | Aligns with extract mtime-only update notes.                                                                                           | place / extract       |
+| `-k`     | `--keep-old-files`         | FEATURE      | don't replace existing files when extracting, treat them as errors    |                                                                                                                                        | place / extract       |
+|          | `--no-overwrite-dir`       | FEATURE      | preserve metadata of existing directories                             |                                                                                                                                        | permissions / extract |
+|          | `--one-top-level[=DIR]`    | FEATURE      | create a subdirectory to avoid having loose files extracted           | In tar, if a loose file without dir starts archive, create tarname as defualt or DIR if arg provided. Related to master/ layout ideas. | place / extract       |
+|          | `--overwrite`              | TO_IMPLEMENT | overwrite existing files when extracting                              | Place currently copies; policy flags not wired.                                                                                        | place / extract       |
+|          | `--overwrite-dir`          | TO_IMPLEMENT | overwrite metadata of existing directories when extracting (default)  |                                                                                                                                        | permissions / extract |
+|          | `--recursive-unlink`       | FEATURE      | empty hierarchies prior to extracting directory                       | If we extract /foo/bar/baz and baz already exists, with this option rm -rf /foo/bar/baz/* is called and files extracted into later.    | place / extract       |
+|          | `--remove-files`           | DISCARDED    | remove files after adding them to the archive                         | Dangerous; not a tar-dedup goal.                                                                                                       | -                     |
+|          | `--skip-old-files`         | FEATURE      | don't replace existing files when extracting, silently skip over them |                                                                                                                                        | place / extract       |
+| `-U`     | `--unlink-first`           | FEATURE      | remove each file prior to extracting over it                          | call rm on file first and wirte into fresh file. (prevent hardlink issues)                                                             | place / extract       |
+| `-W`     | `--verify`                 | DISCARDED    | attempt to verify the archive after writing it                        | Hash/rehash on extract is closer to our model.                                                                                         | -                     |
 
 ---
 
-## Select output stream
+## Select output stream <=
 
 | shortopt | longopt                     | implement | description                                    | comment                                    | phase[s] / command |
 |----------|-----------------------------|-----------|------------------------------------------------|--------------------------------------------|--------------------|
@@ -149,7 +149,7 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## Handling of file attributes
+## Handling of file attributes <=
 
 | shortopt | longopt                                        | implement    | description                                                                                           | comment                                                                     | phase[s] / command    |
 |----------|------------------------------------------------|--------------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|-----------------------|
@@ -169,12 +169,12 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 |          | `--owner-map=FILE`                             | FEATURE      | use FILE to map file owner UIDs and names                                                             |                                                                             | permissions / extract |
 | `-p`     | `--preserve-permissions`, `--same-permissions` | TO_IMPLEMENT | extract information about file permissions                                                            | Capture on archive done; apply on extract TODO.                             | permissions / extract |
 |          | `--same-owner`                                 | TO_IMPLEMENT | try extracting files with the same ownership as exists in the archive                                 | CLI `--restore-owner` exists; full apply still TODO.                        | permissions / extract |
-|          | `--sort=ORDER`                                 | FEATURE      | directory sorting order: none (default), name or inode                                                | Staging orders by ext/size/id for compression. Inode not recorded research! | permissions / extract |
+|          | `--sort=ORDER`                                 | FEATURE      | directory sorting order: none (default), name or inode                                                | Staging orders by ext/size/id for compression. Inode not recorded research! | inventory / archive   |
 | `-s`     | `--preserve-order`, `--same-order`             | DISCARDED    | member arguments are listed in the same order as the files in the archive                             | CLI file-list order not used.                                               |                       |
 
 ---
 
-## Handling of extended file attributes
+## Handling of extended file attributes <=
 
 | shortopt | longopt                 | implement    | description                                | comment                                                    | phase[s] / command    |
 |----------|-------------------------|--------------|--------------------------------------------|------------------------------------------------------------|-----------------------|
@@ -189,7 +189,7 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## Device selection and switching
+## Device selection and switching <=
 
 | shortopt | longopt                                          | implement   | description                                   | comment           | phase[s] / command |
 |----------|--------------------------------------------------|-------------|-----------------------------------------------|-------------------|--------------------|
@@ -204,7 +204,7 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## Device blocking
+## Device blocking <=
 
 | shortopt | longopt                    | implement | description                                 | comment                                                                                                                        | phase[s] / command |
 |----------|----------------------------|-----------|---------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------|--------------------|
@@ -215,7 +215,7 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## Archive format selection
+## Archive format selection <=
 
 | shortopt | longopt                              | implement | description                          | comment                                           | phase[s] / command |
 |----------|--------------------------------------|-----------|--------------------------------------|---------------------------------------------------|--------------------|
@@ -229,7 +229,7 @@ tar -xf archive.tar          # Extract all files from archive.tar.
 
 ---
 
-## Compression options
+## Compression options <=
 
 | shortopt | longopt                          | implement   | description                                                    | comment                                                      | phase[s] / command                  |
 |----------|----------------------------------|-------------|----------------------------------------------------------------|--------------------------------------------------------------|-------------------------------------|
@@ -249,7 +249,7 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 
 ---
 
-## Local file selection
+## Local file selection <=
 
 | shortopt | longopt                                             | implement  | description                                                 | comment                                                                                                                 | phase[s] / command  |
 |----------|-----------------------------------------------------|------------|-------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------|---------------------|
@@ -267,10 +267,10 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 
 ## File name transformations
 
-| shortopt | longopt                                        | implement | description                                                   | comment                   |
-|----------|------------------------------------------------|-----------|---------------------------------------------------------------|---------------------------|
-|          | `--strip-components=NUMBER`                    | FEATURE   | strip NUMBER leading components from file names on extraction | Requires new field in db! |
-|          | `--transform=EXPRESSION`, `--xform=EXPRESSION` | FEATURE   | use sed replace EXPRESSION to transform file names            | Requires new field in db! |
+| shortopt | longopt                                        | implement | description                                                   | comment                   | phase[s] / command |
+|----------|------------------------------------------------|-----------|---------------------------------------------------------------|---------------------------|--------------------|
+|          | `--strip-components=NUMBER`                    | FEATURE   | strip NUMBER leading components from file names on extraction | Requires new field in db! | place / extract    |
+|          | `--transform=EXPRESSION`, `--xform=EXPRESSION` | FEATURE   | use sed replace EXPRESSION to transform file names            | Requires new field in db! | place / extract    |
 
 ---
 
@@ -299,7 +299,7 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 
 ---
 
-## Compatibility options
+## Compatibility options <=
 
 | shortopt | longopt | implement | description                                                                        | comment                         | phase[s] / command |
 |----------|---------|-----------|------------------------------------------------------------------------------------|---------------------------------|--------------------|
