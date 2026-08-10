@@ -138,6 +138,7 @@ pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
         }).collect();
 
     // Set the names now from lookup array.
+    // TODO no more println
     for (uid, o_uname) in zip(uids.iter(), resolves_names.iter()){
         if o_uname.is_none() {
             println!("Could not resolve {uid} to username");
@@ -160,9 +161,3 @@ pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
     // TODO Emmit to tracing, stderr
     Err("Resolve Numeric Ids not available on this platform")
 }
-
-
-// TODO more metadata commandd:
-//  Add the archive version + archiver version
-//  Add read out methods.
-//  Populate username, group name
