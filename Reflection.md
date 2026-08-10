@@ -107,6 +107,8 @@ Compression Algo extractions:
 - `?`   `--link-in-place` rebuild the directory tree with symlinks and leave a stage directory (at some determinable location to )
 - `?`   `--link-type` when `--link-in-place` is provided, specify if hard or soft links are desired.
 - `-W ` `--verify` | `rehash` used to add the rehash pass.
+- `?`   `--no-dedup` assume that no hash collision occurred and skip dedup step
+- `?`   `--no-hardlink-detection` by default, files with the same (inode, dev) tuple will automatically get assigned the same hash and same canonical_id. Disable this treats both instances as two separate files.
 
 # Filesystem Nodes supported
 - Regular File
