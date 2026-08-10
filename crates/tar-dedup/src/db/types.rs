@@ -26,14 +26,17 @@ pub struct FileRecord {
     pub gid: Option<u32>,
     pub mode: Option<u32>,
     pub ftype: Option<FileType>,
+    pub device_id: Option<u64>,
+    pub inode_id: Option<u64>,
     pub xattrs: Option<String>,
     pub posix_acl: Option<String>,
     pub selinux_ctx: Option<Vec<u8>>,
     pub link_dst: Option<PathBuf>,
-    pub exclusion_id: Option<ExclusionId>,
-    pub canonical_id: Option<FileId>,
+    pub include_reason: Option<ExclusionId>,
+    pub exclude_reason: Option<ExclusionId>,
     pub flags: FileFlags,
     pub phase: FilePhase,
+    pub new_name: Option<String>,
 }
 
 /// Narrow file row for pipeline stages that do not need ownership/xattr payloads.
@@ -48,6 +51,9 @@ pub struct StrippedRecord {
     pub atime: Option<DateTime<Utc>>,
     pub ctime: Option<DateTime<Utc>>,
     pub ftype: Option<FileType>,
+    pub device_id: Option<u64>,
+    pub inode_id: Option<u64>,
+
     pub canonical_id: Option<FileId>,
     pub flags: FileFlags,
     pub phase: FilePhase,
@@ -69,6 +75,8 @@ pub struct NewFileRecord {
     pub posix_acl: Option<String>,
     pub selinux_ctx: Option<Vec<u8>>,
     pub link_dst: Option<PathBuf>,
+    pub device_id: Option<u64>,
+    pub inode_id: Option<u64>,
 }
 
 /// Enum represents all possible targets a symlink can have. `Unknown` is for dangling links that
