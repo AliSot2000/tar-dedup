@@ -280,7 +280,7 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 |          | `--owner-map=FILE`                             | FEATURE      | use FILE to map file owner UIDs and names                                                             |                                                                             | permissions / extract |
 | `-p`     | `--preserve-permissions`, `--same-permissions` | TO_IMPLEMENT | extract information about file permissions                                                            | Capture on archive done; apply on extract TODO.                             | permissions / extract |
 |          | `--same-owner`                                 | TO_IMPLEMENT | try extracting files with the same ownership as exists in the archive                                 | CLI `--restore-owner` exists; full apply still TODO.                        | permissions / extract |
-|          | `--sort=ORDER`                                 | FEATURE      | directory sorting order: none (default), name or inode                                                | Staging orders by ext/size/id for compression. Inode not recorded research! | inventory / archive   |
+|          | `--sort=ORDER`                                 | DISCARDED    | directory sorting order: none (default), name or inode                                                | Staging orders by ext/size/id for compression. Inode not recorded research! | inventory / archive   |
 | `-s`     | `--preserve-order`, `--same-order`             | DISCARDED    | member arguments are listed in the same order as the files in the archive                             | CLI file-list order not used.                                               |                       |
 
 ### Handling of extended file attributes
@@ -295,3 +295,10 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 |          | `--xattrs`              | IMPLEMENTED  | Enable extended attributes support         | Captured at inventory.                                     | permissions / extract |
 |          | `--xattrs-exclude=MASK` | FEATURE      | specify the exclude pattern for xattr keys |                                                            | permissions / extract |
 |          | `--xattrs-include=MASK` | FEATURE      | specify the include pattern for xattr keys |                                                            | permissions / extract |
+
+### File name transformations
+
+| shortopt | longopt                                        | implement    | description                                                   | comment                   | phase[s] / command |
+|----------|------------------------------------------------|--------------|---------------------------------------------------------------|---------------------------|--------------------|
+|          | `--strip-components=NUMBER`                    | TO_IMPLEMENT | strip NUMBER leading components from file names on extraction | Requires new field in db! | place / extract    |
+|          | `--transform=EXPRESSION`, `--xform=EXPRESSION` | TO_IMPLEMENT | use sed replace EXPRESSION to transform file names            | Requires new field in db! | place / extract    |
