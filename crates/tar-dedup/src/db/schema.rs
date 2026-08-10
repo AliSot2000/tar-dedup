@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS files (
     ftype         TEXT,
     inode         INTEGER,
     dev           INTEGER,
+    new_name      TEXT, --used to store name transformations.
 
     -- Extended File Attributes
     xattr         TEXT,
