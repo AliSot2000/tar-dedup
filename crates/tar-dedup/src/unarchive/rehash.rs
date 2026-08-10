@@ -116,6 +116,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     }
 }
 
+/// Compute and compare the hash of a single canonical record
 fn rehash_one(stage_dir: &Path, record: &StrippedRecord, shutdown: &Shutdown) -> RehashOutcome {
     let id = record.id;
 
@@ -150,6 +151,7 @@ fn rehash_one(stage_dir: &Path, record: &StrippedRecord, shutdown: &Shutdown) ->
     }
 }
 
+/// Update the database from a single outcome
 fn stat_and_apply_outcomes(db: &Database, outcomes: &[RehashOutcome]) -> Result<(u64, u64, u64)> {
     let mut matches = 0u64;
     let mut mismatches = 0u64;
