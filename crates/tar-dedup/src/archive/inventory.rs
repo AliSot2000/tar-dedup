@@ -27,6 +27,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     for entry in WalkDir::new(&config.input_dir)
             .follow_links(false) // Feature: follow symlinks
+            .same_file_system(false) // Feature: same file system
             .into_iter()
             .filter_map(|e| e.ok()) {
 
