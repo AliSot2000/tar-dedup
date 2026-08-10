@@ -34,6 +34,7 @@ pub struct FileRecord {
     pub link_dst: Option<PathBuf>,
     pub include_reason: Option<ExclusionId>,
     pub exclude_reason: Option<ExclusionId>,
+    pub canonical_id: Option<FileId>,
     pub flags: FileFlags,
     pub phase: FilePhase,
     pub new_name: Option<String>,
