@@ -108,8 +108,11 @@ impl SqlFileRow for FileRecord {
             xattrs: row.get("xattr")?,
             posix_acl: row.get("acl")?,
             selinux_ctx: row.get("selinux")?,
-            exclusion_id: row
-                .get::<_, Option<i64>>("exclusion_id")?
+            exclude_reason: row
+                .get::<_, Option<i64>>("exclude_reason")?
+                .map(ExclusionId),
+            include_reason: row
+                .get::<_, Option<i64>>("include_reason")?
                 .map(ExclusionId),
             canonical_id: row.get::<_, Option<i64>>("canonical_id")?.map(FileId),
             flags: FileFlags::from_i64(row.get::<_, i64>("flags")?),
@@ -117,6 +120,11 @@ impl SqlFileRow for FileRecord {
             link_dst: row
                 .get::<_, Option<String>>("link_dst")?
                 .map(PathBuf::from),
+            new_name: row
+                .get::<_, Option<String>>("new_name")?
+                .map(String::from),
+            inode_id: row.get::<_, Option<i64>>("inode")?.map(|v| v as u64),
+            device_id: row.get::<_, Option<i64>>("dev")?.map(|v| v as u64),
         })
     }
 
@@ -144,6 +152,8 @@ impl SqlFileRow for StrippedRecord {
             canonical_id: row.get::<_, Option<i64>>("canonical_id")?.map(FileId),
             flags: FileFlags::from_i64(row.get::<_, i64>("flags")?),
             phase: parse_phase(row)?,
+            inode_id: row.get::<_, Option<i64>>("inode")?.map(|v| v as u64),
+            device_id: row.get::<_, Option<i64>>("dev")?.map(|v| v as u64),
         })
     }
 
