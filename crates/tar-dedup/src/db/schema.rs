@@ -10,9 +10,16 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
--- Placeholder at the moment will be fully populated when filter stage is designed
-CREATE TABLE IF NOT EXISTS exclusion_reasons (
-    id     INTEGER PRIMARY KEY
+
+CREATE TABLE IF NOT EXISTS filter_reason (
+    id     INTEGER PRIMARY KEY, -- rule >= 0 exclude, < 0 include rule
+    source TEXT NOT NULL, -- e.g. --exclude=some-\regex-pattern or --exclude-from=path-to-file, line
+    expression TEXT NOT NULL -- actual regex expression to match against
+);
+
+CREATE TABLE IF NOT EXISTS source (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS files (
@@ -32,6 +39,8 @@ CREATE TABLE IF NOT EXISTS files (
     groupname     TEXT,
     mode          INTEGER,
     ftype         TEXT,
+    inode         INTEGER,
+    dev           INTEGER,
 
     -- Extended File Attributes
     xattr         TEXT,
@@ -40,11 +49,13 @@ CREATE TABLE IF NOT EXISTS files (
     link_dst      TEXT,
 
     -- Internal Stuff
-    sparse_count  INTEGER,
-    exclusion_id  INTEGER REFERENCES exclusion_reasons(id),
-    canonical_id  INTEGER REFERENCES files(id),
-    phase         TEXT NOT NULL DEFAULT 'inventoried',
-    flags         INTEGER NOT NULL DEFAULT 0
+    sparse_count   INTEGER,
+    include_reason INTEGER REFERENCES filter_reason(id),
+    exclude_reason INTEGER REFERENCES filter_reason(id),
+    source_id      INTEGER REFERENCES source(id),
+    canonical_id   INTEGER REFERENCES files(id),
+    phase          TEXT NOT NULL DEFAULT 'inventoried',
+    flags          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(sha1, size);
