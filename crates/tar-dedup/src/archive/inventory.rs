@@ -52,13 +52,15 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let gid = strip_transpose(path, file_gid(&path), &mut enc_err);
         let ftype = strip_transpose(path, determine_file_type(&entry), &mut enc_err);
         let mode = file_mode(&meta);
+        let dev = strip_transpose(path, get_file_dev(&meta), &mut enc_err);
+        let ino = strip_transpose(path, get_file_ino(&meta), &mut enc_err);
 
         let link_dst: Option<PathBuf> = if matches!(ftype, Some(FileType::Symlink(_))) {
             strip_transpose(path, fs::read_link(path), &mut enc_err)
         } else {
             None
         };
-        
+
         // Optional data
         let xattrs = if config.do_xattrs {
             match get_file_xattr(path) {
@@ -94,6 +96,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             posix_acl,
             selinux_ctx,
             link_dst,
+            device_id: dev,
+            inode_id: ino,
         })? {
             inserted += 1;
             progress.inc(1);
@@ -119,7 +123,7 @@ fn strip_transpose<T>(path: &Path, source: io::Result<T>, errors: &mut Vec<FileS
 #[cfg(unix)]
 fn file_uid(path: &Path) -> io::Result<u32> {
     use std::os::unix::fs::MetadataExt;
-    Ok(std::fs::metadata(path)?.uid())
+    Ok(fs::metadata(path)?.uid())
 }
 
 #[cfg(not(unix))]
@@ -133,7 +137,7 @@ fn file_uid(_path: &Path) -> io::Result<u32> {
 #[cfg(unix)]
 fn file_gid(path: &Path) -> io::Result<u32> {
     use std::os::unix::fs::MetadataExt;
-    Ok(std::fs::metadata(path)?.gid())
+    Ok(fs::metadata(path)?.gid())
 }
 
 #[cfg(not(unix))]
@@ -145,7 +149,7 @@ fn file_gid(_path: &Path) -> io::Result<u32> {
 }
 
 #[cfg(unix)]
-fn file_mode(meta: &std::fs::Metadata) -> u32 {
+fn file_mode(meta: &fs::Metadata) -> u32 {
     use std::os::unix::fs::MetadataExt;
     meta.mode()
 }
@@ -153,6 +157,34 @@ fn file_mode(meta: &std::fs::Metadata) -> u32 {
 #[cfg(not(unix))]
 fn file_mode(_meta: &std::fs::Metadata) -> u32 {
     0o644
+}
+
+#[cfg(unix)]
+fn get_file_dev(meta: &fs::Metadata) -> io::Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(meta.dev())
+}
+
+#[cfg(not(unix))]
+fn get_file_def() -> io::Result<u64> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "file dev is not available on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn get_file_ino(meta: &fs::Metadata) -> io::Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(meta.ino())
+}
+
+#[cfg(not(unix))]
+fn get_file_def() -> io::Result<u64> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "file ino is not available on this platform",
+    ))
 }
 
 /// Function attempts to figure out what a given soft link (chain) is pointing to.
