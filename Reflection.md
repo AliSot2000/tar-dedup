@@ -110,6 +110,11 @@ Compression Algo extractions:
 - `?`   `--no-dedup` assume that no hash collision occurred and skip dedup step
 - `?`   `--no-hardlink-detection` by default, files with the same (inode, dev) tuple will automatically get assigned the same hash and same canonical_id. Disable this treats both instances as two separate files.
 
+- `?`   `--force-reset-to-phase` forcibly resets the progress to a given phase and deletes all progress made.
+
+# features
+- `inspect` command -> Search the files for exclusion and inclusion reason. Dump inclusion and exclusion reasons, dump files (so basically the full database view.)
+
 # Filesystem Nodes supported
 - Regular File
 - Directory
