@@ -34,6 +34,8 @@ also a thought of recentness of the algorithm. The program will default to the m
 exposes du not suite your needs, the command offers to write to a simple tar file you can compress yourself
 (and also subsequently decompress if the format is not supported.)
 
+As the tool is using rust, it expects all its inputs to be in valid utf-8.
+
 The tool also sacrifices functionality the regular tar command offers. Since this tool is not intended to be backwards 
 compatible the decision was made to only support a subset of the tar command options. We tried to retain a manageable 
 overhead and an easy interface (e.g. `--exclude`, `--exclude-from`, `--files-from` are the main options supported from 
@@ -43,7 +45,7 @@ inverse can also be done `--include` and `--include-from` allow you to white lis
 treated as follows: no inclusion => everything is included, no exclusion => nothing is excluded. The tool has no rule 
 order. The list of all members of the given directories and paths are scanned. A subset is then selected based on the 
 include filters. Everything selected by the include filters is then passed through the exclude filters which then strip 
-the remainder of entries before the hash phase begins.
+the remainder of entries before the hash phase begins. 
 
 ## Development
 
