@@ -183,7 +183,7 @@ pub struct ArchiveArgs {
     #[arg(long = "sparsify", default_value_t = false)]
     pub sparsify: bool,
 
-    /// Page size in bytes for hash zero-page counting and sparsify (default 4096).
+    /// Page size in bytes for hash zero-page counting and sparsify.
     #[arg(long = "page-size", value_name = "BYTES", default_value_t = 4096)]
     pub page_size: usize,
 
