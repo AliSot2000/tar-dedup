@@ -1,4 +1,4 @@
-//! Archive (compress) pipeline: inventory → hash → dedup → stage → tar-writer.
+//! Archive (compress) pipeline: inventory → hash → filter → dedup → sparsify → stage → tar-writer.
 
 mod dedup;
 mod filter;
@@ -161,6 +161,7 @@ fn run_phase(
     match phase {
         PipelinePhase::Inventory => inventory::run(config, db, shutdown),
         PipelinePhase::Hash => hash::run(config, db, shutdown),
+        PipelinePhase::Filter => filter::run(db),
         PipelinePhase::Dedup => dedup::run(config, db, shutdown),
         PipelinePhase::Sparsify => sparsify::run(config, db, shutdown),
         PipelinePhase::Stage => stage::run(config, db, shutdown),
