@@ -197,6 +197,15 @@ pub struct Config {
     pub anchored: bool,
     pub ignore_case: bool,
 
+    /// Force owner policy: `NAME`, `UID`, or `NAME:UID` (archive meta / extract apply).
+    pub owner: Option<String>,
+    /// Path to GNU-style owner map file.
+    pub owner_map: Option<PathBuf>,
+    /// Force group policy: `NAME`, `GID`, or `NAME:GID`.
+    pub group: Option<String>,
+    /// Path to GNU-style group map file.
+    pub group_map: Option<PathBuf>,
+
     pub eager_filter: bool,
     pub no_dedup: bool,
 
@@ -277,6 +286,17 @@ impl Config {
             .map(|p| resolve_user_path_against(p, &base))
             .collect::<Result<_>>()?;
 
+        let owner_map = args
+            .owner_map
+            .as_ref()
+            .map(|p| resolve_user_path_against(p, &base))
+            .transpose()?;
+        let group_map = args
+            .group_map
+            .as_ref()
+            .map(|p| resolve_user_path_against(p, &base))
+            .transpose()?;
+
         let work_dir = match &args.work_dir {
             Some(path) => resolve_user_path_against(path, &base)?,
             None => default_archive_work_dir(&archive_path),
@@ -330,6 +350,10 @@ impl Config {
             no_hardlink_detection: args.no_hardlink_detection,
             anchored: args.anchored,
             ignore_case: args.ignore_case,
+            owner: args.owner.clone(),
+            owner_map,
+            group: args.group.clone(),
+            group_map,
             eager_filter: args.eager_filter,
             no_dedup: args.no_dedup,
             write_archive_footer: true,
@@ -395,6 +419,10 @@ impl Config {
             no_hardlink_detection: false,
             anchored: false,
             ignore_case: false,
+            owner: None,
+            owner_map: None,
+            group: None,
+            group_map: None,
             eager_filter: false,
             no_dedup: false,
             write_archive_footer: true,

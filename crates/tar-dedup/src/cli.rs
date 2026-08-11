@@ -159,6 +159,24 @@ pub struct ArchiveArgs {
     #[arg(long = "no-selinux", action = ArgAction::SetFalse)]
     pub selinux: bool,
 
+    /// Force owner for archived members: `NAME`, `UID`, or `NAME:UID` (GNU tar).
+    /// Stored as archive policy (meta); applied on extract.
+    #[arg(long = "owner", value_name = "NAME[:UID]")]
+    pub owner: Option<String>,
+
+    /// Owner translation map file (GNU tar `--owner-map`).
+    #[arg(long = "owner-map", value_name = "FILE")]
+    pub owner_map: Option<PathBuf>,
+
+    /// Force group for archived members: `NAME`, `GID`, or `NAME:GID` (GNU tar).
+    /// Stored as archive policy (meta); applied on extract.
+    #[arg(long = "group", value_name = "NAME[:GID]")]
+    pub group: Option<String>,
+
+    /// Group translation map file (GNU tar `--group-map`).
+    #[arg(long = "group-map", value_name = "FILE")]
+    pub group_map: Option<PathBuf>,
+
     // --- Sparse ---
 
     /// Run the sparsify phase (copy with seeks using `--page-size` / `--min-pages`).
