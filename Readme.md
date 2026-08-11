@@ -2,6 +2,81 @@
 A `tar` "wrapper" to deduplicate the file-tree prior to archiving to save extra space. It capability to interrupt the 
 creation of large tar archives at the cost of lower compression ratios for compressed archives.
 
+## Usage
+The `tar-dedup` consists of a few subcommands. 
+
+### archive
+This command takes a set of input files / directories and produces an archive.
+
+**Basic Operation**
+
+| Short | Long          | Required | Args | Description                                                                                       | Notes |
+|-------|---------------|----------|------|---------------------------------------------------------------------------------------------------|-------|
+| `-f`  | -             | y        | 1    | Specifies the archive file to operate on                                                          | 1.    |
+| `-C`  | `--directory` | n        | 1    | Change current working directory to this argument                                                 | 1.    |
+| -     | `--work-dir`  | n        | 1    | Change location of temp directory for process. **Might grow to the size of the files to archive** | 1.    |
+
+**Inputs**
+
+| Short | Long           | Required | Args | Description                                                                                                                         | Notes |
+|-------|----------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------|-------|
+| `-i`  | `--input-dir`  | y        | 0+   | Provide a path to a directory that should be archived. Multiple directories can be given with `-i`. Path MUST point to a directory. | 1. 2. |
+| `-T`  | `--files-from` | y        | 0+   | Provide a path to a directory that should be archived. Multiple directories can be given with `-i`. Path MUST point to a file.      | 1. 2. |
+| -     | `--null`       | n        | 0    | Applies to `-T`: Switch from a `\n` separated file to a `\0` file list.                                                             |       |
+
+**Compression**
+
+| Short | Long                  | Required | Args | Description                                                                               | Notes |
+|-------|-----------------------|----------|------|-------------------------------------------------------------------------------------------|-------|
+| `-a`  | `--auto-compress`     | n        | 0    | Infer compression method by the extension of `-f`. Conflicts `--no-auto-compress`         | 3.    |
+| -     | `--no-auto-compress`  | n        | 0    | Do not infer the compression method by the extension of `-f`. Conflicts `--auto-compress` | 3.    |
+| `-z`  | `--gzip`              | n        | 0    | Use gunzip to compress the archive.                                                       | 3.    |
+| `-j`  | `--bzip2`             | n        | 0    | Use bzip2 to compress the archive.                                                        | 3.    |
+| `-J`  | `--xz`                | n        | 0    | Use xz to compress the archive. (recommended)                                             | 3.    |
+| -     | `--zstd`              | n        | 0    | Use zstd to compress the archive.                                                         | 3.    |
+| -     | `--level`             | n        | 1    | Set the compression level of the algorithm gzip/bzip2 1-9, xz 0-9, zstd 1-19.             |       |
+| -     | `--xz-extreme`        | n        | 0    | Use extreme preset in xz (xz only).                                                       |       |
+| -     | `--memlimit-compress` | n        | 1    | Set memory limit for compression processes bytes and percentage supported. (xz only).     |       |
+
+**Indexing**
+
+| Short | Long                      | Required | Args | Description                                                                                                        | Notes |
+|-------|---------------------------|----------|------|--------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--no-recursion`          | n        | 0    | Disables recursion into subdirectories                                                                             |       |
+| -     | `--dereference`           | n        | 0    | Follow symlinks                                                                                                    |       |
+| -     | `--one-file-system`       | n        | 0    | Stay within a single file system.                                                                                  |       |
+| `-P`  | `--absolute-names`        | n        | 0    | Function sets the default extraction mode.                                                                         | 4.    |
+| -     | `--no-hardlink-detection` | n        | 0    | Hard Links are detected and merged in hash, dedup. If enabled, two hard linked files are treated as separate ones. | 4.    |
+
+**Filtering**
+
+| Short | Long                    | Required | Args | Description                                                                                      | Notes |
+|-------|-------------------------|----------|------|--------------------------------------------------------------------------------------------------|-------|
+| -     | `--exclude`             | n        | 1+   | Exclude all file system entries that match the REGEX                                             | 5.    |
+| `-X`  | `--exclude-from`        | n        | 1+   | Provide a file containing one REGEX per line. Each line is then applied like an `--exclude` flag | 5.    |
+| -     | `--include`             | n        | 1+   | Include all file system entries that match the REGEX                                             | 5.    |
+| -     | `--include-from`        | n        | 1+   | Provide a file containing one REGEX per line. Each line is then applied like an `--include` flag | 5.    |
+| -     | `--exclude-vcs`         | n        | 0    | Not implemented yet! Exclude version control system directories                                  | 5.    |
+| -     | `--exclude-vcs-ignores` | n        | 0    | Not implemented yet! Read VCS ignore files for exclusions                                        | 5.    |
+| -     | `--no-anchored`         | n        | 0    | Patterns match from the start of the relative path rather than any path component                | 5.    |
+| -     | `--no-ignore-case `     | n        | 0    | Perform case insensitive matching                                                                | 5.    |
+
+**File Attributes**
+As a baseline, the tool attempts to capture as much data as possible. This includes (ctime, atime, mtime, uid, gid, mode, size
+selinux policy, posix_acls, xattrs, file type. By default the tool also attempts to resolve any uid, gid to a group name / owner name)
+
+**Notes**
+1. Path resolution. If the path is absolute, the path is taken as is. If the path is relative and `-C --directory` is not set, 
+   the current working directory is taken from the environment and used as the root for the relative paths. If
+   `-C --directory` is given, relative paths are resolved with this as a root instead.
+2. At least one input must be given. So either one `-T` or `-i`. Multiples are supported. (so multiple `-i` and `-T`)
+3. If no compression method is given or inferred, a normal tar archive is produced.
+4. Internally, all files are stored with an absolute path and conversion to absolute or relative happens when extracting 
+   canonical files are moved back into place.
+5. Filtering always uses REGEX. No Glob or Shell expansions are supported. Files are first indexed. If given, only files
+   matching one or more of the include filters are propagated. Lastly only files that don't match a single exclude 
+   pattern are then eligible. If no a include filter is given, a catch-all filter is used.
+
 ## Motivation
 This tool is written to improve the compression of unstructured data. A good example would be a hard drive of a desktop. 
 Most humans don't tend to have perfect order across all their systems. An intersection between Desktop, Downloads, 
