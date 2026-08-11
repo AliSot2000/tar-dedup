@@ -26,6 +26,7 @@
           pkgs.bzip2     # bzip2 for bzip2 crate
           pkgs.zstd      # zstd C lib for zstd crate
           pkgs.zlib      # zlib (used by flate2 in some configs)
+          pkgs.acl       # libacl for posix-acl / acl-sys
           pkgs.libselinux # headers + lib for selinux / selinux-sys crates
           pkgs.llvmPackages.libclang # needed by bindgen (selinux-sys build script)
           pkgs.llvmPackages.clang    # optional, but useful to have the driver too
@@ -37,6 +38,7 @@
           pkgs.bzip2
           pkgs.zstd
           pkgs.zlib
+          pkgs.acl
           pkgs.libselinux
           pkgs.llvmPackages.libclang
         ];
@@ -47,8 +49,21 @@
           pkgs.bzip2.dev
           pkgs.zstd.dev
           pkgs.zlib.dev
+          pkgs.acl.dev
           pkgs.libselinux.dev
         ];
+
+        # rust-lld does not reliably pick up NIX_LDFLAGS; pass C libs explicitly.
+        RUSTFLAGS = pkgs.lib.concatStringsSep " " [
+          "-Lnative=${pkgs.acl.out}/lib"
+          "-Lnative=${pkgs.libselinux.out}/lib"
+          "-Clink-arg=-lacl"
+          "-Clink-arg=-lselinux"
+        ];
+
+        # Help selinux-sys's build script locate headers/libs without relying on cc probes alone.
+        SELINUX_INCLUDE_DIR = "${pkgs.libselinux.dev}/include";
+        SELINUX_LIB_DIR = "${pkgs.libselinux.out}/lib";
 
         # bindgen needs this to dlopen libclang at build time
         LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -59,6 +74,7 @@
         shellHook = ''
           export PATH="${rust}/bin:$PATH"
           echo "🦀 tar-dedup dev shell — $(rustc --version)"
+          echo "   RUSTFLAGS=$RUSTFLAGS"
         '';
       };
     };
