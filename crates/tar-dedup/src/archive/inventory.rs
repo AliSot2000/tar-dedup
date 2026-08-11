@@ -20,6 +20,7 @@ use std::{fs, io};
 use path_clean::PathClean;
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    assert!(config.input_dir.is_absolute(), "Input Directory to this pass MUST be absolute.");
     tracing::info!(root = %config.input_dir.display(), "inventory pass");
     let progress = CountProgress::new("inventory");
     let mut inserted = 0u64;
