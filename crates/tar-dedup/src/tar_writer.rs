@@ -35,6 +35,7 @@ impl TarWriter {
         settings: &CompressionSettings,
         jobs: usize,
         shutdown: Shutdown,
+        sparse: bool,
     ) -> Result<Self> {
         let format = settings.format;
         let compress_level = settings.level;
@@ -111,10 +112,10 @@ impl TarWriter {
             pending: Vec::with_capacity(TAR_EOF_LEN),
             allow_tar_eof: false,
         };
-        // TODO: sparse
         let mut builder = Builder::new(sink);
         // Stage entries are content-id symlinks; pack the target file bytes.
         builder.follow_symlinks(true);
+        builder.sparse(sparse);
 
         Ok(Self {
             archive_path,
