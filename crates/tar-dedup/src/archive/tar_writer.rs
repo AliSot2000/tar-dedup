@@ -44,6 +44,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         &config.compression,
         config.jobs,
         shutdown.clone(),
+        true, // sparse
     )?;
 
     // Fresh start into archiving.
