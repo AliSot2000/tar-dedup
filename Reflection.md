@@ -95,7 +95,6 @@ Compression Algo extractions:
   None
 
 # tar-dedup specials
-- `?`   `--bridge` perform deduplication + link back into place
 - `?`   `--eager-filter` perform the entire filter in the database before hash rather than after 
 - `?`   `--sparsify <opt num>` make files sparse prior to encoding. If num, 
 - `?`   `--block-size` file system page size (usually 4kib). Determines granularity of 
@@ -111,9 +110,12 @@ Compression Algo extractions:
 - `?`   `--no-hardlink-detection` by default, files with the same (inode, dev) tuple will automatically get assigned the same hash and same canonical_id. Disable this treats both instances as two separate files.
 
 - `?`   `--force-reset-to-phase` forcibly resets the progress to a given phase and deletes all progress made.
+- `?`   `--no-errors`, do not store errors in database. 
 
 # features
 - `inspect` command -> Search the files for exclusion and inclusion reason. Dump inclusion and exclusion reasons, dump files (so basically the full database view.)
+- `bridge` perform deduplication + link back into place 
+- `resume` only able to resume a given archive.
 
 # Filesystem Nodes supported
 - Regular File
