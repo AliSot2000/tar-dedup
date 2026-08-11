@@ -8,12 +8,16 @@ The above copyright notice and this permission notice shall be included in all c
 
 In addition, the following restrictions apply:
 
-1. The Software and any modifications made to it may not be used for the purpose of training or improving machine learning algorithms,
-including but not limited to artificial intelligence, natural language processing, or data mining. This condition applies to any derivatives,
-modifications, or updates based on the Software code. Any usage of the Software in an AI-training dataset is considered a breach of this License.
+1. The Software and any modifications made to it may be used for the purpose of training or improving machine learning algorithms,
+including but not limited to artificial intelligence, natural language processing, or data mining, only if all of the following conditions are satisfied:
 
-2. The Software may not be included in any dataset used for training or improving machine learning algorithms,
-including but not limited to artificial intelligence, natural language processing, or data mining.
+a. Access to and use of the resulting model for inference is provided free of charge and without usage-based, subscription-based, or other monetary fees;
+b. The resulting model, including its weights and source code, is made openly accessible under terms that permit inspection, use, modification, and redistribution; and
+c. The dataset used to train or improve the model is made openly accessible in a non-compiled and human-readable form, or is accompanied by a complete
+publicly accessible record identifying and linking to all materials used in its creation, together with the date and timestamp and the country from which each such material was accessed.
+
+2. The Software may be included in a dataset used for training or improving machine learning algorithms only where the resulting use complies
+fully with the conditions set out in Section 1. Any use of the Software in an AI-training dataset that does not satisfy those conditions constitutes a breach of this License.
 
 3. Any person or organization found to be in violation of these restrictions will be subject to legal action and may be held liable
 for any damages resulting from such use.
