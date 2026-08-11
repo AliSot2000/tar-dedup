@@ -8,7 +8,7 @@ The `tar-dedup` consists of a few subcommands.
 ### archive
 This command takes a set of input files / directories and produces an archive.
 
-**Basic Operation**
+**Archive Paths**
 
 | Short | Long          | Required | Args | Description                                                                                       | Notes |
 |-------|---------------|----------|------|---------------------------------------------------------------------------------------------------|-------|
@@ -63,7 +63,45 @@ This command takes a set of input files / directories and produces an archive.
 
 **File Attributes**
 As a baseline, the tool attempts to capture as much data as possible. This includes (ctime, atime, mtime, uid, gid, mode, size
-selinux policy, posix_acls, xattrs, file type. By default the tool also attempts to resolve any uid, gid to a group name / owner name)
+selinux policy, posix_acls, xattrs, file type. By default, the tool also attempts to resolve any uid, gid to a 
+group name / owner name via the system database.
+
+| Short | Long           | Required | Args | Description                                                           | Notes |
+|-------|----------------|----------|------|-----------------------------------------------------------------------|-------|
+| -     | `--no-acls`    | n        | 0    | Do not attempt to acquire the acls of the file system entries         |       |
+| -     | `--no-xattrs`  | n        | 0    | Do not attempt to acquire the xattrs of the file system entries       |       |
+| -     | `--no-selinux` | n        | 0    | Do not attempt to acquire the SELinux policy of the fiel system entry |       |
+| -     | `--owner`      | n        | 1    | Store an override of the owner field in the database                  | 6.    |
+| -     | `--owner-map`  | n        | 1    | Load the owner map into the database for.                             | 6.    |
+| -     | `--group`      | n        | 1    | Store an override of the group field in the database                  | 6.    |
+| -     | `--group-map`  | n        | 1    | Load the group map into the database for.                             | 6.    |
+
+**Sparse Files**
+The system relies on the tar reader detecting sparse files. To be able to add sparse files to the archive, they are 
+sparse copied into the `--work-dir`, turning them into valid sparse files. Those sparse files are then used as the 
+source of truth rather than the original files. (Note that this will lead to an additional scan files that were 
+selected to be sparsified)
+
+| Short | Long          | Required | Args | Description                                                                | Notes |
+|-------|---------------|----------|------|----------------------------------------------------------------------------|-------|
+| -     | `--sparsify`  | n        | 0    | Create sparse copies of the eligeable files                                |       |
+| -     | `--page-size` | n        | 1    | Determine page size for sparse detection.                                  |       |
+| -     | `--min-pages` | n        | 1    | Minimum number of empty pages a file needs to have before it's sparsified. |       |
+
+**Process Options**
+
+| Short | Long                   | Required | Args | Description                                                                                       | Notes |
+|-------|------------------------|----------|------|---------------------------------------------------------------------------------------------------|-------|
+| -     | `--jobs`               | n        | 1    | Maximum number of workers for rayon pools and xz encoder                                          |       |
+| -     | `--fresh`              | n        | 0    | Wipe `--work-dir` if there's something.                                                           |       |
+| -     | `--keep-db`            | n        | 0    | Retain the database after successfully finishing the archive                                      |       |
+| -     | `--keep-stage`         | n        | 0    | Retain the stage directory (independent of database)                                              |       |
+| -     | `--exit-after-stage`   | n        | 1    | Exit and save state after completing a given stage.                                               |       |
+| -     | `--fail-fast`          | n        | 0    | Exit immediately if an error occurres. (E.g. Permission denied, Path does not Exist, ...)         |       |
+| -     | `--no-errors`          | n        | 0    | Don't keep record of errors associated with a file.                                               |       |
+| -     | `--eager-filter`       | n        | 0    | Perform filtering before the hash phase (faster, less information in database)                    |       |
+| -     | `--no-dedup`           | n        | 0    | (Dangerous) Do not perform binary verification and assume (hash, file-size) match implies unique. |       |
+| -     | `--retry-missing-sha ` | n        | 0    | Attempt to add a file to the archive regardless if it produced errors in the previous sections.   |       |
 
 **Notes**
 1. Path resolution. If the path is absolute, the path is taken as is. If the path is relative and `-C --directory` is not set, 
@@ -76,6 +114,8 @@ selinux policy, posix_acls, xattrs, file type. By default the tool also attempts
 5. Filtering always uses REGEX. No Glob or Shell expansions are supported. Files are first indexed. If given, only files
    matching one or more of the include filters are propagated. Lastly only files that don't match a single exclude 
    pattern are then eligible. If no a include filter is given, a catch-all filter is used.
+6. The database will store the overrides separately from the file metadata. On extract, the overrides will be applied 
+   rather than on archive.
 
 ## Motivation
 This tool is written to improve the compression of unstructured data. A good example would be a hard drive of a desktop. 
