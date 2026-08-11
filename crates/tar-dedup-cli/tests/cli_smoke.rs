@@ -38,6 +38,21 @@ fn archive_help_lists_new_path_and_sparse_flags() {
             || out.contains("--directory"),
         "expected -C/--directory path-resolution help"
     );
+    for heading in [
+        "Archive Paths",
+        "Inputs",
+        "Compression",
+        "Indexing",
+        "Filtering",
+        "File Attributes",
+        "Sparse Files",
+        "Process Options",
+    ] {
+        assert!(
+            out.contains(heading),
+            "expected README help heading {heading:?} in archive --help"
+        );
+    }
     assert!(!out.contains("--resume"), "archive must not expose --resume");
     assert!(
         !out.contains("--force-reset-to-phase"),
