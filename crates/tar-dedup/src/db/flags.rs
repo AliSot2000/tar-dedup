@@ -7,39 +7,49 @@ use crate::error::Result;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum FileFlag {
-    /// Payload for this content landed in the extract cache (canonical row only).
-    /// Set after a successful `unpack`; cleared on catalog install normalization.
-    FileExtracted = 0,
+    /// An IO Error occurred while querying the metadata of this file
+    IoErrorWhileInventorying = 0,
+    /// An Error occurred while querying the xattrs of this file
+    XAttrError = 1,
+    /// An Error occurred while querying the acls of this file.
+    PosixAclError = 2,
+    /// An Error occurred while querying SELinux Policies
+    SELinuxError = 3,
     /// File changed while the archive pipeline was touching it.
-    Modified = 1,
-    /// Sparse rewrite exists; stage/archive should use the sparsified target.
-    HasSparse = 2,
+    Modified = 4,
+    /// An error occurred during the first scan pass (sha + hole)
+    ErrorWhileHash = 5,
     /// Compare vs this round's canonical finished; content differs.
     /// Cleared on round end for the whole `(sha1, size)` group.
-    CheckWithCanonicalCompleted = 3,
+    CheckWithCanonicalCompleted = 6,
     /// Read/compare failed during dedup. Sticky — never cleared on later success.
     /// Excludes the file from canonical election.
-    ErrorWhileDedup = 4,
+    ErrorWhileDedup = 7,
+    /// Sparse rewrite exists; stage/archive should use the sparsified target.
+    HasSparse = 8,
     /// Sparse copy failed (permissions, IO, …). Sticky.
-    ErrorWhileSparsify = 5,
+    ErrorWhileSparsify = 9,
     /// Payload was written into an archive session.
     /// Set on successful `append_path`. Left standing when the session finalizes
     /// (`phase` → `archived`). Cleared only on abort/truncate for rows that are
     /// still not `archived` (incomplete session rewrite).
-    AppendedPath = 6,
+    AppendedPath = 10,
     /// `append_path` failed during the archive process.
-    ErrorWhileArchive = 7,
-    /// Rehashing Encountered a mismatch
-    RehashMismatch = 8,
-    /// While attempting the rehash, an error occurred
-    ErrorWhileRehashing = 9,
+    ErrorWhileArchive = 11,
 
-    // TODO
-    //  Error while unarchiving
-    //  IO Error while indexing
-    //  XATTR Error while indexing
-    //  POSIX_ACL Error while indexing
-    //  SELinux Error while indexing
+    /// Payload for this content landed in the extract cache (canonical row only).
+    /// Set after a successful `unpack`; cleared on catalog install normalization.
+    FileExtracted = 12,
+    /// An error occurred while extracting a given file
+    ErrorWhileExtracting = 13,
+    /// Rehashing Encountered a mismatch
+    RehashMismatch = 14,
+    /// While attempting the rehash, an error occurred
+    ErrorWhileRehashing = 15,
+    /// An Error prevented the file from being placed in its correct position
+    ErrorWhilePlacing = 16,
+    /// At least one error occurred while applying metadata
+    ErrorWhileApplyingMetadata = 17,
 }
 
 impl FileFlag {
