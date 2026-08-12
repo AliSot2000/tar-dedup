@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS filter_reason (
 
 CREATE TABLE IF NOT EXISTS source (
     id INTEGER PRIMARY KEY,
-    source TEXT NOT NULL
+    source TEXT NOT NULL,
+    path TEXT NOT NULL,
+    UNIQUE (source, path)
 );
 
 CREATE TABLE IF NOT EXISTS files (
