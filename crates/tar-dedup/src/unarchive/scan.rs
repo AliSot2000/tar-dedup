@@ -558,8 +558,7 @@ mod tests {
 
         let config = Config {
             archive_path,
-            directory: None,
-            input_dir: PathBuf::new(),
+            directory: PathBuf::new(),
             input_dirs: Vec::new(),
             files_from: Vec::new(),
             files_from_null: false,
