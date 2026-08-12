@@ -240,11 +240,11 @@ pub fn set_file_xattrs(path: &Path, raw_xattr: &str) -> FileStatResult<()> {
         Encoding::Base64 => {
             for (k, v) in dump.data {
                 let key_bytes = STANDARD.decode(&k)
-                    .map_err(|e| {FileStatError::Base64DecodinggError {
+                    .map_err(|e| {FileStatError::Base64DecodingError {
                         path: path.to_path_buf(),
                         source: e}})?;
                 let val_bytes = STANDARD.decode(&v)
-                    .map_err(|e| {FileStatError::Base64DecodinggError {
+                    .map_err(|e| {FileStatError::Base64DecodingError {
                         path: path.to_path_buf(),
                         source: e}})?;
                 // use key_bytes / val_bytes to actually call setxattr
