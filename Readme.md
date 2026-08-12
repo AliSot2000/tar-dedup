@@ -13,7 +13,7 @@ This command takes a set of input files / directories and produces an archive.
 | Short | Long          | Required | Args | Description                                                                                       | Notes |
 |-------|---------------|----------|------|---------------------------------------------------------------------------------------------------|-------|
 | `-f`  | -             | y        | 1    | Specifies the archive file to operate on                                                          | 1.    |
-| `-C`  | `--directory` | n        | 1    | Change current working directory to this argument                                                 | 1.    |
+| `-C`  | `--directory` | n        | 1    | Change current working directory to this argument. If relative, use cwd as the base.              | 1.    |
 | -     | `--work-dir`  | n        | 1    | Change location of temp directory for process. **Might grow to the size of the files to archive** | 1.    |
 
 **Inputs**
@@ -108,7 +108,8 @@ selected to be sparsified)
    the current working directory is taken from the environment and used as the root for the relative paths. If
    `-C --directory` is given, relative paths are resolved with this as a root instead.
 2. At least one input must be given. So either one `-T` or `-i`. Multiples are supported. (so multiple `-i` and `-T`)
-3. If no compression method is given or inferred, a normal tar archive is produced.
+3. If no compression method is given or inferred, a normal tar archive is produced. Explicit flags like `--xz`, ... 
+   take precedence over `--auto-compress`.
 4. Internally, all files are stored with an absolute path and conversion to absolute or relative happens when extracting 
    canonical files are moved back into place.
 5. Filtering always uses REGEX. No Glob or Shell expansions are supported. Files are first indexed. If given, only files
