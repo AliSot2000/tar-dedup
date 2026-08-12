@@ -79,7 +79,7 @@ pub enum FileStatError {
     PosixQualifierParser { path: PathBuf, source: PosixQualifierParserError},
     
     #[error("bBase64 decoding error at {path}: {source}")]
-    Base64DecodinggError { path: PathBuf, source: base64::DecodeError},
+    Base64DecodingError { path: PathBuf, source: base64::DecodeError},
 }
 
 impl FileStatError {
