@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{ArchiveArgs, CompressionFlags, ExitAfterStageArg, ExtractArgs};
@@ -66,7 +67,8 @@ pub struct CompressionSettings {
 impl CompressionSettings {
     /// Validate CLI compression options and build settings for archive creation.
     pub fn from_archive_args(format: CompressionFormat, args: &ArchiveArgs) -> Result<Self> {
-        let (level, xz_extreme) = resolve_compress_options(format, args)?;
+        let (level, xz_extreme) =
+            CompressionSettings::resolve_compress_options(format, args)?;
         let memlimit_compress = args
             .memlimit_compress
             .as_deref()
@@ -94,7 +96,99 @@ impl CompressionSettings {
             memlimit_compress: None,
         }
     }
+
+    /// Validate `--level` / `--xz-extreme` / against the resolved filter.
+    fn resolve_compress_options(
+        format: CompressionFormat,
+        args: &ArchiveArgs,
+    ) -> Result<(u32, bool)> {
+        if args.xz_extreme && format != CompressionFormat::Xz {
+            return Err(Error::Config(
+                "--xz-extreme is only valid with xz compression (-J / .tar.xz)".into(),
+            ));
+        }
+        if format == CompressionFormat::None {
+            if args.level.is_some() {
+                return Err(Error::Config(
+                    "--level requires a compression filter (archive is uncompressed)".into(),
+                ));
+            }
+            return Ok((0, false));
+        }
+
+        let (min, max) = format
+            .level_range()
+            .expect("compressing format has a level range");
+        let level = args.level.unwrap_or_else(|| format.default_level().unwrap());
+        if level < min || level > max {
+            return Err(Error::Config(format!(
+                "--level {level} is out of range for {} (allowed {min}–{max})",
+                format.as_str()
+            )));
+        }
+        Ok((level, args.xz_extreme))
+    }
 }
+
+pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Result<CompressionFormat> {
+    let mut chosen: Option<CompressionFormat> = None;
+    let mut pick = |name: &str, format: CompressionFormat| -> Result<()> {
+        if chosen.is_some() {
+            let chosen_name = chosen.unwrap().as_str();
+            return Err(Error::Config(format!(
+                "compression filter '{name}' conflicts with {chosen_name}"
+            )));
+        }
+        chosen = Some(format);
+        Ok(())
+    };
+
+    if flags.xz {
+        pick("xz", CompressionFormat::Xz)?;
+    }
+    if flags.gzip {
+        pick("gzip", CompressionFormat::Gz)?;
+    }
+    if flags.bzip2 {
+        pick("bzip2", CompressionFormat::Bz2)?;
+    }
+    if flags.zstd {
+        pick("zstd", CompressionFormat::Zstd)?;
+    }
+
+    if let Some(format) = chosen {
+        return Ok(format);
+    }
+
+    if flags.auto_compress || !flags.no_auto_compress {
+        return Ok(infer_compression_from_suffix(archive_path));
+    }
+
+    if flags.auto_compress && flags.no_auto_compress {
+        return Err(Error::Config(
+            "--no-auto-compress and --auto-compress cannot be passed at the same time.".to_string()
+        ));
+    }
+
+    Ok(CompressionFormat::None)
+}
+
+pub fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
+    let name = path.to_string_lossy().to_ascii_lowercase();
+    if name.ends_with(".tar.xz") || name.ends_with(".txz") {
+        CompressionFormat::Xz
+    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        CompressionFormat::Gz
+    } else if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") || name.ends_with(".tbz") {
+        CompressionFormat::Bz2
+    } else if name.ends_with(".tar.zst") || name.ends_with(".tzst") {
+        CompressionFormat::Zstd
+    } else {
+        // TODO different resolution
+        CompressionFormat::None
+    }
+}
+
 
 /// Where extract places `{stem}.estage` (config-only; not wired to CLI).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -125,11 +219,7 @@ pub struct Config {
     pub archive_path: PathBuf,
 
     /// Path-resolution base from archive `-C` / `--directory` (absolute), if set.
-    pub directory: Option<PathBuf>,
-
-    // TODO: Convert to abs path immediately.
-    /// Archive input root (`archive` subcommand only). First of `input_dirs` when non-empty.
-    pub input_dir: PathBuf,
+    pub directory: PathBuf,
 
     /// All archive input roots from repeated `-i` / `--input-dir`.
     pub input_dirs: Vec<PathBuf>,
@@ -188,14 +278,14 @@ pub struct Config {
     pub exclude_from: Vec<PathBuf>,
     /// Paths to include-pattern files from `--include-from`.
     pub include_from: Vec<PathBuf>,
+    pub anchored: bool,
+    pub ignore_case: bool,
 
     pub no_recursion: bool,
     pub dereference: bool,
     pub one_file_system: bool,
     pub absolute_names: bool,
     pub no_hardlink_detection: bool,
-    pub anchored: bool,
-    pub ignore_case: bool,
 
     /// Force owner policy: `NAME`, `UID`, or `NAME:UID` (archive meta / extract apply).
     pub owner: Option<String>,
@@ -232,36 +322,34 @@ pub struct Config {
 
 impl Config {
     pub fn from_archive_args(args: &ArchiveArgs) -> Result<Self> {
-        if args.exclude_vcs || args.exclude_vcs_ignores {
-            return Err(Error::Config(
-                "--exclude-vcs / --exclude-vcs-ignores are not implemented yet".into(),
-            ));
+        // Archive Paths
+        let directory = resolve_cwd(args.directory.as_deref())?;
+
+        let archive_path = resolve_path_to_abs_path(&args.archive, &directory);
+        if let Some(parent) = archive_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
 
+        let work_dir = match &args.work_dir {
+            Some(path) => resolve_path_to_abs_path(&path, &directory),
+            // TODO: Check the soundness of path parent
+            None => default_archive_work_dir(&archive_path),
+        };
+        std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
+
+        // Inputs
         if args.input_dirs.is_empty() && args.files_from.is_empty() {
             return Err(Error::Config(
                 "at least one of `-i`/`--input-dir` or `-T`/`--files-from` is required".into(),
             ));
         }
 
-        if args.page_size == 0 {
-            return Err(Error::Config("page_size must be greater than 0".into()));
-        }
-
-        let base = resolution_base(args.directory.as_deref())?;
-
-        let archive_path = resolve_user_path_against(&args.archive, &base)?;
-        if let Some(parent) = archive_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
-        }
-
         let mut input_dirs = Vec::with_capacity(args.input_dirs.len());
         for dir in &args.input_dirs {
-            let resolved = resolve_user_path_against(dir, &base)?;
-            validate_dir(&resolved, "input directory")?;
+            let resolved = resolve_path_to_abs_path(&dir, &directory);
+            validate_dir(&resolved, "--input-dir")?; // TODO Fail fast.
             input_dirs.push(resolved);
         }
-        let input_dir = input_dirs.first().cloned().unwrap_or_default();
 
         let files_from: Vec<PathBuf> = args
             .files_from
@@ -270,97 +358,129 @@ impl Config {
                 if p.as_os_str() == "-" {
                     Ok(PathBuf::from("-"))
                 } else {
-                    resolve_user_path_against(p, &base)
+                    let resolved = resolve_path_to_abs_path(&p, &directory);
+                    validate_file(resolved.as_ref(), "--from-file")?;
+                    Ok(resolved)
                 }
             })
             .collect::<Result<_>>()?;
 
+        // Compression
+        let format = resolve_compression(&args.compression, &archive_path)?;
+        let compression = CompressionSettings::from_archive_args(format, args)?;
+
+        // Indexing
+        // Bools only - nothing to validate
+
+        // Filtering
         let exclude_from: Vec<PathBuf> = args
             .exclude_from
             .iter()
-            .map(|p| resolve_user_path_against(p, &base))
+            .map(|p| {
+                let resolved = resolve_path_to_abs_path(&p, &directory);
+                validate_file(&resolved, "--exclude-from")?;
+                Ok(resolved)
+            })
             .collect::<Result<_>>()?;
         let include_from: Vec<PathBuf> = args
             .include_from
             .iter()
-            .map(|p| resolve_user_path_against(p, &base))
+            .map(|p| {
+                let resolved = resolve_path_to_abs_path(&p, &directory);
+                validate_file(&resolved, "--exclude-from")?;
+                Ok(resolved)
+            })
             .collect::<Result<_>>()?;
 
-        let owner_map = args
+        if args.exclude_vcs || args.exclude_vcs_ignores {
+            return Err(Error::Config(
+                "--exclude-vcs / --exclude-vcs-ignores are not implemented yet".into(),
+            ));
+        }
+
+        // File Attributes
+        let owner_map: Option<PathBuf> = args
             .owner_map
             .as_ref()
-            .map(|p| resolve_user_path_against(p, &base))
+            .map(|p| -> Result<PathBuf> {
+                let resolved = resolve_path_to_abs_path(&p, &directory);
+                validate_file(&resolved, "--owner-map")?;
+                Ok(resolved)
+            })
             .transpose()?;
-        let group_map = args
+        let group_map: Option<PathBuf> = args
             .group_map
             .as_ref()
-            .map(|p| resolve_user_path_against(p, &base))
+            .map(|p| -> Result<PathBuf> {
+                let resolved = resolve_path_to_abs_path(&p, &directory);
+                validate_file(&resolved, "--group-map")?;
+                Ok(resolved)
+            })
             .transpose()?;
 
-        let work_dir = match &args.work_dir {
-            Some(path) => resolve_user_path_against(path, &base)?,
-            None => default_archive_work_dir(&archive_path),
-        };
-        std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
+        if args.page_size == 0 {
+            return Err(Error::Config("page_size must be greater than 0".into()));
+        }
 
-        let format = resolve_compression(&args.compression, &archive_path)?;
-        let compression = CompressionSettings::from_archive_args(format, args)?;
         // Archive CLI no longer exposes `--resume` (future subcommand); only `--fresh`.
         let start_policy = crate::common::start::StartPolicy::from_flags(false, args.fresh)?;
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
 
-        let directory = args
-            .directory
-            .as_ref()
-            .map(|_| base.clone());
-
         Ok(Self {
             archive_path,
             directory,
-            input_dir,
+            work_dir,
+            
             input_dirs,
             files_from,
             files_from_null: args.null,
-            output_dir: PathBuf::new(),
-            work_dir,
+            
             compression,
-            jobs,
-            start_policy,
-            cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
-            extract_stage_location: ExtractStageLocation::BesideArchive,
-            exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
-            restore_owner: false,
-            do_xattrs: args.xattrs,
-            do_posix_acl: args.acls,
-            do_selinux: args.selinux,
-            dedup_fail_fast: args.fail_fast,
-            fail_fast: args.fail_fast,
-            no_errors: args.no_errors,
-            page_size: args.page_size,
-            min_pages: args.min_pages,
-            sparsify: args.sparsify,
-            exclude_patterns: args.exclude.clone(),
-            include_patterns: args.include.clone(),
-            exclude_from,
-            include_from,
+
             no_recursion: args.no_recursion,
             dereference: args.dereference,
             one_file_system: args.one_file_system,
             absolute_names: args.absolute_names,
             no_hardlink_detection: args.no_hardlink_detection,
+
+            exclude_patterns: args.exclude.clone(),
+            exclude_from,
+            include_patterns: args.include.clone(),
+            include_from,
             anchored: args.anchored,
             ignore_case: args.ignore_case,
+            
+            do_xattrs: args.xattrs,
+            do_posix_acl: args.acls,
+            do_selinux: args.selinux,
             owner: args.owner.clone(),
             owner_map,
             group: args.group.clone(),
             group_map,
+
+            sparsify: args.sparsify,
+            page_size: args.page_size,
+            min_pages: args.min_pages,
+            
+            jobs,
+            start_policy,
+            cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
+            exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
+            dedup_fail_fast: args.fail_fast,
+            fail_fast: args.fail_fast,
+            no_errors: args.no_errors,
             eager_filter: args.eager_filter,
             no_dedup: args.no_dedup,
-            write_archive_footer: true,
             retry_missing_sha: args.retry_missing_sha,
+            write_archive_footer: true, // TODO Add CLI
+            
+            // Extract related
+            extract_stage_location: ExtractStageLocation::BesideArchive,
+            restore_owner: false,
             force_scan: false, // TODO CLI Arg
             clear_archive_meta: false, // TODO CLI Arg
             rehash: true, // TODO CLI Arg
+            output_dir: PathBuf::new(),
         })
     }
 
@@ -385,8 +505,7 @@ impl Config {
 
         Ok(Self {
             archive_path,
-            directory: None,
-            input_dir: PathBuf::new(),
+            directory:  PathBuf::from("hello world"),
             input_dirs: Vec::new(),
             files_from: Vec::new(),
             files_from_null: false,
@@ -450,121 +569,42 @@ impl Config {
     }
 }
 
-pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Result<CompressionFormat> {
-    let mut chosen = None;
-    let mut pick = |name: &str, format: CompressionFormat| -> Result<()> {
-        if chosen.is_some() {
-            return Err(Error::Config(format!(
-                "compression filter '{name}' conflicts with another compression flag"
-            )));
-        }
-        chosen = Some(format);
-        Ok(())
-    };
-
-    if flags.xz {
-        pick("xz", CompressionFormat::Xz)?;
-    }
-    if flags.gzip {
-        pick("gzip", CompressionFormat::Gz)?;
-    }
-    if flags.bzip2 {
-        pick("bzip2", CompressionFormat::Bz2)?;
-    }
-    if flags.zstd {
-        pick("zstd", CompressionFormat::Zstd)?;
-    }
-
-    if let Some(format) = chosen {
-        return Ok(format);
-    }
-
-    if flags.auto_compress || !flags.no_auto_compress {
-        return Ok(infer_compression_from_suffix(archive_path));
-    }
-
-    if flags.auto_compress && flags.no_auto_compress {
-        return Err(Error::Config(
-            "--no-auto-compress and --auto-compress cannot be passed at the same time.".to_string()
-        ));
-    }
-
-    Ok(CompressionFormat::None)
-}
-
-/// Validate `--level` / `--xz-extreme` / `--bzip-small` against the resolved filter.
-fn resolve_compress_options(
-    format: CompressionFormat,
-    args: &ArchiveArgs,
-) -> Result<(u32, bool)> {
-    if args.xz_extreme && format != CompressionFormat::Xz {
-        return Err(Error::Config(
-            "--xz-extreme is only valid with xz compression (-J / .tar.xz)".into(),
-        ));
-    }
-    if format == CompressionFormat::None {
-        if args.level.is_some() {
-            return Err(Error::Config(
-                "--level requires a compression filter (archive is uncompressed)".into(),
-            ));
-        }
-        return Ok((0, false));
-    }
-
-    let (min, max) = format
-        .level_range()
-        .expect("compressing format has a level range");
-    let mut level = args.level.unwrap_or_else(|| format.default_level().unwrap());
-    if level < min || level > max {
-        return Err(Error::Config(format!(
-            "--level {level} is out of range for {} (allowed {min}–{max})",
-            format.as_str()
-        )));
-    }
-
-
-    Ok((level, args.xz_extreme))
-}
-
-pub fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
-    let name = path.to_string_lossy().to_ascii_lowercase();
-    if name.ends_with(".tar.xz") || name.ends_with(".txz") {
-        CompressionFormat::Xz
-    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        CompressionFormat::Gz
-    } else if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") || name.ends_with(".tbz") {
-        CompressionFormat::Bz2
-    } else if name.ends_with(".tar.zst") || name.ends_with(".tzst") {
-        CompressionFormat::Zstd
-    } else {
-        // TODO different resolution
-        CompressionFormat::None
-    }
-}
-
 pub fn resolve_user_path(path: &Path) -> Result<PathBuf> {
     let cwd = std::env::current_dir().map_err(Error::from)?;
-    resolve_user_path_against(path, &cwd)
+    Ok(resolve_path_to_abs_path(path, &cwd))
 }
 
-/// Resolve `path` against `base` (absolute paths unchanged).
-pub fn resolve_user_path_against(path: &Path, base: &Path) -> Result<PathBuf> {
+/// Resolves a path to an absolut path by assembling an abspath the given base.
+/// This function guarantees:
+/// - The path is absolute
+/// - The path is minimal
+///
+/// It is not guaranteed that it exists!
+pub fn resolve_path_to_abs_path(path: &Path, base: &Path) -> PathBuf {
     if path.is_absolute() {
-        Ok(path.to_path_buf())
+        path.to_path_buf()
     } else {
-        Ok(base.join(path))
+        base.join(path)
     }
 }
 
-fn resolution_base(directory: Option<&Path>) -> Result<PathBuf> {
-    match directory {
-        None => std::env::current_dir().map_err(Error::from),
+/// Given CLI arguments, determine the cwd for the remainder of the command.
+/// This function guarantees:
+/// - The path is a directory
+/// - The directory exists
+/// - The path is minimal
+fn resolve_cwd(directory: Option<&Path>) -> Result<PathBuf> {
+    let resolved = match directory {
+        None => std::env::current_dir().map_err(Error::from)?.clean(),
         Some(dir) => {
-            let resolved = resolve_user_path(dir)?;
-            validate_dir(&resolved, "directory")?;
-            Ok(resolved)
+            match dir.is_absolute() {
+                true => dir.to_path_buf().clean(),
+                false => std::env::current_dir().map_err(Error::from)?.join(dir).clean(),
+            }
         }
-    }
+    };
+    validate_dir(&resolved, "--directory")?;
+    Ok(resolved)
 }
 
 /// Archive basename with compound compression / `.tar` suffixes stripped.
@@ -604,6 +644,7 @@ pub fn archive_stem(archive_path: &Path) -> String {
     name[..name.len() - strip_len].to_string()
 }
 
+// TODO Validate functionality
 /// Parent directory for placing siblings of `path`.
 ///
 /// - `/data/foo.tar.gz` → `/data`
@@ -633,42 +674,6 @@ fn default_extract_work_dir(
 
 fn default_archive_work_dir(archive_path: &Path) -> PathBuf {
     path_parent(archive_path).join(format!("{}.astage", archive_stem(archive_path)))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn archive_stem_strips_compound_suffixes() {
-        assert_eq!(archive_stem(Path::new("backup.tar.gz")), "backup");
-        assert_eq!(archive_stem(Path::new("/tmp/x.tar.xz")), "x");
-        assert_eq!(archive_stem(Path::new("a.tgz")), "a");
-        assert_eq!(archive_stem(Path::new("n.tar")), "n");
-    }
-
-    #[test]
-    fn default_dirs_use_astage_estage() {
-        let arch = Path::new("/data/foo.tar.gz");
-        assert_eq!(default_archive_work_dir(arch), PathBuf::from("/data/foo.astage"));
-        assert_eq!(
-            default_extract_work_dir(arch, Path::new("/out"), ExtractStageLocation::BesideArchive),
-            PathBuf::from("/data/foo.estage")
-        );
-        assert_eq!(
-            default_extract_work_dir(arch, Path::new("/out/tree"), ExtractStageLocation::BesideOutput),
-            PathBuf::from("/out/foo.estage")
-        );
-    }
-
-    #[test]
-    fn path_parent_keeps_filesystem_root() {
-        assert_eq!(path_parent(Path::new("/foo.tar.gz")), Path::new("/"));
-        assert_eq!(path_parent(Path::new("/")), Path::new("/"));
-        assert_eq!(path_parent(Path::new("foo.tar.gz")), Path::new("."));
-        assert_eq!(path_parent(Path::new("/data/foo.tar.gz")), Path::new("/data"));
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -857,10 +862,21 @@ impl RuntimeState {
     }
 }
 
+// TODO what about symlinks?
 fn validate_dir(path: &Path, label: &str) -> Result<()> {
     if !path.is_dir() {
         return Err(Error::Config(format!(
             "{label} does not exist or is not a directory: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+// TODO what about symlinks?
+fn validate_file(path: &Path, label: &str) -> Result<()> {
+    if !path.is_file() {
+        return Err(Error::Config(format!(
+            "{label} does not exist or is not a file: {}",
             path.display()
         )));
     }
@@ -917,4 +933,40 @@ fn physical_ram_bytes() -> Option<u64> {
         .to_string();
     let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
     Some(kib * 1024)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn archive_stem_strips_compound_suffixes() {
+        assert_eq!(archive_stem(Path::new("backup.tar.gz")), "backup");
+        assert_eq!(archive_stem(Path::new("/tmp/x.tar.xz")), "x");
+        assert_eq!(archive_stem(Path::new("a.tgz")), "a");
+        assert_eq!(archive_stem(Path::new("n.tar")), "n");
+    }
+
+    #[test]
+    fn default_dirs_use_astage_estage() {
+        let arch = Path::new("/data/foo.tar.gz");
+        assert_eq!(default_archive_work_dir(arch), PathBuf::from("/data/foo.astage"));
+        assert_eq!(
+            default_extract_work_dir(arch, Path::new("/out"), ExtractStageLocation::BesideArchive),
+            PathBuf::from("/data/foo.estage")
+        );
+        assert_eq!(
+            default_extract_work_dir(arch, Path::new("/out/tree"), ExtractStageLocation::BesideOutput),
+            PathBuf::from("/out/foo.estage")
+        );
+    }
+
+    #[test]
+    fn path_parent_keeps_filesystem_root() {
+        assert_eq!(path_parent(Path::new("/foo.tar.gz")), Path::new("/"));
+        assert_eq!(path_parent(Path::new("/")), Path::new("/"));
+        assert_eq!(path_parent(Path::new("foo.tar.gz")), Path::new("."));
+        assert_eq!(path_parent(Path::new("/data/foo.tar.gz")), Path::new("/data"));
+    }
 }
