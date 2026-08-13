@@ -134,10 +134,15 @@ fn file_ctime(meta: &std::fs::Metadata) -> io::Result<DateTime<Utc>> {
 
 // INFO: Section copied from WalkDir::util, (what works - works)
 #[cfg(unix)]
-pub fn device_num<P: AsRef<Path>>(path: P) -> io::Result<u64> {
+pub fn device_num_stat<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     use std::os::unix::fs::MetadataExt;
-
     path.as_ref().metadata().map(|md| md.dev())
+}
+
+#[cfg(unix)]
+pub fn device_num_lstat<P: AsRef<Path>>(path: P) -> io::Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    path.as_ref().symlink_metadata().map(|md| md.dev())
 }
 
 /* TODO Handle Windows Version.
