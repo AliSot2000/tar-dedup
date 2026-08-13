@@ -213,6 +213,13 @@ impl CleanupSettings {
     }
 }
 
+// TODO Determine if we need this to be like this.
+#[derive(Debug, Clone,  Default)]
+pub struct PathSource {
+    pub original_path: PathBuf,
+    pub absolute_path: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Path to archive being created or to archive being extracted filename.tar[.compression]
@@ -222,7 +229,8 @@ pub struct Config {
     pub directory: PathBuf,
 
     /// All archive input roots from repeated `-i` / `--input-dir`.
-    pub input_dirs: Vec<PathBuf>,
+    /// Retain the original and the abs path for convenience, tuple is
+    pub input_dirs: Vec<PathSource>,
 
     /// Paths from repeated `-T` / `--files-from` (may include `-` for stdin).
     pub files_from: Vec<PathBuf>,
@@ -348,7 +356,10 @@ impl Config {
         for dir in &args.input_dirs {
             let resolved = resolve_path_to_abs_path(&dir, &directory);
             validate_dir(&resolved, "--input-dir")?; // TODO Fail fast.
-            input_dirs.push(resolved);
+            input_dirs.push(PathSource {
+                original_path: dir.to_path_buf(),
+                absolute_path: resolved
+            });
         }
 
         let files_from: Vec<PathBuf> = args
