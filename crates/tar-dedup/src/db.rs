@@ -23,6 +23,7 @@ pub mod meta;
 mod schema;
 mod sparsify;
 pub mod content_id;
+mod source;
 
 pub use common::SqlFileRow;
 pub use extract::ExtractScanState;
@@ -44,6 +45,10 @@ impl Database {
 
     pub fn insert_file(&self, record: &NewFileRecord) -> Result<bool> {
         inventory::insert_file(&self.conn, record)
+    }
+
+    pub fn add_get_source(&self, path: &Path, source_kind: &str, line: Option<u64>) -> Result<i64> {
+        source::add_get_source(&self.conn, path, source_kind, line)
     }
 
     pub fn get_file<R: SqlFileRow>(&self, file_id: FileId) -> Result<Option<R>> {
