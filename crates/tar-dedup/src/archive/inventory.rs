@@ -510,9 +510,9 @@ fn resolve_relative(link_path: &Path, target: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn determine_file_type(path: &Path) -> io::Result<FileType> {
+fn determine_file_type(md: &fs::Metadata, path: &Path) -> io::Result<FileType> {
     // walkdir::DirEntry::file_type() is infallible.
-    let ft = path.metadata()?.file_type();
+    let ft = md.file_type();
     if ft.is_file() {
         Ok(FileType::File)
     } else if ft.is_dir() {
@@ -531,16 +531,10 @@ fn determine_file_type(path: &Path) -> io::Result<FileType> {
 }
 
 #[cfg(windows)]
-fn determine_file_type(e: std::fs::DirEntry) -> io::Result<FileType> {
+fn determine_file_type(md: &fs::Metadata, path: &Path) -> io::Result<FileType> {
     use std::os::windows::fs::FileTypeExt;
+    let ft = md.file_type();
 
-    let ft = match e.file_type() {
-        Ok(o) => o,
-        Err(e) => {
-            println!("Failed to resolve file type {}", e);
-            return Ok(FileType::Unknown);
-        }
-    };
     // Iterate through all possible file types
     if ft.is_file() {
         Ok(FileType::File)
