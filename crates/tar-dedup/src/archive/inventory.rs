@@ -191,7 +191,7 @@ pub fn handle_entry(
     let mut enc_err = Vec::new();
 
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
-    let meta = fs::metadata(path)
+    let meta = fs::symlink_metadata(path)
         .map_err(|e| crate::error::Error::io(path, e))?;
     let mode = file_mode(&meta);
 
@@ -200,9 +200,10 @@ pub fn handle_entry(
     let mtime = strip_transpose(path, times.0, &mut enc_err);
     let atime = strip_transpose(path, times.1, &mut enc_err);
     let ctime = strip_transpose(path, times.2, &mut enc_err);
-    let uid = strip_transpose(path, file_uid(&path), &mut enc_err);
-    let gid = strip_transpose(path, file_gid(&path), &mut enc_err);
-    let ftype = strip_transpose(path, determine_file_type(&path), &mut enc_err);
+    let uid = strip_transpose(path, file_uid(&meta), &mut enc_err);
+    let gid = strip_transpose(path, file_gid(&meta), &mut enc_err);
+    let ftype = strip_transpose(
+        path, determine_file_type(&meta, &path), &mut enc_err);
     let dev = strip_transpose(path, get_file_dev(&meta), &mut enc_err);
     let ino = strip_transpose(path, get_file_ino(&meta), &mut enc_err);
 
@@ -365,13 +366,13 @@ fn files_from_reader(mut reader: impl BufRead, null: bool)
 }
 
 #[cfg(unix)]
-fn file_uid(path: &Path) -> io::Result<u32> {
+fn file_uid(md: &fs::Metadata) -> io::Result<u32> {
     use std::os::unix::fs::MetadataExt;
-    Ok(fs::metadata(path)?.uid())
+    Ok(md.uid())
 }
 
 #[cfg(not(unix))]
-fn file_uid(_path: &Path) -> io::Result<u32> {
+fn file_uid(_md: &fs::Metadata) -> io::Result<u32> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "file uid is not available on this platform",
@@ -379,13 +380,13 @@ fn file_uid(_path: &Path) -> io::Result<u32> {
 }
 
 #[cfg(unix)]
-fn file_gid(path: &Path) -> io::Result<u32> {
+fn file_gid(md: &fs::Metadata) -> io::Result<u32> {
     use std::os::unix::fs::MetadataExt;
-    Ok(fs::metadata(path)?.gid())
+    Ok(md.gid())
 }
 
 #[cfg(not(unix))]
-fn file_gid(_path: &Path) -> io::Result<u32> {
+fn file_gid(_md: &fs::Metadata) -> io::Result<u32> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "file uid is not available on this platform",
