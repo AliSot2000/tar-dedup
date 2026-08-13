@@ -15,7 +15,7 @@ pub struct ContentId(pub String);
 #[derive(Debug, Clone)]
 pub struct FileRecord {
     pub id: FileId,
-    pub rel_path: PathBuf,
+    pub abs_path: PathBuf,
     pub ext: String,
     pub size: u64,
     pub sha1: Option<[u8; 20]>,
@@ -44,7 +44,7 @@ pub struct FileRecord {
 #[derive(Debug, Clone)]
 pub struct StrippedRecord {
     pub id: FileId,
-    pub rel_path: PathBuf,
+    pub abs_path: PathBuf,
     pub ext: String,
     pub size: u64,
     pub sha1: Option<[u8; 20]>,
@@ -62,7 +62,7 @@ pub struct StrippedRecord {
 
 #[derive(Debug, Clone)]
 pub struct NewFileRecord {
-    pub rel_path: PathBuf,
+    pub abs_path: PathBuf,
     pub ext: String,
     pub size: u64,
     pub mtime: Option<DateTime<Utc>>,
@@ -78,6 +78,7 @@ pub struct NewFileRecord {
     pub link_dst: Option<PathBuf>,
     pub device_id: Option<u64>,
     pub inode_id: Option<u64>,
+    pub source_id: i64,
 }
 
 /// Enum represents all possible targets a symlink can have. `Unknown` is for dangling links that
