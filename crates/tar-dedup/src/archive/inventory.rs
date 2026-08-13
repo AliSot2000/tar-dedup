@@ -293,7 +293,7 @@ fn walk_link(config: &Config, db: &Database, shutdown: &Shutdown,
     if !abs_dst.exists() { return Ok(()); }
 
     // PRECONDITION: Dereference, Path Exists
-    let target_device_number = device_num(&abs_dst)
+    let target_device_number = device_num_lstat(&abs_dst)
         .map_err(|e| Error::io(&abs_dst, e))?;
     if target_device_number != root_device && config.one_file_system{ return Ok(()); }
 
