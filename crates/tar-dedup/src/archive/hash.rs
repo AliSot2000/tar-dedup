@@ -58,16 +58,14 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let checked = PreYield::new(pending.iter(), |record: &&StrippedRecord| {
         warn_if_times_changed(&record.abs_path, record.mtime, record.atime, record.ctime);
     });
-
+    // TODO: Pack result
     let parallel = pool.install(|| {
         checked.par_bridge().try_for_each(|record| {
             shutdown.check_between_files()?;
-            let path = input_dir.join(&record.rel_path);
-            let (digest, zero_blocks) = hash_file(&path, page_size, &shutdown)?;
-            results
-                .lock()
-                .expect("hash results lock")
-                .push((record.id, digest, zero_blocks));
+            let (digest, zero_blocks) = hash_file(
+                &record.abs_path, page_size, &shutdown)?;
+            let res = (record.id, digest, zero_blocks);
+            results.lock().expect("hash results lock").push(res);
             bar.inc(1);
             Ok(())
         })
