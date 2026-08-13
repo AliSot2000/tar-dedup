@@ -142,14 +142,15 @@ pub fn handle_dir(
     }
     cycle_detector.push(pb_start_dir);
 
-    let root_device = device_num(&start_dir).map_err(
+    let root_device = device_num_lstat(&start_dir).map_err(
         |e| Error::io(&start_dir, e)
     )?;
 
     let mut iter = WalkDir::new(&start_dir)
         .follow_links(false)
+        .follow_root_links(true)// INFO: Custom handling by us
         .same_file_system(config.one_file_system)
-        .min_depth(if config.no_recursion { 1 } else { 0 })
+        .min_depth(0)
         .max_depth(if config.no_recursion { 1 } else { usize::MAX })
         .contents_first(false)
         .into_iter();
