@@ -112,7 +112,7 @@ fn handle_from_files_line(
     debug_assert!(abs_path.is_absolute(), "Path must be absolute now");
 
     let source_id = db.add_get_source(
-        &abs_path, &format!("--from-files={from_files_disp_path}"), Some(line as u64))?;
+        &abs_path, &format!("--files-from={from_files_disp_path}"), Some(line as u64))?;
     handle_dir(&config, &db, &shutdown, source_id, &fpath,
                processed, &progress, path_cycle_detect)?;
 
