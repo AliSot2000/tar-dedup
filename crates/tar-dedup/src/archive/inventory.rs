@@ -298,7 +298,10 @@ fn walk_link(config: &Config, db: &Database, shutdown: &Shutdown,
     if target_device_number != root_device && config.one_file_system{ return Ok(()); }
 
     // PRECONDITION: Dereference, Path exists and is on same file system
-    if !abs_dst.is_dir() {
+    let link_metadata = abs_dst
+        .symlink_metadata()
+        .map_err(|e| Error::io(link_path, e))?;
+    if !link_metadata.is_dir() {
         // INFO: Symlink found -> element added to db.
         let _ = handle_entry(
             &abs_dst, source_id, &config, &db, &progress, processed, root_device,
@@ -307,7 +310,7 @@ fn walk_link(config: &Config, db: &Database, shutdown: &Shutdown,
     } else {
         // PRECONDITION: Dereference, Path exists, is on same file system, is directory.
         //  Start Dir walk again
-        debug_assert!(abs_dst.is_dir(),
+        debug_assert!(link_metadata.is_dir(),
                       "Previously handled all non-dir entries. Now should be dir.");
         let _ = handle_dir(&config, &db, &shutdown, source_id, &abs_dst, processed,
                            &progress, cycle_detect)?;
