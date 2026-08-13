@@ -441,11 +441,11 @@ impl Config {
             archive_path,
             directory,
             work_dir,
-            
+
             input_dirs,
             files_from,
             files_from_null: args.null,
-            
+
             compression,
 
             no_recursion: args.no_recursion,
@@ -460,7 +460,7 @@ impl Config {
             include_from,
             anchored: args.anchored,
             ignore_case: args.ignore_case,
-            
+
             do_xattrs: args.xattrs,
             do_posix_acl: args.acls,
             do_selinux: args.selinux,
@@ -472,7 +472,7 @@ impl Config {
             sparsify: args.sparsify,
             page_size: args.page_size,
             min_pages: args.min_pages,
-            
+
             jobs,
             start_policy,
             cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
@@ -484,7 +484,7 @@ impl Config {
             no_dedup: args.no_dedup,
             retry_missing_sha: args.retry_missing_sha,
             write_archive_footer: true, // TODO Add CLI
-            
+
             // Extract related
             extract_stage_location: ExtractStageLocation::BesideArchive,
             restore_owner: false,
