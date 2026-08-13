@@ -18,9 +18,7 @@ use crate::shutdown::Shutdown;
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let page_size = config.page_size;
-    if page_size == 0 {
-        return Err(Error::Config("page_size must be greater than 0".into()));
-    }
+    debug_assert!(page_size > 0, "page_size == 0");
 
     let total = db.count_files()?; // TODO update to new selection
     let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Inventoried)?;
