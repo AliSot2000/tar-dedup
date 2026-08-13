@@ -59,9 +59,7 @@ CREATE TABLE IF NOT EXISTS files (
     source_id      INTEGER REFERENCES source(id), --relevant to entry point (e.g. cross tree starts with links not recorded)
     canonical_id   INTEGER REFERENCES files(id),
     phase          TEXT NOT NULL DEFAULT 'inventoried',
-    flags          INTEGER NOT NULL DEFAULT 0,
-
-    UNIQUE(dev, inode)
+    flags          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(sha1, size);
