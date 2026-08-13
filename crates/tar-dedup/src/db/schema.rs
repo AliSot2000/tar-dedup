@@ -21,12 +21,13 @@ CREATE TABLE IF NOT EXISTS source (
     id INTEGER PRIMARY KEY,
     source TEXT NOT NULL,
     path TEXT NOT NULL,
-    UNIQUE (source, path)
+    line INTEGER,
+    UNIQUE (source, path. line)
 );
 
 CREATE TABLE IF NOT EXISTS files (
     id            INTEGER PRIMARY KEY,
-    rel_path      TEXT NOT NULL UNIQUE,
+    abs_path      TEXT NOT NULL UNIQUE,
     ext           TEXT NOT NULL,
 
     -- File Attributes
@@ -55,15 +56,18 @@ CREATE TABLE IF NOT EXISTS files (
     sparse_count   INTEGER,
     include_reason INTEGER REFERENCES filter_reason(id),
     exclude_reason INTEGER REFERENCES filter_reason(id),
-    source_id      INTEGER REFERENCES source(id),
+    source_id      INTEGER REFERENCES source(id), --relevant to entry point (e.g. cross tree starts with links not recorded)
     canonical_id   INTEGER REFERENCES files(id),
     phase          TEXT NOT NULL DEFAULT 'inventoried',
-    flags          INTEGER NOT NULL DEFAULT 0
+    flags          INTEGER NOT NULL DEFAULT 0,
+
+    UNIQUE(dev, inode)
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(sha1, size);
 CREATE INDEX IF NOT EXISTS idx_files_canonical ON files(canonical_id);
 CREATE INDEX IF NOT EXISTS idx_files_phase ON files(phase);
+CREATE INDEX IF NOT EXISTS idx_files_abs_path ON files(abs_path);
 
 -- finalized:
 -- 0 = open/interrupted,
