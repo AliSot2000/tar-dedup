@@ -41,7 +41,6 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
-    let input_dir = config.input_dir.clone();
     let shutdown = shutdown.clone();
     let results = Mutex::new(Vec::<(FileId, [u8; 20], u64)>::new());
 
@@ -57,8 +56,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // `PreYield` stats each file when `par_bridge` pulls it for a worker — just
     // before that file is hashed, not in a bulk pass at the start of the stage.
     let checked = PreYield::new(pending.iter(), |record: &&StrippedRecord| {
-        let path = input_dir.join(&record.rel_path);
-        warn_if_times_changed(&path, record.mtime, record.atime, record.ctime);
+        warn_if_times_changed(&record.abs_path, record.mtime, record.atime, record.ctime);
     });
 
     let parallel = pool.install(|| {
