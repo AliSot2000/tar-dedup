@@ -140,6 +140,7 @@ pub fn device_num<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     path.as_ref().metadata().map(|md| md.dev())
 }
 
+/* TODO Handle Windows Version.
 #[cfg(windows)]
 pub fn device_num<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     use winapi_util::{file, Handle};
@@ -155,3 +156,4 @@ pub fn device_num<P: AsRef<Path>>(_: P) -> io::Result<u64> {
         "walkdir: same_file_system option not supported on this platform",
     ))
 }
+*/
