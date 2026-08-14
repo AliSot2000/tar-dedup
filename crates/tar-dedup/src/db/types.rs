@@ -291,6 +291,26 @@ pub struct ArchiveSession {
     pub archive_offset: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FilterExpression {
+    pub id: i64,
+    pub from: String,
+    pub line: Option<u64>,
+    pub expression: String,
+}
+
+impl FilterExpression {
+    pub fn is_exclusion_filter(&self) -> bool {
+        self.id > 0
+    }
+    pub fn is_inclusion_filter(&self) -> bool {
+        self.id < 0
+    }
+    pub fn is_internal(&self) -> bool {
+        self.from == "internal"
+    }
+}
+
 //==================================================================================================
 // Testing
 //==================================================================================================
