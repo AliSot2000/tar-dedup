@@ -4,9 +4,7 @@ use rusqlite::Connection;
 
 use crate::config::{ExtractRuntimeState, RuntimeState};
 use crate::db::flags::{FileFlag, FileFlags};
-use crate::db::types::{
-    ArchiveSession, FileId, FilePhase, GroupKey, NewFileRecord,
-};
+use crate::db::types::{ArchiveSession, FileId, FilePhase, FilterExpression, GroupKey, NewFileRecord};
 use crate::error::Result;
 
 pub mod flags;
@@ -123,6 +121,9 @@ impl Database {
     }
     pub fn count_filters(&self, exclude: Option<bool>) -> Result<u64> {
         filter::count_filters(&self.conn, exclude)
+    }
+    pub fn get_filters(&self, exclude: bool) -> Result<Vec<FilterExpression>> {
+        filter::get_filters(&self.conn, exclude)
     }
     pub fn promote_non_file_filtered_to_deduped(&self) -> Result<u64> {
         dedup::promote_non_file_filtered_to_deduped(&self.conn)
