@@ -55,8 +55,8 @@ impl Database {
         common::get_file(&self.conn, file_id)
     }
 
-    pub fn count_files(&self) -> Result<u64> {
-        common::count_files(&self.conn)
+    pub fn count_entries(&self) -> Result<u64> {
+        common::count_entries(&self.conn)
     }
 
     pub fn count_files_in_phase(&self, phase: FilePhase) -> Result<u64> {
