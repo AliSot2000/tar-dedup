@@ -91,12 +91,20 @@ impl Database {
         flags::get_flag(&self.conn, file_id, flag)
     }
 
-    pub fn set_flag(&self, file_id: FileId, flag: FileFlag, on: bool) -> Result<()> {
+    pub fn set_flag(&self, file_id: FileId, flag: FileFlag, on: bool) -> Result<u64> {
         flags::set_flag(&self.conn, file_id, flag, on)
     }
 
-    pub fn update_file_inspection(&self, file_id: FileId, digest: [u8; 20], sparse_count: u64) -> Result<()> {
-        hash::update_file_inspection(&self.conn, file_id, digest, sparse_count)
+    pub fn get_entries_to_hash<R: SqlFileRow>(&self, eager_filter: bool, detect_hardlinks: bool) -> Result<Vec<R>> {
+        hash::get_entries_to_hash(&self.conn, eager_filter, detect_hardlinks)
+    }
+
+    pub fn count_all_hashable_files(&self, eager_filter: bool, detect_hardlinks: bool) -> Result<u64> {
+        hash::count_all_hashable_files(&self.conn, eager_filter, detect_hardlinks)
+    }
+
+    pub fn update_file_inspection_per_id(&self, file_id: FileId, digest: [u8; 20], sparse_count: u64, update_hardlinks: bool) -> Result<()> {
+        hash::update_file_inspection_per_id(&self.conn, file_id, digest, sparse_count, update_hardlinks)
     }
 
     pub fn pending_duplicate_groups(&self) -> Result<Vec<GroupKey>> {
