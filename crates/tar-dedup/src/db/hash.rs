@@ -44,7 +44,6 @@ pub fn get_entries_to_hash<R: SqlFileRow>(
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
-pub fn update_file_inspection(
 /// Count all rows that need to be hashed in this phase. Not only the remaining files.
 pub fn count_all_hashable_files(
     conn: &Connection, eager_filter: bool, detect_hardlinks: bool) -> Result<u64> {
@@ -77,13 +76,22 @@ pub fn count_all_hashable_files(
     Ok(count as u64)
 }
 
+pub fn update_file_inspection_per_id(
     conn: &Connection,
     file_id: FileId,
     digest: [u8; 20],
     sparse_count: u64,
+    update_hardlinks: bool
 ) -> Result<()> {
+    let sql = if update_hardlinks {
+        "UPDATE files SET sha1 = :sha1, sparse_count = :sparse_count, phase = 'hashed' \
+            WHERE (dev, inode) IN (SELECT dev, inode FROM files WHERE id = :id)"
+    } else {
+        "UPDATE files SET sha1 = :sha1, sparse_count = :sparse_count, phase = 'hashed' \
+         WHERE id = :id"
+    };
     conn.execute(
-        "UPDATE files SET sha1 = :sha1, sparse_count = :sparse_count, phase = 'hashed' WHERE id = :id",
+        sql,
         named_params! {
             ":sha1": digest.as_slice(),
             ":sparse_count": sparse_count as i64,
