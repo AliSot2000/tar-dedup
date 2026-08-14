@@ -22,6 +22,7 @@ use std::{fs, io};
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // TODO Better errors.
+    // TODO on restart - delete the db and start from the beginning
     let mut processed = 0u64;
     let progress = CountProgress::new("inventory");
 
