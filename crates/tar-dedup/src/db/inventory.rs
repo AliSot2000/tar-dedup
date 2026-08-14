@@ -12,14 +12,14 @@ use nix::unistd::{Gid, Group, Uid, User};
 pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
     let changed = conn.execute(
         "INSERT OR IGNORE INTO files (
-             rel_path, ext, size, mtime, atime, ctime, uid, gid, mode, ftype,
+             abs_path, ext, size, mtime, atime, ctime, uid, gid, mode, ftype,
              xattr, acl, selinux, phase, link_dst
          ) VALUES (
-             :rel_path, :ext, :size, :mtime, :atime, :ctime, :uid, :gid, :mode, :ftype,
+             :abs_path, :ext, :size, :mtime, :atime, :ctime, :uid, :gid, :mode, :ftype,
              :xattr, :acl, :selinux, 'inventoried', :link_dst
          )",
         named_params! {
-            ":rel_path": record.rel_path.to_string_lossy(),
+            ":abs_path": record.abs_path.to_string_lossy(),
             ":ext": record.ext.as_str(),
             ":size": record.size,
             ":mtime": record.mtime.as_ref().map(|t| t.to_rfc3339()),
