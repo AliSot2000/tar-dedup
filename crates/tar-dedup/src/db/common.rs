@@ -172,7 +172,7 @@ pub fn get_file<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Result<Opt
     Ok(None)
 }
 
-pub fn count_files(conn: &Connection) -> Result<u64> {
+pub fn count_entries(conn: &Connection) -> Result<u64> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files",
         [],
