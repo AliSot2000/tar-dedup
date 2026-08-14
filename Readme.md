@@ -50,6 +50,11 @@ This command takes a set of input files / directories and produces an archive.
 
 **Filtering**
 
+`--include-from` and `--exclude-from` expects a file with `utf8` content and each pattern separated by a 
+newline character. If you need to match a new line for some reason, use `\n` and never `0x0A`.
+Regex is handled with rusts regex crate. TODO: Verify! This _should_ implement "PCRE-lite" - so a subset minus the 
+backreferences and lookahead/lookbehind functionality.
+
 | Short | Long                    | Required | Args | Description                                                                                      | Notes |
 |-------|-------------------------|----------|------|--------------------------------------------------------------------------------------------------|-------|
 | -     | `--exclude`             | n        | 1+   | Exclude all file system entries that match the REGEX                                             | 5.    |
