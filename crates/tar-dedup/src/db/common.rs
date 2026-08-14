@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use rusqlite::{named_params, Connection};
+use rusqlite::{Connection, named_params};
 
 use crate::db::content_id::{content_id_from_digest, sparse_member_name};
 use crate::db::flags::{FileFlag, FileFlags};
@@ -25,7 +25,7 @@ fn content_id_if_canonical(
     canonical_id: Option<FileId>,
     sha1: Option<&[u8; 20]>,
     size: u64,
-    rel_path: &Path,
+    abs_path: &Path,
     ftype: FileType,
 ) -> Option<ContentId> {
     if canonical_id != Some(id) {
@@ -34,7 +34,7 @@ fn content_id_if_canonical(
     if ftype != FileType::File {
         return None;
     }
-    Some(content_id_from_digest(sha1, size, id, rel_path))
+    Some(content_id_from_digest(sha1, size, id, abs_path))
 }
 
 impl FileRecord {
@@ -45,7 +45,7 @@ impl FileRecord {
             self.canonical_id,
             self.sha1.as_ref(),
             self.size,
-            &self.rel_path,
+            &self.abs_path,
             self.ftype?,
         )
     }
@@ -69,7 +69,7 @@ impl StrippedRecord {
             self.canonical_id,
             self.sha1.as_ref(),
             self.size,
-            &self.rel_path,
+            &self.abs_path,
             self.ftype?,
         )
     }
@@ -87,14 +87,14 @@ impl StrippedRecord {
 
 impl SqlFileRow for FileRecord {
     fn sql_columns() -> &'static str {
-        "id, rel_path, ext, size, sha1, mtime, atime, ctime, \
+        "id, abs_path, ext, size, sha1, mtime, atime, ctime, \
          uid, gid, mode, ftype, xattr, acl, selinux, link_dst, exclusion_id, canonical_id, flags, phase"
     }
 
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(FileRecord {
             id: FileId(row.get("id")?),
-            rel_path: row.get::<_, String>("rel_path")?.into(),
+            abs_path: row.get::<_, String>("abs_path")?.into(),
             ext: row.get("ext")?,
             size: row.get::<_, i64>("size")? as u64,
             sha1: optional_sha1(row)?,
@@ -135,13 +135,13 @@ impl SqlFileRow for FileRecord {
 
 impl SqlFileRow for StrippedRecord {
     fn sql_columns() -> &'static str {
-        "id, rel_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, flags, phase"
+        "id, abs_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, flags, phase"
     }
 
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(StrippedRecord {
             id: FileId(row.get("id")?),
-            rel_path: row.get::<_, String>("rel_path")?.into(),
+            abs_path: row.get::<_, String>("abs_path")?.into(),
             ext: row.get("ext")?,
             size: row.get::<_, i64>("size")? as u64,
             sha1: optional_sha1(row)?,
