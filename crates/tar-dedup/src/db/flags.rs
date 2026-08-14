@@ -9,47 +9,50 @@ use crate::error::Result;
 pub enum FileFlag {
     /// An IO Error occurred while querying the metadata of this file
     IoErrorWhileInventorying = 0,
+    /// This row is the hardlink group’s canonical payload (same `(dev, inode)`).
+    /// The flag is only applied iff there is more than one row with matching `(dev, inode)`
+    FileHardlinkCanonical = 1,
     /// An Error occurred while querying the xattrs of this file
-    XAttrError = 1,
+    XAttrError = 2,
     /// An Error occurred while querying the acls of this file.
-    PosixAclError = 2,
+    PosixAclError = 3,
     /// An Error occurred while querying SELinux Policies
-    SELinuxError = 3,
+    SELinuxError = 4,
     /// File changed while the archive pipeline was touching it.
-    Modified = 4,
+    Modified = 5,
     /// An error occurred during the first scan pass (sha + hole)
-    ErrorWhileHash = 5,
+    ErrorWhileHash = 6,
     /// Compare vs this round's canonical finished; content differs.
     /// Cleared on round end for the whole `(sha1, size)` group.
-    CheckWithCanonicalCompleted = 6,
+    CheckWithCanonicalCompleted = 7,
     /// Read/compare failed during dedup. Sticky — never cleared on later success.
     /// Excludes the file from canonical election.
-    ErrorWhileDedup = 7,
+    ErrorWhileDedup = 8,
     /// Sparse rewrite exists; stage/archive should use the sparsified target.
-    HasSparse = 8,
+    HasSparse = 9,
     /// Sparse copy failed (permissions, IO, …). Sticky.
-    ErrorWhileSparsify = 9,
+    ErrorWhileSparsify = 10,
     /// Payload was written into an archive session.
     /// Set on successful `append_path`. Left standing when the session finalizes
     /// (`phase` → `archived`). Cleared only on abort/truncate for rows that are
     /// still not `archived` (incomplete session rewrite).
-    AppendedPath = 10,
+    AppendedPath = 11,
     /// `append_path` failed during the archive process.
-    ErrorWhileArchive = 11,
+    ErrorWhileArchive = 12,
 
     /// Payload for this content landed in the extract cache (canonical row only).
     /// Set after a successful `unpack`; cleared on catalog install normalization.
-    FileExtracted = 12,
+    FileExtracted = 13,
     /// An error occurred while extracting a given file
-    ErrorWhileExtracting = 13,
+    ErrorWhileExtracting = 14,
     /// Rehashing Encountered a mismatch
-    RehashMismatch = 14,
+    RehashMismatch = 15,
     /// While attempting the rehash, an error occurred
-    ErrorWhileRehashing = 15,
+    ErrorWhileRehashing = 16,
     /// An Error prevented the file from being placed in its correct position
-    ErrorWhilePlacing = 16,
+    ErrorWhilePlacing = 17,
     /// At least one error occurred while applying metadata
-    ErrorWhileApplyingMetadata = 17,
+    ErrorWhileApplyingMetadata = 18,
 }
 
 impl FileFlag {
@@ -134,8 +137,8 @@ pub fn get_flag(conn: &Connection, file_id: FileId, flag: FileFlag) -> Result<bo
     Ok(set != 0)
 }
 
-pub fn set_flag(conn: &Connection, file_id: FileId, flag: FileFlag, on: bool) -> Result<()> {
-    conn.execute(
+pub fn set_flag(conn: &Connection, file_id: FileId, flag: FileFlag, on: bool) -> Result<u64> {
+    let rows_affected = conn.execute(
         "UPDATE files SET flags = CASE
              WHEN :on != 0 THEN flags | :bit
              ELSE flags & ~:bit
@@ -147,7 +150,7 @@ pub fn set_flag(conn: &Connection, file_id: FileId, flag: FileFlag, on: bool) ->
             ":id": file_id.0,
         },
     )?;
-    Ok(())
+    Ok(rows_affected as u64)
 }
 
 #[cfg(test)]
