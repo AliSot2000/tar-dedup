@@ -132,7 +132,7 @@ fn abs_path(config: &Config, record: &StrippedRecord) -> PathBuf {
 // =================================================================================================
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    let catalog = db.count_files()?;
+    let catalog = db.count_entries()?;
     // Early promote db entries we do not process in this phase
     let skipped_non_file = db.promote_non_file_filtered_to_deduped()?;
     let skipped_null_sha1 = db.promote_null_sha1_filtered_to_deduped()?;
