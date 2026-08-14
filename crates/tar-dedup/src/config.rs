@@ -480,7 +480,7 @@ impl Config {
             dedup_fail_fast: args.fail_fast,
             fail_fast: args.fail_fast,
             no_errors: args.no_errors,
-            eager_filter: args.eager_filter,
+            eager_filter: !args.lazy_filter,
             no_dedup: args.no_dedup,
             retry_missing_sha: args.retry_missing_sha,
             write_archive_footer: true, // TODO Add CLI
