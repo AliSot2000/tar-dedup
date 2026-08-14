@@ -483,7 +483,8 @@ mod tests {
         let canonical = insert(&db, "canonical.txt", 4, FileType::File);
         let duplicate = insert(&db, "duplicate.txt", 4, FileType::File);
 
-        db.update_file_inspection(canonical, [7u8; 20], 0)
+        // TODO: Need to figure out if we need to set the last one to true/false
+        db.update_file_inspection_per_id(canonical, [7u8; 20], 0, false)
             .expect("digest");
         db.mark_self_canonical(canonical).expect("self canonical");
         db.set_canonical(duplicate, canonical).expect("canonical");
