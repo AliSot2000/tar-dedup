@@ -22,6 +22,7 @@ use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
+// TODO: Need to rework this file!!!
 pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
     let product = if archive_footer::has_valid_footer(&config.archive_path) {
         ProductPresence::Finished
@@ -70,6 +71,7 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
         StartAction::RunFresh => {
             let state = RuntimeState::new(config.jobs);
             db.save_runtime_state(&state)?;
+            filter::ingest_filters(&db, &config)?;
             state
         }
         StartAction::AlreadyDone => unreachable!(),
