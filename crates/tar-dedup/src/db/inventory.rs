@@ -5,6 +5,7 @@ use std::iter::zip;
 use crate::config::RuntimeState;
 use crate::db::meta;
 use crate::db::types::NewFileRecord;
+use crate::db::flags::FileFlag;
 use crate::error::Result;
 use nix::unistd::{Gid, Group, Uid, User};
 
