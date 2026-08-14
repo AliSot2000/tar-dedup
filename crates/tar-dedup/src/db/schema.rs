@@ -2,6 +2,11 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 
+pub fn initialize(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA)?;
+    Ok(())
+}
+
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
@@ -12,9 +17,9 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 CREATE TABLE IF NOT EXISTS filter_reason (
-    id     INTEGER PRIMARY KEY, -- rule >= 0 exclude, < 0 include rule
+    id     INTEGER PRIMARY KEY CHECK (id > -9223372036854775807), -- rule >= 0 exclude, < 0 include rule
     source TEXT NOT NULL, -- e.g. --exclude=some-\regex-pattern or --exclude-from=path-to-file, line
-    line   INTEGER,
+    line   INTEGER, -- for include/exclude arguments this is the index --exclude=<ptrn>:0 --exclude=<other-ptrn>:1
     expression TEXT NOT NULL -- actual regex expression to match against
 );
 
@@ -79,9 +84,7 @@ CREATE TABLE IF NOT EXISTS archive_sessions (
     started_at     TEXT NOT NULL,
     finished_at    TEXT
 );
-";
 
-pub fn initialize(conn: &Connection) -> Result<()> {
-    conn.execute_batch(SCHEMA)?;
-    Ok(())
-}
+-- Add dummy row
+INSERT INTO filter_reason (id, source, line, expression) VALUES (0, 'internal', NULL, '*');
+";
