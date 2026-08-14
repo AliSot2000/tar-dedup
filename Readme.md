@@ -117,9 +117,9 @@ selected to be sparsified)
    take precedence over `--auto-compress`.
 4. Internally, all files are stored with an absolute path and conversion to absolute or relative happens when extracting 
    canonical files are moved back into place.
-5. Filtering always uses REGEX. No Glob or Shell expansions are supported. Files are first indexed. If given, only files
+5. Filtering always uses REGEX TODO FORMAT!!!. No Glob or Shell expansions are supported. Files are first indexed. If given, only files
    matching one or more of the include filters are propagated. Lastly only files that don't match a single exclude 
-   pattern are then eligible. If no a include filter is given, a catch-all filter is used.
+   pattern are then eligible. If no include filter is given, a catch-all filter is used.
 6. The database will store the overrides separately from the file metadata. On extract, the overrides will be applied 
    rather than on archive.
 
