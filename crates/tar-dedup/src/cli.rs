@@ -293,9 +293,9 @@ pub struct ArchiveArgs {
     #[arg(long = "no-errors", default_value_t = false, help_heading = "Process Options")]
     pub no_errors: bool,
 
-    /// Apply include/exclude filters before the hash phase.
-    #[arg(long = "eager-filter", default_value_t = false, help_heading = "Process Options")]
-    pub eager_filter: bool,
+    /// Apply include/exclude filters after the hash phase.
+    #[arg(long = "lazy_filter", default_value_t = false, help_heading = "Process Options")]
+    pub lazy_filter: bool,
 
     /// Skip the deduplication phase.
     #[arg(long = "no-dedup", default_value_t = false, help_heading = "Process Options")]
