@@ -15,7 +15,7 @@ fn install_initial_manifest_copies_embedded_snapshot() {
     Database::install_initial_manifest(&manifest_path, &db_path).expect("install manifest");
 
     let db = Database::open(&db_path).expect("open work db");
-    assert_eq!(db.count_files().expect("count"), 2);
+    assert_eq!(db.count_entries().expect("count"), 2);
 }
 
 #[test]
