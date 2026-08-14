@@ -3,29 +3,41 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
 
-use indicatif::{ProgressBar, ProgressStyle};
-use rayon::prelude::*;
-use rayon::ThreadPoolBuilder;
-use sha1::{Digest, Sha1};
-
-use crate::common::files::{warn_if_times_changed, PreYield};
+use crate::common::files::{PreYield, warn_if_times_changed};
 use crate::config::Config;
-use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::db::Database;
+use crate::db::flags::FileFlag;
+use crate::db::types::{FileId, StrippedRecord};
 use crate::error::{Error, Result};
 use crate::progress::io_buffer;
 use crate::shutdown::Shutdown;
+use indicatif::{ProgressBar, ProgressStyle};
+use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
+use sha1::{Digest, Sha1};
 
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let page_size = config.page_size;
     debug_assert!(page_size > 0, "page_size == 0");
 
-    let total = db.count_files()?; // TODO update to new selection
-    let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Inventoried)?;
-    let already_hashed = total.saturating_sub(pending.len() as u64);
+
+    // Set hardlink canonicals if and only if, we want to collapse the hardlinks and
+    if !config.no_hardlink_detection {
+        let rows = db.set_hardlink_canonicals()?;
+        tracing::info!("Updated {rows} of hardlink groups to have one canonical");
+    }
+
+    let total_entries = db.count_entries()?;
+    let hash_needed = db.count_all_hashable_files(
+        config.eager_filter, !config.no_hardlink_detection
+    )?;
+    let pending= db.get_entries_to_hash(
+        config.eager_filter, !config.no_hardlink_detection
+    )?;
+    let already_hashed = hash_needed.saturating_sub(pending.len() as u64);
     tracing::info!(
-        files = pending.len(),
-        total,
+        total_entries,
+        unshed_files = pending.len(),
         already_hashed,
         jobs = config.jobs,
         page_size,
@@ -42,9 +54,10 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
     let shutdown = shutdown.clone();
-    let results = Mutex::new(Vec::<(FileId, [u8; 20], u64)>::new());
+    let results = Mutex::new(
+        Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new());
 
-    let bar = ProgressBar::new(total);
+    let bar = ProgressBar::new(hash_needed);
     bar.set_position(already_hashed);
     bar.set_style(
         ProgressStyle::with_template("{spinner} hash [{bar:40.cyan/blue}] {pos}/{len}")
@@ -58,44 +71,66 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let checked = PreYield::new(pending.iter(), |record: &&StrippedRecord| {
         warn_if_times_changed(&record.abs_path, record.mtime, record.atime, record.ctime);
     });
-    // TODO: Pack result
     let parallel = pool.install(|| {
         checked.par_bridge().try_for_each(|record| {
             shutdown.check_between_files()?;
-            let (digest, zero_blocks) = hash_file(
-                &record.abs_path, page_size, &shutdown)?;
-            let res = (record.id, digest, zero_blocks);
+            let res = match hash_file(
+                &record.abs_path, page_size, &shutdown){
+                Ok((digest, zero_blocks)) => Ok((record.id, digest, zero_blocks)),
+                Err(e) => Err(IdError{err: e, id: record.id}),
+            };
             results.lock().expect("hash results lock").push(res);
             bar.inc(1);
             Ok(())
         })
     });
 
-    let hashed = results.lock().expect("hash results lock").clone();
-    for (id, digest, zero_blocks) in &hashed {
-        db.update_file_inspection(*id, *digest, *zero_blocks)?;
+    // TODO flow system later on.
+    let _future_vec = Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new();
+    let hashed = std::mem::replace(
+        &mut *results.lock().expect("hash results lock"),
+        _future_vec);
+
+    for res in &hashed {
+        match res {
+            Ok((id, digest, zero_blocks)) => {
+                db.update_file_inspection_per_id(*id, *digest, *zero_blocks, !config.no_hardlink_detection)?;
+            }
+            Err(e) => {
+                let ra = db.set_flag(e.id, FileFlag::ErrorWhileHash, true)?;
+                assert_eq!(ra, 1, "Rows affected must be 1. Got {ra}. \
+                0 - row vanished, >1 id constraint violated.");
+                // Todo capture error
+                // Todo logging / error
+            }
+        }
     }
 
     let force = shutdown.is_force();
 
     match parallel {
         Ok(()) => {
-            bar.finish_with_message(format!("hash complete ({total}/{total})"));
-            tracing::info!(count = hashed.len(), "hash complete");
+            bar.finish_with_message(format!("hashing complete ({hash_needed}/{hash_needed})"));
+            tracing::info!(count = hashed.len(), "hashing complete");
             Ok(())
         }
         Err(Error::Interrupted) if force => {
             bar.abandon();
-            tracing::warn!("hash force-aborted; in-flight progress discarded");
+            tracing::warn!("hashing force-aborted; in-flight progress discarded");
             Err(Error::Interrupted)
         }
         Err(Error::Interrupted) => {
             bar.abandon();
-            tracing::warn!(saved = hashed.len(), "hash stopped; completed files saved");
+            tracing::warn!(saved = hashed.len(), "hashing stopped; completed files saved");
             Err(Error::Interrupted)
         }
         Err(e) => Err(e),
     }
+}
+
+struct IdError {
+    err: Error,
+    id: FileId,
 }
 
 /// Single-pass SHA-1 and empty-page count.
