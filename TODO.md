@@ -12,6 +12,7 @@
 - [ ] Filter first
 
 ## General:
+- [ ] Force utf8 (any non-utf8 string panics and aborts.)
 - [ ] Testing
 - [ ] Different Verbosities
 - [ ] Sequential / Parallel where possible
