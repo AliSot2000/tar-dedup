@@ -105,6 +105,23 @@ fn set_gname_from_gid(conn: &Connection, gid: &u32, gname: &str) -> Result<()> {
     Ok(())
 }
 
+/// Set the canonical id for tuples of (dev, inode)
+pub fn set_hardlink_canonicals(conn: &Connection) -> Result<u64> {
+    let changes = conn.execute(
+        "UPDATE files
+         SET flags = flags | :flag
+         WHERE id IN (
+             SELECT MIN(id)
+             FROM files
+             WHERE dev IS NOT NULL AND inode IS NOT NULL
+             GROUP BY dev, inode
+         )",
+        named_params! {
+            ":flag": FileFlag::FileHardlinkCanonical.mask_i64(),
+        })?;
+    Ok(changes as u64)
+}
+
 #[cfg(unix)]
 pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
     // Get all present uids and gids

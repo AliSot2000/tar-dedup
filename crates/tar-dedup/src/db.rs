@@ -75,6 +75,10 @@ impl Database {
         inventory::resolve_numeric_ids(&self.conn)
     }
 
+    pub fn set_hardlink_canonicals(&self) -> Result<u64> {
+        inventory::set_hardlink_canonicals(&self.conn)
+    }
+
     pub fn get_flags(&self, file_id: FileId) -> Result<FileFlags> {
         flags::get_flags(&self.conn, file_id)
     }
