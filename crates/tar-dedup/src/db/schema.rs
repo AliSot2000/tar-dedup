@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS filter_reason (
     id     INTEGER PRIMARY KEY, -- rule >= 0 exclude, < 0 include rule
     source TEXT NOT NULL, -- e.g. --exclude=some-\regex-pattern or --exclude-from=path-to-file, line
+    line   INTEGER,
     expression TEXT NOT NULL -- actual regex expression to match against
 );
 
@@ -53,9 +54,9 @@ CREATE TABLE IF NOT EXISTS files (
     link_dst      TEXT,
 
     -- Internal Stuff
-    sparse_count   INTEGER,
-    include_reason INTEGER REFERENCES filter_reason(id),
-    exclude_reason INTEGER REFERENCES filter_reason(id),
+    sparse_count   INTEGER DEFAULT 0,
+    include_reason INTEGER REFERENCES filter_reason(id) DEFAULT 0,
+    exclude_reason INTEGER REFERENCES filter_reason(id) DEFAULT 0,
     source_id      INTEGER REFERENCES source(id), --relevant to entry point (e.g. cross tree starts with links not recorded)
     canonical_id   INTEGER REFERENCES files(id),
     phase          TEXT NOT NULL DEFAULT 'inventoried',
