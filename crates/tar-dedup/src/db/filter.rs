@@ -1,4 +1,5 @@
 use rusqlite::{Connection, named_params};
+use crate::db::flags::FileFlag;
 use crate::db::SqlFileRow;
 use crate::db::types::{FileId, FilterExpression};
 use crate::error::Result;
@@ -131,4 +132,33 @@ pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(conn: &mut Co
     drop(stmt);
     transaction.commit()?;
     Ok(rows_updated)
+}
+
+
+/// Function takes care of updating the FileHardlinkCanonical flag if for a given cluster of
+/// (dev, inode) the current canonical file is not selected.
+/// PRECONDITION:
+///   - no_dereference_hardlinks is false.
+pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<u64> {
+    let transaction = conn.transaction()?;
+    let downgraded = transaction.execute(
+        "UPDATE files \
+             SET flags & ~:hardlinks \
+             WHERE flags & :hardlinks = 1 \
+                AND (dev, inode) IN (SELECT dev, inode \
+                                     FROM files \
+                                     WHERE dev IS NOT NULL AND inode IS NOT NULL \
+                                     GROUP BY (dev, inode) \
+                                     HAVING COUNT(*) > 1",
+        named_params! {":hardlinks": FileFlag::FileHardlinkCanonical.mask_i64()})?;
+    let upgrade = transaction.execute(
+        "UPDATE files \
+             SET flags | ~:hardlinks\
+             WHERE id IN (SELECT MIN(id) \
+                          ROM files \
+                          WHERE AND include_reason > 0 AND exclude_reason = 0 AND",
+                                      named_params! {":hardlinks": FileFlag::FileHardlinkCanonical.mask_i64()})?;
+    transaction.commit()?;
+
+    Ok(0)
 }
