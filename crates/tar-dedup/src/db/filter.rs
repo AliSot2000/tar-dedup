@@ -1,5 +1,6 @@
 use rusqlite::{Connection, named_params};
-use crate::db::types::FilterExpression;
+use crate::db::SqlFileRow;
+use crate::db::types::{FileId, FilterExpression};
 use crate::error::Result;
 
 const FILTER_ROWS: &str = "id, source, line, expression";
@@ -75,3 +76,59 @@ pub fn get_filters(conn: &Connection, exclude: bool) -> Result<Vec<FilterExpress
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)}
+
+/// In case no filters were given, we promote all files to filters and set the blanket rows
+pub fn apply_no_filter(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files SET phase = 'filtered', include_reason = 1, exclude_reason = 0",
+        [],
+    )?;
+    Ok(n as u64)
+}
+
+pub fn get_rows_to_filter<R: SqlFileRow>(
+    conn: &Connection, last_id: Option<FileId>, eager_filter: bool, batch_size: u64)
+    -> Result<Vec<R>> {
+    let last_phase = if eager_filter { "'inventoried'" } else { "'hashed'" };
+    let last_id_filter = if let Some(_) = last_id { " AND id > :last_id " } else { "" };
+    let mut stmt = conn.prepare(
+        &format!("SELECT * FROM files \
+                      WHERE phase = {last_phase} {last_id_filter} \
+                      ORDER BY id \
+                      LIMIT :batch_size"))?;
+
+    let rows = match last_id {
+        None => {
+            stmt.query_map(named_params! {":batch_size": batch_size}, R::from_row)?
+
+        }
+        Some(lid) => {
+            stmt.query_map(
+                named_params! {":batch_size": batch_size, ":last_id": lid.0}, R::from_row)?
+        }
+    };
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+/// Function applies the results of the filtering of the files to the database.
+/// The results must have the structure (FileId, include_reason, exclude_reason)!
+pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(conn: &mut Connection, results: I)
+    -> Result<u64> {
+    let mut rows_updated = 0u64;
+    let transaction = conn.transaction()?; // TODO switch to transaction
+    let mut stmt = transaction.prepare_cached(
+        "UPDATE files \
+        SET include_reason = :include_reason, exclude_reason: exclude_reason, phase = 'filtered' \
+        WHERE id = :id")?;
+
+    for (fid, icr, exr) in results {
+        rows_updated = rows_updated + stmt.execute(named_params! {
+            ":file_id": fid.0,
+            ":include_reason": icr,
+            ":exclude_reason": exr,
+        })? as u64;
+    }
+    drop(stmt);
+    transaction.commit()?;
+    Ok(rows_updated)
+}

@@ -128,6 +128,22 @@ impl Database {
     pub fn get_filters(&self, exclude: bool) -> Result<Vec<FilterExpression>> {
         filter::get_filters(&self.conn, exclude)
     }
+
+    pub fn apply_no_filter(&self) -> Result<u64> {
+        filter::apply_no_filter(&self.conn)
+    }
+
+    pub fn get_rows_to_filter<R: SqlFileRow>(
+        &self, last_id: Option<FileId>, eager_filter: bool, batch_size: u64)
+        -> Result<Vec<R>> {
+        filter::get_rows_to_filter(&self.conn, last_id, eager_filter, batch_size)
+    }
+
+    pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>
+        (&mut self, results: I)-> Result<u64>{
+        filter::apply_filter_result(&mut self.conn, results)
+    }
+
     pub fn promote_non_file_filtered_to_deduped(&self) -> Result<u64> {
         dedup::promote_non_file_filtered_to_deduped(&self.conn)
     }
