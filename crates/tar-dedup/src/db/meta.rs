@@ -190,10 +190,13 @@ fn parse_u64(key: MetaKey, raw: &str) -> Result<u64> {
     })
 }
 
-/// Run `f` inside an immediate transaction. `f` receives `&Connection` (the
-/// transaction derefs to one) so typed setters work inside or outside a txn.
-pub fn with_meta_txn<T>(conn: &Connection, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let tx = conn.unchecked_transaction()?;
+/// Run `f` inside a transaction. `f` receives `&Connection` (the transaction
+/// derefs to one) so typed setters work inside or outside a txn.
+pub fn with_meta_txn<T>(
+    conn: &mut Connection,
+    f: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<T> {
+    let tx = conn.transaction()?;
     let out = f(&tx)?;
     tx.commit()?;
     Ok(out)

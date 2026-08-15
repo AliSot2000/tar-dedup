@@ -38,7 +38,7 @@ pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<
 /// Normalize a freshly installed catalog so stream handling is provenance-agnostic.
 /// Clears [`FileFlag::FileExtracted`] and forces candidate rows to `archived`.
 /// Must not run on a resumed work DB.
-pub fn normalize_installed_catalog(conn: &Connection) -> Result<()> {
+pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
     let bit = FileFlag::FileExtracted.mask_i64();
     conn.execute(
         "UPDATE files SET flags = flags & ~:bit",
@@ -250,7 +250,7 @@ pub fn load_extract_scan_state(conn: &Connection) -> Result<ExtractScanState> {
     })
 }
 
-pub fn save_extract_scan_state(conn: &Connection, state: &ExtractScanState) -> Result<()> {
+pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState) -> Result<()> {
     meta::with_meta_txn(conn, |conn| {
         meta::set_scan_tar_saw_manifest_db(conn, state.saw_manifest_db)?;
         meta::set_scan_tar_saw_any_members(conn, state.saw_any_members)?;
@@ -265,7 +265,7 @@ pub fn save_extract_scan_state(conn: &Connection, state: &ExtractScanState) -> R
     })
 }
 
-pub fn init_extract_runtime_state(conn: &Connection) -> Result<()> {
+pub fn init_extract_runtime_state(conn: &mut Connection) -> Result<()> {
     if load_extract_runtime_state(conn)?.is_none() {
         save_extract_runtime_state(conn, &ExtractRuntimeState::new())?;
     }
@@ -283,7 +283,7 @@ pub fn load_extract_runtime_state(conn: &Connection) -> Result<Option<ExtractRun
     }))
 }
 
-pub fn save_extract_runtime_state(conn: &Connection, state: &ExtractRuntimeState) -> Result<()> {
+pub fn save_extract_runtime_state(conn: &mut Connection, state: &ExtractRuntimeState) -> Result<()> {
     meta::with_meta_txn(conn, |conn| {
         meta::set_extract_phase(conn, state.phase)?;
         meta::set_extract_snapshots_ingested(conn, state.snapshots_ingested)?;
@@ -291,7 +291,7 @@ pub fn save_extract_runtime_state(conn: &Connection, state: &ExtractRuntimeState
     })
 }
 
-pub fn record_snapshot_ingested(conn: &Connection) -> Result<u32> {
+pub fn record_snapshot_ingested(conn: &mut Connection) -> Result<u32> {
     let mut scan = load_extract_scan_state(conn)?;
     scan.snapshots_ingested = scan.snapshots_ingested.saturating_add(1);
     save_extract_scan_state(conn, &scan)?;

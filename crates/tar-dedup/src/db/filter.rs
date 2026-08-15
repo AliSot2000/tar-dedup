@@ -115,7 +115,7 @@ pub fn get_rows_to_filter<R: SqlFileRow>(
 pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(conn: &mut Connection, results: I)
     -> Result<u64> {
     let mut rows_updated = 0u64;
-    let transaction = conn.transaction()?; // TODO switch to transaction
+    let transaction = conn.transaction()?;
     let mut stmt = transaction.prepare_cached(
         "UPDATE files \
         SET include_reason = :include_reason, exclude_reason: exclude_reason, phase = 'filtered' \
