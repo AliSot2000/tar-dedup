@@ -23,6 +23,9 @@ use std::{fs, io};
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // TODO Better errors.
     // TODO on restart - delete the db and start from the beginning
+    tracing::info!("Inventory pass cannot be gracefully interrupted. \
+                    If force aborted, inventory needs to be run again to ensure consistent \
+                    snapshot of filesystem.");
     let mut processed = 0u64;
     let progress = CountProgress::new("inventory");
 
@@ -30,7 +33,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     // Handle input directories
     for input_dir in config.input_dirs.iter() {
-        shutdown.check_between_files()?;
+        shutdown.check_in_flight()?;
         path_cycle_detect.clear();
 
         tracing::info!(root = %input_dir.absolute_path.display(), "inventory pass");
@@ -157,7 +160,7 @@ pub fn handle_dir(
         .into_iter();
 
     while let Some(element) = iter.next() {
-        shutdown.check_between_files()?;
+        shutdown.check_in_flight()?;
         let entry = match element {
             Err(e) => {
                 tracing::error!("Failed to access element with error: {e}"); // TODO fail fast
