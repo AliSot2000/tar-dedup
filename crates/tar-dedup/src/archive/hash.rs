@@ -108,6 +108,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     let force = shutdown.is_force();
 
+    // TODO dummy update of the remining entries.
     match parallel {
         Ok(()) => {
             bar.finish_with_message(format!("hashing complete ({hash_needed}/{hash_needed})"));
