@@ -471,14 +471,14 @@ mod tests {
 
     #[test]
     fn clear_archive_meta_drops_only_byte_counters() {
-        let (_dir, conn) = open_conn();
+        let (_dir, mut conn) = open_conn();
 
         set_archive_phase(&conn, PipelinePhase::Archive).unwrap();
         set_tar_writer_bytes_in(&conn, 1).unwrap();
         set_tar_writer_bytes_out(&conn, 2).unwrap();
         set_extract_phase(&conn, ExtractPipelinePhase::ScanTar).unwrap();
 
-        clear_archive_meta(&conn).unwrap();
+        clear_archive_meta(&mut conn).unwrap();
 
         assert_eq!(get_tar_writer_bytes_in(&conn).unwrap(), None);
         assert_eq!(get_tar_writer_bytes_out(&conn).unwrap(), None);
