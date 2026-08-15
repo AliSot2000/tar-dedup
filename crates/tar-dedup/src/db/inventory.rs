@@ -59,7 +59,7 @@ pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
     }))
 }
 
-pub fn save_runtime_state(conn: &Connection, state: &RuntimeState) -> Result<()> {
+pub fn save_runtime_state(conn: &mut Connection, state: &RuntimeState) -> Result<()> {
     meta::with_meta_txn(conn, |conn| {
         meta::set_archive_phase(conn, state.phase)?;
         meta::set_archive_snapshot_taken_at(conn, state.snapshot_taken_at)?;
