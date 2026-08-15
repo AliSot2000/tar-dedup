@@ -112,6 +112,7 @@ impl Database {
     pub fn promote_hashed_to_filtered(&self) -> Result<u64> {
         filter::promote_hashed_to_filtered(&self.conn)
     }
+
     pub fn add_include_pattern(&self, from: &str, line: Option<u64>, query: &str) -> Result<u64> {
         filter::add_include_pattern(&self.conn, from, line, query)
     }
@@ -119,9 +120,11 @@ impl Database {
     pub fn add_exclude_pattern(&self, from: &str, line: Option<u64>, query: &str) -> Result<u64> {
         filter::add_exclude_pattern(&self.conn, from, line, query)
     }
+
     pub fn count_filters(&self, exclude: Option<bool>) -> Result<u64> {
         filter::count_filters(&self.conn, exclude)
     }
+
     pub fn get_filters(&self, exclude: bool) -> Result<Vec<FilterExpression>> {
         filter::get_filters(&self.conn, exclude)
     }
