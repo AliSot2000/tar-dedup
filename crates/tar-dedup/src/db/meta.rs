@@ -363,7 +363,7 @@ pub fn delete_scan_tar_last_member_index(conn: &Connection) -> Result<()> {
 
 // TODO Delete the entirety of the archive keys.
 /// Drop tar-writer byte counters. Archive/extract phase keys are left standing.
-pub fn clear_archive_meta(conn: &Connection) -> Result<()> {
+pub fn clear_archive_meta(conn: &mut Connection) -> Result<()> {
     with_meta_txn(conn, |conn| {
         delete_meta(conn, MetaKey::TarWriterBytesIn.as_str())?;
         delete_meta(conn, MetaKey::TarWriterBytesOut.as_str())?;
