@@ -1,17 +1,147 @@
+use crate::config::Config;
+use crate::db::Database;
+use crate::db::types::{FileId, FilePhase, FilterExpression, StrippedRecord};
+use crate::error::Result;
+use regex::{Regex, RegexBuilder};
 use std::fs;
 use std::path::PathBuf;
-use regex::Regex;
-use crate::db::Database;
-use crate::error::Result;
-use crate::config::Config;
+use crate::shutdown::Shutdown;
 
 /// Stub filter stage: advance hashed → filtered before dedup.
-pub fn run(db: &Database) -> Result<()> {
-    let promoted = db.promote_hashed_to_filtered()?;
-    if promoted > 0 {
-        tracing::info!(count = promoted, "promoted hashed → filtered");
+pub fn run(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()> {
+    let db_files = db.count_entries()?;
+    let include_count = db.count_filters(Some(false))?;
+    let exclude_count = db.count_filters(Some(true))?;
+
+    // Handle case when nothing is
+    if include_count == 1 && exclude_count == 0 {
+        let include_filter = &db.get_filters(false)?[0];
+        if include_filter.is_internal() {
+            debug_assert_eq!(
+                include_filter.expression, ".*",
+                "Unexpected Filter expression. Filtering perhaps not working correctly?");
+
+            let updated = db.apply_no_filter()?;
+            tracing::info!("No filters present. All {updated} files selected.");
+            debug_assert_eq!(db_files, updated, "Updated rows and total rows don't match");
+            return Ok(());
+        }
     }
+    // Perform actual process of filtering. In case this is a noticeable bottleneck, it is a
+    // separate function so we can swap in a rayon pool or a crossbeam ... whatever is better.
+    fast_filter(&db, &config, &shutdown)?;
     Ok(())
+}
+
+/// Perform the filtering of files as fast as possible. Currently, with lazy map iterators to avoid
+/// creating two memcopies.
+fn fast_filter(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()> {
+    let include_filters =
+        parse_filter(&db.get_filters(false)?, "include", &config);
+    let exclude_filters =
+        parse_filter(&db.get_filters(true)?, "exclude", &config);
+
+    const BATCH_SIZE: u64 = 100_000;
+    let mut last_id = None;
+    loop {
+        shutdown.check_between_files()?;
+
+        let batch: Vec<StrippedRecord> = db.get_rows_to_filter(
+            last_id, config.eager_filter, BATCH_SIZE
+        )?;
+        if batch.is_empty() { break; }
+
+        // PRECONDITION: batch not empty
+        last_id = Some(batch
+            .last()
+            .expect("INVARIANT ERROR: Batch empty, should contain something")
+            .id);
+        let processed = batch
+            .iter()
+            .map(|rec| test_match(&include_filters, &exclude_filters, &rec));
+        let updated = db.apply_filter_result(
+            processed.map(|fr| (fr.id, fr.include_reason,  fr.exclude_reason))
+        )?;
+        assert_eq!(updated, batch.len() as u64,
+                   "INVARIANT ERROR: Number of rows updated does not match rows queried. \
+                   Rows vanished?");
+    }
+    let rem = db.count_files_in_phase(
+        if config.eager_filter {FilePhase::Inventoried} else {FilePhase::Hashed}
+    )?;
+    assert_eq!(0, rem, "INVARIANT ERROR: {rem} files in previous phase. Zero expected.");
+    Ok(())
+}
+
+/// Convert the FilterExpression structs to ParsedFilter struct.
+/// Applying --ignore-case and --anchored
+/// Strong invariants assumed, violation will lead to panics
+fn parse_filter(filters: &Vec<FilterExpression>, operation: &str, config: &Config)
+    -> Vec<ParsedFilter> {
+    let mut parsed_filters: Vec<ParsedFilter> = Vec::with_capacity(filters.len());
+    for filter in filters.iter() {
+        let aexp = if config.anchored && !filter.expression.starts_with('^') {
+            &format!("^{}", filter.expression)
+        } else {
+            &filter.expression
+        };
+        let regex = match RegexBuilder::new(&aexp)
+            .case_insensitive(config.ignore_case)
+            .unicode(false)  // TODO needs to be done with --force-utf8
+            .build(){
+            Ok(regex) => regex,
+            Err(e) => {
+                panic!("INVARIANT ERROR: Previously valid Regex could not be parsed. Error: {e}, \
+                Assembled Regex: {aexp}, Source: {}, Line: {}", filter.from, filter.line.expect(
+                    &format!("Line may only be empty for user defined {operation} filters.")
+                ))
+            }
+        };
+        parsed_filters.push(ParsedFilter{
+            id: filter.id,
+            expression: regex,
+        });
+    }
+    parsed_filters
+}
+
+/// Do the match checking for the include and the exclude filters and produce a FilterResult
+fn test_match(include: &Vec<ParsedFilter>, exclude: &Vec<ParsedFilter>, record: &StrippedRecord)
+    -> FilterResult {
+    let mut include_reason = 0i64;
+    let mut exclude_reason = 0i64;
+
+    for filter in include.iter() {
+        if filter.expression.is_match(&record.abs_path.to_string_lossy()) {
+            include_reason = filter.id;
+            break
+        }
+    }
+
+    for filter in exclude.iter() {
+        if filter.expression.is_match(&record.abs_path.to_string_lossy()) {
+            exclude_reason = filter.id;
+            break
+        }
+    }
+
+    FilterResult {
+        id: record.id,
+        include_reason,
+        exclude_reason,
+    }
+}
+
+struct ParsedFilter {
+    id: i64,
+    expression: Regex,
+}
+
+struct FilterResult {
+    id: FileId,
+    // INFO: Include is negative!!! we need i64
+    include_reason: i64,
+    exclude_reason: i64,
 }
 
 /// Parse the arguments and add them into the database.
