@@ -104,8 +104,10 @@ pub fn get_rows_to_filter<R: SqlFileRow>(
 
 /// Function applies the results of the filtering of the files to the database.
 /// The results must have the structure (FileId, include_reason, exclude_reason)!
-pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(conn: &mut Connection, results: I)
+pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(
+    conn: &mut Connection, results: I)
     -> Result<u64> {
+
     let mut rows_updated = 0u64;
     let transaction = conn.transaction()?;
     let mut stmt = transaction.prepare_cached(
