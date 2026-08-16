@@ -2,10 +2,10 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::db::types::{FileId, FilePhase, FilterExpression, StrippedRecord};
 use crate::error::Result;
+use crate::shutdown::Shutdown;
 use regex::{Regex, RegexBuilder};
 use std::fs;
 use std::path::PathBuf;
-use crate::shutdown::Shutdown;
 
 /// Stub filter stage: advance hashed → filtered before dedup.
 pub fn run(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()> {
@@ -30,6 +30,13 @@ pub fn run(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()> {
     // Perform actual process of filtering. In case this is a noticeable bottleneck, it is a
     // separate function so we can swap in a rayon pool or a crossbeam ... whatever is better.
     fast_filter(&db, &config, &shutdown)?;
+    let (down, up) = db.fix_up_canonical_flag()?;
+    assert_eq!(down, up, "Number of clusters with downgrades did not match numbers with upgrade");
+    let prev_phase = match config.eager_filter {
+        true => FilePhase::Inventoried,
+        false => FilePhase::Hashed,
+    };
+    assert_eq!(0, db.count_files_in_phase(prev_phase)?, "Files left over after the filtering");
     Ok(())
 }
 
