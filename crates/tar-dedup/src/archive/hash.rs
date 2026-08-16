@@ -20,13 +20,6 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let page_size = config.page_size;
     debug_assert!(page_size > 0, "page_size == 0");
 
-
-    // Set hardlink canonicals if and only if, we want to collapse the hardlinks and
-    if !config.no_hardlink_detection {
-        let rows = db.set_hardlink_canonicals()?;
-        tracing::info!("Updated {rows} of hardlink groups to have one canonical");
-    }
-
     let total_entries = db.count_entries()?;
     let hash_needed = db.count_all_hashable_files(
         config.eager_filter, !config.no_hardlink_detection
