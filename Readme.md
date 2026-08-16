@@ -18,11 +18,11 @@ This command takes a set of input files / directories and produces an archive.
 
 **Inputs**
 
-| Short | Long           | Required | Args | Description                                                                                                                         | Notes |
-|-------|----------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------|-------|
-| `-i`  | `--input-dir`  | y        | 0+   | Provide a path to a directory that should be archived. Multiple directories can be given with `-i`. Path MUST point to a directory. | 1. 2. |
-| `-T`  | `--files-from` | y        | 0+   | Provide a path to a directory that should be archived. Multiple directories can be given with `-i`. Path MUST point to a file.      | 1. 2. |
-| -     | `--null`       | n        | 0    | Applies to `-T`: Switch from a `\n` separated file to a `\0` file list.                                                             |       |
+| Short | Long           | Required | Args | Description                                                                                                                          | Notes |
+|-------|----------------|----------|------|--------------------------------------------------------------------------------------------------------------------------------------|-------|
+| `-i`  | `--input-dir`  | y        | 0+   | Provide a path to a directory that should be archived. Multiple directories can be given with `-i`. Path MUST point to a directory.  | 1. 2. |
+| `-T`  | `--files-from` | y        | 0+   | Provide a path to a file containing paths that should be archived. Multiple files can be given with `-T`. Path MUST point to a file. | 1. 2. |
+| -     | `--null`       | n        | 0    | Applies to `-T`: Switch from a `\n` separated file to a `\0` file list.                                                              |       |
 
 **Compression**
 
@@ -40,20 +40,28 @@ This command takes a set of input files / directories and produces an archive.
 
 **Indexing**
 
-| Short | Long                      | Required | Args | Description                                                                                                        | Notes |
-|-------|---------------------------|----------|------|--------------------------------------------------------------------------------------------------------------------|-------|
-| -     | `--no-recursion`          | n        | 0    | Disables recursion into subdirectories                                                                             |       |
-| -     | `--dereference`           | n        | 0    | Follow symlinks                                                                                                    |       |
-| -     | `--one-file-system`       | n        | 0    | Stay within a single file system.                                                                                  |       |
-| `-P`  | `--absolute-names`        | n        | 0    | Function sets the default extraction mode.                                                                         | 4.    |
-| -     | `--no-hardlink-detection` | n        | 0    | Hard Links are detected and merged in hash, dedup. If enabled, two hard linked files are treated as separate ones. | 4.    |
+| Short | Long                      | Required | Args | Description                                                                                                               | Notes |
+|-------|---------------------------|----------|------|---------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--no-recursion`          | n        | 0    | Disables recursion into subdirectories                                                                                    |       |
+| -     | `--dereference`           | n        | 0    | Follow symlinks                                                                                                           |       |
+| -     | `--one-file-system`       | n        | 0    | Stay within a single file system. (Root FS determined by the first entry given - line in `--files-from` or `--input-dir`) |       |
+| `-P`  | `--absolute-names`        | n        | 0    | Function sets the default extraction mode.                                                                                | 4.    |
+| -     | `--no-hardlink-detection` | n        | 0    | Hard Links are detected and merged in hash, dedup. If enabled, two hard linked files are treated as separate ones.        | 4.    |
 
 **Filtering**
 
 `--include-from` and `--exclude-from` expects a file with `utf8` content and each pattern separated by a 
 newline character. If you need to match a new line for some reason, use `\n` and never `0x0A`.
 Regex is handled with rusts regex crate. TODO: Verify! This _should_ implement "PCRE-lite" - so a subset minus the 
-backreferences and lookahead/lookbehind functionality.
+backreferences and lookahead/lookbehind functionality. 
+
+Also, please note **The include/exclude feature deviates substantially from tar!!!** The tool creates an index of all provided sources first. In doing so,
+it stores the absolute path to each item. When the filtering is applied, it is not done to the relative path but the absolute path of the files provided. 
+(We need absolute paths to detect duplicates early - where their elimination is chep) Furthermore, the filtering is applied to each item **independently** of the others. 
+This means, if a `.git$` is processed, it will exclude the `.git$` directory but not the files within. When extracting, this is modeled as any attributes the `.git` directory 
+held will not be restored but the contents of it as well as their metadata will be restored as faithfully as possible. 
+
+If this behavior is undesirable, consider using `--files-from` or `-T` to provide your own list of files to add. `-` for stdin is supported.
 
 | Short | Long                    | Required | Args | Description                                                                                      | Notes |
 |-------|-------------------------|----------|------|--------------------------------------------------------------------------------------------------|-------|
