@@ -153,6 +153,10 @@ impl Database {
         filter::apply_filter_result(&mut *self.conn_mut(), results)
     }
 
+    pub fn fix_up_canonical_flag(&self) -> Result<(u64, u64)> {
+        filter::fix_up_canonical_flag(&mut *self.conn_mut())
+    }
+
     pub fn promote_non_file_filtered_to_deduped(&self) -> Result<u64> {
         dedup::promote_non_file_filtered_to_deduped(&*self.conn())
     }

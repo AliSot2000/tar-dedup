@@ -6,15 +6,6 @@ use crate::error::Result;
 
 const FILTER_ROWS: &str = "id, source, line, expression";
 
-/// Stub until a real filter stage exists: advance all hashed rows to filtered.
-pub fn promote_hashed_to_filtered(conn: &Connection) -> Result<u64> {
-    let n = conn.execute(
-        "UPDATE files SET phase = 'filtered' WHERE phase = 'hashed'",
-        [],
-    )?;
-    Ok(n as u64)
-}
-
 // INFO: During setup a dummy row is added with id 0, so MIN and MAX will return a valid result.
 pub fn add_include_pattern(
     conn: &Connection, from: &str, line: Option<u64>, query: &str)
@@ -139,26 +130,55 @@ pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(conn: &mut Co
 /// (dev, inode) the current canonical file is not selected.
 /// PRECONDITION:
 ///   - no_dereference_hardlinks is false.
-pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<u64> {
+pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<(u64, u64)> {
     let transaction = conn.transaction()?;
+
+    let hardlink_mask = FileFlag::FileHardlinkCanonical.mask_i64();
+
+    // Identify (dev, inode) clusters where:
+    //  - real cluster size > 1
+    //  - the currently-canonical row is excluded
+    //  - at least one row is still selected
+    // Materialize into a temp table since we need it twice.
+    transaction.execute(
+        "CREATE TEMP TABLE stale_clusters AS
+         SELECT dev, inode FROM files
+         WHERE dev IS NOT NULL AND inode IS NOT NULL
+         GROUP BY dev, inode
+         HAVING COUNT(*) > 1
+            AND SUM(CASE WHEN flags & :hardlinks != 0
+                          AND NOT (include_reason > 0 AND exclude_reason = 0)
+                     THEN 1 ELSE 0 END) = 1
+            AND SUM(CASE WHEN include_reason > 0 AND exclude_reason = 0
+                     THEN 1 ELSE 0 END) > 0",
+        named_params! {":hardlinks": hardlink_mask}
+    )?;
+
+    // NOTE: replace `flags & 1` with `flags & :hardlinks` — see below for
+    // why raw named_params can't be used inside execute_batch, so we build
+    // this with a formatted mask constant instead.
     let downgraded = transaction.execute(
-        "UPDATE files \
-             SET flags & ~:hardlinks \
-             WHERE flags & :hardlinks = 1 \
-                AND (dev, inode) IN (SELECT dev, inode \
-                                     FROM files \
-                                     WHERE dev IS NOT NULL AND inode IS NOT NULL \
-                                     GROUP BY (dev, inode) \
-                                     HAVING COUNT(*) > 1",
-        named_params! {":hardlinks": FileFlag::FileHardlinkCanonical.mask_i64()})?;
-    let upgrade = transaction.execute(
-        "UPDATE files \
-             SET flags | ~:hardlinks\
-             WHERE id IN (SELECT MIN(id) \
-                          ROM files \
-                          WHERE AND include_reason > 0 AND exclude_reason = 0 AND",
-                                      named_params! {":hardlinks": FileFlag::FileHardlinkCanonical.mask_i64()})?;
+        "UPDATE files
+             SET flags = flags & ~:hardlinks
+             WHERE flags & :hardlinks != 0
+               AND (dev, inode) IN (SELECT dev, inode FROM stale_clusters)",
+        named_params! {":hardlinks": hardlink_mask},
+    )?;
+
+    let upgraded = transaction.execute(
+        "UPDATE files
+             SET flags = flags | :hardlinks
+             WHERE id IN (
+                 SELECT MIN(id) FROM files
+                 WHERE include_reason > 0 AND exclude_reason = 0
+                   AND (dev, inode) IN (SELECT dev, inode FROM stale_clusters)
+                 GROUP BY dev, inode
+             )",
+        named_params! {":hardlinks": hardlink_mask},
+    )?;
+
+    transaction.execute_batch("DROP TABLE stale_clusters")?;
     transaction.commit()?;
 
-    Ok(0)
+    Ok((downgraded as u64, upgraded as u64))
 }
