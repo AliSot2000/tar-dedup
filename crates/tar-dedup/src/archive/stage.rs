@@ -22,7 +22,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     for file_id in db.list_canonical_files(crate::db::types::FilePhase::Deduped)? {
         shutdown.check_between_files()?;
         
-        let record = db.get_file::<StrippedRecord>(file_id)?
+        let record = db.get_file_by_id::<StrippedRecord>(file_id)?
             .expect("File vanished from database.");
         
         // Determine the Source

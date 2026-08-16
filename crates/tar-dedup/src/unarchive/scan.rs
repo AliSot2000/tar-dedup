@@ -496,7 +496,7 @@ mod tests {
             .expect("phase");
 
         let member = db
-            .get_file::<FileRecord>(canonical)
+            .get_file_by_id::<FileRecord>(canonical)
             .expect("get")
             .expect("row")
             .tar_member_name()

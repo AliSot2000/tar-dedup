@@ -60,8 +60,8 @@ impl Database {
         source::add_get_source(&*self.conn(), path, source_kind, line)
     }
 
-    pub fn get_file<R: SqlFileRow>(&self, file_id: FileId) -> Result<Option<R>> {
-        common::get_file(&*self.conn(), file_id)
+    pub fn get_file_by_id<R: SqlFileRow>(&self, file_id: FileId) -> Result<Option<R>> {
+        common::get_file_by_id(&*self.conn(), file_id)
     }
 
     pub fn count_entries(&self) -> Result<u64> {
