@@ -34,7 +34,7 @@ fn normalize_installed_catalog_clears_file_extracted_and_archives() {
     db.normalize_installed_catalog().expect("normalize");
 
     let canonical = db
-        .get_file::<FileRecord>(canonical_id)
+        .get_file_by_id::<FileRecord>(canonical_id)
         .expect("get")
         .expect("row");
     assert!(!canonical.flags.get(FileFlag::FileExtracted));
@@ -56,11 +56,11 @@ fn mark_file_extracted_sets_canonical_only_not_phase() {
         .expect("mark extracted");
 
     let canonical = db
-        .get_file::<FileRecord>(canonical_id)
+        .get_file_by_id::<FileRecord>(canonical_id)
         .expect("get")
         .expect("row");
     let duplicate = db
-        .get_file::<FileRecord>(duplicate_id)
+        .get_file_by_id::<FileRecord>(duplicate_id)
         .expect("get")
         .expect("row");
 
@@ -92,11 +92,11 @@ fn apply_snapshot_promotes_extracted_canonical_and_duplicates() {
     assert_eq!(promoted, 1);
 
     let canonical = db
-        .get_file::<FileRecord>(canonical_id)
+        .get_file_by_id::<FileRecord>(canonical_id)
         .expect("get")
         .expect("row");
     let duplicate = db
-        .get_file::<FileRecord>(duplicate_id)
+        .get_file_by_id::<FileRecord>(duplicate_id)
         .expect("get")
         .expect("row");
 

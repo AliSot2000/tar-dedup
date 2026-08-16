@@ -71,7 +71,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             break;
         }
 
-        let record = db.get_file::<StrippedRecord>(file_id)?.expect(
+        let record = db.get_file_by_id::<StrippedRecord>(file_id)?.expect(
             "File was present in db for listing; missing row means SQL/list bug or DB corruption",
         );
         let tar_name = record.tar_member_name().expect(

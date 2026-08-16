@@ -162,7 +162,7 @@ impl SqlFileRow for StrippedRecord {
     }
 }
 
-pub fn get_file<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Result<Option<R>> {
+pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Result<Option<R>> {
     let cols = R::sql_columns();
     let mut stmt = conn.prepare(&format!("SELECT {cols} FROM files WHERE id = :id"))?;
     let mut rows = stmt.query(named_params! { ":id": file_id.0 })?;
