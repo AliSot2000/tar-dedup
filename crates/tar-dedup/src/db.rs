@@ -120,10 +120,6 @@ impl Database {
         dedup::pending_duplicate_groups(&*self.conn())
     }
 
-    pub fn promote_hashed_to_filtered(&self) -> Result<u64> {
-        filter::promote_hashed_to_filtered(&*self.conn())
-    }
-
     pub fn add_include_pattern(&self, from: &str, line: Option<u64>, query: &str) -> Result<u64> {
         filter::add_include_pattern(&*self.conn(), from, line, query)
     }
