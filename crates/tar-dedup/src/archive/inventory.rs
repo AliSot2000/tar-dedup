@@ -86,6 +86,11 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
                                    &progress, &mut path_cycle_detect)?
         }
     }
+    // Set hardlink canonicals if and only if, we want to collapse the hardlinks and
+    if !config.no_hardlink_detection {
+        let rows = db.set_hardlink_canonicals()?;
+        tracing::info!("Updated {rows} of hardlink groups to have one canonical");
+    }
 
     db.resolve_numeric_ids()?;
     progress.finish("inventory complete");
