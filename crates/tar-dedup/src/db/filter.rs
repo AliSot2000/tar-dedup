@@ -84,10 +84,10 @@ pub fn get_rows_to_filter<R: SqlFileRow>(
     let last_phase = if eager_filter { "'inventoried'" } else { "'hashed'" };
     let last_id_filter = if let Some(_) = last_id { " AND id > :last_id " } else { "" };
     let mut stmt = conn.prepare(
-        &format!("SELECT * FROM files \
+        &format!("SELECT {} FROM files \
                       WHERE phase = {last_phase} {last_id_filter} \
                       ORDER BY id \
-                      LIMIT :batch_size"))?;
+                      LIMIT :batch_size", R::sql_columns()))?;
 
     let rows = match last_id {
         None => {
