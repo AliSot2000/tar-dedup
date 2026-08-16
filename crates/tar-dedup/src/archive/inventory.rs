@@ -29,12 +29,9 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let mut processed = 0u64;
     let progress = CountProgress::new("inventory");
 
-    let mut path_cycle_detect: Vec<PathBuf> = Vec::new();
-
     // Handle input directories
     for input_dir in config.input_dirs.iter() {
         shutdown.check_in_flight()?;
-        path_cycle_detect.clear();
 
         tracing::info!(root = %input_dir.absolute_path.display(), "inventory pass");
 
@@ -49,7 +46,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let source_id = db.add_get_source(
             &input_dir.absolute_path, "--input-dir", None)?;
         handle_dir(&config, &db, &shutdown, source_id, &input_dir.absolute_path,
-                   &mut processed, &progress, &mut path_cycle_detect)?;
+                   &mut processed, &progress)?;
     }
 
     // Handle from-files
@@ -63,9 +60,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
                     Err(e) => return Err(Error::io("-", e)),
                 };
 
-                path_cycle_detect.clear();
                 handle_from_files_line((line, &path), &files_file, &config, &db, &shutdown,
-                                       &mut processed, &progress, &mut path_cycle_detect)?
+                                       &mut processed, &progress)?
             }
             continue;
         }
@@ -81,9 +77,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             .map_err(|e| Error::io(files_file, e))?;
 
         for element in files_from_records(&file, config.files_from_null) {
-            path_cycle_detect.clear();
             handle_from_files_line(element, &files_file, &config, &db, &shutdown, &mut processed,
-                                   &progress, &mut path_cycle_detect)?
+                                   &progress)?
         }
     }
     // Set hardlink canonicals if and only if, we want to collapse the hardlinks and
@@ -107,10 +102,9 @@ fn handle_from_files_line(
     shutdown: &Shutdown,
     processed: &mut u64,
     progress: &CountProgress,
-    path_cycle_detect: &mut Vec<PathBuf>
 ) -> Result<()> {
     let (line, ff) = element;
-    let fpath = Path::new(OsStr::from_bytes(ff));
+    let fpath = Path::new(OsStr::from_bytes(ff)); // TODO force utf8
     let from_files_disp_path = from_files_path.display();
 
     let abs_path = if fpath.is_absolute() {
@@ -123,7 +117,7 @@ fn handle_from_files_line(
     let source_id = db.add_get_source(
         &abs_path, &format!("--files-from={from_files_disp_path}"), Some(line as u64))?;
     handle_dir(&config, &db, &shutdown, source_id, &fpath,
-               processed, &progress, path_cycle_detect)?;
+               processed, &progress)?;
 
     Ok(())
 }
@@ -141,22 +135,11 @@ pub fn handle_dir(
     source_id: i64,
     start_dir: &Path,
     processed: &mut u64,
-    progress: &CountProgress,
-    cycle_detector: &mut Vec<PathBuf>) -> Result<()> {
-
-    let pb_start_dir = start_dir.to_path_buf();
-    if cycle_detector.contains(&pb_start_dir) {
-        // TODO Print chain
-        return Ok(())
-    }
-    cycle_detector.push(pb_start_dir);
-
-    let root_device = device_num_lstat(&start_dir).map_err(
-        |e| Error::io(&start_dir, e)
-    )?;
+    progress: &CountProgress)
+    -> Result<()> {
 
     let mut iter = WalkDir::new(&start_dir)
-        .follow_links(false)
+        .follow_links(config.dereference)
         .follow_root_links(true)// INFO: Custom handling by us
         .same_file_system(config.one_file_system)
         .min_depth(0)
@@ -173,16 +156,8 @@ pub fn handle_dir(
             }
             Ok(entry) => entry,
         };
-        let res = handle_entry(
-            &entry.path(), source_id, &config, &db, &progress, processed, root_device,
-            &shutdown, cycle_detector)?;
-
-        // Entire directory scanned and we are in dir first mode
-        if res {
-            iter.skip_current_dir();
-        }
+        handle_entry(&entry.path(), source_id, &config, &db, &progress, processed)?;
     }
-    let _ =cycle_detector.pop();
     Ok(())
 }
 
@@ -193,10 +168,8 @@ pub fn handle_entry(
     config: & Config,
     db: &Database,
     progress: &CountProgress,
-    processed: &mut u64,
-    root_device: u64,
-    shutdown: &Shutdown,
-    cycle_detect: &mut Vec<PathBuf>) -> Result<bool> {
+    processed: &mut u64)
+    -> Result<() > {
     let mut enc_err = Vec::new();
 
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
@@ -264,65 +237,6 @@ pub fn handle_entry(
         *processed += 1;
         progress.inc(1);
         // TODO deal with the error vec!
-    } else {
-        // Handle case of already seen directory.
-        if let Some(ft) = ftype {
-            if ft == FileType::Directory {
-                return Ok(true);
-            }
-        }
-
-        // In any other case, (even symlink) we have seen this before,
-        // so we can safely assume it's done.
-        return Ok(false);
-    }
-
-    // Deal with soft links and potentially start a new dir scan.
-    if let Some(ld) = link_dst && config.dereference {
-        debug_assert!(matches!(ftype, Some(FileType::Symlink(_))),
-                      "Link Resolution may only happen for elements of type Symlink(_)");
-        walk_link(&config, &db, &shutdown, &ld, &path, root_device, source_id, &progress,
-                  processed, cycle_detect)?;
-    }
-
-    Ok(false)
-}
-
-/// Handle the case when we want to escape from our current tree into a new tree segment as a
-/// consequence of dereferencing a link.
-/// PRECONDITION: path is link
-fn walk_link(config: &Config, db: &Database, shutdown: &Shutdown,
-             link_dst: &Path, link_path: &Path, root_device: u64, source_id: i64,
-             progress: &CountProgress, processed: &mut u64, cycle_detect: &mut Vec<PathBuf>)
-    -> Result<()> {
-    let parent = link_path.parent().expect("File must be inside a directory.");
-    let abs_dst = parent.join(link_dst).clean();
-
-    // PRECONDITION: Dereference
-    if !abs_dst.exists() { return Ok(()); }
-
-    // PRECONDITION: Dereference, Path Exists
-    let target_device_number = device_num_lstat(&abs_dst)
-        .map_err(|e| Error::io(&abs_dst, e))?;
-    if target_device_number != root_device && config.one_file_system{ return Ok(()); }
-
-    // PRECONDITION: Dereference, Path exists and is on same file system
-    let link_metadata = abs_dst
-        .symlink_metadata()
-        .map_err(|e| Error::io(link_path, e))?;
-    if !link_metadata.is_dir() {
-        // INFO: Symlink found -> element added to db.
-        let _ = handle_entry(
-            &abs_dst, source_id, &config, &db, &progress, processed, root_device,
-            &shutdown, cycle_detect
-        )?;
-    } else {
-        // PRECONDITION: Dereference, Path exists, is on same file system, is directory.
-        //  Start Dir walk again
-        debug_assert!(link_metadata.is_dir(),
-                      "Previously handled all non-dir entries. Now should be dir.");
-        let _ = handle_dir(&config, &db, &shutdown, source_id, &abs_dst, processed,
-                           &progress, cycle_detect)?;
     }
     Ok(())
 }
