@@ -14,6 +14,8 @@ use crate::error::{Error, Result};
 use crate::progress::{io_buffer, CountProgress};
 use crate::shutdown::Shutdown;
 
+// TODO: Filter (dev, inode) == (dev, inode) early and mark as finished.
+
 /// One finished compare: both keys always present.
 /// `Ok(equal)` on a completed byte compare; `Err(file_id)` for the side that failed IO.
 struct CompareOutcome {
@@ -24,15 +26,20 @@ struct CompareOutcome {
 
 struct ComparePair {
     canonical_id: FileId,
-    candidate_id: FileId,
     canonical_path: PathBuf,
-    candidate_path: PathBuf,
     canonical_mtime: Option<DateTime<Utc>>,
     canonical_atime: Option<DateTime<Utc>>,
     canonical_ctime: Option<DateTime<Utc>>,
+    canonical_device_id: Option<u64>,
+    canonical_inode_id: Option<u64>,
+
+    candidate_id: FileId,
+    candidate_path: PathBuf,
     candidate_mtime: Option<DateTime<Utc>>,
     candidate_atime: Option<DateTime<Utc>>,
     candidate_ctime: Option<DateTime<Utc>>,
+    candidate_device_id: Option<u64>,
+    candidate_inode_id: Option<u64>,
 }
 
 enum GroupPrep {
@@ -46,21 +53,25 @@ enum GroupPrep {
 
 /// Build ComparePair struct from two
 fn compare_pair(
-    config: &Config,
     canonical: &StrippedRecord,
     candidate: &StrippedRecord,
 ) -> ComparePair {
     ComparePair {
         canonical_id: canonical.id,
-        candidate_id: candidate.id,
-        canonical_path: abs_path(config, canonical),
-        candidate_path: abs_path(config, candidate),
+        canonical_path: canonical.abs_path.to_path_buf(),
         canonical_mtime: canonical.mtime,
         canonical_atime: canonical.atime,
         canonical_ctime: canonical.ctime,
+        canonical_device_id: canonical.device_id,
+        canonical_inode_id: canonical.inode_id,
+
+        candidate_id: candidate.id,
+        candidate_path: candidate.abs_path.to_path_buf(),
         candidate_mtime: candidate.mtime,
         candidate_atime: candidate.atime,
         candidate_ctime: candidate.ctime,
+        candidate_device_id: canonical.device_id,
+        candidate_inode_id: canonical.inode_id,
     }
 }
 
@@ -88,14 +99,32 @@ fn compare_one(
     shutdown: &Shutdown,
     results: &Mutex<Vec<CompareOutcome>>,
     bar: &CountProgress,
+    detect_hardlinks: bool,
 ) -> Result<()> {
+
     shutdown.check_between_files()?;
+
+    let pre_flight_check =  if detect_hardlinks {
+        match (pair.canonical_inode_id,
+               pair.canonical_device_id,
+               pair.candidate_inode_id,
+               pair.candidate_device_id) {
+            (Some(oi), Some(od), Some(ai), Some(ad))
+                if oi == ai && od == ad => true,
+            _ => false,
+        }
+    } else {
+        false
+    };
     // Interrupt must not become a CompareOutcome (or end_round would run).
-    let equal = match files_equal(&pair.canonical_path, &pair.candidate_path, shutdown) {
-        Ok(v) => Ok(v),
-        Err(Error::Interrupted) => return Err(Error::Interrupted),
-        Err(Error::Io { path, .. }) => Err(io_error_file_id(pair, &path)),
-        Err(e) => panic!("unexpected compare error (not Io/Interrupted): {e}"),
+    let equal = match pre_flight_check {
+        false => match files_equal(&pair.canonical_path, &pair.candidate_path, shutdown) {
+            Ok(v) => Ok(v),
+            Err(Error::Interrupted) => return Err(Error::Interrupted),
+            Err(Error::Io { path, .. }) => Err(io_error_file_id(pair, &path)),
+            Err(e) => panic!("unexpected compare error (not Io/Interrupted): {e}"),
+        },
+        true => Ok(true),
     };
     results
         .lock()
@@ -125,18 +154,14 @@ fn io_error_file_id(pair: &ComparePair, path: &Path) -> FileId {
     }
 }
 
-fn abs_path(config: &Config, record: &StrippedRecord) -> PathBuf {
-    config.input_dir.join(&record.rel_path)
-}
-
 // =================================================================================================
-
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let catalog = db.count_entries()?;
     // Early promote db entries we do not process in this phase
     let skipped_non_file = db.promote_non_file_filtered_to_deduped()?;
     let skipped_null_sha1 = db.promote_null_sha1_filtered_to_deduped()?;
     let skipped_singleton = db.promote_singleton_filtered_to_deduped()?;
+    // TODO skip everything excluded
     // INFO: Valid files:
     //  - NOT (ftype IS NULL OR ftype != 'file')
     //  - sha1 IS NOT NULL
@@ -222,7 +247,9 @@ fn run_pool(
         let parallel = pool.install(|| {
             tc_pair_iter
                 .par_bridge()
-                .try_for_each(|pair| compare_one(pair, &shutdown_workers, &results, bar))
+                .try_for_each(|pair| compare_one(
+                    pair, &shutdown_workers, &results, bar, !config.no_hardlink_detection
+                ))
         });
 
         // Flush finished compares either way; unfinished pairs stay pending.
@@ -294,7 +321,7 @@ fn prepare_round(
             } => {
                 // Generate Candidates
                 for cand in &candidates {
-                    pairs.push(compare_pair(config, &canonical, cand));
+                    pairs.push(compare_pair(&canonical, cand));
                 }
                 groups_needing_end.push(key);
             }
