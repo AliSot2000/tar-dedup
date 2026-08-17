@@ -83,10 +83,11 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let bar = CountProgress::with_total("sparsify", candidates.len() as u64);
     let results = Mutex::new(Vec::<SparseOutcome>::with_capacity(candidates.len()));
 
-    let input_dir = config.input_dir.clone();
-    let checked = PreYield::new(candidates.into_iter(), |record: &StrippedRecord| {
-        warn_sparsify_times(&input_dir, record);
-    });
+    let checked = PreYield::new(
+        candidates.into_iter(), |record: &StrippedRecord| {
+            warn_if_times_changed(&record.abs_path, record.mtime, record.atime, record.ctime);
+        }
+    );
 
     let parallel = run_pool(config, shutdown, &bar, &results, checked);
 
