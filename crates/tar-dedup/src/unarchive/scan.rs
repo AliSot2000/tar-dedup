@@ -16,9 +16,6 @@ use crate::tar_reader::open_tar_archive;
 use path_clean::PathClean;
 use tar::Entry;
 
-const SNAPSHOT_INIT_TAR_NAME: &str = "manifest.sqlite";
-const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
-
 const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";
 
 // TODO Fail fast option for - what if extract fails.
