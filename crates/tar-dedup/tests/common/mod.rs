@@ -11,12 +11,12 @@ pub fn open_temp_db() -> (tempfile::TempDir, Database) {
     (dir, db)
 }
 
-pub fn insert_file(db: &Database, rel_path: &str, size: u64) -> FileId {
+pub fn insert_file(db: &Database, abs_path: &str, size: u64) -> FileId {
     use tar_dedup::common::files::original_extension;
-    let path = PathBuf::from(rel_path);
+    let path = PathBuf::from(abs_path);
     db.insert_file(&NewFileRecord {
         ext: original_extension(&path),
-        rel_path: path,
+        abs_path: path,
         size,
         mtime: None,
         atime: None,
@@ -30,14 +30,15 @@ pub fn insert_file(db: &Database, rel_path: &str, size: u64) -> FileId {
         selinux_ctx: None,
         link_dst: None,
         inode_id: None,
-        device_id: None
+        device_id: None,
+        source_id: 1
     })
     .expect("insert file");
 
     db.files_in_phase::<StrippedRecord>(FilePhase::Inventoried)
         .expect("list inventoried")
         .into_iter()
-        .find(|f| f.rel_path == Path::new(rel_path))
+        .find(|f| f.abs_path == Path::new(abs_path))
         .expect("inserted file")
         .id
 }
