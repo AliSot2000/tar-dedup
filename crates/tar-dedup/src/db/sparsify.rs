@@ -24,12 +24,14 @@ pub fn promote_non_sparsify_candidates_to_sparsified(
         "UPDATE files SET phase = 'sparsified'
          WHERE phase = 'deduped'
            AND (
-                canonical_id IS NULL OR canonical_id != id
-             OR ftype IS NULL OR ftype != 'file'
+             canonical_id IS NULL
+             OR canonical_id != id
+             OR ftype IS NULL
+             OR ftype != 'file'
              OR sha1 IS NULL               -- technically implied by canonical_id IS NULL
              OR sparse_count IS NULL       -- sparse_count IS NULL implied by canonical_id IS NULL
              OR sparse_count < :min_pages
-             OR (flags & :has_sparse) != 0
+             OR (flags & :has_sparse) = 1
              OR include_reason = 0
              OR exclude_reason > 0
            )",
