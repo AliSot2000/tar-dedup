@@ -163,7 +163,7 @@ fn run_phase(
     match phase {
         PipelinePhase::Inventory => inventory::run(config, db, shutdown),
         PipelinePhase::Hash => hash::run(config, db, shutdown),
-        PipelinePhase::Filter => filter::run(db),
+        PipelinePhase::Filter => filter::run(&db, &config, &shutdown),
         PipelinePhase::Dedup => dedup::run(config, db, shutdown),
         PipelinePhase::Sparsify => sparsify::run(config, db, shutdown),
         PipelinePhase::Stage => stage::run(config, db, shutdown),
