@@ -273,7 +273,7 @@ pub struct Config {
     /// Sparse/hash zero-page size in bytes.
     pub page_size: usize,
     /// Optional minimum empty-page count before a file is worth sparsifying (used by sparsify).
-    pub min_pages: Option<u64>,
+    pub min_pages: u64,
 
     /// When true, run the sparsify phase (phase wiring later).
     pub sparsify: bool,
@@ -536,7 +536,7 @@ impl Config {
             fail_fast: false,
             no_errors: false,
             page_size: 4096,
-            min_pages: Some(0),
+            min_pages: 0,
             sparsify: false,
             exclude_patterns: Vec::new(),
             include_patterns: Vec::new(),
