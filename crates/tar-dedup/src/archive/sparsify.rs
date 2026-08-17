@@ -64,17 +64,17 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let stage_dir = config.stage_dir();
     fs::create_dir_all(&stage_dir).map_err(|e| Error::io(&stage_dir, e))?;
 
-    let Some(min_pages) = config.min_pages else {
+    if !config.sparsify {
         let n = db.promote_deduped_to_sparsified()?;
         tracing::info!(count = n, "promoted all deduped → sparsified (min_pages unset)");
         return Ok(());
     };
 
     // PRECONDITION: min_page set.
-    let skipped = db.promote_non_sparsify_candidates_to_sparsified(min_pages)?;
+    let skipped = db.promote_non_sparsify_candidates_to_sparsified(config.min_pages)?;
     tracing::info!(count = skipped, "promoted non-candidates → sparsified");
 
-    let candidates: Vec<StrippedRecord> = db.list_sparsify_candidates(min_pages)?;
+    let candidates: Vec<StrippedRecord> = db.list_sparsify_candidates(config.min_pages)?;
     if candidates.is_empty() {
         sanity_no_deduped(db)?;
         return Ok(());
