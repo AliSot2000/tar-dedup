@@ -84,10 +84,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let target = std::fs::canonicalize(&source).map_err(|e| Error::io(&source, e))?;
         warn_if_times_changed(&target, record.mtime, record.atime, record.ctime);
 
-        progress.set_file("archive", &record.rel_path);
+        progress.set_file("archive", &record.abs_path);
 
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
-            Ok(()) => db.set_flag(record.id, FileFlag::AppendedPath, true)?,
+            Ok(()) => { 
+                db.set_flag(record.id, FileFlag::AppendedPath, true)?; 
+            }
             Err(e) if e.is_interrupted() => {
                 stopped = true;
                 final_archive = false;
@@ -95,7 +97,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             }
             Err(e) => {
                 tracing::error!(
-                    path = %record.rel_path.to_string_lossy(),
+                    path = %record.abs_path.to_string_lossy(),
                     error = %e,
                     "archive append_path failed; marking ErrorWhileArchive and continuing"
                 );
@@ -158,7 +160,8 @@ fn recover_incomplete_session(config: &Config, db: &Database) -> Result<()> {
 
     truncate_archive_at(&config.archive_path, open_session.archive_offset)?;
     db.abort_incomplete_archive_session(&open_session)?;
-
+    
+    // TODO tracing
     eprintln!(
         "recovered incomplete archive session at offset {} ({})",
         open_session.archive_offset,
