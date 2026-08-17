@@ -52,7 +52,6 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
         opened.normalize_installed_catalog()?;
         Some(opened)
     } else {
-        remove_temp_db(&config.temp_db());
         None
     };
 
