@@ -873,7 +873,6 @@ impl RuntimeState {
     }
 }
 
-// TODO what about symlinks?
 fn validate_dir(path: &Path, label: &str) -> Result<()> {
     if !path.is_dir() {
         return Err(Error::Config(format!(
