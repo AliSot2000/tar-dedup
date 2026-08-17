@@ -933,6 +933,7 @@ fn parse_memlimit(s: &str) -> Result<u64> {
         .map_err(|_| Error::Config(format!("invalid memlimit: {s}")))?;
     n.checked_mul(scale)
         .ok_or_else(|| Error::Config(format!("memlimit overflow: {s}")))
+    // TODO not zero
 }
 
 fn physical_ram_bytes() -> Option<u64> {
