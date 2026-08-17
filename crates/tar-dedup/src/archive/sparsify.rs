@@ -48,14 +48,8 @@ impl Drop for TempSparseFile {
     }
 }
 
-fn warn_sparsify_times(input_dir: &Path, record: &StrippedRecord) {
-    let path = input_dir.join(&record.rel_path);
-    warn_if_times_changed(&path, record.mtime, record.atime, record.ctime);
-}
-
 /// Sparsify stage: optional sparse rewrites under `stage/sp.{content_id}`.
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    // TODO check this in cli
     debug_assert_ne!(config.page_size, 0, "Expected page_size > 0");
     if config.page_size == 0 {
         return Err(Error::Config("page_size must be greater than 0".into()));
