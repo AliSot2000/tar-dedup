@@ -91,21 +91,22 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let parallel = run_pool(config, shutdown, &bar, &results, checked);
 
     let outcomes = results.into_inner().expect("sparsify results lock");
+    let mut ok = 0u64;
+    let mut err = 0u64;
     for outcome in &outcomes {
         match outcome {
-            SparseOutcome::Ok(id) => db.mark_sparsified_sparse(*id)?,
-            SparseOutcome::Err(id) => db.mark_sparsified_error(*id)?,
+            SparseOutcome::Ok(id) => { db.mark_sparsified_sparse(*id)?; ok += 1; }
+            SparseOutcome::Err(id) => { db.mark_sparsified_error(*id)?; err += 1; }
         }
     }
-
 
     match parallel {
         Ok(()) => {
             bar.finish("sparsify complete");
             sanity_no_deduped(db)?;
             tracing::info!(
-                ok = outcomes.iter().filter(|o| matches!(o, SparseOutcome::Ok(_))).count(),
-                err = outcomes.iter().filter(|o| matches!(o, SparseOutcome::Err(_))).count(),
+                ok,
+                err,
                 "sparsify complete"
             );
             Ok(())
