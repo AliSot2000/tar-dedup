@@ -137,7 +137,6 @@ fn run_pool(
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
-    let input_dir = config.input_dir.clone();
     let stage_dir = config.stage_dir().clone();
     let page_size = config.page_size;
     let shutdown_workers = shutdown.clone();
@@ -146,15 +145,14 @@ fn run_pool(
         checked.par_bridge().try_for_each(|record| {
             shutdown_workers.check_between_files()?;
 
-            let src = input_dir.join(&record.rel_path);
             let name = record.sparse_member_name().expect(
-                "Invariant: sparsify candidates are self-canonical files with sha1",
+                "Invariant: sparsify candidates must be self-canonical files",
             );
             let dst = stage_dir.join(name).clean();
             let tmp = TempSparseFile::new(dst);
 
             let copy_result =
-                sparse_copy_with_progress(&src, tmp.path(), page_size, |_, _, _| {
+                sparse_copy_with_progress(&record.abs_path, tmp.path(), page_size, |_, _, _| {
                     if shutdown_workers.is_force() {
                         Err(Error::Interrupted)
                     } else {
