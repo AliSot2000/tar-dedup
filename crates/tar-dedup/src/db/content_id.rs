@@ -34,11 +34,6 @@ pub fn sparse_member_name(content_id: &ContentId) -> String {
     format!("sp.{}", content_id.0)
 }
 
-/// `stage_dir/sp.{content_id}`.
-pub fn sparse_stage_path(stage_dir: &Path, content_id: &ContentId) -> PathBuf {
-    stage_dir.join(sparse_member_name(content_id))
-}
-
 /// Parse `{hash_b64}.{fsize_b64}.{fid_b64}.ext` back into `(digest, size, file_id, extension)`.
 pub fn parse_content_id(content_id: &str) -> Result<(Option<[u8; 20]>, u64, FileId, String)> {
     let ext = original_extension(Path::new(content_id));
