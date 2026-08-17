@@ -359,7 +359,7 @@ fn report_scan_completeness(
             );
         }
     }
-    // INFO: ONLY canonical_id = id, FileExtracted = truer
+    // INFO: ONLY canonical_id = id, FileExtracted = true
     let canonical = db.count_extracted_canonical()?;
     // INFO: Select FileExtracted = true or parent (where canonical_id = id)
     let paths = db.count_extracted_paths()?;
