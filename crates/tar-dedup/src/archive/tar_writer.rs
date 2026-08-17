@@ -53,6 +53,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         append_snapshot(&mut writer, config, db, shutdown, true)?;
     }
 
+    // TODO add batching
     // TODO change ordering.
     let to_archive = db.list_staged_canonical_ordered(filter_sha)?;
     if to_archive.is_empty() && already_archived == 0 {
