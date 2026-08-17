@@ -11,9 +11,7 @@ use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
 use crate::shutdown::Shutdown;
 use crate::tar_writer::TarWriter;
-
-const SNAPSHOT_INIT_TAR_NAME: &str = "manifest.sqlite";
-const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
+use crate::common::{SNAPSHOT_TAR_NAME, SNAPSHOT_INIT_TAR_NAME};
 
 // TODO Consider the transition state of the files that are ingested.
 

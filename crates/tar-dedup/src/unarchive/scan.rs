@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{BufReader, Read, copy};
 use std::path::{Path, PathBuf};
 
+use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::archive_footer::read_footer;
 use crate::config::Config;
 use crate::db::content_id::parse_content_id;
