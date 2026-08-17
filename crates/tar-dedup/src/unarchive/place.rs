@@ -33,16 +33,16 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         if !cache_path.is_file() {
             return Err(Error::Config(format!(
                 "missing cached tar member `{tar_name}` for {}",
-                record.rel_path.display()
+                record.abs_path.display()
             )));
         }
 
-        let dest = safe_output_path(&config.output_dir, &record.rel_path)?;
+        let dest = safe_output_path(&config.output_dir, &record.abs_path)?;
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
 
-        progress.set_file("extract", &record.rel_path);
+        progress.set_file("extract", &record.abs_path);
         fs::copy(&cache_path, &dest).map_err(|e| Error::io(&dest, e))?;
         // Lightweight mtime/owner until the permissions stage owns full metadata restore.
         apply_basic_metadata(config, &record, &dest)?;
