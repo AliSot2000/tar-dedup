@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use path_clean::PathClean;
 use rusqlite::{Connection, named_params};
 
 use crate::db::content_id::{content_id_from_digest, sparse_member_name};
