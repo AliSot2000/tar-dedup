@@ -30,8 +30,10 @@ pub fn run(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()> {
     // Perform actual process of filtering. In case this is a noticeable bottleneck, it is a
     // separate function so we can swap in a rayon pool or a crossbeam ... whatever is better.
     fast_filter(&db, &config, &shutdown)?;
-    let (down, up) = db.fix_up_canonical_flag()?;
-    assert_eq!(down, up, "Number of clusters with downgrades did not match numbers with upgrade");
+    if !config.no_hardlink_detection {
+        let (down, up) = db.fix_up_canonical_flag()?;
+        assert_eq!(down, up, "Number of clusters with downgrades did not match numbers with upgrade");
+    }
     let prev_phase = match config.eager_filter {
         true => FilePhase::Inventoried,
         false => FilePhase::Hashed,
