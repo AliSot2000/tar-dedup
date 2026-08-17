@@ -19,7 +19,8 @@
 - [ ] Add Version of Tool to metadata
 - [ ] Add Platform to metadata
 - [ ] Good logging
-- [ ] need to add source root -i flag to the metadata
+- [X] need to add source root -i flag to the metadata (solved as source table)
+- [ ] Add --batch-size arg to control batch size for single threaded phases
 
 ## Phases
 ### CLI:
@@ -38,8 +39,9 @@
 - [X] Store ln -s target for windows (file/dir (recursively resolve softlinks until cycle or non-softlink file is reached))
 
 ### Filter
-- [ ] Research Filtering options of tar
-- [ ] Implement filtering on top of paths in the database.
+- [X] Research Filtering options of tar
+- [X] Implement filtering on top of paths in the database.
+- [ ] Parent resolve filter
 
 ### Hash
 - [ ] Docker style output (by default)
@@ -65,7 +67,7 @@ Should be done?
 
 ### Scan/Extract
 - [ ] Live check the files
-- [ ] Potentially data driven file extraction
+- [ ] Potentially data driven file extraction (DDFE)
 
 ### Hash
 - [ ] Hash file on extraction
