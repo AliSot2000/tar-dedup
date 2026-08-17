@@ -502,11 +502,11 @@ mod tests {
         member
     }
 
-    fn insert(db: &Database, rel_path: &str, size: u64, ftype: FileType) -> FileId {
-        let path = PathBuf::from(rel_path);
+    fn insert(db: &Database, abs_path: &str, size: u64, ftype: FileType) -> FileId {
+        let path = PathBuf::from(abs_path);
         db.insert_file(&NewFileRecord {
             ext: crate::common::files::original_extension(&path),
-            rel_path: path,
+            abs_path: path,
             size,
             mtime: None,
             atime: None,
@@ -521,13 +521,14 @@ mod tests {
             link_dst: None,
             device_id: None,
             inode_id: None,
+            source_id: 1,
         })
         .expect("insert");
 
         db.files_in_phase::<StrippedRecord>(FilePhase::Inventoried)
             .expect("list")
             .into_iter()
-            .find(|f| f.rel_path == Path::new(rel_path))
+            .find(|f| f.abs_path == Path::new(abs_path))
             .expect("inserted row")
             .id
     }
@@ -576,7 +577,7 @@ mod tests {
             fail_fast: false,
             no_errors: false,
             page_size: 4096,
-            min_pages: Some(0),
+            min_pages: 0,
             sparsify: false,
             exclude_patterns: Vec::new(),
             include_patterns: Vec::new(),
