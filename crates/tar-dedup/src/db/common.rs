@@ -172,6 +172,22 @@ pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Resu
     Ok(None)
 }
 
+// TODO: Delete?
+pub fn get_file_by_path<R: SqlFileRow>(conn: &Connection, abs_path: &Path) -> Result<Option<R>> {
+    debug_assert_eq!(abs_path, abs_path.to_path_buf().clean(), "Got non-normalized path");
+    let cols = R::sql_columns();
+    let mut stmt = conn.prepare(
+        &format!("SELECT {cols} FROM files WHERE abs_path = :abs_path")
+    )?;
+    let mut rows = stmt.query(
+        named_params! { ":abs_path": abs_path.to_string_lossy() }
+    )?;
+    if let Some(row) = rows.next()? {
+        return Ok(Some(R::from_row(row)?));
+    }
+    Ok(None)
+}
+
 pub fn count_entries(conn: &Connection) -> Result<u64> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files",
