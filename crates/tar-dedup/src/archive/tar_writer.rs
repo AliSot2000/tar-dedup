@@ -160,8 +160,7 @@ fn recover_incomplete_session(config: &Config, db: &Database) -> Result<()> {
     truncate_archive_at(&config.archive_path, open_session.archive_offset)?;
     db.abort_incomplete_archive_session(&open_session)?;
     
-    // TODO tracing
-    eprintln!(
+    tracing::info!(
         "recovered incomplete archive session at offset {} ({})",
         open_session.archive_offset,
         config.archive_path.display()
@@ -174,12 +173,13 @@ fn truncate_archive_at(path: &Path, offset: u64) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
+    let err_converter = |e| Error::io(path, e);
     let file = OpenOptions::new()
         .write(true)
         .open(path)
-        .map_err(|e| Error::io(path, e))?;
-    file.set_len(offset).map_err(|e| Error::io(path, e))?;
-    file.sync_all().map_err(|e| Error::io(path, e))?;
+        .map_err(err_converter)?;
+    file.set_len(offset).map_err(err_converter)?;
+    file.sync_all().map_err(err_converter)?;
     if offset == 0 {
         // Empty archive file: remove so next session starts clean.
         drop(file);
