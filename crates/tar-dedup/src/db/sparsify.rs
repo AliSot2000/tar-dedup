@@ -14,15 +14,6 @@ pub fn promote_deduped_to_sparsified(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
-/// Candidate predicate fragments shared by list.
-/// Bindings: `:min_pages`, `:has_sparse`.
-const SPARSIFY_CANDIDATE_PRED: &str = "canonical_id = id
-         AND ftype = 'file'
-         AND sha1 IS NOT NULL
-         AND sparse_count IS NOT NULL
-         AND sparse_count >= :min_pages
-         AND (flags & :has_sparse) = 0";
-
 /// Promote Deduped rows that are **not** sparsify candidates (null-safe negation).
 pub fn promote_non_sparsify_candidates_to_sparsified(
     conn: &Connection,
@@ -35,11 +26,12 @@ pub fn promote_non_sparsify_candidates_to_sparsified(
            AND (
                 canonical_id IS NULL OR canonical_id != id
              OR ftype IS NULL OR ftype != 'file'
-             --technically implied by canonical_id IS NULL
-             OR sha1 IS NULL 
-             --sparse_count IS NULL implied by canonical_id IS NULL
-             OR sparse_count IS NULL OR sparse_count < :min_pages 
+             OR sha1 IS NULL               -- technically implied by canonical_id IS NULL
+             OR sparse_count IS NULL       -- sparse_count IS NULL implied by canonical_id IS NULL
+             OR sparse_count < :min_pages
              OR (flags & :has_sparse) != 0
+             OR include_reason = 0
+             OR exclude_reason > 0
            )",
         named_params! {
             ":min_pages": min_pages as i64,
@@ -59,7 +51,13 @@ pub fn list_sparsify_candidates<R: SqlFileRow>(
     let mut stmt = conn.prepare(&format!(
         "SELECT {cols} FROM files
          WHERE phase = 'deduped'
-           AND ({SPARSIFY_CANDIDATE_PRED})
+             AND canonical_id = id
+             AND ftype = 'file'
+             AND sha1 IS NOT NULL
+             AND sparse_count >= :min_pages -- implies NOT NULL
+             AND (flags & :has_sparse) = 0
+             AND include_reason > 0
+             AND exclude_reason = 0
          ORDER BY id"
     ))?;
     let rows = stmt.query_map(
