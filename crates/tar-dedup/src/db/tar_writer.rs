@@ -123,6 +123,7 @@ pub fn reset_archive_state(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// TODO update selector like stage
 pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Result<u64> {
     let filter = if filter_sha {
         " AND sha1 IS NOT NULL"
@@ -144,6 +145,7 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Re
 
 /// Staged self-canonical file ids, ordered for packing: extension, size, id.
 /// When `filter_sha` is true, rows with `sha1 IS NULL` are omitted.
+/// TODO update selector like stage
 pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Result<Vec<FileId>> {
     let filter = if filter_sha {
         " AND sha1 IS NOT NULL"
@@ -162,6 +164,8 @@ pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Res
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
+
+// TODO use flag
 pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Result<u64> {
     let filter = if filter_sha {
         " AND sha1 IS NOT NULL"
@@ -199,6 +203,7 @@ pub fn promote_ineligible_to_archived(conn: &Connection, filter_sha: bool) -> Re
              OR ftype IS NULL OR ftype != 'file'
              {sha_clause}
            )"
+        // TODO order by filename   replace(abs_path, rtrim(abs_path, replace(abs_path, '/', '')), '') ASC,
     );
     let n = conn.execute(&stmt, {})?;
     Ok(n as u64)
