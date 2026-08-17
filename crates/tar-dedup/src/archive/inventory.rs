@@ -89,7 +89,10 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
     db.resolve_numeric_ids()?;
     progress.finish("inventory complete");
-    tracing::info!(processed, total = db.count_entries()?, "inventory indexed");
+    tracing::info!(
+        entries_processed = processed,
+        total_unique_entries = db.count_entries()?,
+        "inventory indexed");
     Ok(())
 }
 
@@ -173,6 +176,14 @@ pub fn handle_entry(
     let mut enc_err = Vec::new();
 
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
+
+    // Preflight check if path exists
+    if db.abs_path_exists(&path)? {
+        *processed += 1;
+        progress.inc(1);
+        return Ok(());
+    }
+
     let meta = fs::symlink_metadata(path)
         .map_err(|e| crate::error::Error::io(path, e))?;
     let mode = file_mode(&meta);
