@@ -756,6 +756,7 @@ impl PipelinePhase {
         }
     }
 
+    // TODO eager_filter
     pub fn next(self) -> Option<Self> {
         match self {
             Self::Inventory => Some(Self::Hash),
