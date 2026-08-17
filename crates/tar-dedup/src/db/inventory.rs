@@ -8,6 +8,7 @@ use crate::db::types::NewFileRecord;
 use crate::db::flags::FileFlag;
 use crate::error::Result;
 use nix::unistd::{Gid, Group, Uid, User};
+use path_clean::PathClean;
 
 pub fn abs_path_exists(conn: &Connection, path: &Path) -> Result<bool> {
     let count: i64 = conn.query_row(
@@ -21,6 +22,10 @@ pub fn abs_path_exists(conn: &Connection, path: &Path) -> Result<bool> {
 }
 
 pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
+    debug_assert!(record.abs_path.is_absolute(), "Only abs_paths allowed in db");
+    debug_assert_eq!(record.abs_path, record.abs_path.to_path_buf().clean(),
+                     "Paths must be normalized to enter the db");
+
     let changed = conn.execute(
         "INSERT OR IGNORE INTO files (
              abs_path, ext, size, mtime, atime, ctime, uid, gid, mode, ftype,
