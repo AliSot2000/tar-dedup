@@ -158,20 +158,22 @@ fn io_error_file_id(pair: &ComparePair, path: &Path) -> FileId {
 pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let catalog = db.count_entries()?;
     // Early promote db entries we do not process in this phase
+    let excluded_files = db.promote_excluded_entries_to_deduped()?;
     let skipped_non_file = db.promote_non_file_filtered_to_deduped()?;
     let skipped_null_sha1 = db.promote_null_sha1_filtered_to_deduped()?;
     let skipped_singleton = db.promote_singleton_filtered_to_deduped()?;
-    // TODO skip everything excluded
     // INFO: Valid files:
     //  - NOT (ftype IS NULL OR ftype != 'file')
     //  - sha1 IS NOT NULL
-    //  - phase = ?
+    //  - phase = 'filtered'
+    //  - include_reason > 0 AND exclude_reason = 0 
 
     // Get actual number of our candidates.
     let candidates = db.count_files_in_phase(FilePhase::Filtered)?;
 
     tracing::info!(
         catalog,
+        excluded_files,
         skipped_non_file,
         skipped_null_sha1,
         skipped_singleton,
