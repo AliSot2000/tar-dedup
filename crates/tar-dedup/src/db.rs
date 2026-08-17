@@ -197,7 +197,11 @@ impl Database {
         dedup::promote_to_deduped(&*self.conn(), file_id)
     }
 
-    pub fn clear_check_with_canonical_completed(
+    pub fn promote_excluded_entries_to_deduped(&self) -> Result<u64> {
+        dedup::promote_excluded_entries_to_deduped(&self.conn())
+    }
+
+        pub fn clear_check_with_canonical_completed(
         &self,
         sha1: &[u8; 20],
         size: u64,
