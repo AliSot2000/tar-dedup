@@ -1,13 +1,24 @@
 use nix::libc::{gid_t, uid_t};
 use rusqlite::{Connection, named_params};
 use std::iter::zip;
-
+use std::path::Path;
 use crate::config::RuntimeState;
 use crate::db::meta;
 use crate::db::types::NewFileRecord;
 use crate::db::flags::FileFlag;
 use crate::error::Result;
 use nix::unistd::{Gid, Group, Uid, User};
+
+pub fn abs_path_exists(conn: &Connection, path: &Path) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files WHERE abs_path = :abs_path",
+        named_params! {":abs_path": path.to_string_lossy() },
+        |row| row.get("count"),
+    )?;
+    assert!(count == 0 || count == 1, 
+            "DB Error: Absolute Path existed {count} times, 0, 1 are valid");
+    Ok(count == 1)
+}
 
 pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
     let changed = conn.execute(
