@@ -3,7 +3,6 @@ use std::os::unix::fs::FileTypeExt;
 
 use walkdir::WalkDir;
 
-use crate::common::files::device_num_lstat;
 use crate::common::files::{get_file_times, original_extension};
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::Config;
