@@ -23,6 +23,7 @@ mod schema;
 mod sparsify;
 pub mod content_id;
 mod source;
+mod stage;
 
 pub use common::SqlFileRow;
 pub use extract::ExtractScanState;
@@ -191,6 +192,14 @@ impl Database {
 
     pub fn mark_sparsified_error(&self, file_id: FileId) -> Result<()> {
         sparsify::mark_sparsified_error(&*self.conn(), file_id)
+    }
+
+    pub fn promote_unstageable_files(&self, retry_missing_sha: bool) -> Result<u64> {
+        stage::promote_unstageable_files(&self.conn(), retry_missing_sha)
+    }
+
+    pub fn list_files_to_stage<R: SqlFileRow>(&self, retry_missing_sha: bool) -> Result<Vec<R>> {
+        stage::list_files_to_stage(&self.conn(), retry_missing_sha)
     }
 
     pub fn mark_active_canonical(&self, file_id: FileId) -> Result<()> {
