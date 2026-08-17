@@ -52,6 +52,10 @@ impl Database {
         })
     }
 
+    pub fn abs_path_exists(&self, path: &Path) -> Result<bool> {
+        inventory::abs_path_exists(&self.conn(), path)
+    }
+
     pub fn insert_file(&self, record: &NewFileRecord) -> Result<bool> {
         inventory::insert_file(&*self.conn(), record)
     }
