@@ -5,6 +5,7 @@ use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, GroupKey};
 use crate::error::Result;
 
+/// Set canonical column of the row identified by file_id
 pub fn set_canonical(conn: &Connection, file_id: FileId, canonical_id: FileId) -> Result<()> {
     conn.execute(
         "UPDATE files SET canonical_id = :canonical_id, phase = 'deduped' WHERE id = :id",
@@ -16,6 +17,7 @@ pub fn set_canonical(conn: &Connection, file_id: FileId, canonical_id: FileId) -
     Ok(())
 }
 
+/// Update canonical column of a row to the row's file_id. Filter row by file_id
 pub fn mark_self_canonical(conn: &Connection, file_id: FileId) -> Result<()> {
     conn.execute(
         "UPDATE files SET canonical_id = id, phase = 'deduped' WHERE id = :id",
@@ -33,12 +35,20 @@ pub fn mark_active_canonical(conn: &Connection, file_id: FileId) -> Result<()> {
     Ok(())
 }
 
+/// Promote the phase of a given file to 'deduped'
 pub fn promote_to_deduped(conn: &Connection, file_id: FileId) -> Result<()> {
     conn.execute(
         "UPDATE files SET phase = 'deduped' WHERE id = :id",
         named_params! { ":id": file_id.0 },
     )?;
     Ok(())
+}
+
+/// Promote excluded entries to deduped
+pub fn promote_excluded_entries_to_deduped(conn: &Connection) -> Result<u64> {
+    let n = conn.execute("UPDATE files SET phase = 'filtered' \
+        WHERE include_reason = 0 OR exclude_reason > 0", [])?;
+    Ok(n as u64)
 }
 
 /// Non-regular / unknown types (and NULL ftype): nothing to byte-compare.
