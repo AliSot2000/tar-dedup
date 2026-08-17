@@ -111,7 +111,7 @@ Compression Algo extractions:
 
 - `?`   `--force-reset-to-phase` forcibly resets the progress to a given phase and deletes all progress made.
 - `?`   `--no-errors`, do not store errors in database. 
-
+- `?`   `--batch-size`, determine how many elements are processed at a time in single threaded phases
 # features
 - `inspect` command -> Search the files for exclusion and inclusion reason. Dump inclusion and exclusion reasons, dump files (so basically the full database view.)
 - `bridge` perform deduplication + link back into place 
