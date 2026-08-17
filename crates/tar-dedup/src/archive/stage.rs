@@ -17,20 +17,23 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     fs::create_dir_all(config.stage_dir())
         .map_err(|e| crate::error::Error::io(&config.stage_dir(), e))?;
 
-    // TODO: Mark non-canonical
+    let promoted = db.promote_unstageable_files(config.retry_missing_sha)?;
+    tracing::info!("Promoted {promoted} entries to staged which aren't eligible");
 
-    for file_id in db.list_canonical_files(crate::db::types::FilePhase::Deduped)? {
+    // TODO progressbar
+    // TODO batching
+    // TODO logging
+    let file_vec: Vec<StrippedRecord> = db.list_files_to_stage(config.retry_missing_sha)?;
+    let total_files = file_vec.len();
+    for record in file_vec {
         shutdown.check_between_files()?;
-        
-        let record = db.get_file_by_id::<StrippedRecord>(file_id)?
-            .expect("File vanished from database.");
         
         // Determine the Source
         let source_path = if record.flags.get(FileFlag::HasSparse) {
             let sparse_name = record.sparse_member_name().expect(EXPECTED_CANONICAL);
             config.stage_dir().join(sparse_name).clean()
         } else {
-            config.input_dir.join(&record.rel_path).clean()
+            record.abs_path.to_path_buf()
         };
 
         // Determine the Destination
@@ -41,16 +44,15 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             record.atime,
             record.ctime,
         );
-        let source = source_path.clean();
+        debug_assert_eq!(source_path, source_path.clean(), "Source Paths must be normalized");
         let target = config.stage_dir().join(tar_name);
         if target.exists() {
             fs::remove_file(&target).map_err(|e| crate::error::Error::io(&target, e))?;
         }
-        symlink(&source, &target).map_err(|e| crate::error::Error::io(&target, e))?;
-        // TODO also mark the files are descendants.
-        db.mark_file_phase(file_id, crate::db::types::FilePhase::Staged)?;
+        symlink(&source_path, &target).map_err(|e| crate::error::Error::io(&target, e))?;
+        db.mark_file_phase(record.id, crate::db::types::FilePhase::Staged)?;
     }
-
+    tracing::info!("Staged {} files", total_files);
     // Live DB already lives in the flat work dir (`snapshot.sqlite`); tar-writer
     // stages a copy via `.snapshot-for-tar.sqlite` when appending to the archive.
     Ok(())
