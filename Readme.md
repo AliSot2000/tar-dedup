@@ -74,6 +74,9 @@ If this behavior is undesirable, consider using `--files-from` or `-T` to provid
 | -     | `--no-anchored`         | n        | 0    | Patterns match from the start of the relative path rather than any path component                | 5.    |
 | -     | `--no-ignore-case `     | n        | 0    | Perform case insensitive matching                                                                | 5.    |
 
+Currently not implemented is the `--newer` ... filters. They are currently on the feature list but for the moment, this 
+can be remedied by using `filter` in conjunction with `--files-from` to achieve the same filtering.
+
 **File Attributes**
 As a baseline, the tool attempts to capture as much data as possible. This includes (ctime, atime, mtime, uid, gid, mode, size
 selinux policy, posix_acls, xattrs, file type. By default, the tool also attempts to resolve any uid, gid to a 
@@ -152,29 +155,47 @@ a single write of the uncompressed archive size or a single write of the origina
 restoration mode. 
 
 ## Disclaimers
-Importantly: **THIS IS UNSTABLE CODE!!!**  
+
+### THIS IS UNSTABLE CODE!!!  
 Any archives created with this tool prior to the v1.0.0 release have **no guarantees** that future commits will still 
 decompress them correctly and successfully! If you need this tool done soon, create an issue or star the project to 
 show interest.
 
+
+### Compression Algorithms
 The current offering of compression algorithms is due to both the availability of rust crates for the algorithms and
 also a thought of recentness of the algorithm. The program will default to the most aggressive compression possible
 (xz, cpu_count threads, extreme compression profile and no regard for RAM consumption) if the options of the command
 exposes du not suite your needs, the command offers to write to a simple tar file you can compress yourself
 (and also subsequently decompress if the format is not supported.)
 
-As the tool is using rust, it expects all its inputs to be in valid utf-8.
+As the tool is using rust, it expects all its inputs to be in valid utf-8. // TODO further enhancement
 
+### Divergence from the `tar` command
+
+#### File Filtering 
 The tool also sacrifices functionality the regular tar command offers. Since this tool is not intended to be backwards 
 compatible the decision was made to only support a subset of the tar command options. We tried to retain a manageable 
 overhead and an easy interface (e.g. `--exclude`, `--exclude-from`, `--files-from` are the main options supported from 
 tar. However, the exclude options expect full regex to match paths against and `--files-from` is the alternative 
 approach to exclude and supports \n or \0 terminated lines. Paths are expected to be unescaped.) Additionally, the
-inverse can also be done `--include` and `--include-from` allow you to white list rather than black list. Defaults are 
+inverse can also be done `--include` and `--include-from` allow you to whitelist rather than black list. Defaults are 
 treated as follows: no inclusion => everything is included, no exclusion => nothing is excluded. The tool has no rule 
 order. The list of all members of the given directories and paths are scanned. A subset is then selected based on the 
 include filters. Everything selected by the include filters is then passed through the exclude filters which then strip 
 the remainder of entries before the hash phase begins. 
+
+Filtering is not recursive. The filters are applied to each element separately. This is a consequence how the tool 
+optimizes path traversal and allocation of files (we want to minimize the archive size after all). All regex for filters 
+are matched against each absolute path recorded in during the inventory stage.
+
+// Todo entry vs path restoration.
+
+### Security
+As this tool is meant to produce a coherent and complete picture of a file tree [...] for archival purposes, the security concerns 
+are higher for this tool compared to the regular `tar` command! The sqlite manifest stores absolute paths to all files 
+archived and the full metadata of files is also stored in plain format. Please use caution when using this tool to 
+produce archives ment to be publicly accessible.
 
 ## Development
 
