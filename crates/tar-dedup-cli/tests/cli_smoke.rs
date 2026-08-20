@@ -59,3 +59,21 @@ fn archive_help_lists_new_path_and_sparse_flags() {
         "archive must not expose --force-reset-to-phase"
     );
 }
+
+#[test]
+fn resume_help_lists_work_dir_jobs_and_exit_after_stage() {
+    let assert = Command::cargo_bin("tar-dedup")
+        .expect("binary")
+        .args(["resume", "--help"])
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(out.contains("--work-dir"), "expected --work-dir in resume help");
+    assert!(out.contains("--jobs"), "expected --jobs in resume help");
+    assert!(
+        out.contains("--exit-after-stage"),
+        "expected --exit-after-stage in resume help"
+    );
+    assert!(!out.contains("--fresh"), "resume must not expose --fresh");
+    assert!(!out.contains("--input-dir"), "resume must not expose archive inputs");
+}
