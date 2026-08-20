@@ -12,9 +12,13 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Walk, deduplicate, and write a resumable archive.
+    /// Aborts if work or an archive already exists; use `--fresh` to replace.
     Archive(ArchiveArgs),
     /// Restore a tar-dedup archive (materialize: full copy at each original path).
+    /// Aborts if extract work already exists; use `--fresh` to replace.
     Extract(ExtractArgs),
+    /// Continue an interrupted archive or extract from its work directory.
+    Resume(ResumeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -268,7 +272,7 @@ pub struct ArchiveArgs {
     #[arg(long = "jobs", value_name = "N", help_heading = "Process Options")]
     pub jobs: Option<usize>,
 
-    /// Wipe stage work and restart from inventory.
+    /// Wipe existing work and archive, then start from inventory.
     #[arg(long = "fresh", help_heading = "Process Options")]
     pub fresh: bool,
 
@@ -347,16 +351,18 @@ pub struct ExtractArgs {
     #[arg(short = 'C', value_name = "DIR")]
     pub output_dir: PathBuf,
 
+    /// Restore using absolute catalog paths (`-P`). With `-C`, abs paths are
+    /// joined under the output dir (leading `/` stripped); without applying
+    /// relative strip rules. Alias: `--absolute-names`.
+    #[arg(short = 'P', long = "absolute", visible_alias = "absolute-names")]
+    pub absolute_names: bool,
+
     /// Restore saved uid/gid on extracted files (best effort; may require root).
     #[arg(long)]
     pub restore_owner: bool,
 
-    /// Resume from incomplete extract work (error if nothing to resume).
-    #[arg(long, conflicts_with = "fresh")]
-    pub resume: bool,
-
     /// Wipe extract stage work and start over.
-    #[arg(long, conflicts_with = "resume")]
+    #[arg(long)]
     pub fresh: bool,
 
     /// After success, keep a timestamped copy of snapshot.sqlite in the output directory.
@@ -366,6 +372,23 @@ pub struct ExtractArgs {
     /// After success, keep the `{stem}.estage` work directory.
     #[arg(long = "keep-stage")]
     pub keep_stage: bool,
+}
+
+/// Continue incomplete work. Policy comes from the work DB; only jobs and
+/// `--exit-after-stage` may be overridden.
+#[derive(Debug, Args)]
+pub struct ResumeArgs {
+    /// Work directory (`.astage` / `.estage`) of the interrupted run.
+    #[arg(long = "work-dir", value_name = "DIR")]
+    pub work_dir: PathBuf,
+
+    /// Maximum concurrent workers (rayon pools and xz threads).
+    #[arg(long = "jobs", value_name = "N")]
+    pub jobs: Option<usize>,
+
+    /// Run through STAGE then exit cleanly (state saved).
+    #[arg(long = "exit-after-stage", value_name = "STAGE", value_enum)]
+    pub exit_after_stage: Option<ExitAfterStageArg>,
 }
 
 /// Pipeline stop point for `--exit-after-stage`.
