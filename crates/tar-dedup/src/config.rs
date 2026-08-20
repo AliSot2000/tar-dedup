@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{ArchiveArgs, CompressionFlags, ExitAfterStageArg, ExtractArgs};
+use crate::cli::{ArchiveArgs, CompressionFlags, ExitAfterStageArg, ExtractArgs, ResumeArgs};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
