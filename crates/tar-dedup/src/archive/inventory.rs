@@ -43,7 +43,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
                       "Path should be minimal");
 
         let source_id = db.add_get_source(
-            &input_dir.absolute_path, "--input-dir", None)?;
+            &input_dir.absolute_path, "--input-dir", None, None)?;
         handle_dir(&config, &db, &shutdown, source_id, &input_dir.absolute_path,
                    &mut processed, &progress)?;
     }
@@ -117,7 +117,8 @@ fn handle_from_files_line(
     debug_assert!(abs_path.is_absolute(), "Path must be absolute now");
 
     let source_id = db.add_get_source(
-        &abs_path, &format!("--files-from={from_files_disp_path}"), Some(line as u64))?;
+        &abs_path, &format!("--files-from={from_files_disp_path}"), Some(line as u64),
+        Some(fpath))?;
     handle_dir(&config, &db, &shutdown, source_id, &fpath,
                processed, &progress)?;
 
@@ -226,7 +227,7 @@ pub fn handle_entry(
     } else { None };
 
     if db.insert_file(&NewFileRecord {
-        abs_path: path.to_path_buf(),
+        abs_path: path.clean().to_path_buf(),
         ext: original_extension(&path),
         size: meta.len(),
         mtime,
