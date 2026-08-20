@@ -1,11 +1,11 @@
-//! Shared Auto / Fresh / Resume start policy for archive and extract.
+//! Shared Create / Fresh / Resume start policy for archive and extract.
 
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartPolicy {
-    /// Resume incomplete work if present; otherwise start new (archive may no-op if product finished).
-    Auto,
+    /// New run; error if incomplete work or a finished product already exists.
+    Create,
     /// Wipe work and start from the beginning.
     Fresh,
     /// Require incomplete work; error if absent.
@@ -13,14 +13,11 @@ pub enum StartPolicy {
 }
 
 impl StartPolicy {
-    pub fn from_flags(resume: bool, fresh: bool) -> Result<Self> {
-        match (resume, fresh) {
-            (true, true) => Err(Error::Config(
-                "--resume and --fresh cannot be used together".into(),
-            )),
-            (true, false) => Ok(Self::Resume),
-            (false, true) => Ok(Self::Fresh),
-            (false, false) => Ok(Self::Auto),
+    pub fn create_or_fresh(fresh: bool) -> Self {
+        if fresh {
+            Self::Fresh
+        } else {
+            Self::Create
         }
     }
 }
@@ -37,7 +34,7 @@ pub enum WorkPresence {
 pub enum ProductPresence {
     /// No finished product short-circuit (extract always; archive when file missing/invalid).
     Absent,
-    /// Finished archive present (valid footer).
+    /// Finished archive present (valid footer) or an archive file already exists.
     Finished,
 }
 
@@ -45,7 +42,6 @@ pub enum ProductPresence {
 pub enum StartAction {
     RunFresh,
     Resume,
-    AlreadyDone,
 }
 
 pub fn resolve_start(
@@ -58,16 +54,20 @@ pub fn resolve_start(
         StartPolicy::Resume => match work {
             WorkPresence::Incomplete => Ok(StartAction::Resume),
             WorkPresence::Absent => Err(Error::Config(
-                "no incomplete work to resume (omit --resume, or use --fresh to start over)"
+                "no incomplete work to resume (`resume` requires an existing work directory)"
                     .into(),
             )),
         },
-        StartPolicy::Auto => match work {
-            WorkPresence::Incomplete => Ok(StartAction::Resume),
-            WorkPresence::Absent => match product {
-                ProductPresence::Finished => Ok(StartAction::AlreadyDone),
-                ProductPresence::Absent => Ok(StartAction::RunFresh),
-            },
+        StartPolicy::Create => match (work, product) {
+            (WorkPresence::Incomplete, _) => Err(Error::Config(
+                "incomplete work already exists; use `resume --work-dir` to continue or `--fresh` to start over"
+                    .into(),
+            )),
+            (WorkPresence::Absent, ProductPresence::Finished) => Err(Error::Config(
+                "output already exists; use `--fresh` to replace it"
+                    .into(),
+            )),
+            (WorkPresence::Absent, ProductPresence::Absent) => Ok(StartAction::RunFresh),
         },
     }
 }

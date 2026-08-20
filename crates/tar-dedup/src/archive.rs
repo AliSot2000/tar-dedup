@@ -12,7 +12,6 @@ use std::fs::OpenOptions;
 
 use fs4::fs_std::FileExt;
 
-use crate::archive_footer;
 use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
     resolve_start, ProductPresence, StartAction, StartPolicy, WorkPresence,
@@ -24,7 +23,7 @@ use crate::shutdown::Shutdown;
 
 // TODO: Need to rework this file!!!
 pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
-    let product = if archive_footer::has_valid_footer(&config.archive_path) {
+    let product = if config.archive_path.is_file() {
         ProductPresence::Finished
     } else {
         ProductPresence::Absent
@@ -49,13 +48,6 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
     };
 
     let action = resolve_start(config.start_policy, work, product)?;
-    if action == StartAction::AlreadyDone {
-        eprintln!(
-            "archive already complete: {}",
-            config.archive_path.display()
-        );
-        return Ok(());
-    }
 
     let db = Database::open(&db_path)?;
     let saved = db.load_runtime_state()?;
@@ -74,7 +66,6 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
             filter::ingest_filters(&db, &config)?;
             state
         }
-        StartAction::AlreadyDone => unreachable!(),
     };
 
     while state.phase != PipelinePhase::Done {

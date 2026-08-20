@@ -565,7 +565,7 @@ mod tests {
             work_dir: dir.join("work"),
             compression: CompressionSettings::for_extract(CompressionFormat::None),
             jobs: 1,
-            start_policy: StartPolicy::Auto,
+            start_policy: StartPolicy::Create,
             cleanup: CleanupSettings::from_flags(false, false),
             extract_stage_location: ExtractStageLocation::BesideArchive,
             exit_after_stage: None,

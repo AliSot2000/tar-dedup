@@ -48,7 +48,6 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
         StartAction::Resume => {
             eprintln!("resuming extract from phase `{}`", state.phase.as_str());
         }
-        StartAction::AlreadyDone => unreachable!("extract product is always Absent"),
     }
 
     while state.phase != ExtractPipelinePhase::Done {
