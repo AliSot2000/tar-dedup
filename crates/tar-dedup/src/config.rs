@@ -433,8 +433,7 @@ impl Config {
             return Err(Error::Config("page_size must be greater than 0".into()));
         }
 
-        // Archive CLI no longer exposes `--resume` (future subcommand); only `--fresh`.
-        let start_policy = crate::common::start::StartPolicy::from_flags(false, args.fresh)?;
+        let start_policy = crate::common::start::StartPolicy::create_or_fresh(args.fresh);
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
 
         Ok(Self {
@@ -512,7 +511,7 @@ impl Config {
         std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
 
         let format = infer_compression_from_suffix(&archive_path);
-        let start_policy = crate::common::start::StartPolicy::from_flags(args.resume, args.fresh)?;
+        let start_policy = crate::common::start::StartPolicy::create_or_fresh(args.fresh);
 
         Ok(Self {
             archive_path,
@@ -545,7 +544,7 @@ impl Config {
             no_recursion: false,
             dereference: false,
             one_file_system: false,
-            absolute_names: false,
+            absolute_names: args.absolute_names,
             no_hardlink_detection: false,
             anchored: false,
             ignore_case: false,
@@ -560,6 +559,70 @@ impl Config {
             force_scan: false, // TODO Add CLI Arg
             clear_archive_meta: false, // TODO CLI Arg
             rehash: true, // TODO CLI Arg
+        })
+    }
+
+    /// Continue from an existing work directory. Other policy is loaded from the DB at run time.
+    pub fn from_resume_args(args: &ResumeArgs) -> Result<Self> {
+        let cwd = std::env::current_dir().map_err(Error::from)?;
+        let work_dir = resolve_path_to_abs_path(&args.work_dir, &cwd);
+        validate_dir(&work_dir, "--work-dir")?;
+
+        let db_path = work_dir.join("tar-dedup.sqlite");
+        if !db_path.is_file() {
+            return Err(Error::Config(format!(
+                "no work database in {}: missing {}",
+                work_dir.display(),
+                db_path.display()
+            )));
+        }
+
+        Ok(Self {
+            archive_path: PathBuf::new(),
+            directory: cwd,
+            input_dirs: Vec::new(),
+            files_from: Vec::new(),
+            files_from_null: false,
+            output_dir: PathBuf::new(),
+            work_dir,
+            compression: CompressionSettings::for_extract(CompressionFormat::None),
+            jobs: args.jobs.unwrap_or_else(num_cpus::get),
+            start_policy: crate::common::start::StartPolicy::Resume,
+            cleanup: CleanupSettings::from_flags(false, false),
+            extract_stage_location: ExtractStageLocation::BesideArchive,
+            exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
+            restore_owner: false,
+            do_xattrs: true,
+            do_posix_acl: true,
+            do_selinux: true,
+            dedup_fail_fast: false,
+            fail_fast: false,
+            no_errors: false,
+            page_size: 4096,
+            min_pages: 0,
+            sparsify: false,
+            exclude_patterns: Vec::new(),
+            include_patterns: Vec::new(),
+            exclude_from: Vec::new(),
+            include_from: Vec::new(),
+            no_recursion: false,
+            dereference: false,
+            one_file_system: false,
+            absolute_names: false,
+            no_hardlink_detection: false,
+            anchored: false,
+            ignore_case: false,
+            owner: None,
+            owner_map: None,
+            group: None,
+            group_map: None,
+            eager_filter: false,
+            no_dedup: false,
+            write_archive_footer: true,
+            retry_missing_sha: false,
+            force_scan: false,
+            clear_archive_meta: false,
+            rehash: true,
         })
     }
 
