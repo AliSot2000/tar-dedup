@@ -13,12 +13,18 @@ fn help_exits_successfully() {
 
 #[test]
 fn extract_help_exits_successfully() {
-    Command::cargo_bin("tar-dedup")
+    let assert = Command::cargo_bin("tar-dedup")
         .expect("binary")
         .args(["extract", "--help"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("-C"));
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(out.contains("-C"), "expected -C in extract help");
+    assert!(out.contains("-P"), "expected -P in extract help");
+    assert!(
+        out.contains("--absolute"),
+        "expected --absolute in extract help"
+    );
 }
 
 #[test]
