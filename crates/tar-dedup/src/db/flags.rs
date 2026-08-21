@@ -5,7 +5,7 @@ use crate::error::Result;
 
 /// Bit index into [`FileFlags`] (not the mask itself).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u16)]
+#[repr(u64)]
 pub enum FileFlag {
     /// An IO Error occurred while querying the metadata of this file
     IoErrorWhileInventorying = 0,
