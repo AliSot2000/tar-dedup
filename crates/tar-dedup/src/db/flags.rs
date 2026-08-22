@@ -105,6 +105,63 @@ impl FileFlags {
     }
 }
 
+/// Bit index into [`SourceFlags`] (not the mask itself).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u64)]
+pub enum SourceFlag {
+    /// This source row is a directory tree root (`-i` or a directory `--files-from` line).
+    IsDirectory = 0,
+}
+
+impl SourceFlag {
+    pub const fn mask(self) -> u64 {
+        1u64 << (self as u8)
+    }
+
+    pub const fn mask_i64(self) -> i64 {
+        self.mask() as i64
+    }
+}
+
+/// Bitset stored in `source.flags`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SourceFlags(u64);
+
+impl SourceFlags {
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits & !(1u64 << 63))
+    }
+
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+
+    pub fn from_i64(raw: i64) -> Self {
+        Self::from_bits(raw as u64)
+    }
+
+    pub fn to_i64(self) -> i64 {
+        self.0 as i64
+    }
+
+    pub fn get(self, flag: SourceFlag) -> bool {
+        self.0 & flag.mask() != 0
+    }
+
+    pub fn set(&mut self, flag: SourceFlag, on: bool) {
+        if on {
+            self.0 |= flag.mask();
+        } else {
+            self.0 &= !flag.mask();
+        }
+    }
+
+    pub fn with(mut self, flag: SourceFlag, on: bool) -> Self {
+        self.set(flag, on);
+        self
+    }
+}
+
 pub fn get_flags(conn: &Connection, file_id: FileId) -> Result<FileFlags> {
     let raw: i64 = conn.query_row(
         "SELECT flags FROM files WHERE id = :id",
@@ -179,6 +236,18 @@ mod tests {
                 | FileFlag::CheckWithCanonicalCompleted.mask()
                 | FileFlag::ErrorWhileDedup.mask()
                 | FileFlag::AppendedPath.mask()
+        );
+    }
+
+    #[test]
+    fn source_flag_round_trip_bits() {
+        let mut flags = SourceFlags::default();
+        assert!(!flags.get(SourceFlag::IsDirectory));
+        flags.set(SourceFlag::IsDirectory, true);
+        assert!(flags.get(SourceFlag::IsDirectory));
+        assert_eq!(
+            SourceFlags::from_i64(flags.to_i64()).bits(),
+            SourceFlag::IsDirectory.mask()
         );
     }
 }
