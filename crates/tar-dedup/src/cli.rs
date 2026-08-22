@@ -104,15 +104,6 @@ pub struct ArchiveArgs {
     #[arg(long = "one-file-system", default_value_t = false, help_heading = "Indexing")]
     pub one_file_system: bool,
 
-    /// Do not strip leading `/` from stored names (policy for absolute paths).
-    #[arg(
-        short = 'P',
-        long = "absolute-names",
-        default_value_t = false,
-        help_heading = "Indexing"
-    )]
-    pub absolute_names: bool,
-
     /// Do not coalesce same (inode, device) hard links in hash/dedup.
     #[arg(
         long = "no-hardlink-detection",
@@ -120,6 +111,14 @@ pub struct ArchiveArgs {
         help_heading = "Indexing"
     )]
     pub no_hardlink_detection: bool,
+
+    /// Allow nested or duplicate `-i` / `-T` directory roots (still recorded and walked).
+    #[arg(
+        long = "no-strict-separation",
+        default_value_t = false,
+        help_heading = "Indexing"
+    )]
+    pub no_strict_separation: bool,
 
     // --- Filtering ---
 
