@@ -6,6 +6,7 @@ use walkdir::WalkDir;
 use crate::common::files::{get_file_times, original_extension};
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::Config;
+use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::Database;
 use crate::db::types::{FileType, LinkType, NewFileRecord};
 use crate::error::{Error, FileStatError, Result};
@@ -29,7 +30,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let progress = CountProgress::new("inventory");
 
     // Handle input directories
-    for input_dir in config.input_dirs.iter() {
+    for (index, input_dir) in config.input_dirs.iter().enumerate() {
         shutdown.check_in_flight()?;
 
         tracing::info!(root = %input_dir.absolute_path.display(), "inventory pass");
@@ -43,7 +44,12 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
                       "Path should be minimal");
 
         let source_id = db.add_get_source(
-            &input_dir.absolute_path, "--input-dir", None, None)?;
+            &input_dir.absolute_path,
+            "--input-dir",
+            Some(index as u64),
+            None,
+            SourceFlags::default().with(SourceFlag::IsDirectory, true),
+        )?;
         handle_dir(&config, &db, &shutdown, source_id, &input_dir.absolute_path,
                    &mut processed, &progress)?;
     }
@@ -116,10 +122,26 @@ fn handle_from_files_line(
     };
     debug_assert!(abs_path.is_absolute(), "Path must be absolute now");
 
+    if abs_path.is_dir() {
+        if let Some((_, existing)) = db.find_overlapping_source(&abs_path)? {
+            if !config.no_strict_separation {
+                return Err(Error::Config(format!(
+                    "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
+                    abs_path.display(),
+                    existing.display()
+                )));
+            }
+        }
+    }
+
     let source_id = db.add_get_source(
-        &abs_path, &format!("--files-from={from_files_disp_path}"), Some(line as u64),
-        Some(fpath))?;
-    handle_dir(&config, &db, &shutdown, source_id, &fpath,
+        &abs_path,
+        &format!("--files-from={from_files_disp_path}"),
+        Some(line as u64),
+        Some(fpath),
+        SourceFlags::default().with(SourceFlag::IsDirectory, abs_path.is_dir()),
+    )?;
+    handle_dir(&config, &db, &shutdown, source_id, &abs_path,
                processed, &progress)?;
 
     Ok(())
