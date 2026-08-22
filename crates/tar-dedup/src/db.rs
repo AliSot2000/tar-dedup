@@ -1,10 +1,10 @@
 use std::cell::{Ref, RefCell, RefMut};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
 use crate::config::{ExtractRuntimeState, RuntimeState};
-use crate::db::flags::{FileFlag, FileFlags};
+use crate::db::flags::{FileFlag, FileFlags, SourceFlags};
 use crate::db::types::{ArchiveSession, FileId, FilePhase, FilterExpression, GroupKey, NewFileRecord};
 use crate::error::Result;
 
@@ -61,8 +61,12 @@ impl Database {
         inventory::insert_file(&*self.conn(), record)
     }
 
-    pub fn add_get_source(&self, abs_path: &Path, source_kind: &str, line: Option<u64>, original_path: Option<&Path>) -> Result<i64> {
-        source::add_get_source(&*self.conn(), abs_path, source_kind, line, original_path)
+    pub fn add_get_source(&self, abs_path: &Path, source_kind: &str, line: Option<u64>, original_path: Option<&Path>, flags: SourceFlags) -> Result<i64> {
+        source::add_get_source(&*self.conn(), abs_path, source_kind, line, original_path, flags)
+    }
+
+    pub fn find_overlapping_source(&self, abs_path: &Path) -> Result<Option<(i64, PathBuf)>> {
+        source::find_overlapping_source(&*self.conn(), abs_path)
     }
 
     pub fn get_file_by_id<R: SqlFileRow>(&self, file_id: FileId) -> Result<Option<R>> {
