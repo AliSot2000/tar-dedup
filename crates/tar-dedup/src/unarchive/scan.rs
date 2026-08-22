@@ -588,6 +588,7 @@ mod tests {
             one_file_system: false,
             absolute_names: false,
             no_hardlink_detection: false,
+            no_strict_separation: false,
             anchored: false,
             ignore_case: false,
             owner: None,
