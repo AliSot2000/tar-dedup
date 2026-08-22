@@ -3,6 +3,14 @@ use chrono::{DateTime, Utc};
 use std::io;
 use std::path::Path;
 
+/// True when either cleaned absolute path is a component-wise prefix of the other.
+///
+/// `/a` overlaps `/a/b` (both orders) and `/a` overlaps `/a`. `/a/b` vs `/a/c`
+/// and `/a` vs `/ab` do not.
+pub fn directory_roots_overlap(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
 /// Extension with leading dot (e.g. `.txt`), or empty if none / non-UTF-8.
 pub fn original_extension(path: &Path) -> String {
     path.extension()
@@ -162,3 +170,36 @@ pub fn device_num<P: AsRef<Path>>(_: P) -> io::Result<u64> {
     ))
 }
 */
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn overlap_nested_both_orders() {
+        assert!(directory_roots_overlap(Path::new("/a"), Path::new("/a/b")));
+        assert!(directory_roots_overlap(Path::new("/a/b"), Path::new("/a")));
+    }
+
+    #[test]
+    fn overlap_identical() {
+        assert!(directory_roots_overlap(Path::new("/a"), Path::new("/a")));
+    }
+
+    #[test]
+    fn siblings_do_not_overlap() {
+        assert!(!directory_roots_overlap(Path::new("/a/b"), Path::new("/a/c")));
+    }
+
+    #[test]
+    fn string_prefix_is_not_overlap() {
+        assert!(!directory_roots_overlap(Path::new("/a"), Path::new("/ab")));
+    }
+
+    #[test]
+    fn trailing_slash_clean_equivalent() {
+        assert!(directory_roots_overlap(Path::new("/a/b"), Path::new("/a/b/")));
+        assert!(directory_roots_overlap(Path::new("/a/b/"), Path::new("/a/b")));
+    }
+}
