@@ -5,6 +5,7 @@ use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{ArchiveArgs, CompressionFlags, ExitAfterStageArg, ExtractArgs, ResumeArgs};
+use crate::common::files::directory_roots_overlap;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +295,8 @@ pub struct Config {
     pub one_file_system: bool,
     pub absolute_names: bool,
     pub no_hardlink_detection: bool,
+    /// When true, overlapping `-i` / `-T` directory roots are recorded and walked.
+    pub no_strict_separation: bool,
 
     /// Force owner policy: `NAME`, `UID`, or `NAME:UID` (archive meta / extract apply).
     pub owner: Option<String>,
@@ -353,12 +356,26 @@ impl Config {
         }
 
         let mut input_dirs = Vec::with_capacity(args.input_dirs.len());
+        let mut accepted_roots: Vec<PathBuf> = Vec::with_capacity(args.input_dirs.len());
         for dir in &args.input_dirs {
             let resolved = resolve_path_to_abs_path(&dir, &directory);
             validate_dir(&resolved, "--input-dir")?; // TODO Fail fast.
+            if let Some(existing) = accepted_roots
+                .iter()
+                .find(|root| directory_roots_overlap(root, &resolved))
+            {
+                if !args.no_strict_separation {
+                    return Err(Error::Config(format!(
+                        "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
+                        resolved.display(),
+                        existing.display()
+                    )));
+                }
+            }
+            accepted_roots.push(resolved.clone());
             input_dirs.push(PathSource {
                 original_path: dir.to_path_buf(),
-                absolute_path: resolved
+                absolute_path: resolved,
             });
         }
 
@@ -450,8 +467,9 @@ impl Config {
             no_recursion: args.no_recursion,
             dereference: args.dereference,
             one_file_system: args.one_file_system,
-            absolute_names: args.absolute_names,
+            absolute_names: false,
             no_hardlink_detection: args.no_hardlink_detection,
+            no_strict_separation: args.no_strict_separation,
 
             exclude_patterns: args.exclude.clone(),
             exclude_from,
@@ -546,6 +564,7 @@ impl Config {
             one_file_system: false,
             absolute_names: args.absolute_names,
             no_hardlink_detection: false,
+            no_strict_separation: false,
             anchored: false,
             ignore_case: false,
             owner: None,
@@ -610,6 +629,7 @@ impl Config {
             one_file_system: false,
             absolute_names: false,
             no_hardlink_detection: false,
+            no_strict_separation: false,
             anchored: false,
             ignore_case: false,
             owner: None,
@@ -656,9 +676,9 @@ pub fn resolve_user_path(path: &Path) -> Result<PathBuf> {
 /// It is not guaranteed that it exists!
 pub fn resolve_path_to_abs_path(path: &Path, base: &Path) -> PathBuf {
     if path.is_absolute() {
-        path.to_path_buf()
+        path.to_path_buf().clean()
     } else {
-        base.join(path)
+        base.join(path).clean()
     }
 }
 
