@@ -29,8 +29,10 @@ CREATE TABLE IF NOT EXISTS source (
     abs_path TEXT NOT NULL,
     original_path TEXT,
     line INTEGER,
+    flags INTEGER NOT NULL DEFAULT 0,
     UNIQUE (source, path, line)
 );
+CREATE INDEX IF NOT EXISTS idx_source_dirs ON source(abs_path) WHERE (flags & 1) != 0;
 
 CREATE TABLE IF NOT EXISTS files (
     id            INTEGER PRIMARY KEY,
