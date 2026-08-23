@@ -371,6 +371,8 @@ pub struct ExtractArgs {
     /// After success, keep the `{stem}.estage` work directory.
     #[arg(long = "keep-stage")]
     pub keep_stage: bool,
+
+    // TOOD late delete
 }
 
 /// Continue incomplete work. Policy comes from the work DB; only jobs and

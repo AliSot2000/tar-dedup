@@ -189,9 +189,11 @@ Filtering is not recursive. The filters are applied to each element separately. 
 optimizes path traversal and allocation of files (we want to minimize the archive size after all). All regex for filters 
 are matched against each absolute path recorded in during the inventory stage.
 
-// Todo entry vs path restoration.
+// Todo entry vs path restoration.path
+#### Directory scanning.
+By default, tar-dedup expects to scan disjoint trees (consequence of the mapping and )
 
-### Security
+### Security    
 As this tool is meant to produce a coherent and complete picture of a file tree [...] for archival purposes, the security concerns 
 are higher for this tool compared to the regular `tar` command! The sqlite manifest stores absolute paths to all files 
 archived and the full metadata of files is also stored in plain format. Please use caution when using this tool to 
