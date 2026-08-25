@@ -3,12 +3,26 @@ use chrono::{DateTime, Utc};
 use std::io;
 use std::path::Path;
 
-/// True when either cleaned absolute path is a component-wise prefix of the other.
+/// True when two directory roots collide for inventory.
 ///
-/// `/a` overlaps `/a/b` (both orders) and `/a` overlaps `/a`. `/a/b` vs `/a/c`
-/// and `/a` vs `/ab` do not.
-pub fn directory_roots_overlap(a: &Path, b: &Path) -> bool {
+/// Same path (including trailing `/`) always overlaps. Nested paths (`/a` vs
+/// `/a/b`) overlap only when `no_recursion` is false — `--no-recurse` walks
+/// only the root itself, so a descendant root is a distinct tree.
+/// `/a/b` vs `/a/c` and `/a` vs `/ab` never overlap.
+pub fn directory_roots_overlap(a: &Path, b: &Path, no_recursion: bool) -> bool {
+    if paths_equal_ignore_trailing_slash(a, b) {
+        return true;
+    }
+    if no_recursion {
+        return false;
+    }
     a.starts_with(b) || b.starts_with(a)
+}
+
+fn paths_equal_ignore_trailing_slash(a: &Path, b: &Path) -> bool {
+    let a = a.as_os_str().as_encoded_bytes();
+    let b = b.as_os_str().as_encoded_bytes();
+    a.strip_suffix(b"/").unwrap_or(a) == b.strip_suffix(b"/").unwrap_or(b)
 }
 
 /// Extension with leading dot (e.g. `.txt`), or empty if none / non-UTF-8.
