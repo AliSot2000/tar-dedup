@@ -123,7 +123,7 @@ fn handle_from_files_line(
     debug_assert!(abs_path.is_absolute(), "Path must be absolute now");
 
     if abs_path.is_dir() {
-        if let Some((_, existing)) = db.find_overlapping_source(&abs_path)? {
+        if let Some((_, existing)) = db.find_overlapping_source(&abs_path, config.no_recursion)? {
             if !config.no_strict_separation {
                 return Err(Error::Config(format!(
                     "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
@@ -199,10 +199,9 @@ pub fn handle_entry(
 
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
 
-    // Preflight check if path exists
-    if db.abs_path_exists(&path)? {
-        *processed += 1;
-        progress.inc(1);
+    // Preflight: already inventoried — attach this source without restatting.
+    if let Some(file_id) = db.file_id_by_abs_path(path)? {
+        db.add_ref(source_id, file_id)?;
         return Ok(());
     }
 
@@ -248,7 +247,7 @@ pub fn handle_entry(
         }
     } else { None };
 
-    if db.insert_file(&NewFileRecord {
+    if db.insert_file_and_ref(source_id, &NewFileRecord {
         abs_path: path.clean().to_path_buf(),
         ext: original_extension(&path),
         size: meta.len(),
@@ -265,7 +264,6 @@ pub fn handle_entry(
         link_dst: link_dst.clone(),
         device_id: dev,
         inode_id: ino,
-        source_id,
     })? {
         *processed += 1;
         progress.inc(1);
