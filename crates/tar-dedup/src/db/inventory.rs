@@ -195,3 +195,59 @@ pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
     // TODO Emmit to tracing, stderr
     Err("Resolve Numeric Ids not available on this platform")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::flags::{SourceFlag, SourceFlags};
+    use crate::db::Database;
+    use std::path::{Path, PathBuf};
+
+    fn record(path: &str) -> NewFileRecord {
+        NewFileRecord {
+            abs_path: PathBuf::from(path),
+            ext: String::new(),
+            size: 1,
+            mtime: None,
+            atime: None,
+            ctime: None,
+            uid: None,
+            gid: None,
+            mode: None,
+            ftype: None,
+            xattrs: None,
+            posix_acl: None,
+            selinux_ctx: None,
+            link_dst: None,
+            device_id: None,
+            inode_id: None,
+        }
+    }
+
+    fn dir_flags() -> SourceFlags {
+        SourceFlags::default().with(SourceFlag::IsDirectory, true)
+    }
+
+    #[test]
+    fn two_sources_share_one_file_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("t.sqlite")).unwrap();
+        let s1 = db
+            .add_get_source(Path::new("/root-a"), "--input-dir", Some(0), None, dir_flags())
+            .unwrap();
+        let s2 = db
+            .add_get_source(Path::new("/root-b"), "--input-dir", Some(1), None, dir_flags())
+            .unwrap();
+        let rec = record("/shared/file.txt");
+        assert!(db.insert_file_and_ref(s1, &rec).unwrap());
+        let id = db.file_id_by_abs_path(Path::new("/shared/file.txt")).unwrap().unwrap();
+        assert!(db.add_ref(s2, id).unwrap());
+        assert!(!db.add_ref(s2, id).unwrap());
+        assert_eq!(
+            db.file_id_by_abs_path(Path::new("/shared/file.txt"))
+                .unwrap()
+                .unwrap(),
+            id
+        );
+    }
+}
