@@ -65,7 +65,6 @@ CREATE TABLE IF NOT EXISTS files (
     sparse_count   INTEGER DEFAULT 0,
     include_reason INTEGER REFERENCES filter_reason(id) DEFAULT 0,
     exclude_reason INTEGER REFERENCES filter_reason(id) DEFAULT 0,
-    source_id      INTEGER REFERENCES source(id), --relevant to entry point (e.g. cross tree starts with links not recorded)
     canonical_id   INTEGER REFERENCES files(id),
     phase          TEXT NOT NULL DEFAULT 'inventoried',
     flags          INTEGER NOT NULL DEFAULT 0
@@ -75,6 +74,14 @@ CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(sha1, size);
 CREATE INDEX IF NOT EXISTS idx_files_canonical ON files(canonical_id);
 CREATE INDEX IF NOT EXISTS idx_files_phase ON files(phase);
 CREATE INDEX IF NOT EXISTS idx_files_abs_path ON files(abs_path);
+
+CREATE TABLE IF NOT EXISTS ref (
+    source_id INTEGER NOT NULL REFERENCES source(id),
+    file_id   INTEGER NOT NULL REFERENCES files(id),
+    flags     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (source_id, file_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ref_file ON ref(file_id);
 
 -- finalized:
 -- 0 = open/interrupted,
@@ -89,5 +96,5 @@ CREATE TABLE IF NOT EXISTS archive_sessions (
 );
 
 -- Add dummy row
-INSERT INTO filter_reason (id, source, line, expression) VALUES (0, 'internal', NULL, '*');
+INSERT OR IGNORE INTO filter_reason (id, source, line, expression) VALUES (0, 'internal', NULL, '*');
 ";
