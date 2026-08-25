@@ -89,7 +89,9 @@ impl StrippedRecord {
 impl SqlFileRow for FileRecord {
     fn sql_columns() -> &'static str {
         "id, abs_path, ext, size, sha1, mtime, atime, ctime, \
-         uid, gid, mode, ftype, xattr, acl, selinux, link_dst, exclusion_id, canonical_id, flags, phase"
+         uid, gid, mode, ftype, xattr, acl, selinux, link_dst, \
+         include_reason, exclude_reason, canonical_id, flags, phase, \
+         new_name, inode, dev"
     }
 
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
@@ -136,7 +138,8 @@ impl SqlFileRow for FileRecord {
 
 impl SqlFileRow for StrippedRecord {
     fn sql_columns() -> &'static str {
-        "id, abs_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, flags, phase"
+        "id, abs_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, flags, phase, \
+         inode, dev"
     }
 
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
