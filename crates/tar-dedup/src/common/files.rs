@@ -178,28 +178,36 @@ mod tests {
 
     #[test]
     fn overlap_nested_both_orders() {
-        assert!(directory_roots_overlap(Path::new("/a"), Path::new("/a/b")));
-        assert!(directory_roots_overlap(Path::new("/a/b"), Path::new("/a")));
+        assert!(directory_roots_overlap(Path::new("/a"), Path::new("/a/b"), false));
+        assert!(directory_roots_overlap(Path::new("/a/b"), Path::new("/a"), false));
     }
 
     #[test]
     fn overlap_identical() {
-        assert!(directory_roots_overlap(Path::new("/a"), Path::new("/a")));
+        assert!(directory_roots_overlap(Path::new("/a"), Path::new("/a"), false));
+        assert!(directory_roots_overlap(Path::new("/a"), Path::new("/a"), true));
     }
 
     #[test]
     fn siblings_do_not_overlap() {
-        assert!(!directory_roots_overlap(Path::new("/a/b"), Path::new("/a/c")));
+        assert!(!directory_roots_overlap(Path::new("/a/b"), Path::new("/a/c"), false));
+        assert!(!directory_roots_overlap(Path::new("/a/b"), Path::new("/a/c"), true));
     }
 
     #[test]
     fn string_prefix_is_not_overlap() {
-        assert!(!directory_roots_overlap(Path::new("/a"), Path::new("/ab")));
+        assert!(!directory_roots_overlap(Path::new("/a"), Path::new("/ab"), false));
     }
 
     #[test]
     fn trailing_slash_clean_equivalent() {
-        assert!(directory_roots_overlap(Path::new("/a/b"), Path::new("/a/b/")));
-        assert!(directory_roots_overlap(Path::new("/a/b/"), Path::new("/a/b")));
+        assert!(directory_roots_overlap(Path::new("/a/b"), Path::new("/a/b/"), false));
+        assert!(directory_roots_overlap(Path::new("/a/b/"), Path::new("/a/b"), true));
+    }
+
+    #[test]
+    fn no_recursion_ignores_descendants() {
+        assert!(!directory_roots_overlap(Path::new("/a"), Path::new("/a/b"), true));
+        assert!(!directory_roots_overlap(Path::new("/a/b"), Path::new("/a"), true));
     }
 }
