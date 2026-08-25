@@ -362,7 +362,7 @@ impl Config {
             validate_dir(&resolved, "--input-dir")?; // TODO Fail fast.
             if let Some(existing) = accepted_roots
                 .iter()
-                .find(|root| directory_roots_overlap(root, &resolved))
+                .find(|root| directory_roots_overlap(root, &resolved, args.no_recursion))
             {
                 if !args.no_strict_separation {
                     return Err(Error::Config(format!(
