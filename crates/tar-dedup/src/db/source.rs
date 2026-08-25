@@ -48,18 +48,24 @@ pub fn add_get_source(conn: &Connection,
 pub fn find_overlapping_source(
     conn: &Connection,
     abs_path: &Path,
+    no_recursion: bool,
 ) -> Result<Option<(i64, PathBuf)>> {
     let path_str = abs_path.to_string_lossy();
     let dir_bit = SourceFlag::IsDirectory.mask_i64();
+    let overlap = if no_recursion {
+        "rtrim(abs_path, '/') = rtrim(:path, '/')"
+    } else {
+        "(abs_path = :path
+          OR instr(:path, rtrim(abs_path, '/') || '/') = 1
+          OR instr(abs_path, rtrim(:path, '/') || '/') = 1)"
+    };
     conn.query_row(
-        "SELECT id, abs_path FROM source
-         WHERE (flags & :dir_bit) != 0
-           AND (
-                abs_path = :path
-             OR instr(:path, rtrim(abs_path, '/') || '/') = 1
-             OR instr(abs_path, rtrim(:path, '/') || '/') = 1
-           )
-         LIMIT 1",
+        &format!(
+            "SELECT id, abs_path FROM source
+             WHERE (flags & :dir_bit) != 0
+               AND {overlap}
+             LIMIT 1"
+        ),
         named_params! {
             ":path": path_str.as_ref(),
             ":dir_bit": dir_bit,
@@ -122,10 +128,10 @@ mod tests {
     fn overlap_nested_and_identical() {
         let conn = conn();
         insert_dir(&conn, "/a");
-        assert!(find_overlapping_source(&conn, Path::new("/a/b"))
+        assert!(find_overlapping_source(&conn, Path::new("/a/b"), false)
             .unwrap()
             .is_some());
-        assert!(find_overlapping_source(&conn, Path::new("/a"))
+        assert!(find_overlapping_source(&conn, Path::new("/a"), false)
             .unwrap()
             .is_some());
     }
@@ -134,10 +140,10 @@ mod tests {
     fn siblings_and_string_prefix_do_not_overlap() {
         let conn = conn();
         insert_dir(&conn, "/a/b");
-        assert!(find_overlapping_source(&conn, Path::new("/a/c"))
+        assert!(find_overlapping_source(&conn, Path::new("/a/c"), false)
             .unwrap()
             .is_none());
-        assert!(find_overlapping_source(&conn, Path::new("/ab"))
+        assert!(find_overlapping_source(&conn, Path::new("/ab"), false)
             .unwrap()
             .is_none());
     }
@@ -147,12 +153,27 @@ mod tests {
         let conn = conn();
         insert_file(&conn, "/a/file.txt", 0);
         insert_file(&conn, "/a/b/c.bin", 1);
-        assert!(find_overlapping_source(&conn, Path::new("/a"))
+        assert!(find_overlapping_source(&conn, Path::new("/a"), false)
             .unwrap()
             .is_none());
         insert_dir(&conn, "/a");
-        assert!(find_overlapping_source(&conn, Path::new("/a/b"))
+        assert!(find_overlapping_source(&conn, Path::new("/a/b"), false)
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn no_recursion_same_dir_overlaps_nested_does_not() {
+        let conn = conn();
+        insert_dir(&conn, "/a/b");
+        assert!(find_overlapping_source(&conn, Path::new("/a/b/"), true)
+            .unwrap()
+            .is_some());
+        assert!(find_overlapping_source(&conn, Path::new("/a/b/c"), true)
+            .unwrap()
+            .is_none());
+        assert!(find_overlapping_source(&conn, Path::new("/a"), true)
+            .unwrap()
+            .is_none());
     }
 }
