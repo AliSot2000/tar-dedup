@@ -162,6 +162,153 @@ impl SourceFlags {
     }
 }
 
+/// Bit index into [`RefFlags`] (not the mask itself).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u64)]
+pub enum RefFlag {
+    /// This source already walked this node (resume / skip re-stat).
+    AlreadyWalked = 0,
+    /// This membership was materialized on extract.
+    Extracted = 1,
+}
+
+impl RefFlag {
+    pub const fn mask(self) -> u64 {
+        1u64 << (self as u8)
+    }
+
+    pub const fn mask_i64(self) -> i64 {
+        self.mask() as i64
+    }
+}
+
+/// Bitset stored in `ref.flags`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RefFlags(u64);
+
+impl RefFlags {
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits & !(1u64 << 63))
+    }
+
+    pub fn bits(self) -> u64 {
+        self.0
+    }
+
+    pub fn from_i64(raw: i64) -> Self {
+        Self::from_bits(raw as u64)
+    }
+
+    pub fn to_i64(self) -> i64 {
+        self.0 as i64
+    }
+
+    pub fn get(self, flag: RefFlag) -> bool {
+        self.0 & flag.mask() != 0
+    }
+
+    pub fn set(&mut self, flag: RefFlag, on: bool) {
+        if on {
+            self.0 |= flag.mask();
+        } else {
+            self.0 &= !flag.mask();
+        }
+    }
+
+    pub fn with(mut self, flag: RefFlag, on: bool) -> Self {
+        self.set(flag, on);
+        self
+    }
+}
+
+pub fn insert_ref(
+    conn: &Connection,
+    source_id: i64,
+    file_id: FileId,
+    flags: RefFlags,
+) -> Result<bool> {
+    let n = conn.execute(
+        "INSERT OR IGNORE INTO ref (source_id, file_id, flags)
+         VALUES (:source_id, :file_id, :flags)",
+        named_params! {
+            ":source_id": source_id,
+            ":file_id": file_id.0,
+            ":flags": flags.to_i64(),
+        },
+    )?;
+    Ok(n > 0)
+}
+
+pub fn get_ref_flags(conn: &Connection, source_id: i64, file_id: FileId) -> Result<RefFlags> {
+    let raw: i64 = conn.query_row(
+        "SELECT flags FROM ref WHERE source_id = :source_id AND file_id = :file_id",
+        named_params! {
+            ":source_id": source_id,
+            ":file_id": file_id.0,
+        },
+        |row| row.get(0),
+    )?;
+    Ok(RefFlags::from_i64(raw))
+}
+
+pub fn set_ref_flags(
+    conn: &Connection,
+    source_id: i64,
+    file_id: FileId,
+    flags: RefFlags,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE ref SET flags = :flags WHERE source_id = :source_id AND file_id = :file_id",
+        named_params! {
+            ":flags": flags.to_i64(),
+            ":source_id": source_id,
+            ":file_id": file_id.0,
+        },
+    )?;
+    Ok(())
+}
+
+pub fn get_ref_flag(
+    conn: &Connection,
+    source_id: i64,
+    file_id: FileId,
+    flag: RefFlag,
+) -> Result<bool> {
+    let set: i64 = conn.query_row(
+        "SELECT (flags & :bit) != 0 FROM ref WHERE source_id = :source_id AND file_id = :file_id",
+        named_params! {
+            ":bit": flag.mask_i64(),
+            ":source_id": source_id,
+            ":file_id": file_id.0,
+        },
+        |row| row.get(0),
+    )?;
+    Ok(set != 0)
+}
+
+pub fn set_ref_flag(
+    conn: &Connection,
+    source_id: i64,
+    file_id: FileId,
+    flag: RefFlag,
+    on: bool,
+) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE ref SET flags = CASE
+             WHEN :on != 0 THEN flags | :bit
+             ELSE flags & ~:bit
+           END
+         WHERE source_id = :source_id AND file_id = :file_id",
+        named_params! {
+            ":on": if on { 1i64 } else { 0i64 },
+            ":bit": flag.mask_i64(),
+            ":source_id": source_id,
+            ":file_id": file_id.0,
+        },
+    )?;
+    Ok(n as u64)
+}
+
 pub fn get_flags(conn: &Connection, file_id: FileId) -> Result<FileFlags> {
     let raw: i64 = conn.query_row(
         "SELECT flags FROM files WHERE id = :id",
@@ -248,6 +395,20 @@ mod tests {
         assert_eq!(
             SourceFlags::from_i64(flags.to_i64()).bits(),
             SourceFlag::IsDirectory.mask()
+        );
+    }
+
+    #[test]
+    fn ref_flag_round_trip_bits() {
+        let mut flags = RefFlags::default();
+        assert!(!flags.get(RefFlag::AlreadyWalked));
+        flags.set(RefFlag::AlreadyWalked, true);
+        flags.set(RefFlag::Extracted, true);
+        assert!(flags.get(RefFlag::AlreadyWalked));
+        assert!(flags.get(RefFlag::Extracted));
+        assert_eq!(
+            RefFlags::from_i64(flags.to_i64()).bits(),
+            RefFlag::AlreadyWalked.mask() | RefFlag::Extracted.mask()
         );
     }
 }
