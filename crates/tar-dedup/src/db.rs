@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 
 use crate::config::{ExtractRuntimeState, RuntimeState};
-use crate::db::flags::{FileFlag, FileFlags, SourceFlags};
+use crate::db::flags::{FileFlag, FileFlags, RefFlags, SourceFlags};
 use crate::db::types::{ArchiveSession, FileId, FilePhase, FilterExpression, GroupKey, NewFileRecord};
 use crate::error::Result;
 
@@ -57,16 +57,43 @@ impl Database {
         inventory::abs_path_exists(&self.conn(), path)
     }
 
+    pub fn file_id_by_abs_path(&self, path: &Path) -> Result<Option<FileId>> {
+        inventory::file_id_by_abs_path(&*self.conn(), path)
+    }
+
+    pub fn add_ref(&self, source_id: i64, file_id: FileId) -> Result<bool> {
+        flags::insert_ref(&*self.conn(), source_id, file_id, RefFlags::default())
+    }
+
     pub fn insert_file(&self, record: &NewFileRecord) -> Result<bool> {
         inventory::insert_file(&*self.conn(), record)
+    }
+
+    /// Insert a new `files` row and a `ref` membership in one transaction.
+    pub fn insert_file_and_ref(&self, source_id: i64, record: &NewFileRecord) -> Result<bool> {
+        let mut conn = self.conn.borrow_mut();
+        let tx = conn.transaction()?;
+        let inserted = inventory::insert_file(&tx, record)?;
+        let file_id = inventory::file_id_by_abs_path(&tx, &record.abs_path)?.ok_or_else(|| {
+            crate::error::Error::Config(
+                "insert_file_and_ref: file missing after insert".into(),
+            )
+        })?;
+        flags::insert_ref(&tx, source_id, file_id, RefFlags::default())?;
+        tx.commit()?;
+        Ok(inserted)
     }
 
     pub fn add_get_source(&self, abs_path: &Path, source_kind: &str, line: Option<u64>, original_path: Option<&Path>, flags: SourceFlags) -> Result<i64> {
         source::add_get_source(&*self.conn(), abs_path, source_kind, line, original_path, flags)
     }
 
-    pub fn find_overlapping_source(&self, abs_path: &Path) -> Result<Option<(i64, PathBuf)>> {
-        source::find_overlapping_source(&*self.conn(), abs_path)
+    pub fn find_overlapping_source(
+        &self,
+        abs_path: &Path,
+        no_recursion: bool,
+    ) -> Result<Option<(i64, PathBuf)>> {
+        source::find_overlapping_source(&*self.conn(), abs_path, no_recursion)
     }
 
     pub fn get_file_by_id<R: SqlFileRow>(&self, file_id: FileId) -> Result<Option<R>> {
