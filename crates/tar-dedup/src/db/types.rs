@@ -78,7 +78,6 @@ pub struct NewFileRecord {
     pub link_dst: Option<PathBuf>,
     pub device_id: Option<u64>,
     pub inode_id: Option<u64>,
-    pub source_id: i64,
 }
 
 /// Enum represents all possible targets a symlink can have. `Unknown` is for dangling links that
