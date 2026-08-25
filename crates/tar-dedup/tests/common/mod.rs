@@ -31,7 +31,6 @@ pub fn insert_file(db: &Database, abs_path: &str, size: u64) -> FileId {
         link_dst: None,
         inode_id: None,
         device_id: None,
-        source_id: 1
     })
     .expect("insert file");
 
