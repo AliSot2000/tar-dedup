@@ -477,8 +477,8 @@ mod tests {
     /// both `archived`, canonical flagged `AppendedPath`. Returns the member name.
     fn write_catalog(path: &Path) -> String {
         let db = Database::open(path).expect("open catalog");
-        let canonical = insert(&db, "canonical.txt", 4, FileType::File);
-        let duplicate = insert(&db, "duplicate.txt", 4, FileType::File);
+        let canonical = insert(&db, "/canonical.txt", 4, FileType::File);
+        let duplicate = insert(&db, "/duplicate.txt", 4, FileType::File);
 
         // TODO: Need to figure out if we need to set the last one to true/false
         db.update_file_inspection_per_id(canonical, [7u8; 20], 0, false)
@@ -521,7 +521,6 @@ mod tests {
             link_dst: None,
             device_id: None,
             inode_id: None,
-            source_id: 1,
         })
         .expect("insert");
 
