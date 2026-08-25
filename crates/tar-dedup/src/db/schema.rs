@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS source (
     original_path TEXT,
     line INTEGER,
     flags INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (source, path, line)
+    UNIQUE (source, abs_path, line)
 );
 CREATE INDEX IF NOT EXISTS idx_source_dirs ON source(abs_path) WHERE (flags & 1) != 0;
 
