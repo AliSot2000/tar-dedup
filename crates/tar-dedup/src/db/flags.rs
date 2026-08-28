@@ -124,7 +124,7 @@ impl SourceFlag {
 }
 
 /// Bitset stored in `source.flags`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct SourceFlags(u64);
 
 impl SourceFlags {
