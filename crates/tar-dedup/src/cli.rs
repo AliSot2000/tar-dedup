@@ -223,6 +223,7 @@ pub struct ArchiveArgs {
     #[arg(long = "no-selinux", action = ArgAction::SetFalse)]
     pub selinux: bool,
 
+    // TODO extraction?
     /// Force owner for archived members: `NAME`, `UID`, or `NAME:UID` (GNU tar).
     /// Stored as archive policy (meta); applied on extract.
     #[arg(long = "owner", value_name = "NAME[:UID]", help_heading = "File Attributes")]
@@ -343,36 +344,195 @@ pub struct CompressionFlags {
 
 #[derive(Debug, Args)]
 pub struct ExtractArgs {
-    #[arg(short = 'f')]
+    // --- Archive Paths ---
+
+    /// Archive path (relative paths use `-C` / current directory).
+    #[arg(short = 'f', value_name = "ARCHIVE", help_heading = "Archive Paths")]
     pub archive: PathBuf,
 
-    /// Extract files relative to this directory (like GNU tar -C).
-    #[arg(short = 'C', value_name = "DIR")]
-    pub output_dir: PathBuf,
+    /// Treat DIR as the working directory when resolving relative paths on this
+    /// command line (`-f`, `--work-dir`, …) and as the extraction root. Absolute
+    /// paths are unchanged. Default: process current directory.
+    #[arg(
+        short = 'C',
+        long = "directory",
+        value_name = "DIR",
+        help_heading = "Archive Paths"
+    )]
+    pub directory: Option<PathBuf>,
 
-    /// Restore using absolute catalog paths (`-P`). With `-C`, abs paths are
-    /// joined under the output dir (leading `/` stripped); without applying
-    /// relative strip rules. Alias: `--absolute-names`.
-    #[arg(short = 'P', long = "absolute", visible_alias = "absolute-names")]
+    /// Stage directory for sqlite DB, cached payloads, and locks (defaults to
+    /// `{stem}.estage` next to the archive). Relative paths use `-C` / cwd.
+    #[arg(long = "work-dir", value_name = "DIR", help_heading = "Archive Paths")]
+    pub work_dir: Option<PathBuf>,
+
+    /// Restore using absolute catalog paths (`-P`). With `-C`, join abs paths under
+    /// the extraction root (leading `,/` stripped); without `-C`, restore under
+    /// filesystem root. Alias: `--absolute-names`.
+    #[arg(
+        short = 'P',
+        long = "absolute",
+        visible_alias = "absolute-names",
+        default_value_t = false,
+        help_heading = "Archive Paths"
+    )]
     pub absolute_names: bool,
 
-    /// Restore saved uid/gid on extracted files (best effort; may require root).
-    #[arg(long)]
+    /// Create a subdirectory so loose archive members are not extracted directly into
+    /// the extraction root (GNU tar `--one-top-level`). Optional DIR overrides the
+    /// default (archive stem).
+    #[arg(
+        long = "one-top-level",
+        value_name = "DIR",
+        help_heading = "Archive Paths"
+    )]
+    pub one_top_level: Option<PathBuf>,
+
+    // --- Overwrite Control ---
+
+    /// Preserve existing directory symlinks instead of replacing them (GNU tar
+    /// `--keep-directory-symlink`).
+    #[arg(
+        long = "keep-directory-symlink",
+        default_value_t = false,
+        help_heading = "Overwrite Control"
+    )]
+    pub keep_dir_symlink: bool,
+
+    /// Remove each existing file before extracting over it (GNU tar `-U` /
+    /// `--unlink-first`).
+    #[arg(
+        short = 'U',
+        long = "unlink-first",
+        default_value_t = false,
+        help_heading = "Overwrite Control"
+    )]
+    pub unlink_first: bool,
+
+    /// Skip members whose parent directory does not exist (error with `--fail-fast`).
+    #[arg(
+        long = "no-create-dirs",
+        default_value_t = false,
+        help_heading = "Overwrite Control"
+    )]
+    pub no_create_dir: bool,
+
+    /// Do not apply archived metadata to existing directories (GNU tar
+    /// `--no-overwrite-dir`). Default: apply directory metadata for placed
+    /// members, matching GNU tar at the end of the pipeline.
+    #[arg(
+        long = "no-overwrite-dir",
+        default_value_t = false,
+        help_heading = "Overwrite Control"
+    )]
+    pub no_overwrite_dir: bool,
+
+    /// Also apply archived directory metadata to directories excluded by filters.
+    /// Normally only placed members are updated (GNU tar equivalent); this flag
+    /// matters because excluded paths remain in the catalog with full metadata.
+    #[arg(
+        long = "overwrite-dir",
+        default_value_t = false,
+        help_heading = "Overwrite Control"
+    )]
+    pub force_overwrite_dir: bool,
+
+    /// How to handle paths that already exist on disk.
+    #[arg(
+        long = "conflict-policy",
+        value_enum,
+        default_value_t = ConflictPolicy::Replace,
+        help_heading = "Overwrite Control"
+    )]
+    pub conflict_policy: ConflictPolicy,
+
+    /// Do not log path or type conflicts (pairs with `--conflict-policy`).
+    #[arg(
+        long = "silent-conflicts",
+        default_value_t = false,
+        help_heading = "Overwrite Control"
+    )]
+    pub silent_conflicts: bool,
+
+    /// On type mismatch at a path, remove the existing entry and extract the archive member.
+    #[arg(
+        long = "remove-and-replace",
+        default_value_t = false,
+        help_heading = "Overwrite Control"
+    )]
+    pub remove_and_replace: bool,
+
+    // --- Link Tree ---
+
+    /// Build the restored tree from symlinks/hard links into the extract stage instead
+    /// of copying payloads (keeps the `.estage` cache).
+    #[arg(
+        long = "link-tree",
+        default_value_t = false,
+        help_heading = "Link Tree"
+    )]
+    pub link_tree: bool,
+
+    /// With `--link-tree`, use hard links instead of symlinks.
+    #[arg(
+        long = "hard-links",
+        default_value_t = false,
+        help_heading = "Link Tree"
+    )]
+    pub use_hard_links: bool,
+
+    /// With `--link-tree`, link using absolute paths instead of paths relative to the
+    /// output root.
+    #[arg(
+        long = "absolute-links",
+        default_value_t = false,
+        help_heading = "Link Tree"
+    )]
+    pub absolute_links: bool,
+
+    /// Re-create hard links between extracted files that share `(dev, inode)` in the
+    /// archive catalog (default: on).
+    #[arg(
+        long = "hardlink-reestablish",
+        default_value_t = true,
+        action = ArgAction::SetTrue,
+        help_heading = "Link Tree"
+    )]
+    #[arg(long = "no-hardlink-reestablish", action = ArgAction::SetFalse)]
+    pub hardlink_reestablish: bool,
+
+    // --- File Attributes ---
+
+    /// Restore archived uid/gid when possible (GNU tar `--same-owner`; may require root).
+    #[arg(
+        long = "same-owner",
+        visible_alias = "restore-owner",
+        default_value_t = false,
+        help_heading = "File Attributes"
+    )]
     pub restore_owner: bool,
 
-    /// Wipe extract stage work and start over.
-    #[arg(long)]
+    // --- Process Options ---
+
+    /// Wipe extract work (`.estage`) and start over.
+    #[arg(long = "fresh", help_heading = "Process Options")]
     pub fresh: bool,
 
-    /// After success, keep a timestamped copy of snapshot.sqlite in the output directory.
-    #[arg(long = "keep-db")]
+    /// Abort on the first warning or error instead of continuing where possible.
+    #[arg(
+        long = "fail-fast",
+        default_value_t = false,
+        help_heading = "Process Options"
+    )]
+    pub fail_fast: bool,
+
+    /// After success, keep a timestamped copy of snapshot.sqlite next to the archive.
+    #[arg(long = "keep-db", help_heading = "Process Options")]
     pub keep_db: bool,
 
     /// After success, keep the `{stem}.estage` work directory.
-    #[arg(long = "keep-stage")]
+    #[arg(long = "keep-stage", help_heading = "Process Options")]
     pub keep_stage: bool,
-
-    // TOOD late delete
 }
 
 /// Continue incomplete work. Policy comes from the work DB; only jobs and
@@ -417,4 +577,20 @@ pub enum ExitAfterStageArg {
     Archive,
     /// Full pipeline then clean the work directory (honours `--keep-db` / `--keep-stage`).
     Cleanup,
+}
+
+/// How extraction handles paths that already exist on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum ConflictPolicy {
+    /// Keep existing files; warn on conflict (GNU tar `--keep-old-files`).
+    #[value(alias = "keep-old-files")]
+    PreserveExisting,
+    /// Keep whichever copy has the newer mtime (GNU tar `--keep-newer-files`).
+    #[value(alias = "keep-newer-files")]
+    PreferNewer,
+    /// Overwrite existing paths (GNU tar `--overwrite`; default).
+    #[default]
+    #[value(alias = "overwrite")]
+    Replace,
 }
