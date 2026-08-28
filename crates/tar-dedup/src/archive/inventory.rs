@@ -47,7 +47,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             &input_dir.absolute_path,
             "--input-dir",
             Some(index as u64),
-            None,
+            Some(&input_dir.original_path),
             SourceFlags::default().with(SourceFlag::IsDirectory, true),
         )?;
         handle_dir(&config, &db, &shutdown, source_id, &input_dir.absolute_path,
@@ -138,7 +138,7 @@ fn handle_from_files_line(
         &abs_path,
         &format!("--files-from={from_files_disp_path}"),
         Some(line as u64),
-        Some(fpath),
+        Some(&fpath.clean()),
         SourceFlags::default().with(SourceFlag::IsDirectory, abs_path.is_dir()),
     )?;
     handle_dir(&config, &db, &shutdown, source_id, &abs_path,
