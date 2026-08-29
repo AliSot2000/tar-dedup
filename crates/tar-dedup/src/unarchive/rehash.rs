@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::config::Config;
+use crate::config::ExtractConfig;
 use crate::db::Database;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
@@ -27,20 +27,20 @@ enum RehashOutcome {
     Error(FileId),
 }
 
-pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // TODO promote all files that aren't elected to rehash
     let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?;
     let total = pending.len() as u64;
     let already_hashed= 0;
 
-    let do_skip = if config.rehash { "" } else { "skip " };
+    let do_skip = if config.scan.rehash { "" } else { "skip " };
     tracing::info!(
         files = pending.len(),
-        jobs = config.jobs,
+        jobs = config.process.jobs,
         "{do_skip}rehash pass"
     );
 
-    if !config.rehash {
+    if !config.scan.rehash {
         let n = db.skip_rehash()?;
         tracing::info!(promoted = n, "rehash skipped; unarchived → rehashed");
         return Ok(());
@@ -51,11 +51,11 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     }
 
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.jobs)
+        .num_threads(config.process.jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
-    let stage_dir = config.stage_dir();
+    let stage_dir = config.paths.stage_dir();
     let shutdown = shutdown.clone();
     let results = Mutex::new(Vec::<RehashOutcome>::new());
 

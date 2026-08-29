@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::common::files::{warn_if_times_changed, PreYield};
-use crate::config::Config;
+use crate::config::ArchiveConfig;
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
@@ -49,32 +49,32 @@ impl Drop for TempSparseFile {
 }
 
 /// Sparsify stage: optional sparse rewrites under `stage/sp.{content_id}`.
-pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    debug_assert_ne!(config.page_size, 0, "Expected page_size > 0");
-    if config.page_size == 0 {
+pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    debug_assert_ne!(config.sparse.page_size, 0, "Expected page_size > 0");
+    if config.sparse.page_size == 0 {
         return Err(Error::Config("page_size must be greater than 0".into()));
     }
 
     tracing::info!(
-        page_size = config.page_size,
-        min_pages = ?config.min_pages,
+        page_size = config.sparse.page_size,
+        min_pages = ?config.sparse.min_pages,
         "sparsify pass"
     );
 
-    let stage_dir = config.stage_dir();
+    let stage_dir = config.paths.stage_dir();
     fs::create_dir_all(&stage_dir).map_err(|e| Error::io(&stage_dir, e))?;
 
-    if !config.sparsify {
+    if !config.sparse.sparsify {
         let n = db.promote_deduped_to_sparsified()?;
         tracing::info!(count = n, "promoted all deduped → sparsified (min_pages unset)");
         return Ok(());
     };
 
     // PRECONDITION: min_page set.
-    let skipped = db.promote_non_sparsify_candidates_to_sparsified(config.min_pages)?;
+    let skipped = db.promote_non_sparsify_candidates_to_sparsified(config.sparse.min_pages)?;
     tracing::info!(count = skipped, "promoted non-candidates → sparsified");
 
-    let candidates: Vec<StrippedRecord> = db.list_sparsify_candidates(config.min_pages)?;
+    let candidates: Vec<StrippedRecord> = db.list_sparsify_candidates(config.sparse.min_pages)?;
     if candidates.is_empty() {
         sanity_no_deduped(db)?;
         return Ok(());
@@ -126,19 +126,19 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 
 /// Run the rayon pool over sparsify candidates and return its result.
 fn run_pool(
-    config: &Config,
+    config: &ArchiveConfig,
     shutdown: &Shutdown,
     bar: &CountProgress,
     results: &Mutex<Vec<SparseOutcome>>,
     checked: impl Iterator<Item = StrippedRecord> + Send,
 ) -> Result<()> {
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.jobs)
+        .num_threads(config.process.jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
-    let stage_dir = config.stage_dir().clone();
-    let page_size = config.page_size;
+    let stage_dir = config.paths.stage_dir().clone();
+    let page_size = config.sparse.page_size;
     let shutdown_workers = shutdown.clone();
 
     let parallel = pool.install(|| {

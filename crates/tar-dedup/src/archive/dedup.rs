@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 
 use crate::common::files::{warn_if_times_changed, PreYield};
-use crate::config::Config;
+use crate::config::ArchiveConfig;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, GroupKey, StrippedRecord};
 use crate::db::Database;
@@ -155,7 +155,7 @@ fn io_error_file_id(pair: &ComparePair, path: &Path) -> FileId {
 }
 
 // =================================================================================================
-pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let catalog = db.count_entries()?;
     // Early promote db entries we do not process in this phase
     let excluded_files = db.promote_excluded_entries_to_deduped()?;
@@ -178,8 +178,8 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         skipped_null_sha1,
         skipped_singleton,
         dedup_candidates = candidates,
-        jobs = config.jobs,
-        dedup_fail_fast = config.dedup_fail_fast,
+        jobs = config.process.jobs,
+        dedup_fail_fast = config.process.fail_fast,
         "dedup pass"
     );
 
@@ -211,14 +211,14 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 /// Function encapsulates the iteration deduplication rounds. Structure is chosen this way as to
 /// keep all thing related to the Rayon Thread Pool inside a single function.
 fn run_pool(
-    config: &Config,
+    config: &ArchiveConfig,
     db: &Database,
     shutdown: &Shutdown,
     bar: &CountProgress,
 ) -> Result<()> {
     // TODO: Better errors.
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.jobs)
+        .num_threads(config.process.jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
@@ -250,7 +250,7 @@ fn run_pool(
             tc_pair_iter
                 .par_bridge()
                 .try_for_each(|pair| compare_one(
-                    pair, &shutdown_workers, &results, bar, !config.no_hardlink_detection
+                    pair, &shutdown_workers, &results, bar, !config.indexing.no_hardlink_detection
                 ))
         });
 
@@ -300,7 +300,7 @@ fn prepare_round(
     groups_needing_end: &mut Vec<GroupKey>,
     bar: &CountProgress,
     db: &Database,
-    config: &Config
+    config: &ArchiveConfig
 ) -> Result<(bool, bool)> {
 
     let mut errored_only_groups: Vec<GroupKey> = Vec::new();
@@ -314,7 +314,7 @@ fn prepare_round(
 
     // Deal with any potentially halted progress.
     for (key, members) in groups {
-        match establish_group_state(db, key, members, config.dedup_fail_fast)? {
+        match establish_group_state(db, key, members, config.process.fail_fast)? {
             GroupPrep::ErroredOnly { key } => {
                 errored_only_groups.push(key);
             }

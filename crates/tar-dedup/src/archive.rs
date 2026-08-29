@@ -16,27 +16,27 @@ use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
     resolve_start, ProductPresence, StartAction, StartPolicy, WorkPresence,
 };
-use crate::config::{Config, PipelinePhase, RuntimeState};
+use crate::config::{ArchiveConfig, ExitAfterStage, PipelinePhase, RuntimeState};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
-// TODO: Need to rework this file!!!
-pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
-    let product = if config.archive_path.is_file() {
+pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
+    let product = if config.paths.archive_path.is_file() {
         ProductPresence::Finished
     } else {
         ProductPresence::Absent
     };
 
-    if config.start_policy == StartPolicy::Fresh {
+    if config.process.start_policy == StartPolicy::Fresh {
         let _ = cleanup::reset_workdir(&config);
-        std::fs::create_dir_all(&config.work_dir).map_err(|e| Error::io(&config.work_dir, e))?;
+        std::fs::create_dir_all(&config.paths.work_dir)
+            .map_err(|e| Error::io(&config.paths.work_dir, e))?;
     }
 
     let lock = acquire_workdir_lock(&config)?;
 
-    let db_path = config.db_path();
+    let db_path = config.paths.db_path();
     let work = if db_path.is_file() {
         let probe = Database::open(&db_path)?;
         match probe.load_runtime_state()? {
@@ -47,7 +47,7 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
         WorkPresence::Absent
     };
 
-    let action = resolve_start(config.start_policy, work, product)?;
+    let action = resolve_start(config.process.start_policy, work, product)?;
 
     let db = Database::open(&db_path)?;
     let saved = db.load_runtime_state()?;
@@ -56,12 +56,12 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
         StartAction::Resume => {
             let mut state = saved.expect("incomplete work checked above");
             eprintln!("resuming from phase `{}`", state.phase.as_str());
-            state.max_workers = config.jobs;
+            state.max_workers = config.process.jobs;
             db.save_runtime_state(&state)?;
             state
         }
         StartAction::RunFresh => {
-            let state = RuntimeState::new(config.jobs);
+            let state = RuntimeState::new(config.process.jobs);
             db.save_runtime_state(&state)?;
             filter::ingest_filters(&db, &config)?;
             state
@@ -100,7 +100,11 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
             break;
         }
 
-        if let Some(stop_after) = config.exit_after_stage.and_then(|s| s.stop_after_phase()) {
+        if let Some(stop_after) = config
+            .process
+            .exit_after_stage
+            .and_then(|s| s.stop_after_phase())
+        {
             if completed == stop_after {
                 eprintln!(
                     "exit-after-stage `{}`: finished `{}`, resume from `{}`",
@@ -116,25 +120,29 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
     drop(db);
     drop(lock);
 
-    eprintln!("archive written to {}", config.archive_path.display());
+    eprintln!(
+        "archive written to {}",
+        config.paths.archive_path.display()
+    );
 
     cleanup::cleanup_workdir(&config, CleanupMode::Archive)?;
-    if config.cleanup.keep_stage {
+    if config.process.cleanup.keep_stage {
         eprintln!(
             "keeping stage (--keep-stage): {}",
-            config.work_dir.display()
+            config.paths.work_dir.display()
         );
     }
-    if config.exit_after_stage == Some(crate::config::ExitAfterStage::Cleanup) {
+    if config.process.exit_after_stage == Some(ExitAfterStage::Cleanup) {
         eprintln!("exit-after-stage `cleanup`: finished");
     }
 
     Ok(())
 }
 
-fn acquire_workdir_lock(config: &Config) -> Result<std::fs::File> {
-    std::fs::create_dir_all(&config.work_dir).map_err(|e| Error::io(&config.work_dir, e))?;
-    let lock_path = config.work_dir.join(".lock");
+fn acquire_workdir_lock(config: &ArchiveConfig) -> Result<std::fs::File> {
+    std::fs::create_dir_all(&config.paths.work_dir)
+        .map_err(|e| Error::io(&config.paths.work_dir, e))?;
+    let lock_path = config.paths.work_dir.join(".lock");
     let lock = OpenOptions::new()
         .create(true)
         .write(true)
@@ -147,14 +155,14 @@ fn acquire_workdir_lock(config: &Config) -> Result<std::fs::File> {
 
 fn run_phase(
     phase: &PipelinePhase,
-    config: &Config,
+    config: &ArchiveConfig,
     db: &Database,
     shutdown: &Shutdown,
 ) -> Result<()> {
     match phase {
         PipelinePhase::Inventory => inventory::run(config, db, shutdown),
         PipelinePhase::Hash => hash::run(config, db, shutdown),
-        PipelinePhase::Filter => filter::run(&db, &config, &shutdown),
+        PipelinePhase::Filter => filter::run(db, config, shutdown),
         PipelinePhase::Dedup => dedup::run(config, db, shutdown),
         PipelinePhase::Sparsify => sparsify::run(config, db, shutdown),
         PipelinePhase::Stage => stage::run(config, db, shutdown),

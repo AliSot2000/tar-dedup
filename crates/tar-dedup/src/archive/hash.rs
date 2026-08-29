@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::common::files::{PreYield, warn_if_times_changed};
-use crate::config::Config;
+use crate::config::ArchiveConfig;
 use crate::db::Database;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, StrippedRecord};
@@ -16,23 +16,23 @@ use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use sha1::{Digest, Sha1};
 
-pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    let page_size = config.page_size;
+pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    let page_size = config.sparse.page_size;
     debug_assert!(page_size > 0, "page_size == 0");
 
     let total_entries = db.count_entries()?;
     let hash_needed = db.count_all_hashable_files(
-        config.eager_filter, !config.no_hardlink_detection
+        config.filter.eager_filter, !config.indexing.no_hardlink_detection
     )?;
     let pending= db.get_entries_to_hash(
-        config.eager_filter, !config.no_hardlink_detection
+        config.filter.eager_filter, !config.indexing.no_hardlink_detection
     )?;
     let already_hashed = hash_needed.saturating_sub(pending.len() as u64);
     tracing::info!(
         total_entries,
         unshed_files = pending.len(),
         already_hashed,
-        jobs = config.jobs,
+        jobs = config.process.jobs,
         page_size,
         "hash pass"
     );
@@ -42,7 +42,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     }
 
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.jobs)
+        .num_threads(config.process.jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
@@ -87,7 +87,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     for res in &hashed {
         match res {
             Ok((id, digest, zero_blocks)) => {
-                db.update_file_inspection_per_id(*id, *digest, *zero_blocks, !config.no_hardlink_detection)?;
+                db.update_file_inspection_per_id(*id, *digest, *zero_blocks, !config.indexing.no_hardlink_detection)?;
             }
             Err(e) => {
                 let ra = db.set_flag(e.id, FileFlag::ErrorWhileHash, true)?;

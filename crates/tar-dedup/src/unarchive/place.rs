@@ -5,14 +5,16 @@ use std::path::{Component, Path, PathBuf};
 
 use filetime::{set_file_mtime, FileTime};
 
-use crate::config::Config;
+use crate::config::ExtractConfig;
 use crate::db::types::{FilePhase, FileRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
 use crate::shutdown::Shutdown;
 
-pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+const BATCH_SIZE: u64 = 10_000;
+
+pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let files: Vec<FileRecord> = db.list_files_to_restore()?;
     let total_bytes: u64 = files.iter().map(|f| f.size).sum();
     let progress = ByteProgress::new("extract", total_bytes);
@@ -20,7 +22,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     eprintln!(
         "extract: materializing {} file(s) under {}",
         files.len(),
-        config.output_dir.display()
+        config.paths.extraction_root().display()
     );
 
     for record in files {
@@ -29,7 +31,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let tar_name = record
             .tar_member_name()
             .expect("Invariant Error: FileRecord without sha1 found!");
-        let cache_path = config.extract_cache_dir().join(&tar_name);
+        let cache_path = config.paths.extract_cache_dir().join(&tar_name);
         if !cache_path.is_file() {
             return Err(Error::Config(format!(
                 "missing cached tar member `{tar_name}` for {}",
@@ -37,7 +39,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             )));
         }
 
-        let dest = safe_output_path(&config.output_dir, &record.abs_path)?;
+        let dest = safe_output_path(config.paths.extraction_root(), &record.abs_path)?;
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
@@ -54,6 +56,15 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     Ok(())
 }
 
+pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+    let mut stack: Vec<PathBuf> = Vec::new();
+
+
+
+    Ok(())
+}
+
+
 pub fn warn_catalog_uncertainty(db: &Database) -> Result<()> {
     let unconfirmed = db.count_unconfirmed_extracted()?;
     if unconfirmed > 0 {
@@ -66,7 +77,7 @@ pub fn warn_catalog_uncertainty(db: &Database) -> Result<()> {
 }
 
 fn apply_basic_metadata(
-    config: &Config,
+    config: &ExtractConfig,
     record: &FileRecord,
     dest: &Path,
 ) -> Result<()> {
@@ -76,7 +87,7 @@ fn apply_basic_metadata(
     }
 
     #[cfg(unix)]
-    if config.restore_owner {
+    if config.attributes.restore_owner {
         if let (Some(uid), Some(gid)) = (record.uid, record.gid) {
             use std::os::unix::fs::chown;
             if chown(dest, Some(uid), Some(gid)).is_err() {
