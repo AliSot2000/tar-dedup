@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::ArchiveConfig;
 use crate::db::Database;
 use crate::db::types::{FileId, FilePhase, FilterExpression, StrippedRecord};
 use crate::error::Result;
@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Stub filter stage: advance hashed → filtered before dedup.
-pub fn run(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()> {
+pub fn run(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result<()> {
     let db_files = db.count_entries()?;
     let include_count = db.count_filters(Some(false))?;
     let exclude_count = db.count_filters(Some(true))?;
@@ -30,11 +30,11 @@ pub fn run(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()> {
     // Perform actual process of filtering. In case this is a noticeable bottleneck, it is a
     // separate function so we can swap in a rayon pool or a crossbeam ... whatever is better.
     fast_filter(&db, &config, &shutdown)?;
-    if !config.no_hardlink_detection {
+    if !config.indexing.no_hardlink_detection {
         let (down, up) = db.fix_up_canonical_flag()?;
         assert_eq!(down, up, "Number of clusters with downgrades did not match numbers with upgrade");
     }
-    let prev_phase = match config.eager_filter {
+    let prev_phase = match config.filter.eager_filter {
         true => FilePhase::Inventoried,
         false => FilePhase::Hashed,
     };
@@ -44,7 +44,7 @@ pub fn run(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()> {
 
 /// Perform the filtering of files as fast as possible. Currently, with lazy map iterators to avoid
 /// creating two memcopies.
-fn fast_filter(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()> {
+fn fast_filter(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result<()> {
     let include_filters =
         parse_filter(&db.get_filters(false)?, "include", &config);
     let exclude_filters =
@@ -56,7 +56,7 @@ fn fast_filter(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()
         shutdown.check_between_files()?;
 
         let batch: Vec<StrippedRecord> = db.get_rows_to_filter(
-            last_id, config.eager_filter, BATCH_SIZE
+            last_id, config.filter.eager_filter, BATCH_SIZE
         )?;
         if batch.is_empty() { break; }
 
@@ -76,7 +76,7 @@ fn fast_filter(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()
                    Rows vanished?");
     }
     let rem = db.count_files_in_phase(
-        if config.eager_filter {FilePhase::Inventoried} else {FilePhase::Hashed}
+        if config.filter.eager_filter {FilePhase::Inventoried} else {FilePhase::Hashed}
     )?;
     assert_eq!(0, rem, "INVARIANT ERROR: {rem} files in previous phase. Zero expected.");
     Ok(())
@@ -85,17 +85,17 @@ fn fast_filter(db: &Database, config: &Config, shutdown: &Shutdown) -> Result<()
 /// Convert the FilterExpression structs to ParsedFilter struct.
 /// Applying --ignore-case and --anchored
 /// Strong invariants assumed, violation will lead to panics
-fn parse_filter(filters: &Vec<FilterExpression>, operation: &str, config: &Config)
+fn parse_filter(filters: &Vec<FilterExpression>, operation: &str, config: &ArchiveConfig)
     -> Vec<ParsedFilter> {
     let mut parsed_filters: Vec<ParsedFilter> = Vec::with_capacity(filters.len());
     for filter in filters.iter() {
-        let aexp = if config.anchored && !filter.expression.starts_with('^') {
+        let aexp = if config.filter.anchored && !filter.expression.starts_with('^') {
             &format!("^{}", filter.expression)
         } else {
             &filter.expression
         };
         let regex = match RegexBuilder::new(&aexp)
-            .case_insensitive(config.ignore_case)
+            .case_insensitive(config.filter.ignore_case)
             .unicode(false)  // TODO needs to be done with --force-utf8
             .build(){
             Ok(regex) => regex,
@@ -154,10 +154,10 @@ struct FilterResult {
 }
 
 /// Parse the arguments and add them into the database.
-pub fn ingest_filters(db: &Database, config: &Config) -> Result<()> {
+pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
     // Handle the include files
     handle_filter(
-        &config.include_patterns, &config.include_from, "include",
+        &config.filter.include_patterns, &config.filter.include_from, "include",
         &|from, line, query| db.add_include_pattern(from, line, query))?;
 
     if db.count_filters(Some(false))? == 0 {
@@ -166,7 +166,7 @@ pub fn ingest_filters(db: &Database, config: &Config) -> Result<()> {
     }
 
     handle_filter(
-        &config.exclude_patterns, &config.exclude_from, "exclude",
+        &config.filter.exclude_patterns, &config.filter.exclude_from, "exclude",
         &|from, line, query| db.add_exclude_pattern(from, line, query))?;
     Ok(())
 }

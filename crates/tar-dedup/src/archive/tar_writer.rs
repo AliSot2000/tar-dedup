@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::archive_footer;
 use crate::common::files::warn_if_times_changed;
-use crate::config::Config;
+use crate::config::ArchiveConfig;
 use crate::db::Database;
 use crate::db::flags::FileFlag;
 use crate::db::types::StrippedRecord;
@@ -15,18 +15,18 @@ use crate::common::{SNAPSHOT_TAR_NAME, SNAPSHOT_INIT_TAR_NAME};
 
 // TODO Consider the transition state of the files that are ingested.
 
-pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // Crash / force leftover: truncate incomplete stream C, keep finished A..B.
     recover_incomplete_session(config, db)?;
 
-    let archive_offset = archive_file_len(&config.archive_path);
+    let archive_offset = archive_file_len(&config.paths.archive_path);
     check_archive_bytes_out(db, archive_offset)?;
 
     debug_assert!(db.open_archive_session()?.is_none());
     let session_id = db.begin_archive_session(archive_offset)?;
 
     // Require sha1 unless retry_missing_sha asks to include unhashed files.
-    let filter_sha = !config.retry_missing_sha;
+    let filter_sha = !config.pipeline.retry_missing_sha;
     db.promote_ineligible_to_archived(filter_sha)?;
 
     let bytes_in_base = db.get_archive_bytes_in()?;
@@ -38,9 +38,9 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     progress.set_position(already_archived);
 
     let mut writer = TarWriter::open(
-        config.archive_path.clone(),
+        config.paths.archive_path.clone(),
         &config.compression,
-        config.jobs,
+        config.process.jobs,
         shutdown.clone(),
         true, // sparse
     )?;
@@ -77,7 +77,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
             "INVARIANT ERROR: Members to be encoded must have a symlink in the \
             staging directory.",
         );
-        let source = config.stage_dir().join(&tar_name);
+        let source = config.paths.stage_dir().join(&tar_name);
 
         // Stage path is a symlink; compare inventory times against the real target.
         let target = std::fs::canonicalize(&source).map_err(|e| Error::io(&source, e))?;
@@ -151,19 +151,19 @@ fn check_archive_bytes_out(db: &Database, archive_len: u64) -> Result<()> {
 /// Truncate archive to the incomplete session's start offset, mark session aborted,
 /// and clear [`FileFlag::AppendedPath`] on non-`archived` rows only.
 /// Prior finalized sessions (and their archived files, including sticky `AppendedPath`) stay intact.
-fn recover_incomplete_session(config: &Config, db: &Database) -> Result<()> {
+fn recover_incomplete_session(config: &ArchiveConfig, db: &Database) -> Result<()> {
     let open_session = match db.open_archive_session()? {
         None => return Ok(()),
         Some(s) => s,
     };
 
-    truncate_archive_at(&config.archive_path, open_session.archive_offset)?;
+    truncate_archive_at(&config.paths.archive_path, open_session.archive_offset)?;
     db.abort_incomplete_archive_session(&open_session)?;
     
     tracing::info!(
         "recovered incomplete archive session at offset {} ({})",
         open_session.archive_offset,
-        config.archive_path.display()
+        config.paths.archive_path.display()
     );
     Ok(())
 }
@@ -205,15 +205,15 @@ fn force_abort_session(
 /// append_snapshot, commits the db, stages it, adds it to the archive and removes the stage again.
 fn append_snapshot(
     writer: &mut TarWriter,
-    config: &Config,
+    config: &ArchiveConfig,
     db: &Database,
     shutdown: &Shutdown,
     is_init: bool,
 ) -> Result<()> {
 
     db.checkpoint()?;
-    let src = config.db_path();
-    let staging = config.work_dir.join(".snapshot-for-tar.sqlite");
+    let src = config.paths.db_path();
+    let staging = config.paths.work_dir.join(".snapshot-for-tar.sqlite");
     std::fs::copy(&src, &staging).map_err(|e| Error::io(&staging, e))?;
     let tar_dst = if is_init { SNAPSHOT_INIT_TAR_NAME } else { SNAPSHOT_TAR_NAME };
     // INFO: append_path might return return interrupted error!
@@ -224,7 +224,7 @@ fn append_snapshot(
 
 fn end_session(
     mut writer: TarWriter,
-    config: &Config,
+    config: &ArchiveConfig,
     db: &Database,
     shutdown: &Shutdown,
     progress: &ByteProgress,
@@ -262,14 +262,14 @@ fn end_session(
             db.set_archive_bytes_in(bytes_in_base.saturating_add(session_bytes_in))?;
             db.set_archive_bytes_out(bytes_out)?;
 
-            if write_tar_eof && config.write_archive_footer {
+            if write_tar_eof && config.pipeline.write_archive_footer {
                 // TODO ensure every entry has phase='archived' the database is in a consistent
                 //   state.
-                if config.clear_archive_meta {
+                if config.pipeline.clear_archive_meta {
                     db.clear_archive_meta()?;
                 }
                 db.checkpoint()?;
-                archive_footer::write_footer(&config.archive_path, &config.db_path())?;
+                archive_footer::write_footer(&config.paths.archive_path, &config.paths.db_path())?;
             }
             Ok(())
         }

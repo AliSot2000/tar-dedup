@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::archive_footer::read_footer;
-use crate::config::Config;
+use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
 use crate::db::types::{FileId, FilePhase};
 use crate::db::{Database, ExtractScanState};
@@ -30,23 +30,23 @@ const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at 
 //    5. Promote remaining entries in DB to 'unarchived'
 
 /// Walk the tar stream: load catalog (footer or leading manifest), cache payloads, promote.
-pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Database> {
-    fs::create_dir_all(config.extract_cache_dir())
-        .map_err(|e| Error::io(&config.extract_cache_dir(), e))?;
+pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Result<Database> {
+    fs::create_dir_all(config.paths.extract_cache_dir())
+        .map_err(|e| Error::io(&config.paths.extract_cache_dir(), e))?;
 
     let resume_db = db_path.is_file();
     // Only a first pass installs the footer catalog; later passes inherit the fact
     // that it came from a footer through `ExtractScanState::from_footer`.
-    let opt_db = read_footer(&config.temp_db(), db_path);
+    let opt_db = read_footer(&config.paths.temp_db(), db_path);
     let footer_this_pass = !resume_db && opt_db.is_ok();
 
     let mut db = if resume_db {
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
-        remove_temp_db(&config.temp_db());
+        remove_temp_db(&config.paths.temp_db());
         Some(opened)
     } else if footer_this_pass {
-        fs::rename(config.temp_db(), db_path).map_err(|e| Error::io(db_path, e))?;
+        fs::rename(config.paths.temp_db(), db_path).map_err(|e| Error::io(db_path, e))?;
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
         opened.normalize_installed_catalog()?;
@@ -55,11 +55,11 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
         None
     };
 
-    let local_dst = config.extract_cache_dir();
-    let snapshot_tmp = config.work_dir.join(".snapshot-ingest.tmp");
+    let local_dst = config.paths.extract_cache_dir();
+    let snapshot_tmp = config.paths.work_dir.join(".snapshot-ingest.tmp");
 
     let mut force_buffer: Option<Vec<FileId>> =
-        if config.force_scan { Some(Vec::new()) } else { None };
+        if config.scan.force_scan { Some(Vec::new()) } else { None };
 
     // Single source of truth for everything the scan knows about the archive.
     // `footer_this_pass` is folded in here and never consulted again.
@@ -80,12 +80,12 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
 
     let mut stopped = false;
     let mut archive =
-        open_tar_archive(&config.archive_path, config.compression.format)?;
+        open_tar_archive(&config.paths.archive_path, config.decompression)?;
 
     // FEATURE: Switch to seek for tar
     for (member_index, entry) in archive
         .entries()
-        .map_err(|e| Error::io(&config.archive_path, e))?
+        .map_err(|e| Error::io(&config.paths.archive_path, e))?
         .enumerate()
     {
         let member_index = member_index as u64;
@@ -96,11 +96,11 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
 
         // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
         if member_index < resume_from {
-            entry.map_err(|e| Error::io(&config.archive_path, e))?;
+            entry.map_err(|e| Error::io(&config.paths.archive_path, e))?;
             continue;
         }
 
-        let mut entry = entry.map_err(|e| Error::io(&config.archive_path, e))?;
+        let mut entry = entry.map_err(|e| Error::io(&config.paths.archive_path, e))?;
         let path = entry
             .path()
             .map_err(|e| Error::Other(anyhow::anyhow!("tar entry path: {e}")))?;
@@ -129,7 +129,7 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
     if !scan.saw_any_members { return Err(Error::Config("Archive is Empty".to_string())); }
 
     if db.is_none() {
-        if config.force_scan {
+        if config.scan.force_scan {
             return Err(Error::Config(
                 "Archive did not contain database. Cannot continue extraction".to_string(),
             ));
@@ -145,9 +145,9 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
     validate_result(&scan, resume_db)?;
 
     let sdb = db.expect(OPT_DB_ERROR);
-    let trust_catalog = scan.from_footer || config.force_scan;
+    let trust_catalog = scan.from_footer || config.scan.force_scan;
     // Mark any cache payloads that were missed during the stream.
-    sdb.flush_cached_payloads(&config.extract_cache_dir())?;
+    sdb.flush_cached_payloads(&config.paths.extract_cache_dir())?;
 
     if trust_catalog {
         let n = sdb.promote_extracted_to_unarchived()?;
@@ -159,7 +159,7 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
         }
     }
 
-    report_scan_completeness(&sdb, scan.from_footer, config.force_scan)?;
+    report_scan_completeness(&sdb, scan.from_footer, config.scan.force_scan)?;
 
     let paths = sdb.count_files_in_phase(FilePhase::Unarchived)?;
     let source = if scan.from_footer {
@@ -185,7 +185,7 @@ pub fn run(config: &Config, db_path: &Path, shutdown: &Shutdown) -> Result<Datab
 /// Fully process an entry from the tar archive.
 /// Precondition: Index is valid (i.e. not extracted yet)
 fn process_entry(
-    config: &Config,
+    config: &ExtractConfig,
     db_path: &Path,
     local_dst: &Path,
     name: &str,
@@ -206,7 +206,7 @@ fn process_entry(
             ));
         },
         (SNAPSHOT_TAR_NAME, false) => {
-            if !config.force_scan {
+            if !config.scan.force_scan {
                 return Err(Error::Config(format!(
                     "first tar member is {SNAPSHOT_TAR_NAME} not manifest.sqlite; \
                          attempt to bypass with --force-scan"
@@ -218,7 +218,7 @@ fn process_entry(
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
         },
         (SNAPSHOT_TAR_NAME, true) => {
-            if config.force_scan && db.is_none() {
+            if config.scan.force_scan && db.is_none() {
                 copy_database(&snapshot_tmp,entry)?;
                 *db = Some(open_initial_database(snapshot_tmp, db_path)?);
                 let ref_db = db.as_ref().expect(OPT_DB_ERROR);
@@ -240,7 +240,7 @@ fn process_entry(
         },
         (content_id, saw_first)
         if let Ok((_, _, fid, _)) = parse_content_id(content_id) => {
-            if !config.force_scan && !saw_first {
+            if !config.scan.force_scan && !saw_first {
                 return Err(Error::Config(format!(
                     "first tar member is canonical file {content_id} not manifest.sqlite; \
                      bypass available with --force-scan"
@@ -250,7 +250,7 @@ fn process_entry(
             let entry_dst = local_dst.join(name);
             entry.unpack(&entry_dst).map_err(|e| Error::io(&entry_dst, e))?;
 
-            if config.force_scan && db.is_none() {
+            if config.scan.force_scan && db.is_none() {
                 let buf = force_buffer.as_mut().expect(
                     "INVARIANT ERROR: Buffer must be Some(Vec) if force_scan is set",
                 );
@@ -466,10 +466,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::common::start::StartPolicy;
-    use crate::config::{
-        CleanupSettings, CompressionFormat, CompressionSettings, ExtractStageLocation,
-    };
+    use crate::config::ExtractConfig;
     use crate::db::flags::FileFlag;
     use crate::db::types::{FilePhase, FileRecord, FileType, NewFileRecord, StrippedRecord};
 
@@ -542,7 +539,7 @@ mod tests {
     }
 
     /// `manifest.sqlite`, one payload, `snapshot.sqlite` — an uncompressed archive.
-    fn build_archive(dir: &Path) -> (Config, String) {
+    fn build_archive(dir: &Path) -> (ExtractConfig, String) {
         let catalog = dir.join("catalog.sqlite");
         let member = write_catalog(&catalog);
         let catalog_bytes = fs::read(&catalog).expect("read catalog");
@@ -554,54 +551,11 @@ mod tests {
         append_member(&mut builder, SNAPSHOT_TAR_NAME, &catalog_bytes);
         builder.finish().expect("finish tar");
 
-        let config = Config {
+        let config = ExtractConfig::for_scan_test(
             archive_path,
-            directory: PathBuf::new(),
-            input_dirs: Vec::new(),
-            files_from: Vec::new(),
-            files_from_null: false,
-            output_dir: dir.join("out"),
-            work_dir: dir.join("work"),
-            compression: CompressionSettings::for_extract(CompressionFormat::None),
-            jobs: 1,
-            start_policy: StartPolicy::Create,
-            cleanup: CleanupSettings::from_flags(false, false),
-            extract_stage_location: ExtractStageLocation::BesideArchive,
-            exit_after_stage: None,
-            restore_owner: false,
-            do_xattrs: false,
-            do_posix_acl: false,
-            do_selinux: false,
-            dedup_fail_fast: false,
-            fail_fast: false,
-            no_errors: false,
-            page_size: 4096,
-            min_pages: 0,
-            sparsify: false,
-            exclude_patterns: Vec::new(),
-            include_patterns: Vec::new(),
-            exclude_from: Vec::new(),
-            include_from: Vec::new(),
-            no_recursion: false,
-            dereference: false,
-            one_file_system: false,
-            absolute_names: false,
-            no_hardlink_detection: false,
-            no_strict_separation: false,
-            anchored: false,
-            ignore_case: false,
-            owner: None,
-            owner_map: None,
-            group: None,
-            group_map: None,
-            eager_filter: false,
-            no_dedup: false,
-            write_archive_footer: false,
-            retry_missing_sha: false,
-            force_scan: false,
-            clear_archive_meta: false,
-            rehash: true,
-        };
+            dir.join("work"),
+            dir.join("out"),
+        );
         (config, member)
     }
 
@@ -609,11 +563,11 @@ mod tests {
     fn scan_caches_payloads_and_promotes_on_snapshot() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, member) = build_archive(dir.path());
-        let db_path = config.db_path();
+        let db_path = config.paths.db_path();
 
         let db = run(&config, &db_path, &Shutdown::detached()).expect("scan");
 
-        assert!(config.extract_cache_dir().join(&member).is_file());
+        assert!(config.paths.extract_cache_dir().join(&member).is_file());
         assert_eq!(
             db.count_files_in_phase(FilePhase::Unarchived).expect("count"),
             2
@@ -634,7 +588,7 @@ mod tests {
     fn scan_interrupt_persists_state_and_resume_skips_processed_members() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = build_archive(dir.path());
-        let db_path = config.db_path();
+        let db_path = config.paths.db_path();
 
         // First pass installs the catalog so later passes take the resume path.
         run(&config, &db_path, &Shutdown::detached()).expect("first scan");

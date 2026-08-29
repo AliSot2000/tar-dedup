@@ -5,7 +5,7 @@ use walkdir::WalkDir;
 
 use crate::common::files::{get_file_times, original_extension};
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
-use crate::config::Config;
+use crate::config::ArchiveConfig;
 use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::Database;
 use crate::db::types::{FileType, LinkType, NewFileRecord};
@@ -20,7 +20,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // TODO Better errors.
     // TODO on restart - delete the db and start from the beginning
     tracing::info!("Inventory pass cannot be gracefully interrupted. \
@@ -30,7 +30,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let progress = CountProgress::new("inventory");
 
     // Handle input directories
-    for (index, input_dir) in config.input_dirs.iter().enumerate() {
+    for (index, input_dir) in config.inputs.input_dirs.iter().enumerate() {
         shutdown.check_in_flight()?;
 
         tracing::info!(root = %input_dir.absolute_path.display(), "inventory pass");
@@ -55,10 +55,10 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
     }
 
     // Handle from-files
-    for files_file in config.files_from.iter() {
+    for files_file in config.inputs.files_from.iter() {
         if files_file == "-" {
             let br = BufReader::new(io::stdin());
-            for element in files_from_reader(br, config.files_from_null){
+            for element in files_from_reader(br, config.inputs.files_from_null) {
                 let (line, result) = element;
                 let path = match result {
                     Ok(path_vec) => path_vec,
@@ -81,13 +81,13 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
         let file = fs::read(files_file)
             .map_err(|e| Error::io(files_file, e))?;
 
-        for element in files_from_records(&file, config.files_from_null) {
+        for element in files_from_records(&file, config.inputs.files_from_null) {
             handle_from_files_line(element, &files_file, &config, &db, &shutdown, &mut processed,
                                    &progress)?
         }
     }
     // Set hardlink canonicals if and only if, we want to collapse the hardlinks and
-    if !config.no_hardlink_detection {
+    if !config.indexing.no_hardlink_detection {
         let rows = db.set_hardlink_canonicals()?;
         tracing::info!("Updated {rows} of hardlink groups to have one canonical");
     }
@@ -105,7 +105,7 @@ pub fn run(config: &Config, db: &Database, shutdown: &Shutdown) -> Result<()> {
 fn handle_from_files_line(
     element: (usize, &[u8]),
     from_files_path: &Path,
-    config: &Config,
+    config: &ArchiveConfig,
     db: &Database,
     shutdown: &Shutdown,
     processed: &mut u64,
@@ -118,13 +118,13 @@ fn handle_from_files_line(
     let abs_path = if fpath.is_absolute() {
         fpath.to_path_buf().clean()
     } else {
-        config.directory.join(fpath).clean()
+        config.paths.directory.join(fpath).clean()
     };
     debug_assert!(abs_path.is_absolute(), "Path must be absolute now");
 
     if abs_path.is_dir() {
-        if let Some((_, existing)) = db.find_overlapping_source(&abs_path, config.no_recursion)? {
-            if !config.no_strict_separation {
+        if let Some((_, existing)) = db.find_overlapping_source(&abs_path, config.indexing.no_recursion)? {
+            if !config.indexing.no_strict_separation {
                 return Err(Error::Config(format!(
                     "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
                     abs_path.display(),
@@ -154,7 +154,7 @@ fn handle_from_files_line(
 /// - Path is directory.
 /// - Path is on the same file system if called recursively
 pub fn handle_dir(
-    config: &Config,
+    config: &ArchiveConfig,
     db: &Database,
     shutdown: &Shutdown,
     source_id: i64,
@@ -164,11 +164,11 @@ pub fn handle_dir(
     -> Result<()> {
 
     let mut iter = WalkDir::new(&start_dir)
-        .follow_links(config.dereference)
+        .follow_links(config.indexing.dereference)
         .follow_root_links(true)// INFO: Custom handling by us
-        .same_file_system(config.one_file_system)
+        .same_file_system(config.indexing.one_file_system)
         .min_depth(0)
-        .max_depth(if config.no_recursion { 1 } else { usize::MAX })
+        .max_depth(if config.indexing.no_recursion { 1 } else { usize::MAX })
         .contents_first(false)
         .into_iter();
 
@@ -190,7 +190,7 @@ pub fn handle_dir(
 pub fn handle_entry(
     path: &Path,
     source_id: i64,
-    config: & Config,
+    config: &ArchiveConfig,
     db: &Database,
     progress: &CountProgress,
     processed: &mut u64)
@@ -228,19 +228,19 @@ pub fn handle_entry(
     };
 
     // Optional data
-    let xattrs = if config.do_xattrs {
+    let xattrs = if config.capture.do_xattrs {
         match get_file_xattr(path) {
             Err(e) => { enc_err.push(e); None},
             Ok(md) => Some(md),
         }
     } else { None };
-    let posix_acl = if config.do_posix_acl {
+    let posix_acl = if config.capture.do_posix_acl {
         match get_file_acl(path) {
             Err(e) => { enc_err.push(e); None},
             Ok(md) => Some(md),
         }
     } else { None };
-    let selinux_ctx = if config.do_selinux {
+    let selinux_ctx = if config.capture.do_selinux {
         match get_file_selinux_data(path) {
             Err(e) => { enc_err.push(e); None},
             Ok(md) => Some(md),
