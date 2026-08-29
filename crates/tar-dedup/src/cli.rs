@@ -390,6 +390,8 @@ pub struct ExtractArgs {
 
     // --- Overwrite Control ---
 
+    // TODO clean (rm and create extract dir)
+
     /// Preserve existing directory symlinks instead of replacing them (GNU tar
     /// `--keep-directory-symlink`).
     #[arg(
