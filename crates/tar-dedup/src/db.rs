@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::config::{ExtractRuntimeState, RuntimeState};
 use crate::db::flags::{FileFlag, FileFlags, RefFlags, SourceFlags};
-use crate::db::types::{ArchiveSession, FileId, FilePhase, FilterExpression, GroupKey, NewFileRecord};
+use crate::db::types::{ArchiveSession, FileId, FilePhase, FilterExpression, GroupKey, NewFileRecord, SourceRecord, StrippedRecord};
 use crate::error::Result;
 
 pub mod flags;
@@ -24,6 +24,10 @@ mod sparsify;
 pub mod content_id;
 mod source;
 mod stage;
+mod scan;
+mod rehash;
+mod place;
+mod permissions;
 
 pub use common::SqlFileRow;
 pub use extract::ExtractScanState;
@@ -94,6 +98,15 @@ impl Database {
         no_recursion: bool,
     ) -> Result<Option<(i64, PathBuf)>> {
         source::find_overlapping_source(&*self.conn(), abs_path, no_recursion)
+    }
+
+    pub fn list_sources(
+        &self,
+        only_dirs: Option<bool>,
+        starting_id: Option<i64>,
+        batch_size: u64,
+    ) -> Result<Vec<SourceRecord>> {
+        source::list_sources(&self.conn(), only_dirs, starting_id, batch_size)
     }
 
     pub fn get_file_by_id<R: SqlFileRow>(&self, file_id: FileId) -> Result<Option<R>> {
