@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 
-use crate::db::flags::FileFlags;
+use crate::db::flags::{FileFlags, SourceFlags};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(pub i64);
@@ -308,6 +308,16 @@ impl FilterExpression {
     pub fn is_internal(&self) -> bool {
         self.from == "internal"
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SourceRecord {
+    id: i64,
+    source: String,
+    abs_path: PathBuf,
+    original_path: PathBuf,
+    line: i64,
+    flags: SourceFlags,
 }
 
 //==================================================================================================
