@@ -312,12 +312,12 @@ impl FilterExpression {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SourceRecord {
-    id: i64,
-    source: String,
-    abs_path: PathBuf,
-    original_path: PathBuf,
-    line: i64,
-    flags: SourceFlags,
+    pub id: i64,
+    pub source: String,
+    pub abs_path: PathBuf,
+    pub original_path: PathBuf,
+    pub line: i64,
+    pub flags: SourceFlags,
 }
 
 //==================================================================================================
