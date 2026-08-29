@@ -4,9 +4,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use filetime::{set_file_mtime, FileTime};
-
+use nix::NixPath;
+use path_clean::PathClean;
 use crate::config::ExtractConfig;
-use crate::db::types::{FilePhase, FileRecord};
+use crate::db::types::{FileId, FilePhase, FileRecord};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
@@ -56,11 +57,147 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     Ok(())
 }
 
-pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
-    let mut stack: Vec<PathBuf> = Vec::new();
+pub fn run2(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    // Step 1, ensure we have c
 
+    Ok(())
+}
 
+pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &Shutdown)
+    -> Result<()> {
+    // Create dir in relative mode.
+    if !config.placement.absolute_names {
+        let mut last_source_id = 0i64;
+        loop {
+            let sources = db.list_sources(
+                Some(true), Some(last_source_id), BATCH_SIZE)?;
+            if sources.is_empty() { break }
+            last_source_id = sources.last().unwrap().id;
 
+            for source in sources {
+                let (checked_prefix, _stripped) = strip_leading_up(&source.original_path.clean());
+                let source_base_dir = config.paths.extraction_root().join(checked_prefix);
+                let mut checked_path = source_base_dir.clone();
+
+                let mut last_dir = FileId(0);
+                loop {
+                    let dirs = db.list_directories_from_source(source.id, Some(last_dir), BATCH_SIZE)?;
+                    if dirs.is_empty() { break };
+                    last_dir = dirs.last().unwrap().id;
+
+                    for dir in dirs {
+                        let rel_stem = dir.abs_path.strip_prefix(&source.abs_path)
+                            .expect("Same Source => Same abs_path prefix");
+                        let target = source_base_dir.join(&rel_stem);
+                        build_path(&config, &mut checked_path, &target)?;
+                    }
+                }
+            }
+        }
+    // Create directories in absolute mode.
+    } else {
+        let mut last_dir = FileId(0);
+        let mut previous_check = PathBuf::new();
+        loop {
+            let dirs = db.list_directories(Some(last_dir), BATCH_SIZE)?;
+            if dirs.is_empty() { break }
+            last_dir = dirs.last().unwrap().id;
+
+            for dir in dirs {
+                debug_assert!(config.paths.extraction_root().is_absolute(),
+                              "INVARIANT ERROR: extraction root is not absolute");
+                debug_assert!(dir.abs_path.is_absolute(),
+                              "INVARIANT ERROR: target_dir path is not absolute");
+
+                let target_dir = config.paths.extraction_root().join(
+                    dir.abs_path.strip_prefix("/").unwrap());
+                build_path(config, &mut previous_check, &target_dir)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Strip leading ../ in relative paths s.t. they do not escape from the extraction target.
+fn strip_leading_up(path: &Path) -> (PathBuf, u64) {
+    let mut components = path.components().peekable();
+    let mut ups = 0u64;
+    while matches!(components.peek(), Some(Component::ParentDir)) {
+        components.next();
+        ups += 1;
+    }
+    let mut out = PathBuf::new();
+    for comp in components {
+        if let Component::Normal(name) = comp {
+            out.push(name);
+        }
+    }
+    (out, ups)
+}
+
+/// Build a given directory path for later extraction.
+/// PRECONDITION: Calling function must ensure no_create_dir is false
+pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target: &Path) -> Result<()>  {
+    debug_assert!(!config.placement.no_create_dir,
+                  "INVARIANT ERROR: build_path may not be called with no_create_dir");
+    let mut prefix = PathBuf::new();
+    let mut start = 0u64;
+
+    // Check known good prefix
+    for (num, (c_comp, t_comp)) in already_checked.components().zip(target.components()).enumerate() {
+        if c_comp == t_comp {
+           prefix.push(t_comp)
+        } else {
+            start = num as u64;
+            break
+        }
+    }
+    assert!(prefix.len() >= config.paths.extraction_root().len(), "target not within extract dir");
+
+    // Walk new prefix
+    for (num, component) in target.components().enumerate() {
+        if (num as u64) < start { continue }
+        prefix.push(component);
+        let printable = prefix.display();
+
+        // Symlink
+        if prefix.exists() && prefix.is_symlink() && !config.placement.keep_dir_symlink {
+            fs::remove_file(&prefix)?;
+            fs::create_dir_all(&prefix)?;
+            tracing::info!("Replaced symlink with dir at path: {printable}");
+            continue
+        }
+
+        // Some but no dir
+        if prefix.exists() && !prefix.is_dir() {
+            if config.placement.remove_and_replace {
+                fs::remove_file(&prefix)?;
+                fs::create_dir_all(&prefix)?;
+                tracing::info!("Replaced non-dir with dir at path: {printable}");
+                continue
+            } else {
+                return Err(Error::Config(
+                    format!("Encountered existing non-directory path at extraction \
+                             location where directory was needed: {printable}")));
+            }
+        }
+
+        // Does not exist
+        if !prefix.exists() {
+            // INFO: No further checks: no_create_dir is false
+            fs::create_dir_all(&prefix)?;
+            tracing::info!("Replaced non-dir with dir at path: {printable}");
+            continue;
+        }
+
+        assert!(prefix.exists()
+                && (prefix.is_dir()
+                || (prefix.is_symlink() && config.placement.keep_dir_symlink)),
+                "INVARIANT ERROR: Directory should be created or error raised.")
+    }
+
+    *already_checked = target.to_path_buf();
     Ok(())
 }
 
