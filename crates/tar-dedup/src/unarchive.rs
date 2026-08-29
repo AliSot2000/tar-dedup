@@ -11,24 +11,24 @@ use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
     resolve_start, ProductPresence, StartAction, StartPolicy, WorkPresence,
 };
-use crate::config::{Config, ExtractPipelinePhase, ExtractRuntimeState};
+use crate::config::{ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
-pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
-    // Extract never short-circuits on “already extracted”.
+pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     let product = ProductPresence::Absent;
 
-    if config.start_policy == StartPolicy::Fresh {
+    if config.process.start_policy == StartPolicy::Fresh {
         let _ = cleanup::reset_workdir(&config);
     }
-    std::fs::create_dir_all(&config.work_dir).map_err(|e| Error::io(&config.work_dir, e))?;
+    std::fs::create_dir_all(&config.paths.work_dir)
+        .map_err(|e| Error::io(&config.paths.work_dir, e))?;
 
-    let db_path = config.db_path();
+    let db_path = config.paths.db_path();
     if db_path.is_file() {
         let db = Database::open(&db_path)?;
-        if config.clear_archive_meta {
+        if config.scan.clear_archive_meta {
             db.clear_archive_meta()?;
         }
     }
@@ -40,7 +40,7 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
         WorkPresence::Absent
     };
 
-    let action = resolve_start(config.start_policy, work, product)?;
+    let action = resolve_start(config.process.start_policy, work, product)?;
     match action {
         StartAction::RunFresh => {
             state = ExtractRuntimeState::new();
@@ -73,17 +73,16 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
                 permissions::run(&config, &db, &shutdown)?;
             }
             ExtractPipelinePhase::Cleanup => {
-                // Persist Done before deleting / relocating the DB.
                 state.phase = ExtractPipelinePhase::Done;
                 {
                     let db = Database::open(&db_path)?;
                     db.save_extract_runtime_state(&state)?;
                 }
                 cleanup::cleanup_workdir(&config, CleanupMode::Extract)?;
-                if config.cleanup.keep_stage {
+                if config.process.cleanup.keep_stage {
                     eprintln!(
                         "keeping stage (--keep-stage): {}",
-                        config.work_dir.display()
+                        config.paths.work_dir.display()
                     );
                 }
                 break;
@@ -99,7 +98,10 @@ pub fn run(config: Config, shutdown: Shutdown) -> Result<()> {
         db.save_extract_runtime_state(&state)?;
     }
 
-    eprintln!("extracted to {}", config.output_dir.display());
+    eprintln!(
+        "extracted to {}",
+        config.paths.extraction_root().display()
+    );
     Ok(())
 }
 
