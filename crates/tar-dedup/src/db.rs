@@ -492,4 +492,14 @@ impl Database {
     pub fn init_extract_runtime_state(&self) -> Result<()> {
         extract::init_extract_runtime_state(&mut *self.conn_mut())
     }
+    pub fn list_directories(&self, last_id: Option<FileId>, batch_size: u64)
+                            -> Result<Vec<StrippedRecord>> {
+        place::list_directories(&self.conn(), last_id, batch_size)
+    }
+
+    pub fn list_directories_from_source(
+        &self, source_id: i64, last_id: Option<FileId>, batch_size: u64)
+        -> Result<Vec<StrippedRecord>> {
+        place::list_directories_from_source(&self.conn(), source_id, last_id, batch_size)
+    }
 }
