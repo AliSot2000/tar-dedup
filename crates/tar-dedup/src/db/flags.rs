@@ -49,10 +49,12 @@ pub enum FileFlag {
     RehashMismatch = 15,
     /// While attempting the rehash, an error occurred
     ErrorWhileRehashing = 16,
+    /// Source ready for linking
+    AtLinkSource = 17,
     /// An Error prevented the file from being placed in its correct position
-    ErrorWhilePlacing = 17,
+    ErrorWhilePlacing = 18,
     /// At least one error occurred while applying metadata
-    ErrorWhileApplyingMetadata = 18,
+    ErrorWhileApplyingMetadata = 19,
 }
 
 impl FileFlag {
@@ -170,6 +172,10 @@ pub enum RefFlag {
     AlreadyWalked = 0,
     /// This membership was materialized on extract.
     Extracted = 1,
+    /// An error occurred while copying the file back in place
+    ErrorWhilePlace = 2,
+    /// An Error Occurred while applying the metadata.
+    ErrorWhileApplyingMetadata = 3,
 }
 
 impl RefFlag {
