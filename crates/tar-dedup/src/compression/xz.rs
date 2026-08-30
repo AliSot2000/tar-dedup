@@ -1,7 +1,9 @@
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 
 use lzma_sys;
+use xz2::read::XzDecoder;
 use xz2::stream::{Action, Check, MtStreamBuilder, Status, Stream};
+use xz2::write::XzEncoder;
 
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
@@ -10,6 +12,8 @@ use crate::shutdown::Shutdown;
 pub const PRESET_LEVEL_MASK: u32 = lzma_sys::LZMA_PRESET_LEVEL_MASK;
 /// `xz --extreme` / `-e`.
 pub const PRESET_EXTREME: u32 = lzma_sys::LZMA_PRESET_EXTREME;
+/// Fixed xz preset for the archive footer sqlite blob (`xz -9 -e`, liblzma maximum).
+pub const FOOTER_XZ_PRESET: u32 = 9 | PRESET_EXTREME;
 /// Return from `process` periodically so shutdown can be polled during archive.
 const TIMEOUT_MS: u32 = 1000;
 /// `0` = liblzma default block size (3× dict or 1 MiB); matches `xz -9 -T16`.
@@ -110,6 +114,29 @@ fn physical_ram_bytes() -> Option<u64> {
         .to_string();
     let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
     Some(kib * 1024)
+}
+
+/// Compress bytes for the archive footer (single-threaded `xz -10 -e`, CRC64).
+pub fn compress_footer_bytes(input: &[u8]) -> Result<Vec<u8>> {
+    let stream = Stream::new_easy_encoder(FOOTER_XZ_PRESET, Check::Crc64).map_err(|e| {
+        Error::Other(anyhow::anyhow!("xz footer encoder: {e}"))
+    })?;
+    let mut out = Vec::new();
+    let mut enc = XzEncoder::new_stream(&mut out, stream);
+    enc.write_all(input)
+        .map_err(|e| Error::Other(anyhow::anyhow!("xz footer compress: {e}")))?;
+    enc.finish()
+        .map_err(|e| Error::Other(anyhow::anyhow!("xz footer finish: {e}")))?;
+    Ok(out)
+}
+
+/// Decompress a footer xz blob produced by [`compress_footer_bytes`].
+pub fn decompress_footer_bytes(compressed: &[u8]) -> Result<Vec<u8>> {
+    let mut dec = XzDecoder::new(compressed);
+    let mut out = Vec::new();
+    dec.read_to_end(&mut out)
+        .map_err(|e| Error::Other(anyhow::anyhow!("xz footer decompress: {e}")))?;
+    Ok(out)
 }
 
 pub struct InterruptibleXzEncoder<W: Write> {
