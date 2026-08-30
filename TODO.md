@@ -62,14 +62,14 @@ Should be done?
 - [X] Finish the FileEntry and ContentID structs
 - [X] Finish the different compression algorithms
 - [X] Finish plane
+- [X] Archive footer: xz `-9 -e` compressed catalog + sha1 over xz blob + seek offset (replaces raw sqlite footer)
 - ~~[ ] Finish shell-out use plain for that.~~
 
 ### Scan/Extract
-- [ ] Live check the files
 - [ ] Potentially data driven file extraction (DDFE)
 
 ### Hash
-- [ ] Hash file on extraction
+- [X] Hash file on extraction
 - [ ] Hash eager (DDFE)
 
 ### Move / Place
