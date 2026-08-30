@@ -104,6 +104,7 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
             }
             if errors > 0 {
                 tracing::warn!(errors, "rehash error(s) recorded");
+                // TODO: Fail fast
             }
             Ok(())
         }
