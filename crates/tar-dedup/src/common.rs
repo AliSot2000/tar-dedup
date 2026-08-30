@@ -13,3 +13,8 @@ pub const SNAPSHOT_INIT_TAR_NAME: &str = "manifest.sqlite";
 /// Name for any subsequent database added to the archive which are used to store the progress of
 /// appending files to the archive.
 pub const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
+
+/// To ensure the program is responsive, we need to periodically check, if the user interrupted us.
+/// This is the stepsize during read / write operations between successive checks of the program
+/// status.
+pub const COPY_STEP_SIZE: u64 = 1024 * 1024 * 4;
