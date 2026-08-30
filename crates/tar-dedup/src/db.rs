@@ -26,7 +26,7 @@ mod source;
 mod stage;
 mod scan;
 mod rehash;
-mod place;
+pub mod place;
 mod permissions;
 
 pub use common::SqlFileRow;
@@ -492,14 +492,46 @@ impl Database {
     pub fn init_extract_runtime_state(&self) -> Result<()> {
         extract::init_extract_runtime_state(&mut *self.conn_mut())
     }
-    pub fn list_directories(&self, last_id: Option<FileId>, batch_size: u64)
-                            -> Result<Vec<StrippedRecord>> {
-        place::list_directories(&self.conn(), last_id, batch_size)
+    pub fn create_prep_ancestor_table(&self, relative: bool) -> Result<()> {
+        place::create_prep_ancestor_table(&self.conn(), relative)
     }
 
-    pub fn list_directories_from_source(
-        &self, source_id: i64, last_id: Option<FileId>, batch_size: u64)
-        -> Result<Vec<StrippedRecord>> {
-        place::list_directories_from_source(&self.conn(), source_id, last_id, batch_size)
+    pub fn drop_prep_ancestor_table(&self) -> Result<()> {
+        place::drop_prep_ancestor_table(&self.conn())
+    }
+
+    pub fn list_materialized_leaves(
+        &self,
+        last_id: Option<FileId>,
+        batch_size: u64,
+        source_id: Option<i64>,
+    ) -> Result<Vec<place::MaterializedLeaf>> {
+        place::list_materialized_leaves(&self.conn(), last_id, batch_size, source_id)
+    }
+
+    pub fn insert_prep_ancestors_abs(
+        &self,
+        paths: &[PathBuf],
+    ) -> Result<()> {
+        place::insert_prep_ancestors_abs(&self.conn(), paths)
+    }
+    pub fn insert_prep_ancestors_rel(
+        &self,
+        paths: &[(PathBuf, i64)],
+    ) -> Result<()> {
+        place::insert_prep_ancestors_rel(&self.conn(), paths)
+    }
+
+    pub fn link_prep_ancestor_dir_ids(&self) -> Result<()> {
+        place::link_prep_ancestor_dir_ids(&self.conn())
+    }
+
+    pub fn list_directories_from_prep(
+        &self,
+        last_id: Option<FileId>,
+        batch_size: u64,
+        source_id: Option<i64>,
+    ) -> Result<Vec<StrippedRecord>> {
+        place::list_directories_from_prep(&self.conn(), last_id, batch_size, source_id)
     }
 }
