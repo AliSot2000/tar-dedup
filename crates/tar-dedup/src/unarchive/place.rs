@@ -201,6 +201,182 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
     Ok(())
 }
 
+/// Resolve all ancestor paths in bottom up order
+/// Example: /path/to/dir will become
+///     /path/to
+///     /path
+///     /
+fn build_ancestors(path: &Path) -> Vec<PathBuf> {
+    let mut res = Vec::new();
+    let mut wp = path;
+
+    loop {
+        let p = wp.parent();
+        match p {
+            None => break,
+            Some(p) => { res.push(p.to_path_buf()); wp = p; }
+        }
+    }
+    res
+}
+
+pub struct MaterializedRelLeaf {
+    pub id: FileId,
+    pub abs_path: PathBuf,
+    pub source_prefix: PathBuf,
+    pub source_id: i64,
+}
+
+/// Build a lookup table for all directories that need to be created based on the included leaves
+/// (non-directory entries)
+fn prepare_dir_look_up_table(db: &Database, config: &ExtractConfig, shutdown: &Shutdown)
+    -> Result<()> {
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(config.process.jobs)
+        .build()
+        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
+
+    let shutdown = shutdown.clone();
+
+    // Create dir in relative mode.
+    if !config.placement.absolute_names {
+        let results: Mutex<Vec<Vec<(PathBuf, i64)>>> = Mutex::new(Vec::new());
+        let mut last_source_id = 0i64;
+        let mut source_leaf_vec: Vec<MaterializedRelLeaf> = Vec::new();
+
+        loop {
+            let sources = db.list_sources(
+                Some(true), Some(last_source_id), BATCH_SIZE)?;
+            if sources.is_empty() { break; }
+            last_source_id = sources.last().unwrap().id;
+
+            for source in sources {
+                let mut last_leaf_id = FileId(0);
+                loop {
+                    let leaves = db.list_materialized_leaves(
+                        Some(last_leaf_id),
+                        min(BATCH_SIZE, BATCH_SIZE - (source_leaf_vec.len() as u64)),
+                        Some(source.id)
+                    )?;
+                    if leaves.is_empty() { break }
+                    last_leaf_id = leaves.last().expect(
+                        "INVARIANT ERROR: At lest one element expected").id;
+
+                    // Construct structs with the full data so the parallel processes are independent.
+                    source_leaf_vec.extend(leaves.iter().map(|l| {
+                        MaterializedRelLeaf {
+                            id: l.id,
+                            abs_path: l.abs_path.clone(),
+                            source_prefix: source.abs_path.clone(),
+                            source_id: source.id,
+                        }
+                    }));
+
+                    // Parallel process if enough values present
+                    if (source_leaf_vec.len() as u64) == BATCH_SIZE {
+                        handle_pool_rel(&db, &shutdown, &mut source_leaf_vec, &results, &pool)?
+                    }
+                }
+            }
+        }
+        // Last parallel call to empty
+        if !source_leaf_vec.is_empty() {
+            handle_pool_rel(&db, &shutdown, &mut source_leaf_vec, &results, &pool)?
+        }
+
+    // Create directories in absolute mode.
+    } else {
+        let results: Mutex<Vec<Vec<PathBuf>>> = Mutex::new(Vec::new());
+        let mut last_dir = FileId(0);
+        loop {
+            let dirs = db.list_materialized_leaves(Some(last_dir), BATCH_SIZE, None)?;
+            if dirs.is_empty() { break }
+            last_dir = dirs.last().unwrap().id;
+
+            let _ = handle_parallel_res(pool.install(|| {
+                dirs.par_iter().try_for_each(|record| -> Result<()> {
+                    shutdown.check_between_files()?;
+
+                    let ancestors = build_ancestors(&record.abs_path);
+                    results.lock().expect("prepare dir lock poisoned").push(ancestors);
+                    Ok(())
+                })
+            }), &shutdown)?;
+
+            let _future_vec: Vec<Vec<PathBuf>> = Vec::new();
+            let ancestors = std::mem::replace(
+                &mut *results.lock().expect("hash results lock"),
+                _future_vec);
+
+            let mut flat_ancestors = Vec::new();
+            flat_ancestors.extend(ancestors.into_iter().flatten());
+            db.insert_prep_ancestors_abs(&flat_ancestors)?;
+        }
+    }
+    db.link_prep_ancestor_dir_ids()?;
+    Ok(())
+}
+
+/// Handle the process of computing the ancestors for the rel branch.
+/// After ancestors are computed, ancestors are subsequently added to the database and
+/// the source_leaf_vec cleared.
+/// Code called twice hence separate function
+fn handle_pool_rel(
+    db: &Database,
+    shutdown: &Shutdown,
+
+    source_leaf_vec: &mut Vec<MaterializedRelLeaf>,
+    results: &Mutex<Vec<Vec<(PathBuf, i64)>>>,
+    pool: &ThreadPool) -> Result<()> {
+    debug_assert!(!source_leaf_vec.is_empty(),
+                  "INVARIANT ERROR: source_leaf_vec must not be empty");
+
+    // Do parallel processing
+    let _ = handle_parallel_res(pool.install(|| {
+        source_leaf_vec.par_iter().try_for_each(|record| -> Result<()> {
+            shutdown.check_between_files()?;
+
+            let ancestors = build_ancestors(&record.abs_path);
+            let pref_ancestors: Vec<(PathBuf, i64)> =
+                ancestors
+                    .into_iter()
+                    .filter(|a| a.starts_with(&record.source_prefix))
+                    .map(|p| (p, record.source_id))
+                    .collect();
+            results
+                .lock()
+                .expect("prepare dir lock poisoned")
+                .push(pref_ancestors);
+            Ok(())
+        })
+    }), &shutdown);
+
+    // Get results
+    let _future_vec: Vec<Vec<(PathBuf, i64)>> = Vec::new();
+    let ancestors = std::mem::replace(
+        &mut *results.lock().expect("hash results lock"),
+        _future_vec);
+
+    // Postprocess and store the results
+    let mut flat_ancestors = Vec::new();
+    flat_ancestors.extend(ancestors.into_iter().flatten());
+    db.insert_prep_ancestors_rel(&flat_ancestors)?;
+    source_leaf_vec.clear();
+    Ok(())
+
+}
+
+fn handle_parallel_res(res: Result<()>, shutdown: &Shutdown) -> Result<()> {
+    match res {
+        Ok(()) => Ok(()),
+        Err(Error::Interrupted) => {
+            let op = if shutdown.is_force() {"aborted"} else {"halted"};
+            tracing::info!("Place Phase {op}.");
+            Err(Error::Interrupted)
+        },
+        Err(e) => Err(e),
+    }
+}
 
 pub fn warn_catalog_uncertainty(db: &Database) -> Result<()> {
     let unconfirmed = db.count_unconfirmed_extracted()?;
