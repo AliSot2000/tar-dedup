@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS filter_reason (
 );
 
 CREATE TABLE IF NOT EXISTS source (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY CHECK (id > 0),
     source TEXT NOT NULL,
     abs_path TEXT NOT NULL,
     original_path TEXT,
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS source (
 CREATE INDEX IF NOT EXISTS idx_source_dirs ON source(abs_path) WHERE (flags & 1) != 0;
 
 CREATE TABLE IF NOT EXISTS files (
-    id            INTEGER PRIMARY KEY,
+    id            INTEGER PRIMARY KEY CHECK (id > 0),
     abs_path      TEXT NOT NULL UNIQUE,
     ext           TEXT NOT NULL,
 
