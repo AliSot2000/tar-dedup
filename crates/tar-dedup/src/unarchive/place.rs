@@ -1,21 +1,27 @@
 //! Place: copy/link cached payloads to final output paths.
 
-use std::fs;
-use std::path::{Component, Path, PathBuf};
-
-use filetime::{set_file_mtime, FileTime};
-use nix::NixPath;
-use path_clean::PathClean;
 use crate::config::ExtractConfig;
-use crate::db::types::{FileId, FilePhase, FileRecord};
 use crate::db::Database;
+use crate::db::types::{FileId, FilePhase, FileRecord};
 use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
 use crate::shutdown::Shutdown;
+use filetime::{FileTime, set_file_mtime};
+use nix::NixPath;
+use path_clean::PathClean;
+use rayon::prelude::*;
+use rayon::{ThreadPool, ThreadPoolBuilder};
+use std::cmp::min;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
 
 const BATCH_SIZE: u64 = 10_000;
 
-pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+// TODO Logging
+// TODO Progress
+
+pub fn run2(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let files: Vec<FileRecord> = db.list_files_to_restore()?;
     let total_bytes: u64 = files.iter().map(|f| f.size).sum();
     let progress = ByteProgress::new("extract", total_bytes);
@@ -40,15 +46,15 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
             )));
         }
 
-        let dest = safe_output_path(config.paths.extraction_root(), &record.abs_path)?;
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
-        }
+        //let dest = safe_output_path(config.paths.extraction_root(), &record.abs_path)?;
+        // if let Some(parent) = dest.parent() {
+        //     fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+        // }
 
         progress.set_file("extract", &record.abs_path);
-        fs::copy(&cache_path, &dest).map_err(|e| Error::io(&dest, e))?;
+        //fs::copy(&cache_path, &dest).map_err(|e| Error::io(&dest, e))?;
         // Lightweight mtime/owner until the permissions stage owns full metadata restore.
-        apply_basic_metadata(config, &record, &dest)?;
+        //apply_basic_metadata(config, &record, &dest)?;
         db.mark_file_phase(record.id, FilePhase::AtDestination)?;
         progress.inc(record.size);
     }
@@ -57,14 +63,40 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     Ok(())
 }
 
-pub fn run2(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    // Step 1, ensure we have c
+pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    // Step 1.1 empty out source root prior to starting extraction.
+    if config.placement.clean_target {
+        assert!(!config.placement.no_create_dir,
+                "INVARIANT ERROR: clean_target => no_create_dir is false");
+        fs::remove_dir_all(config.paths.extraction_root())?;
+        fs::create_dir_all(config.paths.extraction_root())?;
+    }
+
+    // Step 1.2 Create directoris if required
+    if !config.placement.no_create_dir {
+        prepare_extraction_dir(&db, &config, shutdown)?;
+    }
+
+    // Step 2, move the canonical files into place for link_tree
+    if config.placement.link_tree {
+        tracing::info!("Moving canonical file in place for link tree...");
+        // TODO move that shit
+    }
 
     Ok(())
 }
 
+/// Function walks all the extraction directories, ensures there are no symlink on the path if
+/// selected, and errors out or r&r any given path entry that was not dir. If path segment does not
+/// exist, path es created.
+/// PRECONDITION: no_create_dir is false.
 pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &Shutdown)
     -> Result<()> {
+    debug_assert!(config.paths.extraction_root().is_absolute(),
+                  "INVARIANT ERROR: extraction root is not absolute");
+    // Prepare helper table
+    prepare_dir_look_up_table(&db, &config, &shutdown)?;
+
     // Create dir in relative mode.
     if !config.placement.absolute_names {
         let mut last_source_id = 0i64;
@@ -75,17 +107,20 @@ pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &
             last_source_id = sources.last().unwrap().id;
 
             for source in sources {
-                let (checked_prefix, _stripped) = strip_leading_up(&source.original_path.clean());
+                let (checked_prefix, _stripped) = strip_leading_up(
+                    &source.original_path.clean());
                 let source_base_dir = config.paths.extraction_root().join(checked_prefix);
                 let mut checked_path = source_base_dir.clone();
 
                 let mut last_dir = FileId(0);
                 loop {
-                    let dirs = db.list_directories_from_source(source.id, Some(last_dir), BATCH_SIZE)?;
+                    let dirs = db.list_directories_from_prep(
+                        Some(last_dir), BATCH_SIZE, Some(source.id))?;
                     if dirs.is_empty() { break };
                     last_dir = dirs.last().unwrap().id;
 
                     for dir in dirs {
+                        shutdown.check_in_flight()?;
                         let rel_stem = dir.abs_path.strip_prefix(&source.abs_path)
                             .expect("Same Source => Same abs_path prefix");
                         let target = source_base_dir.join(&rel_stem);
@@ -99,13 +134,13 @@ pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &
         let mut last_dir = FileId(0);
         let mut previous_check = PathBuf::new();
         loop {
-            let dirs = db.list_directories(Some(last_dir), BATCH_SIZE)?;
+            let dirs = db.list_directories_from_prep(
+                Some(last_dir), BATCH_SIZE, None)?;
             if dirs.is_empty() { break }
             last_dir = dirs.last().unwrap().id;
 
             for dir in dirs {
-                debug_assert!(config.paths.extraction_root().is_absolute(),
-                              "INVARIANT ERROR: extraction root is not absolute");
+                shutdown.check_in_flight()?;
                 debug_assert!(dir.abs_path.is_absolute(),
                               "INVARIANT ERROR: target_dir path is not absolute");
 
@@ -115,7 +150,7 @@ pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &
             }
         }
     }
-
+    db.drop_prep_ancestor_table()?;
     Ok(())
 }
 
@@ -143,9 +178,13 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
                   "INVARIANT ERROR: build_path may not be called with no_create_dir");
     let mut prefix = PathBuf::new();
     let mut start = 0u64;
+    let iter = already_checked
+        .components()
+        .zip(target.components())
+        .enumerate();
 
     // Check known good prefix
-    for (num, (c_comp, t_comp)) in already_checked.components().zip(target.components()).enumerate() {
+    for (num, (c_comp, t_comp)) in iter {
         if c_comp == t_comp {
            prefix.push(t_comp)
         } else {
@@ -191,6 +230,7 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
             continue;
         }
 
+        // By exclusion principle -> dir or symlink with keep_dir_symlink
         assert!(prefix.exists()
                 && (prefix.is_dir()
                 || (prefix.is_symlink() && config.placement.keep_dir_symlink)),
