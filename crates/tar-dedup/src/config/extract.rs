@@ -18,20 +18,21 @@ pub struct PlacementOptions {
     pub keep_dir_symlink: bool,
     pub unlink_first: bool,
     pub no_create_dir: bool,
-    pub no_overwrite_dir: bool,
-    pub force_overwrite_dir: bool,
     pub conflict_policy: ConflictPolicy,
     pub silent_conflicts: bool,
     pub remove_and_replace: bool,
     pub link_tree: bool,
     pub use_hard_links: bool,
-    pub absolute_links: bool,
+    pub absolute_links: bool, // TODO not possible with use_hard_links
     pub hardlink_reestablish: bool,
+    pub clean_target: bool, // TODO implies no_create_dir is false!
 }
 
 #[derive(Debug, Clone)]
 pub struct ExtractAttributeOptions {
     pub restore_owner: bool,
+    pub no_overwrite_dir: bool,
+    pub force_overwrite_dir: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -87,8 +88,6 @@ impl ExtractConfig {
                 keep_dir_symlink: args.keep_dir_symlink,
                 unlink_first: args.unlink_first,
                 no_create_dir: args.no_create_dir,
-                no_overwrite_dir: args.no_overwrite_dir,
-                force_overwrite_dir: args.force_overwrite_dir,
                 conflict_policy: args.conflict_policy,
                 silent_conflicts: args.silent_conflicts,
                 remove_and_replace: args.remove_and_replace,
@@ -96,9 +95,12 @@ impl ExtractConfig {
                 use_hard_links: args.use_hard_links,
                 absolute_links: args.absolute_links,
                 hardlink_reestablish: args.hardlink_reestablish,
+                clean_target: true, // TODO add cli
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: args.restore_owner,
+                no_overwrite_dir: args.no_overwrite_dir,
+                force_overwrite_dir: args.force_overwrite_dir,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -131,8 +133,6 @@ impl ExtractConfig {
                 keep_dir_symlink: false,
                 unlink_first: false,
                 no_create_dir: false,
-                no_overwrite_dir: false,
-                force_overwrite_dir: false,
                 conflict_policy: ConflictPolicy::Replace,
                 silent_conflicts: false,
                 remove_and_replace: false,
@@ -140,9 +140,12 @@ impl ExtractConfig {
                 use_hard_links: false,
                 absolute_links: false,
                 hardlink_reestablish: true,
+                clean_target: true // TODO add cli
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: false,
+                no_overwrite_dir: false,
+                force_overwrite_dir: false,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -175,8 +178,6 @@ impl ExtractConfig {
                 keep_dir_symlink: false,
                 unlink_first: false,
                 no_create_dir: false,
-                no_overwrite_dir: false,
-                force_overwrite_dir: false,
                 conflict_policy: ConflictPolicy::Replace,
                 silent_conflicts: false,
                 remove_and_replace: false,
@@ -184,9 +185,12 @@ impl ExtractConfig {
                 use_hard_links: false,
                 absolute_links: false,
                 hardlink_reestablish: true,
+                clean_target: true, // TODO cli
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: false,
+                no_overwrite_dir: false,
+                force_overwrite_dir: false,
             },
             scan: ScanOptions {
                 force_scan: false,
