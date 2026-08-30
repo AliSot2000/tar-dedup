@@ -12,6 +12,7 @@ use std::fs::OpenOptions;
 
 use fs4::fs_std::FileExt;
 
+use crate::archive_footer;
 use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
     resolve_start, ProductPresence, StartAction, StartPolicy, WorkPresence,
@@ -22,7 +23,7 @@ use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
 pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
-    let product = if config.paths.archive_path.is_file() {
+    let product = if archive_footer::has_valid_footer(&config.paths.archive_path) {
         ProductPresence::Finished
     } else {
         ProductPresence::Absent
