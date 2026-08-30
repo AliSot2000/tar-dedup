@@ -24,7 +24,8 @@ file with the matching binary content.
 size in base64.
 7. Copy the database also into the folder, making sure to have commited the transactions and detached.
 8. Tar (with or without compression) but dereferencing the sym links  to a single file.
-9. Done
+9. Append a seekable footer to the finished archive: `MAGIC | xz(-9e)(catalog.sqlite) | sha1(xz) | MAGIC | u64 offset`. Extract can load the catalog instantly from this trailer without replaying every `snapshot.sqlite`.
+10. Done
 
 And in reverse:
 1. Untar the sqlite.db
