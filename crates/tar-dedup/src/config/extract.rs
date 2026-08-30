@@ -26,6 +26,7 @@ pub struct PlacementOptions {
     pub absolute_links: bool, // TODO not possible with use_hard_links
     pub hardlink_reestablish: bool,
     pub clean_target: bool, // TODO implies no_create_dir is false!
+    pub link_source: Option<PathBuf>,  // TODO CLI + san!!!
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ pub struct ScanOptions {
 
 #[derive(Debug, Clone)]
 pub struct ExtractConfig {
+    pub force: bool, // Will force the system just try anyway even tho stuff failed. Might lead to inconsistent states and corrupted data.
     pub paths: PathLayout,
     pub decompression: super::compression::CompressionFormat,
     pub placement: PlacementOptions,
@@ -76,6 +78,7 @@ impl ExtractConfig {
         let start_policy = StartPolicy::create_or_fresh(args.fresh);
 
         Ok(Self {
+            force: true, // TODO cli
             paths: PathLayout {
                 archive_path,
                 directory,
@@ -96,6 +99,7 @@ impl ExtractConfig {
                 absolute_links: args.absolute_links,
                 hardlink_reestablish: args.hardlink_reestablish,
                 clean_target: true, // TODO add cli
+                link_source: None,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: args.restore_owner,
@@ -121,6 +125,7 @@ impl ExtractConfig {
     /// Minimal config for `resume` when extract runtime state is present.
     pub fn for_resume(work_dir: PathBuf, jobs: usize) -> Self {
         Self {
+            force: true, // TODO cli
             paths: PathLayout {
                 archive_path: PathBuf::new(),
                 directory: PathBuf::new(),
@@ -140,7 +145,8 @@ impl ExtractConfig {
                 use_hard_links: false,
                 absolute_links: false,
                 hardlink_reestablish: true,
-                clean_target: true // TODO add cli
+                clean_target: true, // TODO add cli
+                link_source: None,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: false,
@@ -166,6 +172,7 @@ impl ExtractConfig {
     #[cfg(test)]
     pub fn for_scan_test(archive_path: PathBuf, work_dir: PathBuf, directory: PathBuf) -> Self {
         Self {
+            force: true, // TODO cli
             paths: PathLayout {
                 archive_path,
                 directory,
@@ -186,6 +193,7 @@ impl ExtractConfig {
                 absolute_links: false,
                 hardlink_reestablish: true,
                 clean_target: true, // TODO cli
+                link_source: None,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: false,
