@@ -2,7 +2,9 @@ mod xz;
 
 use crate::config::CompressionFormat;
 
-pub use xz::InterruptibleXzEncoder;
+pub use xz::{
+    compress_footer_bytes, decompress_footer_bytes, InterruptibleXzEncoder, FOOTER_XZ_PRESET,
+};
 
 pub fn warn_on_start(format: CompressionFormat) {
     // TODO: Needs to be tracing
