@@ -1,7 +1,7 @@
 //! Seekable sqlite trailer appended after a finished compressed archive stream.
 //!
 //! Layout (file absolute):
-//! `MAGIC | sqlite_bytes | sha1(20) | MAGIC | offset_u64_le`
+//! `MAGIC | xz_bytes(-9e) | sha1(xz_bytes) | MAGIC | offset_u64_le`
 //! where `offset` points at the first `MAGIC`.
 
 use std::fs::{File, OpenOptions};
@@ -10,9 +10,16 @@ use std::path::{Path, PathBuf};
 
 use sha1::{Digest, Sha1};
 
+use crate::compression::{compress_footer_bytes, decompress_footer_bytes};
 use crate::error::{Error, Result};
 
 pub const FOOTER_MAGIC: &[u8] = b"Tar-Dedup-SQLite-Footer";
+const SHA1_LEN: u64 = 20;
+const OFFSET_LEN: u64 = 8;
+
+fn footer_fixed_overhead() -> u64 {
+    FOOTER_MAGIC.len() as u64 + SHA1_LEN + FOOTER_MAGIC.len() as u64 + OFFSET_LEN
+}
 
 /// Append footer after the compression stream has closed and the work DB is finalized.
 pub fn write_footer(archive_path: &Path, sqlite_path: &Path) -> Result<()> {
@@ -21,7 +28,8 @@ pub fn write_footer(archive_path: &Path, sqlite_path: &Path) -> Result<()> {
         .and_then(|mut f| f.read_to_end(&mut db_bytes))
         .map_err(|e| Error::io(sqlite_path, e))?;
 
-    let digest = Sha1::digest(&db_bytes);
+    let xz_bytes = compress_footer_bytes(&db_bytes)?;
+    let digest = Sha1::digest(&xz_bytes);
     let offset = std::fs::metadata(archive_path)
         .map_err(|e| Error::io(archive_path, e))?
         .len();
@@ -32,7 +40,7 @@ pub fn write_footer(archive_path: &Path, sqlite_path: &Path) -> Result<()> {
         .map_err(|e| Error::io(archive_path, e))?;
 
     out.write_all(FOOTER_MAGIC)
-        .and_then(|_| out.write_all(&db_bytes))
+        .and_then(|_| out.write_all(&xz_bytes))
         .and_then(|_| out.write_all(&digest))
         .and_then(|_| out.write_all(FOOTER_MAGIC))
         .and_then(|_| out.write_all(&offset.to_le_bytes()))
@@ -68,7 +76,7 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         .map_err(|e| Error::io(archive_path, e))?
         .len();
     let magic_len = FOOTER_MAGIC.len() as u64;
-    let min_len = magic_len + 20 + magic_len + 8;
+    let min_len = footer_fixed_overhead();
     if len < min_len {
         return Err(Error::Config(format!(
             "archive too small for footer: {}",
@@ -76,8 +84,8 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
-    // Read the offset and sanity check size.
-    file.seek(SeekFrom::End(-8))
+    // Get offset and validate it.
+    file.seek(SeekFrom::End(-(OFFSET_LEN as i64)))
         .map_err(|e| Error::io(archive_path, e))?;
     let mut off_buf = [0u8; 8];
     file.read_exact(&mut off_buf)
@@ -90,7 +98,7 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
-    // Check for the presence of the magic string
+    // Check Magic is first
     file.seek(SeekFrom::Start(offset))
         .map_err(|e| Error::io(archive_path, e))?;
     let mut magic = vec![0u8; FOOTER_MAGIC.len()];
@@ -103,27 +111,27 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
-    // Lift db
-    let db_len = len
-        .checked_sub(offset + magic_len + 20 + magic_len + 8)
+    // Read xz stream
+    let xz_len = len
+        .checked_sub(offset + magic_len + SHA1_LEN + magic_len + OFFSET_LEN)
         .ok_or_else(|| Error::Config("footer size underflow".into()))?;
-    let mut db_bytes = vec![0u8; db_len as usize];
-    file.read_exact(&mut db_bytes)
+    let mut xz_bytes = vec![0u8; xz_len as usize];
+    file.read_exact(&mut xz_bytes)
         .map_err(|e| Error::io(archive_path, e))?;
 
-    // Check hash of db
+    // Check SHA of xz stream
     let mut digest = [0u8; 20];
     file.read_exact(&mut digest)
         .map_err(|e| Error::io(archive_path, e))?;
-    let expected = Sha1::digest(&db_bytes);
+    let expected = Sha1::digest(&xz_bytes);
     if digest != expected.as_slice() {
         return Err(Error::Config(format!(
-            "footer sqlite sha1 mismatch in {}",
+            "footer xz sha1 mismatch in {}",
             archive_path.display()
         )));
     }
 
-    // Check second footer
+    // Check file ends in footer (prior to the u64 for the offset)
     file.read_exact(&mut magic)
         .map_err(|e| Error::io(archive_path, e))?;
     if magic != FOOTER_MAGIC {
@@ -133,7 +141,10 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
-    // Write DB to file
+    // Decompress opaque catalog blob; sqlite validity is checked when the DB is opened.
+    let db_bytes = decompress_footer_bytes(&xz_bytes)?;
+
+    // Create parent and write extracted db to disk.
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
     }
