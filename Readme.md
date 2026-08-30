@@ -211,14 +211,14 @@ Compile hints on Debian:
 ### Returned Archive
 Note on the returned file. The file is a valid archive with an appended footer. This looks like this:
 ```
-[ compressed(tar archive) | MAGIC | final-database.sqlite | sha1 of database | MAGIC | u64 offset ]
+[ compressed(tar archive) | MAGIC | xz(-9e) of final-database.sqlite | sha1 of xz blob | MAGIC | u64 offset ]
 ```
 - `MAGIC` is `"Tar-Dedup-SQLite-Footer"` - to make finding the footer by hand analyzing the file with a program like `less`.
-- `final-database.sqlite` is the database after the session was closed and contains the finished session info. 
-  Besides that, it allows tar-dedup to instantly have the manifest in the correct state rather than having to apply one 
-  snapshot after the other.
-- `sha1 of database` is the hash of the database to check for corruption.
-- `u64 offset` is the offset of the first MAGIC string relative to the beginning of the file
+- `xz(-9e) of final-database.sqlite` is the finalized work database compressed with a fixed `xz -9 -e` preset (independent of tar stream compression). It contains the finished session info and allows tar-dedup to instantly have the manifest in the correct state rather than having to apply one snapshot after the other.
+- `sha1 of xz blob` is the hash of the compressed footer payload (not the raw sqlite) to check for corruption.
+- `u64 offset` is the offset of the first `MAGIC` string relative to the beginning of the file
+
+Archives with the previous raw-sqlite footer format are not supported.
 
 The returned file can be opened by associated compressor or the tar archive. The footer will most likely be ignored 
 by the compression algorithm and the tar stream and the contents can be viewed and used as is. A warning is also 
