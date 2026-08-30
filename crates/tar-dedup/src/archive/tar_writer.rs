@@ -269,6 +269,7 @@ fn end_session(
                     db.clear_archive_meta()?;
                 }
                 db.checkpoint()?;
+                // Footer catalog is always xz -9e, independent of tar stream compression.
                 archive_footer::write_footer(&config.paths.archive_path, &config.paths.db_path())?;
             }
             Ok(())
