@@ -1,5 +1,6 @@
 //! Rehash: verify extract-cache payloads against catalog SHA-1 digests.
 
+use std::fmt::format;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -16,6 +17,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use sha1::{Digest, Sha1};
+use crate::unarchive::rehash::RehashOutcome::Error;
 
 #[derive(Debug, Clone)]
 enum RehashOutcome {
@@ -29,7 +31,7 @@ enum RehashOutcome {
 
 pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // TODO promote all files that aren't elected to rehash
-    let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?;
+    let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?; // TODO that's wrong
     let total = pending.len() as u64;
     let already_hashed= 0;
 
@@ -92,7 +94,13 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
             let (matches, mismatches, errors) = counts;
             tracing::info!(matches, mismatches, errors, "rehash complete");
             if mismatches > 0 {
-                tracing::warn!(mismatches, "rehash digest mismatch(es) recorded");
+                if config.force {
+                    tracing::warn!(mismatches, "rehash digest mismatch(es) recorded");
+                } else {
+                    return Err(Error::Config(format!(
+                        "Corruption detected: {mismatches} files with mismatching hash. \
+                        Ignore this error with --force")))
+                }
             }
             if errors > 0 {
                 tracing::warn!(errors, "rehash error(s) recorded");
