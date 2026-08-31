@@ -66,7 +66,6 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
             ExtractPipelinePhase::Place => {
                 let db = Database::open(&db_path)?;
                 place::run(&config, &db, &shutdown)?;
-                place::warn_catalog_uncertainty(&db)?;
             }
             ExtractPipelinePhase::Permissions => {
                 let db = Database::open(&db_path)?;
