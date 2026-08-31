@@ -173,6 +173,54 @@ impl ExtractConfig {
     }
 
     #[cfg(test)]
+    pub fn for_place_test(extraction_root: PathBuf, absolute_names: bool, jobs: usize) -> Self {
+        Self {
+            force: true,
+            paths: PathLayout {
+                archive_path: PathBuf::new(),
+                directory: extraction_root,
+                work_dir: PathBuf::new(),
+            },
+            decompression: super::compression::CompressionFormat::None,
+            placement: PlacementOptions {
+                absolute_names,
+                one_top_level: None,
+                keep_dir_symlink: false,
+                unlink_first: false,
+                no_create_dir: true,
+                conflict_policy: ConflictPolicy::Replace,
+                silent_conflicts: false,
+                remove_and_replace: false,
+                link_tree: false,
+                use_hard_links: false,
+                absolute_links: false,
+                hardlink_reestablish: true,
+                clean_target: false,
+                link_source: None,
+                no_reflink: false,
+            },
+            attributes: ExtractAttributeOptions {
+                restore_owner: false,
+                no_overwrite_dir: false,
+                force_overwrite_dir: false,
+            },
+            scan: ScanOptions {
+                force_scan: false,
+                rehash: true,
+                clear_archive_meta: false,
+            },
+            process: ProcessOptions {
+                start_policy: StartPolicy::Create,
+                jobs,
+                fail_fast: false,
+                no_errors: false,
+                cleanup: CleanupSettings::from_flags(false, false),
+                exit_after_stage: None,
+            },
+        }
+    }
+
+    #[cfg(test)]
     pub fn for_scan_test(archive_path: PathBuf, work_dir: PathBuf, directory: PathBuf) -> Self {
         Self {
             force: true, // TODO cli
