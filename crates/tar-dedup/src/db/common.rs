@@ -244,6 +244,7 @@ pub fn checkpoint(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+// TODO into scan
 /// Rows still `archived` whose canonical has `FileExtracted` (awaiting confirmation).
 pub fn count_unconfirmed_extracted(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
