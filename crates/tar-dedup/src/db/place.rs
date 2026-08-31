@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{named_params, Connection};
 
 use crate::db::common::SqlFileRow;
+use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FileType, StrippedRecord};
 use crate::error::Result;
 
@@ -203,4 +204,35 @@ pub fn list_directories_from_prep(
         )?,
     };
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn list_canonical_files_for_move(
+    conn: &Connection, filter: bool, last_id: FileId, batch_size: u64
+) -> Result<Vec<StrippedRecord>> {
+    debug_assert!(last_id.0 >= 0,
+                  "INVARIANT ERROR: Only > 0 FileIds handed out, 0 minimum lower bound");
+
+    let cols = StrippedRecord::sql_columns();
+    let sql_filt = if filter { " AND include_reason > 0 AND exclude_reason = 0" } else { "" };
+    let mut stmt = conn.prepare(&format!("\
+        SELECT {cols} FROM files \
+            WHERE flags & :extracted = 1 \
+                AND flags & :moved = 0
+                AND ftype IS NOT NULL
+                AND ftype = 'file'
+                AND phase = 'rehashed'
+                AND id > :last_id
+                {sql_filt}
+            ORDER BY id LIMIT :batch_size
+        "))?;
+    let results = stmt.query_map(
+        named_params! {
+            ":extracted": FileFlag::FileExtracted.mask_i64(),
+            ":last_id": last_id.0,
+            ":batch_size": batch_size,
+            ":moved": FileFlag::AtLinkSource.mask_i64()
+        },
+        StrippedRecord::from_row
+    )?;
+    results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
