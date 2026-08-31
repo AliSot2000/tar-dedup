@@ -123,7 +123,8 @@ fn handle_from_files_line(
     debug_assert!(abs_path.is_absolute(), "Path must be absolute now");
 
     if abs_path.is_dir() {
-        if let Some((_, existing)) = db.find_overlapping_source(&abs_path, config.indexing.no_recursion)? {
+        if let Some((_, existing)) = db.find_overlapping_source(
+            &abs_path, config.indexing.no_recursion)? {
             if !config.indexing.no_strict_separation {
                 return Err(Error::Config(format!(
                     "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
