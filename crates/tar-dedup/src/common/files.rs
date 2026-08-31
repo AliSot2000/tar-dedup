@@ -1,7 +1,44 @@
 use chrono::{DateTime, Utc};
 
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
 use std::path::Path;
+
+use crate::error::{Error, Result};
+
+use super::COPY_STEP_SIZE;
+
+/// Copy `src` → `dst` in [`COPY_STEP_SIZE`] chunks, calling `should_interrupt` after each chunk.
+///
+/// When `should_interrupt()` returns `true`, the partial `dst` is removed and [`Error::Interrupted`]
+/// is returned. When it returns `false`, copying continues until EOF.
+pub fn copy_file_batched<P, F>(src: P, dst: P, mut should_interrupt: F) -> Result<()>
+where
+    P: AsRef<Path>,
+    F: FnMut() -> bool,
+{
+    let src = src.as_ref();
+    let dst = dst.as_ref();
+
+    let mut src_file = File::open(src).map_err(|e| Error::io(src, e))?;
+    let mut dst_file = File::create(dst).map_err(|e| Error::io(dst, e))?;
+
+    let mut buf = vec![0u8; COPY_STEP_SIZE as usize];
+    loop {
+        let n = src_file.read(&mut buf).map_err(|e| Error::io(src, e))?;
+        if n == 0 {
+            break;
+        }
+        dst_file
+            .write_all(&buf[..n])
+            .map_err(|e| Error::io(dst, e))?;
+        if should_interrupt() {
+            let _ = fs::remove_file(dst);
+            return Err(Error::Interrupted);
+        }
+    }
+    Ok(())
+}
 
 /// True when two directory roots collide for inventory.
 ///
