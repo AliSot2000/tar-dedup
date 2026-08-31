@@ -7,6 +7,19 @@ use crate::error::Result;
 
 const SOURCE_RECORD_COLUMNS: &str = " id, source, abs_path, original_path, line, flags";
 
+impl SourceRecord {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRecord>  {
+        Ok(SourceRecord {
+            id: row.get::<_, i64>("id")?.into(),
+            source: row.get::<_, String>("source")?,
+            abs_path: row.get::<_, String>("abs_path")?.into(),
+            original_path: row.get::<_, String>("original_path")?.into(),
+            line: row.get::<_, i64>("line")?,
+            flags: SourceFlags::from_i64(row.get::<_, i64>("flags")?),
+        })
+    }
+}
+
 /// Insert `(source, path)` if missing, then return the row id.
 ///
 /// Relies on `UNIQUE (source, path)` — no deletes from this table, so a plain
@@ -79,8 +92,6 @@ pub fn find_overlapping_source(
     .map_err(Into::into)
 }
 
-type SourceRowMapper = fn(&rusqlite::Row<'_>) -> rusqlite::Result<SourceRecord>;
-
 /// Return up to `batch_size` source rows with `id > starting_id`, ordered by id.
 ///
 /// Pass `starting_id = None` for the first batch, then set it to the last row's
@@ -88,15 +99,15 @@ type SourceRowMapper = fn(&rusqlite::Row<'_>) -> rusqlite::Result<SourceRecord>;
 pub fn list_sources(
     conn: &Connection,
     only_dirs: Option<bool>,
-    starting_id: Option<i64>,
+    starting_id: i64,
     batch_size: u64,
 ) -> Result<Vec<SourceRecord>> {
+    debug_assert!(starting_id >= 0, "INVARIANT ERROR: starting_id >= 0, since ids start at 1");
     let dir_filter = match only_dirs {
         Some(true) => " AND flags & :DirFlag = 1",
         Some(false) => " AND flags & :DirFlag = 0",
         None => "",
     };
-    let after_id = starting_id.unwrap_or(0);
     let dir_flag = SourceFlag::IsDirectory.mask_i64();
     let sql = format!(
         "SELECT {SOURCE_RECORD_COLUMNS} FROM source \
@@ -108,33 +119,22 @@ pub fn list_sources(
     let rows = if only_dirs.is_some() {
         stmt.query_map(
             named_params! {
-                ":starting_id": after_id,
+                ":starting_id": starting_id,
                 ":DirFlag": dir_flag,
                 ":batch_size": batch_size,
             },
-            from_row as SourceRowMapper,
+            SourceRecord::from_row,
         )?
     } else {
         stmt.query_map(
             named_params! {
-                ":starting_id": after_id,
+                ":starting_id": starting_id,
                 ":batch_size": batch_size,
             },
-            from_row as SourceRowMapper,
+            SourceRecord::from_row,
         )?
     };
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-}
-
-fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRecord>  {
-    Ok(SourceRecord {
-        id: row.get::<_, i64>("id")?.into(),
-        source: row.get::<_, String>("source")?,
-        abs_path: row.get::<_, String>("abs_path")?.into(),
-        original_path: row.get::<_, String>("original_path")?.into(),
-        line: row.get::<_, i64>("line")?,
-        flags: SourceFlags::from_i64(row.get::<_, i64>("flags")?),
-    })
 }
 
 #[cfg(test)]
