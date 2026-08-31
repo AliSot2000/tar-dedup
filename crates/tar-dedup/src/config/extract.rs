@@ -27,6 +27,7 @@ pub struct PlacementOptions {
     pub hardlink_reestablish: bool,
     pub clean_target: bool, // TODO implies no_create_dir is false!
     pub link_source: Option<PathBuf>,  // TODO CLI + san!!!
+    pub no_reflink: bool // TODO cli
 }
 
 #[derive(Debug, Clone)]
@@ -98,8 +99,9 @@ impl ExtractConfig {
                 use_hard_links: args.use_hard_links,
                 absolute_links: args.absolute_links,
                 hardlink_reestablish: args.hardlink_reestablish,
-                clean_target: true, // TODO add cli
+                clean_target: true,
                 link_source: None,
+                no_reflink: false,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: args.restore_owner,
@@ -145,8 +147,9 @@ impl ExtractConfig {
                 use_hard_links: false,
                 absolute_links: false,
                 hardlink_reestablish: true,
-                clean_target: true, // TODO add cli
+                clean_target: true,
                 link_source: None,
+                no_reflink: false,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: false,
@@ -194,6 +197,7 @@ impl ExtractConfig {
                 hardlink_reestablish: true,
                 clean_target: true, // TODO cli
                 link_source: None,
+                no_reflink: false,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: false,
