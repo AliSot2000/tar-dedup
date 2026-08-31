@@ -5,6 +5,8 @@ mod place;
 mod rehash;
 mod scan;
 
+pub use place::populate_out_tree; // INFO: Export for testing
+
 use std::path::Path;
 
 use crate::common::cleanup::{self, CleanupMode};
