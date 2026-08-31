@@ -17,7 +17,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use sha1::{Digest, Sha1};
-use crate::unarchive::rehash::RehashOutcome::Error;
 
 #[derive(Debug, Clone)]
 enum RehashOutcome {
