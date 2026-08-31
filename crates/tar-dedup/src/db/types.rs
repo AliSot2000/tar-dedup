@@ -4,6 +4,35 @@ use std::path::PathBuf;
 use crate::db::flags::{FileFlags, SourceFlags};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OutTreeId(pub i64);
+
+#[derive(Debug, Clone)]
+pub struct OutTreeRecord {
+    pub id: OutTreeId,
+    pub abs_path: PathBuf,
+    pub file_id: Option<FileId>,
+    pub flags: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewOutTreeRow {
+    pub abs_path: PathBuf,
+    pub file_id: Option<FileId>,
+    pub flags: u64,
+}
+
+// TODO Check if we need this.
+#[derive(Debug, Clone)]
+pub struct DuplicateOutPath {
+    pub abs_path: PathBuf,
+    pub file_id: FileId,
+    pub dev: Option<u64>,
+    pub inode: Option<u64>,
+    pub ftype: Option<FileType>,
+    pub link_dst: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(pub i64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
