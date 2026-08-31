@@ -261,4 +261,36 @@ mod tests {
         assert!(!directory_roots_overlap(Path::new("/a"), Path::new("/a/b"), true));
         assert!(!directory_roots_overlap(Path::new("/a/b"), Path::new("/a"), true));
     }
+
+    #[test]
+    fn copy_file_batched_copies_all_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("src.bin");
+        let dst = dir.path().join("dst.bin");
+        let payload: Vec<u8> = (0..COPY_STEP_SIZE as usize + 123).map(|i| (i % 251) as u8).collect();
+        fs::write(&src, &payload).expect("write src");
+
+        copy_file_batched(&src, &dst, || false).expect("copy");
+
+        assert_eq!(fs::read(&dst).expect("read dst"), payload);
+    }
+
+    #[test]
+    fn copy_file_batched_interrupt_removes_partial_dst() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("src.bin");
+        let dst = dir.path().join("dst.bin");
+        let payload = vec![0u8; COPY_STEP_SIZE as usize + 1];
+        fs::write(&src, &payload).expect("write src");
+
+        let mut chunks = 0u32;
+        let err = copy_file_batched(&src, &dst, || {
+            chunks += 1;
+            chunks >= 2
+        })
+        .expect_err("interrupted");
+
+        assert!(matches!(err, Error::Interrupted));
+        assert!(!dst.exists());
+    }
 }
