@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 
-use crate::db::flags::{FileFlags, SourceFlags};
+use crate::db::flags::{FileFlags, OutTreeFlags, SourceFlags};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutTreeId(pub i64);
@@ -11,14 +11,14 @@ pub struct OutTreeRecord {
     pub id: OutTreeId,
     pub abs_path: PathBuf,
     pub file_id: Option<FileId>,
-    pub flags: u64,
+    pub flags: OutTreeFlags,
 }
 
 #[derive(Debug, Clone)]
 pub struct NewOutTreeRow {
     pub abs_path: PathBuf,
     pub file_id: Option<FileId>,
-    pub flags: u64,
+    pub flags: OutTreeFlags,
 }
 
 // TODO Check if we need this.
