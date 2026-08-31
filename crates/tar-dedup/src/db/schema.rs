@@ -78,10 +78,25 @@ CREATE INDEX IF NOT EXISTS idx_files_abs_path ON files(abs_path);
 CREATE TABLE IF NOT EXISTS ref (
     source_id INTEGER NOT NULL REFERENCES source(id),
     file_id   INTEGER NOT NULL REFERENCES files(id),
-    flags     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (source_id, file_id)
 );
 CREATE INDEX IF NOT EXISTS idx_ref_file ON ref(file_id);
+
+CREATE TABLE IF NOT EXISTS out_tree (
+    id       INTEGER PRIMARY KEY CHECK (id > 0),
+    abs_path TEXT NOT NULL UNIQUE,
+    file_id  INTEGER REFERENCES files(id),
+    flags    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_out_tree_file ON out_tree(file_id) WHERE file_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_out_tree_abs_path ON out_tree(abs_path);
+
+CREATE TABLE IF NOT EXISTS ref_out (
+    out_id    INTEGER NOT NULL REFERENCES out_tree(id),
+    source_id INTEGER NOT NULL REFERENCES source(id),
+    PRIMARY KEY (out_id, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ref_out_source ON ref_out(source_id);
 
 -- finalized:
 -- 0 = open/interrupted,
