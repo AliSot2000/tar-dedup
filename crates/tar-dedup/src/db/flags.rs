@@ -164,21 +164,21 @@ impl SourceFlags {
     }
 }
 
-/// Bit index into [`RefFlags`] (not the mask itself).
+/// Bit index into [`OutTreeFlags`] (not the mask itself).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u64)]
-pub enum RefFlag {
-    /// This source already walked this node (resume / skip re-stat).
+pub enum OutTreeFlag {
+    /// Output path was walked / stat'd during place (resume skip).
     AlreadyWalked = 0,
-    /// This membership was materialized on extract.
+    /// Payload was materialized at this output path.
     Extracted = 1,
-    /// An error occurred while copying the file back in place
+    /// Copy/link into this output path failed.
     ErrorWhilePlace = 2,
-    /// An Error Occurred while applying the metadata.
+    /// Metadata restore failed for this output path.
     ErrorWhileApplyingMetadata = 3,
 }
 
-impl RefFlag {
+impl OutTreeFlag {
     pub const fn mask(self) -> u64 {
         1u64 << (self as u8)
     }
@@ -188,16 +188,16 @@ impl RefFlag {
     }
 }
 
-/// Bitset stored in `ref.flags`.
+/// Bitset stored in `out_tree.flags`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct RefFlags(u64);
+pub struct OutTreeFlags(u64);
 
-impl RefFlags {
+impl OutTreeFlags {
     pub const fn from_bits(bits: u64) -> Self {
         Self(bits & !(1u64 << 63))
     }
 
-    pub fn bits(self) -> u64 {
+    pub const fn bits(self) -> u64 {
         self.0
     }
 
@@ -209,11 +209,11 @@ impl RefFlags {
         self.0 as i64
     }
 
-    pub fn get(self, flag: RefFlag) -> bool {
+    pub fn get(self, flag: OutTreeFlag) -> bool {
         self.0 & flag.mask() != 0
     }
 
-    pub fn set(&mut self, flag: RefFlag, on: bool) {
+    pub fn set(&mut self, flag: OutTreeFlag, on: bool) {
         if on {
             self.0 |= flag.mask();
         } else {
@@ -221,7 +221,7 @@ impl RefFlags {
         }
     }
 
-    pub fn with(mut self, flag: RefFlag, on: bool) -> Self {
+    pub fn with(mut self, flag: OutTreeFlag, on: bool) -> Self {
         self.set(flag, on);
         self
     }
@@ -231,88 +231,16 @@ pub fn insert_ref(
     conn: &Connection,
     source_id: i64,
     file_id: FileId,
-    flags: RefFlags,
 ) -> Result<bool> {
     let n = conn.execute(
-        "INSERT OR IGNORE INTO ref (source_id, file_id, flags)
-         VALUES (:source_id, :file_id, :flags)",
+        "INSERT OR IGNORE INTO ref (source_id, file_id)
+         VALUES (:source_id, :file_id)",
         named_params! {
             ":source_id": source_id,
             ":file_id": file_id.0,
-            ":flags": flags.to_i64(),
         },
     )?;
     Ok(n > 0)
-}
-
-pub fn get_ref_flags(conn: &Connection, source_id: i64, file_id: FileId) -> Result<RefFlags> {
-    let raw: i64 = conn.query_row(
-        "SELECT flags FROM ref WHERE source_id = :source_id AND file_id = :file_id",
-        named_params! {
-            ":source_id": source_id,
-            ":file_id": file_id.0,
-        },
-        |row| row.get(0),
-    )?;
-    Ok(RefFlags::from_i64(raw))
-}
-
-pub fn set_ref_flags(
-    conn: &Connection,
-    source_id: i64,
-    file_id: FileId,
-    flags: RefFlags,
-) -> Result<()> {
-    conn.execute(
-        "UPDATE ref SET flags = :flags WHERE source_id = :source_id AND file_id = :file_id",
-        named_params! {
-            ":flags": flags.to_i64(),
-            ":source_id": source_id,
-            ":file_id": file_id.0,
-        },
-    )?;
-    Ok(())
-}
-
-pub fn get_ref_flag(
-    conn: &Connection,
-    source_id: i64,
-    file_id: FileId,
-    flag: RefFlag,
-) -> Result<bool> {
-    let set: i64 = conn.query_row(
-        "SELECT (flags & :bit) != 0 FROM ref WHERE source_id = :source_id AND file_id = :file_id",
-        named_params! {
-            ":bit": flag.mask_i64(),
-            ":source_id": source_id,
-            ":file_id": file_id.0,
-        },
-        |row| row.get(0),
-    )?;
-    Ok(set != 0)
-}
-
-pub fn set_ref_flag(
-    conn: &Connection,
-    source_id: i64,
-    file_id: FileId,
-    flag: RefFlag,
-    on: bool,
-) -> Result<u64> {
-    let n = conn.execute(
-        "UPDATE ref SET flags = CASE
-             WHEN :on != 0 THEN flags | :bit
-             ELSE flags & ~:bit
-           END
-         WHERE source_id = :source_id AND file_id = :file_id",
-        named_params! {
-            ":on": if on { 1i64 } else { 0i64 },
-            ":bit": flag.mask_i64(),
-            ":source_id": source_id,
-            ":file_id": file_id.0,
-        },
-    )?;
-    Ok(n as u64)
 }
 
 pub fn get_flags(conn: &Connection, file_id: FileId) -> Result<FileFlags> {
@@ -363,6 +291,67 @@ pub fn set_flag(conn: &Connection, file_id: FileId, flag: FileFlag, on: bool) ->
     Ok(rows_affected as u64)
 }
 
+pub fn get_out_tree_flags(conn: &Connection, out_id: crate::db::types::OutTreeId) -> Result<OutTreeFlags> {
+    let raw: i64 = conn.query_row(
+        "SELECT flags FROM out_tree WHERE id = :id",
+        named_params! { ":id": out_id.0 },
+        |row| row.get(0),
+    )?;
+    Ok(OutTreeFlags::from_i64(raw))
+}
+
+pub fn set_out_tree_flags(
+    conn: &Connection,
+    out_id: crate::db::types::OutTreeId,
+    flags: OutTreeFlags,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE out_tree SET flags = :flags WHERE id = :id",
+        named_params! {
+            ":flags": flags.to_i64(),
+            ":id": out_id.0,
+        },
+    )?;
+    Ok(())
+}
+
+pub fn get_out_tree_flag(
+    conn: &Connection,
+    out_id: crate::db::types::OutTreeId,
+    flag: OutTreeFlag,
+) -> Result<bool> {
+    let set: i64 = conn.query_row(
+        "SELECT (flags & :bit) != 0 FROM out_tree WHERE id = :id",
+        named_params! {
+            ":bit": flag.mask_i64(),
+            ":id": out_id.0,
+        },
+        |row| row.get(0),
+    )?;
+    Ok(set != 0)
+}
+
+pub fn set_out_tree_flag(
+    conn: &Connection,
+    out_id: crate::db::types::OutTreeId,
+    flag: OutTreeFlag,
+    on: bool,
+) -> Result<u64> {
+    let rows_affected = conn.execute(
+        "UPDATE out_tree SET flags = CASE
+             WHEN :on != 0 THEN flags | :bit
+             ELSE flags & ~:bit
+           END
+         WHERE id = :id",
+        named_params! {
+            ":on": if on { 1i64 } else { 0i64 },
+            ":bit": flag.mask_i64(),
+            ":id": out_id.0,
+        },
+    )?;
+    Ok(rows_affected as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,16 +394,16 @@ mod tests {
     }
 
     #[test]
-    fn ref_flag_round_trip_bits() {
-        let mut flags = RefFlags::default();
-        assert!(!flags.get(RefFlag::AlreadyWalked));
-        flags.set(RefFlag::AlreadyWalked, true);
-        flags.set(RefFlag::Extracted, true);
-        assert!(flags.get(RefFlag::AlreadyWalked));
-        assert!(flags.get(RefFlag::Extracted));
+    fn out_tree_flag_round_trip_bits() {
+        let mut flags = OutTreeFlags::default();
+        assert!(!flags.get(OutTreeFlag::AlreadyWalked));
+        flags.set(OutTreeFlag::AlreadyWalked, true);
+        flags.set(OutTreeFlag::Extracted, true);
+        assert!(flags.get(OutTreeFlag::AlreadyWalked));
+        assert!(flags.get(OutTreeFlag::Extracted));
         assert_eq!(
-            RefFlags::from_i64(flags.to_i64()).bits(),
-            RefFlag::AlreadyWalked.mask() | RefFlag::Extracted.mask()
+            OutTreeFlags::from_i64(flags.to_i64()).bits(),
+            OutTreeFlag::AlreadyWalked.mask() | OutTreeFlag::Extracted.mask()
         );
     }
 }
