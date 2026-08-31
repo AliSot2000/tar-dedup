@@ -6,7 +6,6 @@ use crate::db::types::{FileId, FilePhase, FileRecord};
 use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
 use crate::shutdown::Shutdown;
-use filetime::{FileTime, set_file_mtime};
 use nix::NixPath;
 use path_clean::PathClean;
 use rayon::prelude::*;
