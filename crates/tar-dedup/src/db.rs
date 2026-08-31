@@ -534,4 +534,10 @@ impl Database {
     ) -> Result<Vec<StrippedRecord>> {
         place::list_directories_from_prep(&self.conn(), last_id, batch_size, source_id)
     }
+
+    pub fn list_canonical_files_for_move(
+        &self, filter: bool, last_id: FileId, batch_size: u64
+    ) -> Result<Vec<StrippedRecord>> {
+        place::list_canonical_files_for_move(&self.conn(), filter, last_id, batch_size)
+    }
 }
