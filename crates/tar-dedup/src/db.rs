@@ -66,7 +66,7 @@ impl Database {
     }
 
     pub fn add_ref(&self, source_id: i64, file_id: FileId) -> Result<bool> {
-        flags::insert_ref(&*self.conn(), source_id, file_id, RefFlags::default())
+        flags::insert_ref(&*self.conn(), source_id, file_id)
     }
 
     pub fn insert_file(&self, record: &NewFileRecord) -> Result<bool> {
@@ -83,7 +83,7 @@ impl Database {
                 "insert_file_and_ref: file missing after insert".into(),
             )
         })?;
-        flags::insert_ref(&tx, source_id, file_id, RefFlags::default())?;
+        flags::insert_ref(&tx, source_id, file_id)?;
         tx.commit()?;
         Ok(inserted)
     }
