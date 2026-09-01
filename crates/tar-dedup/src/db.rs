@@ -153,6 +153,22 @@ impl Database {
         flags::set_flag(&*self.conn(), file_id, flag, on)
     }
 
+    pub fn get_out_tree_flags(&self, out_id: OutTreeId) -> Result<OutTreeFlags> {
+        flags::get_out_tree_flags(&*self.conn(), out_id)
+    }
+
+    pub fn set_out_tree_flags(&self, out_id: OutTreeId, value: OutTreeFlags) -> Result<()> {
+        flags::set_out_tree_flags(&*self.conn(), out_id, value)
+    }
+
+    pub fn get_out_tree_flag(&self, out_id: OutTreeId, flag: OutTreeFlag) -> Result<bool> {
+        flags::get_out_tree_flag(&*self.conn(), out_id, flag)
+    }
+
+    pub fn set_out_tree_flag(&self, out_id: OutTreeId, flag: OutTreeFlag, on: bool) -> Result<u64> {
+        flags::set_out_tree_flag(&*self.conn(), out_id, flag, on)
+    }
+
     pub fn get_entries_to_hash<R: SqlFileRow>(&self, eager_filter: bool, detect_hardlinks: bool) -> Result<Vec<R>> {
         hash::get_entries_to_hash(&*self.conn(), eager_filter, detect_hardlinks)
     }
