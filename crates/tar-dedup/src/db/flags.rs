@@ -176,6 +176,8 @@ pub enum OutTreeFlag {
     ErrorWhilePlace = 2,
     /// Metadata restore failed for this output path.
     ErrorWhileApplyingMetadata = 3,
+    /// Highlight directories to be able to scan them for dir tree creation.
+    IsDirectory = 5,
 }
 
 impl OutTreeFlag {
