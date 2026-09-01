@@ -508,52 +508,75 @@ impl Database {
     pub fn init_extract_runtime_state(&self) -> Result<()> {
         extract::init_extract_runtime_state(&mut *self.conn_mut())
     }
-    pub fn create_prep_ancestor_table(&self, relative: bool) -> Result<()> {
-        place::create_prep_ancestor_table(&self.conn(), relative)
-    }
-
-    pub fn drop_prep_ancestor_table(&self) -> Result<()> {
-        place::drop_prep_ancestor_table(&self.conn())
-    }
-
-    pub fn list_materialized_leaves(
-        &self,
-        last_id: Option<FileId>,
-        batch_size: u64,
-        source_id: Option<i64>,
-    ) -> Result<Vec<place::MaterializedLeaf>> {
-        place::list_materialized_leaves(&self.conn(), last_id, batch_size, source_id)
-    }
-
-    pub fn insert_prep_ancestors_abs(
-        &self,
-        paths: &[PathBuf],
-    ) -> Result<()> {
-        place::insert_prep_ancestors_abs(&self.conn(), paths)
-    }
-    pub fn insert_prep_ancestors_rel(
-        &self,
-        paths: &[(PathBuf, i64)],
-    ) -> Result<()> {
-        place::insert_prep_ancestors_rel(&self.conn(), paths)
-    }
-
-    pub fn link_prep_ancestor_dir_ids(&self) -> Result<()> {
-        place::link_prep_ancestor_dir_ids(&self.conn())
-    }
-
-    pub fn list_directories_from_prep(
-        &self,
-        last_id: Option<FileId>,
-        batch_size: u64,
-        source_id: Option<i64>,
-    ) -> Result<Vec<StrippedRecord>> {
-        place::list_directories_from_prep(&self.conn(), last_id, batch_size, source_id)
-    }
-
+    
     pub fn list_canonical_files_for_move(
         &self, filter: bool, last_id: FileId, batch_size: u64
     ) -> Result<Vec<StrippedRecord>> {
         place::list_canonical_files_for_move(&self.conn(), filter, last_id, batch_size)
+    }
+
+    pub fn out_tree_is_built(&self) -> Result<bool> {
+        place::out_tree_is_built(&self.conn())
+    }
+
+    pub fn dir_tree_is_built(&self) -> Result<bool> {
+        place::dir_tree_is_built(&self.conn())
+    }
+
+    pub fn set_out_tree_built(&self) -> Result<()> {
+        place::set_out_tree_built(&self.conn())
+    }
+
+    pub fn set_dir_tree_built(&self) -> Result<()> {
+        place::set_dir_tree_built(&self.conn())
+    }
+
+    pub fn list_materialized_entries(
+        &self,
+        last_id: Option<FileId>,
+        batch_size: u64,
+        source_id: Option<i64>,
+    ) -> Result<Vec<StrippedRecord>> {
+        place::list_materialized_entries(&self.conn(), last_id, batch_size, source_id)
+    }
+
+    pub fn insert_out_tree_rows(
+        &self,
+        rows: &[NewOutTreeRow],
+    ) -> Result<Vec<OutTreeId>> {
+        place::insert_out_tree_rows(&self.conn(), rows)
+    }
+
+    pub fn insert_ref_out_rows(&self, pairs: &[(OutTreeId, i64)]) -> Result<()> {
+        place::insert_ref_out_rows(&self.conn(), pairs)
+    }
+
+    pub fn list_out_tree(
+        &self,
+        last_id: OutTreeId,
+        batch_size: u64,
+        source_id: Option<i64>,
+        only_dir: Option<bool>,
+    ) -> Result<Vec<OutTreeRecord>> {
+        place::list_out_tree(&self.conn(), last_id, batch_size, source_id, only_dir)
+    }
+
+    pub fn list_duplicate_out_paths_for_canonical(
+        &self,
+        canonical_id: FileId,
+    ) -> Result<Vec<DuplicateOutPath>> {
+        place::list_duplicate_out_paths_for_canonical(&self.conn(), canonical_id)
+    }
+
+    pub fn count_out_tree_rows(&self) -> Result<u64> {
+        place::count_out_tree_rows(&self.conn())
+    }
+
+    pub fn count_ref_out_rows(&self) -> Result<u64> {
+        place::count_ref_out_rows(&self.conn())
+    }
+
+    pub fn out_paths_for_file_id(&self, file_id: FileId) -> Result<Vec<PathBuf>> {
+        place::out_paths_for_file_id(&self.conn(), file_id)
     }
 }
