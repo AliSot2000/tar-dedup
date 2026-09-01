@@ -103,7 +103,7 @@ impl Database {
     pub fn list_sources(
         &self,
         only_dirs: Option<bool>,
-        starting_id: Option<i64>,
+        starting_id: i64,
         batch_size: u64,
     ) -> Result<Vec<SourceRecord>> {
         source::list_sources(&self.conn(), only_dirs, starting_id, batch_size)
