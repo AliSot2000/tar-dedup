@@ -172,4 +172,16 @@ fn main(){
     println!("'{}' starts with '{}'? {}", c.display(), b.display(), c.starts_with(&b));
     println!("'{}' starts with '{}'? {}", b.display(), c.display(), b.starts_with(&c));
 
+    let target = PathBuf::from("/home/user/Desktop/TarExtract");
+    let root = PathBuf::from("/");
+    let base_child = PathBuf::from("/version.txt");
+
+    // Panics!
+    // let target_and_root = target.join(root.parent().unwrap());
+    // println!("Joining {} with {}, expected {}", target.display(), root.display(), target_and_root.display());
+
+    let target_and_root = target.join(base_child.parent().unwrap());
+    println!("Parent is: {}", base_child.parent().unwrap().display());
+    println!("Joining {} with {}, got {}, expected {}", target.display(), base_child.display(), target_and_root.display(), target.display());
+
 }
