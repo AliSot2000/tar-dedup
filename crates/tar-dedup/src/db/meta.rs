@@ -28,6 +28,8 @@ pub enum MetaKey {
     ScanTarComplete,
     ScanTarFromFooter,
     ScanTarLastMemberIndex,
+    OutTreeBuilt,
+    DirTreeBuilt,
 }
 
 impl MetaKey {
@@ -45,6 +47,8 @@ impl MetaKey {
             Self::ScanTarComplete => "scan_tar_complete",
             Self::ScanTarFromFooter => "scan_tar_from_footer",
             Self::ScanTarLastMemberIndex => "scan_tar_last_member_index",
+            Self::OutTreeBuilt => "out_tree_built",
+            Self::DirTreeBuilt => "dir_tree_built",
         }
     }
 
@@ -62,6 +66,8 @@ impl MetaKey {
             "scan_tar_complete" => Self::ScanTarComplete,
             "scan_tar_from_footer" => Self::ScanTarFromFooter,
             "scan_tar_last_member_index" => Self::ScanTarLastMemberIndex,
+            "out_tree_built" => Self::OutTreeBuilt,
+            "dir_tree_built" => Self::DirTreeBuilt,
             _ => return None,
         })
     }
@@ -80,6 +86,8 @@ impl MetaKey {
             Self::ScanTarComplete,
             Self::ScanTarFromFooter,
             Self::ScanTarLastMemberIndex,
+            Self::OutTreeBuilt,
+            Self::DirTreeBuilt,
         ]
     }
 }
@@ -99,6 +107,8 @@ pub enum MetaEntry {
     ScanTarComplete(bool),
     ScanTarFromFooter(bool),
     ScanTarLastMemberIndex(u64),
+    OutTreeBuilt(bool),
+    DirTreeBuilt(bool),
 }
 
 impl MetaEntry {
@@ -116,6 +126,8 @@ impl MetaEntry {
             Self::ScanTarComplete(_) => MetaKey::ScanTarComplete,
             Self::ScanTarFromFooter(_) => MetaKey::ScanTarFromFooter,
             Self::ScanTarLastMemberIndex(_) => MetaKey::ScanTarLastMemberIndex,
+            Self::OutTreeBuilt(_) => MetaKey::OutTreeBuilt,
+            Self::DirTreeBuilt(_) => MetaKey::DirTreeBuilt,
         }
     }
 
@@ -132,7 +144,9 @@ impl MetaEntry {
             Self::ScanTarSawManifestDb(v)
             | Self::ScanTarSawAnyMembers(v)
             | Self::ScanTarComplete(v)
-            | Self::ScanTarFromFooter(v) => {
+            | Self::ScanTarFromFooter(v)
+            | Self::OutTreeBuilt(v)
+            | Self::DirTreeBuilt(v) => {
                 if *v { "1" } else { "0" }.to_string()
             }
         }
@@ -169,6 +183,8 @@ impl MetaEntry {
             MetaKey::ScanTarLastMemberIndex => {
                 Ok(Self::ScanTarLastMemberIndex(parse_u64(key, raw)?))
             }
+            MetaKey::OutTreeBuilt => Ok(Self::OutTreeBuilt(parse_bool(key, raw)?)),
+            MetaKey::DirTreeBuilt => Ok(Self::DirTreeBuilt(parse_bool(key, raw)?)),
         }
     }
 }
@@ -359,6 +375,28 @@ pub fn set_scan_tar_last_member_index(conn: &Connection, value: u64) -> Result<(
 
 pub fn delete_scan_tar_last_member_index(conn: &Connection) -> Result<()> {
     delete_meta(conn, MetaKey::ScanTarLastMemberIndex.as_str())
+}
+
+pub fn get_out_tree_built(conn: &Connection) -> Result<Option<bool>> {
+    get_typed(conn, MetaKey::OutTreeBuilt, |e| match e {
+        MetaEntry::OutTreeBuilt(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_out_tree_built(conn: &Connection, value: bool) -> Result<()> {
+    set_entry(conn, &MetaEntry::OutTreeBuilt(value))
+}
+
+pub fn get_dir_tree_built(conn: &Connection) -> Result<Option<bool>> {
+    get_typed(conn, MetaKey::DirTreeBuilt, |e| match e {
+        MetaEntry::DirTreeBuilt(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_dir_tree_built(conn: &Connection, value: bool) -> Result<()> {
+    set_entry(conn, &MetaEntry::DirTreeBuilt(value))
 }
 
 // TODO Delete the entirety of the archive keys.
