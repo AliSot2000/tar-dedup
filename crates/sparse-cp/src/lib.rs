@@ -108,6 +108,11 @@ pub fn sparse_copy(src: &Path, dst: &Path, block_size: usize) -> io::Result<Spar
 ///
 /// `on_progress` may return `Err` to abort early (partial `dst` may exist). IO failures are
 /// converted with [`From::from`].
+/// on_progress:
+/// - The first argument is the number of bytes processed by the function.
+///   (monotonically increasing)
+/// - The second argument is the file size as is on disk.
+/// - The third argument contains a duration of the copy progress
 pub fn sparse_copy_with_progress<E, F>(
     src: &Path,
     dst: &Path,
