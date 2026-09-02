@@ -16,7 +16,7 @@ pub fn get_entries_to_hash<R: SqlFileRow>(
         ""
     };
     let filter_hardlink_canonical = if detect_hardlinks {
-        "AND (flags & :flag) != 0"
+        "AND (flags & :flag) = 1"
     } else {
         ""
     };
