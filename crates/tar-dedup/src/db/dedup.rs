@@ -88,27 +88,6 @@ pub fn promote_singleton_filtered_to_deduped(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
-// TODO needs to go at least into common
-pub fn list_canonical_files(conn: &Connection, phase: FilePhase) -> Result<Vec<FileId>> {
-    let phase_str = match phase {
-        FilePhase::Deduped => "deduped",
-        FilePhase::Sparsified => "sparsified",
-        FilePhase::Staged => "staged",
-        other => {
-            return Err(crate::error::Error::Config(format!(
-                "cannot list canonical files in phase {other:?}"
-            )));
-        }
-    };
-    let mut stmt = conn.prepare(
-        "SELECT id FROM files WHERE canonical_id = id AND phase = :phase ORDER BY id",
-    )?;
-    let rows = stmt.query_map(named_params! { ":phase": phase_str }, |row| {
-        row.get::<_, i64>("id").map(FileId)
-    })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-}
-
 fn parse_group_key_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupKey> {
     let sha1_blob: Vec<u8> = row.get("sha1")?;
     let sha1: [u8; 20] = sha1_blob.try_into().map_err(|b: Vec<u8>| {
