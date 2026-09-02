@@ -323,10 +323,6 @@ impl Database {
         dedup::mark_self_canonical(&*self.conn(), file_id)
     }
 
-    pub fn list_canonical_files(&self, phase: FilePhase) -> Result<Vec<FileId>> {
-        dedup::list_canonical_files(&*self.conn(), phase)
-    }
-
     pub fn load_runtime_state(&self) -> Result<Option<RuntimeState>> {
         inventory::load_runtime_state(&*self.conn())
     }
@@ -508,7 +504,7 @@ impl Database {
     pub fn init_extract_runtime_state(&self) -> Result<()> {
         extract::init_extract_runtime_state(&mut *self.conn_mut())
     }
-    
+
     pub fn list_canonical_files_for_move(
         &self, filter: bool, last_id: FileId, batch_size: u64
     ) -> Result<Vec<StrippedRecord>> {
@@ -536,8 +532,9 @@ impl Database {
         last_id: Option<FileId>,
         batch_size: u64,
         source_id: Option<i64>,
+        only_dirs: Option<bool>,
     ) -> Result<Vec<StrippedRecord>> {
-        place::list_materialized_entries(&self.conn(), last_id, batch_size, source_id)
+        place::list_materialized_entries(&self.conn(), last_id, batch_size, source_id, only_dirs)
     }
 
     pub fn insert_out_tree_rows(
