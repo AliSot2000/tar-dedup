@@ -18,3 +18,8 @@ pub const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
 /// This is the stepsize during read / write operations between successive checks of the program
 /// status.
 pub const COPY_STEP_SIZE: u64 = 1024 * 1024 * 4;
+
+/// When processing files, file system entries, ... we take the precaution not to load too much
+/// into ram. Worst case Estimate is 16kiB / Entry, so we try to be conservative with 100'000 as
+/// a batch size
+pub const DEFAULT_BATCH_SIZE: u64 = 100_000;
