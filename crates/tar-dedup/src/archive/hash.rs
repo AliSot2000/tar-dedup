@@ -90,7 +90,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                 db.update_file_inspection_per_id(*id, *digest, *zero_blocks, !config.indexing.no_hardlink_detection)?;
             }
             Err(e) => {
-                let ra = db.set_flag(e.id, FileFlag::ErrorWhileHash, true)?;
+                let ra = db.set_file_flag(e.id, FileFlag::ErrorWhileHash, true)?;
                 assert_eq!(ra, 1, "Rows affected must be 1. Got {ra}. \
                 0 - row vanished, >1 id constraint violated.");
                 // Todo capture error

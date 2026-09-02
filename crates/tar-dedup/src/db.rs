@@ -137,20 +137,20 @@ impl Database {
         inventory::set_hardlink_canonicals(&*self.conn())
     }
 
-    pub fn get_flags(&self, file_id: FileId) -> Result<FileFlags> {
-        flags::get_flags(&*self.conn(), file_id)
+    pub fn get_file_flags(&self, file_id: FileId) -> Result<FileFlags> {
+        flags::get_file_flags(&*self.conn(), file_id)
     }
 
-    pub fn set_flags(&self, file_id: FileId, value: FileFlags) -> Result<()> {
-        flags::set_flags(&*self.conn(), file_id, value)
+    pub fn set_file_flags(&self, file_id: FileId, value: FileFlags) -> Result<()> {
+        flags::set_file_flags(&*self.conn(), file_id, value)
     }
 
-    pub fn get_flag(&self, file_id: FileId, flag: FileFlag) -> Result<bool> {
-        flags::get_flag(&*self.conn(), file_id, flag)
+    pub fn get_file_flag(&self, file_id: FileId, flag: FileFlag) -> Result<bool> {
+        flags::get_file_flag(&*self.conn(), file_id, flag)
     }
 
-    pub fn set_flag(&self, file_id: FileId, flag: FileFlag, on: bool) -> Result<u64> {
-        flags::set_flag(&*self.conn(), file_id, flag, on)
+    pub fn set_file_flag(&self, file_id: FileId, flag: FileFlag, on: bool) -> Result<u64> {
+        flags::set_file_flag(&*self.conn(), file_id, flag, on)
     }
 
     pub fn get_out_tree_flags(&self, out_id: OutTreeId) -> Result<OutTreeFlags> {

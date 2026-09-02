@@ -482,7 +482,7 @@ mod tests {
             .expect("digest");
         db.mark_self_canonical(canonical).expect("self canonical");
         db.set_canonical(duplicate, canonical).expect("canonical");
-        db.set_flag(canonical, FileFlag::AppendedPath, true)
+        db.set_file_flag(canonical, FileFlag::AppendedPath, true)
             .expect("appended");
         db.mark_file_phase(canonical, FilePhase::Archived)
             .expect("phase");

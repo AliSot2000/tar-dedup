@@ -28,7 +28,7 @@ fn normalize_installed_catalog_clears_file_extracted_and_archives() {
         "member-id",
         FilePhase::Staged,
     );
-    db.set_flag(canonical_id, FileFlag::FileExtracted, true)
+    db.set_file_flag(canonical_id, FileFlag::FileExtracted, true)
         .expect("set extracted");
 
     db.normalize_installed_catalog().expect("normalize");
@@ -194,7 +194,7 @@ fn count_missing_and_extracted_reports() {
         "member-id",
         FilePhase::Archived,
     );
-    db.set_flag(canonical_id, FileFlag::AppendedPath, true)
+    db.set_file_flag(canonical_id, FileFlag::AppendedPath, true)
         .expect("appended");
 
     assert_eq!(db.count_missing_payloads().expect("missing"), 1);

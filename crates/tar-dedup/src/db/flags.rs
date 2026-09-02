@@ -245,7 +245,7 @@ pub fn insert_ref(
     Ok(n > 0)
 }
 
-pub fn get_flags(conn: &Connection, file_id: FileId) -> Result<FileFlags> {
+pub fn get_file_flags(conn: &Connection, file_id: FileId) -> Result<FileFlags> {
     let raw: i64 = conn.query_row(
         "SELECT flags FROM files WHERE id = :id",
         named_params! { ":id": file_id.0 },
@@ -254,7 +254,7 @@ pub fn get_flags(conn: &Connection, file_id: FileId) -> Result<FileFlags> {
     Ok(FileFlags::from_i64(raw))
 }
 
-pub fn set_flags(conn: &Connection, file_id: FileId, flags: FileFlags) -> Result<()> {
+pub fn set_file_flags(conn: &Connection, file_id: FileId, flags: FileFlags) -> Result<()> {
     conn.execute(
         "UPDATE files SET flags = :flags WHERE id = :id",
         named_params! {
@@ -265,7 +265,7 @@ pub fn set_flags(conn: &Connection, file_id: FileId, flags: FileFlags) -> Result
     Ok(())
 }
 
-pub fn get_flag(conn: &Connection, file_id: FileId, flag: FileFlag) -> Result<bool> {
+pub fn get_file_flag(conn: &Connection, file_id: FileId, flag: FileFlag) -> Result<bool> {
     let set: i64 = conn.query_row(
         "SELECT (flags & :bit) != 0 FROM files WHERE id = :id",
         named_params! {
@@ -277,7 +277,7 @@ pub fn get_flag(conn: &Connection, file_id: FileId, flag: FileFlag) -> Result<bo
     Ok(set != 0)
 }
 
-pub fn set_flag(conn: &Connection, file_id: FileId, flag: FileFlag, on: bool) -> Result<u64> {
+pub fn set_file_flag(conn: &Connection, file_id: FileId, flag: FileFlag, on: bool) -> Result<u64> {
     let rows_affected = conn.execute(
         "UPDATE files SET flags = CASE
              WHEN :on != 0 THEN flags | :bit
