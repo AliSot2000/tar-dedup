@@ -171,12 +171,12 @@ fn stat_and_apply_outcomes(db: &Database, outcomes: &[RehashOutcome]) -> Result<
                 matches += 1;
             }
             RehashOutcome::Mismatch(id) => {
-                db.set_flag(*id, FileFlag::RehashMismatch, true)?;
+                db.set_file_flag(*id, FileFlag::RehashMismatch, true)?;
                 db.mark_file_phase(*id, FilePhase::Rehashed)?;
                 mismatches += 1;
             }
             RehashOutcome::Error(id) => {
-                db.set_flag(*id, FileFlag::ErrorWhileRehashing, true)?;
+                db.set_file_flag(*id, FileFlag::ErrorWhileRehashing, true)?;
                 db.mark_file_phase(*id, FilePhase::Rehashed)?;
                 errors += 1;
             }

@@ -87,7 +87,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
 
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
             Ok(()) => { 
-                db.set_flag(record.id, FileFlag::AppendedPath, true)?; 
+                db.set_file_flag(record.id, FileFlag::AppendedPath, true)?; 
             }
             Err(e) if e.is_interrupted() => {
                 stopped = true;
@@ -100,7 +100,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                     error = %e,
                     "archive append_path failed; marking ErrorWhileArchive and continuing"
                 );
-                db.set_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
+                db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
                 // Do not set AppendedPath — member was not successfully written.
             }
         }

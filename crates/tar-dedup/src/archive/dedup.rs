@@ -434,14 +434,14 @@ fn apply_outcome(db: &Database, outcome: &CompareOutcome) -> Result<()> {
             db.set_canonical(outcome.candidate_id, outcome.canonical_id)?;
         }
         Ok(false) => {
-            db.set_flag(
+            db.set_file_flag(
                 outcome.candidate_id,
                 FileFlag::CheckWithCanonicalCompleted,
                 true,
             )?;
         }
         Err(failed) => {
-            db.set_flag(failed, FileFlag::ErrorWhileDedup, true)?;
+            db.set_file_flag(failed, FileFlag::ErrorWhileDedup, true)?;
         }
     }
     Ok(())
