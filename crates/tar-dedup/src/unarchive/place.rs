@@ -2,15 +2,15 @@
 
 use crate::config::ExtractConfig;
 use crate::db::Database;
-use crate::db::types::{FileId, FilePhase, FileRecord};
+use crate::db::flags::{FileFlag, OutTreeFlag, OutTreeFlags};
+use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, StrippedRecord};
 use crate::error::{Error, Result};
-use crate::progress::ByteProgress;
 use crate::shutdown::Shutdown;
 use nix::NixPath;
 use path_clean::PathClean;
+use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
-use rayon::{ThreadPool, ThreadPoolBuilder};
-use std::cmp::min;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
