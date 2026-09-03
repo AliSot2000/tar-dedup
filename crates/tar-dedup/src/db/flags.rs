@@ -3,230 +3,261 @@ use rusqlite::{named_params, Connection};
 use crate::db::types::FileId;
 use crate::error::Result;
 
-/// Bit index into [`FileFlags`] (not the mask itself).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u64)]
-pub enum FileFlag {
-    /// An IO Error occurred while querying the metadata of this file
-    IoErrorWhileInventorying = 0,
-    /// This row is the hardlink group’s canonical payload (same `(dev, inode)`).
-    /// The flag is only applied iff there is more than one row with matching `(dev, inode)`
-    FileHardlinkCanonical = 1,
-    /// An Error occurred while querying the xattrs of this file
-    XAttrError = 2,
-    /// An Error occurred while querying the acls of this file.
-    PosixAclError = 3,
-    /// An Error occurred while querying SELinux Policies
-    SELinuxError = 4,
-    /// File changed while the archive pipeline was touching it.
-    Modified = 5,
-    /// An error occurred during the first scan pass (sha + hole)
-    ErrorWhileHash = 6,
-    /// Compare vs this round's canonical finished; content differs.
-    /// Cleared on round end for the whole `(sha1, size)` group.
-    CheckWithCanonicalCompleted = 7,
-    /// Read/compare failed during dedup. Sticky — never cleared on later success.
-    /// Excludes the file from canonical election.
-    ErrorWhileDedup = 8,
-    /// Sparse rewrite exists; stage/archive should use the sparsified target.
-    HasSparse = 9,
-    /// Sparse copy failed (permissions, IO, …). Sticky.
-    ErrorWhileSparsify = 10,
-    /// Payload was written into an archive session.
-    /// Set on successful `append_path`. Left standing when the session finalizes
-    /// (`phase` → `archived`). Cleared only on abort/truncate for rows that are
-    /// still not `archived` (incomplete session rewrite).
-    AppendedPath = 11,
-    /// `append_path` failed during the archive process.
-    ErrorWhileArchive = 12,
+/// Single bit position inside a [`FlagSet`] (the discriminant, not the mask).
+///
+/// Discriminants must be in `0..=62` ([`MAX_FLAG_BIT`]).
+pub trait FlagBit: Copy {
+    fn bit_index(self) -> u8;
 
-    /// Payload for this content landed in the extract cache (canonical row only).
-    /// Set after a successful `unpack`; cleared on catalog install normalization.
-    FileExtracted = 13,
-    /// An error occurred while extracting a given file
-    ErrorWhileExtracting = 14,
-    /// Rehashing Encountered a mismatch
-    RehashMismatch = 15,
-    /// While attempting the rehash, an error occurred
-    ErrorWhileRehashing = 16,
-    /// Source ready for linking
-    AtLinkSource = 17,
-    /// An Error prevented the file from being placed in its correct position
-    ErrorWhilePlacing = 18,
-    /// At least one error occurred while applying metadata
-    ErrorWhileApplyingMetadata = 19,
-}
-
-impl FileFlag {
-    pub const fn mask(self) -> u64 {
-        1u64 << (self as u8)
+    fn mask(self) -> u64 {
+        1u64 << self.bit_index()
     }
 
-    pub const fn mask_i64(self) -> i64 {
+    fn mask_i64(self) -> i64 {
         self.mask() as i64
     }
 }
 
-/// Bitset stored in `files.flags`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct FileFlags(u64);
+/// Bitset stored as SQLite `INTEGER` (sign bit cleared on read/write).
+pub trait FlagSet: Copy + Default + PartialEq + Eq {
+    type Flag: FlagBit;
 
-impl FileFlags {
-    pub const fn from_bits(bits: u64) -> Self {
-        // Keep sign bit clear for SQLite INTEGER round-trips.
-        Self(bits & !(1u64 << 63))
-    }
+    fn bits(self) -> u64;
+    fn from_bits(bits: u64) -> Self;
+    fn set_bits(&mut self, bits: u64);
 
-    pub const fn bits(self) -> u64 {
-        self.0
-    }
-
-    pub fn from_i64(raw: i64) -> Self {
+    fn from_i64(raw: i64) -> Self {
         Self::from_bits(raw as u64)
     }
 
-    pub fn to_i64(self) -> i64 {
-        self.0 as i64
+    fn to_i64(self) -> i64 {
+        self.bits() as i64
     }
 
-    pub fn get(self, flag: FileFlag) -> bool {
-        self.0 & flag.mask() != 0
+    fn get(self, flag: Self::Flag) -> bool {
+        self.bits() & flag.mask() != 0
     }
 
-    pub fn set(&mut self, flag: FileFlag, on: bool) {
-        if on {
-            self.0 |= flag.mask();
+    fn set(&mut self, flag: Self::Flag, on: bool) {
+        let bits = self.bits();
+        self.set_bits(if on {
+            bits | flag.mask()
         } else {
-            self.0 &= !flag.mask();
-        }
+            bits & !flag.mask()
+        });
     }
 
-    pub fn with(mut self, flag: FileFlag, on: bool) -> Self {
+    fn with(mut self, flag: Self::Flag, on: bool) -> Self {
         self.set(flag, on);
         self
     }
 }
 
-/// Bit index into [`SourceFlags`] (not the mask itself).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u64)]
-pub enum SourceFlag {
-    /// This source row is a directory tree root (`-i` or a directory `--files-from` line).
-    IsDirectory = 0,
-}
+/// Highest allowed [`FlagBit`] index. Bit 63 is reserved (SQLite `INTEGER` sign bit).
+pub const MAX_FLAG_BIT: u8 = 62;
 
-impl SourceFlag {
-    pub const fn mask(self) -> u64 {
-        1u64 << (self as u8)
-    }
+const SIGN_BIT: u64 = 1u64 << 63;
 
-    pub const fn mask_i64(self) -> i64 {
-        self.mask() as i64
+const fn assert_flag_bit(bit: u64) {
+    if bit > MAX_FLAG_BIT as u64 {
+        panic!("flag bit index must be 0..=62 (bit 63 reserved for SQLite INTEGER sign)");
     }
 }
 
-/// Bitset stored in `source.flags`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
-pub struct SourceFlags(u64);
-
-impl SourceFlags {
-    pub const fn from_bits(bits: u64) -> Self {
-        Self(bits & !(1u64 << 63))
-    }
-
-    pub const fn bits(self) -> u64 {
-        self.0
-    }
-
-    pub fn from_i64(raw: i64) -> Self {
-        Self::from_bits(raw as u64)
-    }
-
-    pub fn to_i64(self) -> i64 {
-        self.0 as i64
-    }
-
-    pub fn get(self, flag: SourceFlag) -> bool {
-        self.0 & flag.mask() != 0
-    }
-
-    pub fn set(&mut self, flag: SourceFlag, on: bool) {
-        if on {
-            self.0 |= flag.mask();
-        } else {
-            self.0 &= !flag.mask();
+macro_rules! define_flags {
+    (
+        $(#[$enum_meta:meta])*
+        $enum_vis:vis enum $Flag:ident {
+            $($(#[$variant_meta:meta])* $variant:ident = $bit:literal),* $(,)?
         }
-    }
+        $(#[$set_meta:meta])*
+        $set_vis:vis struct $Flags:ident;
+    ) => {
+        $( const _: () = { assert_flag_bit($bit as u64); }; )*
 
-    pub fn with(mut self, flag: SourceFlag, on: bool) -> Self {
-        self.set(flag, on);
-        self
-    }
-}
-
-/// Bit index into [`OutTreeFlags`] (not the mask itself).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u64)]
-pub enum OutTreeFlag {
-    /// Output path was walked / stat'd during place (resume skip).
-    AlreadyWalked = 0,
-    /// Payload was materialized at this output path.
-    Extracted = 1,
-    /// Copy/link into this output path failed.
-    ErrorWhilePlace = 2,
-    /// Metadata restore failed for this output path.
-    ErrorWhileApplyingMetadata = 3,
-    /// Highlight directories to be able to scan them for dir tree creation.
-    IsDirectory = 5,
-}
-
-impl OutTreeFlag {
-    pub const fn mask(self) -> u64 {
-        1u64 << (self as u8)
-    }
-
-    pub const fn mask_i64(self) -> i64 {
-        self.mask() as i64
-    }
-}
-
-/// Bitset stored in `out_tree.flags`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct OutTreeFlags(u64);
-
-impl OutTreeFlags {
-    pub const fn from_bits(bits: u64) -> Self {
-        Self(bits & !(1u64 << 63))
-    }
-
-    pub const fn bits(self) -> u64 {
-        self.0
-    }
-
-    pub fn from_i64(raw: i64) -> Self {
-        Self::from_bits(raw as u64)
-    }
-
-    pub fn to_i64(self) -> i64 {
-        self.0 as i64
-    }
-
-    pub fn get(self, flag: OutTreeFlag) -> bool {
-        self.0 & flag.mask() != 0
-    }
-
-    pub fn set(&mut self, flag: OutTreeFlag, on: bool) {
-        if on {
-            self.0 |= flag.mask();
-        } else {
-            self.0 &= !flag.mask();
+        $(#[$enum_meta])*
+        $enum_vis enum $Flag {
+            $($(#[$variant_meta])* $variant = $bit,)*
         }
-    }
 
-    pub fn with(mut self, flag: OutTreeFlag, on: bool) -> Self {
-        self.set(flag, on);
-        self
+        impl FlagBit for $Flag {
+            #[inline]
+            fn bit_index(self) -> u8 {
+                self as u8
+            }
+        }
+
+        impl $Flag {
+            #[inline]
+            pub fn mask(self) -> u64 {
+                <Self as FlagBit>::mask(self)
+            }
+
+            #[inline]
+            pub fn mask_i64(self) -> i64 {
+                <Self as FlagBit>::mask_i64(self)
+            }
+        }
+
+        $(#[$set_meta])*
+        $set_vis struct $Flags(u64);
+
+        impl $Flags {
+            #[inline]
+            pub const fn from_bits(bits: u64) -> Self {
+                Self(bits & !SIGN_BIT)
+            }
+
+            #[inline]
+            pub const fn bits(self) -> u64 {
+                self.0
+            }
+
+            #[inline]
+            pub fn from_i64(raw: i64) -> Self {
+                <Self as FlagSet>::from_i64(raw)
+            }
+
+            #[inline]
+            pub fn to_i64(self) -> i64 {
+                <Self as FlagSet>::to_i64(self)
+            }
+
+            #[inline]
+            pub fn get(self, flag: $Flag) -> bool {
+                <Self as FlagSet>::get(self, flag)
+            }
+
+            #[inline]
+            pub fn set(&mut self, flag: $Flag, on: bool) {
+                <Self as FlagSet>::set(self, flag, on)
+            }
+
+            #[inline]
+            pub fn with(self, flag: $Flag, on: bool) -> Self {
+                <Self as FlagSet>::with(self, flag, on)
+            }
+        }
+
+        impl FlagSet for $Flags {
+            type Flag = $Flag;
+
+            #[inline]
+            fn bits(self) -> u64 {
+                self.0
+            }
+
+            #[inline]
+            fn from_bits(bits: u64) -> Self {
+                Self::from_bits(bits)
+            }
+
+            #[inline]
+            fn set_bits(&mut self, bits: u64) {
+                self.0 = bits & !SIGN_BIT;
+            }
+        }
+
+        impl Default for $Flags {
+            fn default() -> Self {
+                Self::from_bits(0)
+            }
+        }
+    };
+}
+
+define_flags! {
+    /// Bit index into [`FileFlags`] (not the mask itself).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[repr(u64)]
+    pub enum FileFlag {
+        /// An IO Error occurred while querying the metadata of this file
+        IoErrorWhileInventorying = 0,
+        /// This row is the hardlink group’s canonical payload (same `(dev, inode)`).
+        /// The flag is only applied iff there is more than one row with matching `(dev, inode)`
+        FileHardlinkCanonical = 1,
+        /// An Error occurred while querying the xattrs of this file
+        XAttrError = 2,
+        /// An Error occurred while querying the acls of this file.
+        PosixAclError = 3,
+        /// An Error occurred while querying SELinux Policies
+        SELinuxError = 4,
+        /// File changed while the archive pipeline was touching it.
+        Modified = 5,
+        /// An error occurred during the first scan pass (sha + hole)
+        ErrorWhileHash = 6,
+        /// Compare vs this round's canonical finished; content differs.
+        /// Cleared on round end for the whole `(sha1, size)` group.
+        CheckWithCanonicalCompleted = 7,
+        /// Read/compare failed during dedup. Sticky — never cleared on later success.
+        /// Excludes the file from canonical election.
+        ErrorWhileDedup = 8,
+        /// Sparse rewrite exists; stage/archive should use the sparsified target.
+        HasSparse = 9,
+        /// Sparse copy failed (permissions, IO, …). Sticky.
+        ErrorWhileSparsify = 10,
+        /// Payload was written into an archive session.
+        /// Set on successful `append_path`. Left standing when the session finalizes
+        /// (`phase` → `archived`). Cleared only on abort/truncate for rows that are
+        /// still not `archived` (incomplete session rewrite).
+        AppendedPath = 11,
+        /// `append_path` failed during the archive process.
+        ErrorWhileArchive = 12,
+        /// Payload for this content landed in the extract cache (canonical row only).
+        /// Set after a successful `unpack`; cleared on catalog install normalization.
+        FileExtracted = 13,
+        /// An error occurred while extracting a given file
+        ErrorWhileExtracting = 14,
+        /// Rehashing Encountered a mismatch
+        RehashMismatch = 15,
+        /// While attempting the rehash, an error occurred
+        ErrorWhileRehashing = 16,
+        /// Source ready for linking
+        AtLinkSource = 17,
+        /// Used RefLink (if false -> used (sparse) copy)
+        UsedRefLink = 18,
+        /// An Error prevented the file from being placed in its correct position
+        ErrorWhilePlacing = 19,
+        /// At least one error occurred while applying metadata
+        ErrorWhileApplyingMetadata = 20,
     }
+    /// Bitset stored in `files.flags`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct FileFlags;
+}
+
+define_flags! {
+    /// Bit index into [`SourceFlags`] (not the mask itself).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[repr(u64)]
+    pub enum SourceFlag {
+        /// This source row is a directory tree root (`-i` or a directory `--files-from` line).
+        IsDirectory = 0,
+    }
+    /// Bitset stored in `source.flags`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct SourceFlags;
+}
+
+define_flags! {
+    /// Bit index into [`OutTreeFlags`] (not the mask itself).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[repr(u64)]
+    pub enum OutTreeFlag {
+        /// Payload was materialized at this output path or linked in case of link tree.
+        Placed = 0,
+        /// Payload was hard-linked to existing hard link group
+        IsHardlink = 1,
+        /// Copy/link into this output path failed.
+        ErrorWhilePlace = 2,
+        /// Metadata restore failed for this output path.
+        ErrorWhileApplyingMetadata = 3,
+        /// Highlight directories to be able to scan them for dir tree creation.
+        IsDirectory = 4,
+    }
+    /// Bitset stored in `out_tree.flags`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct OutTreeFlags;
 }
 
 pub fn insert_ref(
@@ -398,14 +429,19 @@ mod tests {
     #[test]
     fn out_tree_flag_round_trip_bits() {
         let mut flags = OutTreeFlags::default();
-        assert!(!flags.get(OutTreeFlag::AlreadyWalked));
-        flags.set(OutTreeFlag::AlreadyWalked, true);
-        flags.set(OutTreeFlag::Extracted, true);
-        assert!(flags.get(OutTreeFlag::AlreadyWalked));
-        assert!(flags.get(OutTreeFlag::Extracted));
+        assert!(!flags.get(OutTreeFlag::Placed));
+        flags.set(OutTreeFlag::Placed, true);
+        flags.set(OutTreeFlag::IsDirectory, true);
+        assert!(flags.get(OutTreeFlag::Placed));
+        assert!(flags.get(OutTreeFlag::IsDirectory));
         assert_eq!(
             OutTreeFlags::from_i64(flags.to_i64()).bits(),
-            OutTreeFlag::AlreadyWalked.mask() | OutTreeFlag::Extracted.mask()
+            OutTreeFlag::Placed.mask() | OutTreeFlag::IsDirectory.mask()
         );
+    }
+
+    #[test]
+    fn max_file_flag_bit_within_range() {
+        assert!(FileFlag::ErrorWhileApplyingMetadata as u8 <= MAX_FLAG_BIT);
     }
 }
