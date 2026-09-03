@@ -14,8 +14,8 @@ use crate::error::Result;
 /// Row type that can be SELECTed from `files` and mapped from a rusqlite row.
 pub trait SqlFileRow: Sized {
     /// Comma-separated column list (no `SELECT` keyword).
-    fn sql_columns() -> &'static str;
-    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self>;
+    fn sql_columns(prefix: Option<&str>) -> String;
+    fn from_row(row: &rusqlite::Row<'_>, prefix: Option<&str>) -> rusqlite::Result<Self>;
     /// Content id only for self-canonical rows with a digest.
     fn content_id(&self) -> Option<ContentId>;
 }
@@ -87,47 +87,62 @@ impl StrippedRecord {
 }
 
 impl SqlFileRow for FileRecord {
-    fn sql_columns() -> &'static str {
-        "id, abs_path, ext, size, sha1, mtime, atime, ctime, \
-         uid, gid, mode, ftype, xattr, acl, selinux, link_dst, \
-         include_reason, exclude_reason, canonical_id, flags, phase, \
-         new_name, inode, dev"
+    fn sql_columns(prefix: Option<&str>) -> String {
+        match prefix {
+            None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, \
+                uid, gid, mode, ftype, xattr, acl, selinux, link_dst, \
+                include_reason, exclude_reason, canonical_id, flags, phase, \
+                new_name, inode, dev".to_string(),
+            Some(p) => format!("\
+                {p}.id, {p}.abs_path, {p}.ext, {p}.size, {p}.sha1, {p}.mtime, {p}.atime, {p}.ctime,
+                {p}.uid, {p}.gid, {p}.mode, {p}.ftype, {p}.xattr, {p}.acl, {p}.selinux,
+                {p}.link_dst, {p}.include_reason, {p}.exclude_reason, {p}.canonical_id, {p}.flags,
+                {p}.phase, {p}.new_name, {p}.inode, {p}.dev")
+        }
+
     }
 
-    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+    fn from_row(row: &rusqlite::Row<'_>, prefix: Option<&str>) -> rusqlite::Result<Self> {
+        let upx = match prefix {
+            None => "",
+            Some(p) => &format!("{p}.")
+        };
         Ok(FileRecord {
-            id: FileId(row.get("id")?),
-            abs_path: row.get::<_, String>("abs_path")?.into(),
+            id: FileId(row.get(format!("{upx}id").as_str())?),
+            abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
             ext: row.get("ext")?,
-            size: row.get::<_, i64>("size")? as u64,
-            sha1: optional_sha1(row)?,
-            mtime: optional_rfc3339(row, "mtime")?,
-            atime: optional_rfc3339(row, "atime")?,
-            ctime: optional_rfc3339(row, "ctime")?,
-            uid: row.get::<_, Option<i64>>("uid")?.map(|v| v as u32),
-            gid: row.get::<_, Option<i64>>("gid")?.map(|v| v as u32),
-            mode: row.get::<_, Option<i64>>("mode")?.map(|v| v as u32),
-            ftype: optional_ftype(row, "ftype")?,
-            xattrs: row.get("xattr")?,
-            posix_acl: row.get("acl")?,
-            selinux_ctx: row.get("selinux")?,
+            size: row.get::<_, i64>(format!("{upx}size").as_str())? as u64,
+            sha1: optional_sha1(row, upx)?,
+            mtime: optional_rfc3339(row, format!("{upx}mtime").as_str())?,
+            atime: optional_rfc3339(row, format!("{upx}atime").as_str())?,
+            ctime: optional_rfc3339(row, format!("{upx}ctime").as_str())?,
+            uid: row.get::<_, Option<i64>>(format!("{upx}uid").as_str())?.map(|v| v as u32),
+            gid: row.get::<_, Option<i64>>(format!("{upx}gid").as_str())?.map(|v| v as u32),
+            mode: row.get::<_, Option<i64>>(format!("{upx}mode").as_str())?.map(|v| v as u32),
+            ftype: optional_ftype(row, format!("{upx}ftype").as_str())?,
+            xattrs: row.get(format!("{upx}xattr").as_str())?,
+            posix_acl: row.get(format!("{upx}acl").as_str())?,
+            selinux_ctx: row.get(format!("{upx}selinux").as_str())?,
             exclude_reason: row
-                .get::<_, Option<i64>>("exclude_reason")?
+                .get::<_, Option<i64>>(format!("{upx}exclude_reason").as_str())?
                 .map(ExclusionId),
             include_reason: row
-                .get::<_, Option<i64>>("include_reason")?
+                .get::<_, Option<i64>>(format!("{upx}include_reason").as_str())?
                 .map(ExclusionId),
-            canonical_id: row.get::<_, Option<i64>>("canonical_id")?.map(FileId),
-            flags: FileFlags::from_i64(row.get::<_, i64>("flags")?),
-            phase: parse_phase(row)?,
+            canonical_id: row.get::<_, Option<i64>>(format!("{upx}canonical_id").as_str())?
+                .map(FileId),
+            flags: FileFlags::from_i64(row.get::<_, i64>(format!("{upx}flags").as_str())?),
+            phase: parse_phase(row, upx)?,
             link_dst: row
-                .get::<_, Option<String>>("link_dst")?
+                .get::<_, Option<String>>(format!("{upx}link_dst").as_str())?
                 .map(PathBuf::from),
             new_name: row
-                .get::<_, Option<String>>("new_name")?
+                .get::<_, Option<String>>(format!("{upx}new_name").as_str())?
                 .map(String::from),
-            inode_id: row.get::<_, Option<i64>>("inode")?.map(|v| v as u64),
-            device_id: row.get::<_, Option<i64>>("dev")?.map(|v| v as u64),
+            inode_id: row.get::<_, Option<i64>>(format!("{upx}inode").as_str())?
+                .map(|v| v as u64),
+            device_id: row.get::<_, Option<i64>>(format!("{upx}dev").as_str())?
+                .map(|v| v as u64),
         })
     }
 
@@ -137,27 +152,39 @@ impl SqlFileRow for FileRecord {
 }
 
 impl SqlFileRow for StrippedRecord {
-    fn sql_columns() -> &'static str {
-        "id, abs_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, flags, phase, \
-         inode, dev"
+    fn sql_columns(prefix: Option<&str>) -> String {
+        match prefix {
+            None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, \
+                flags, phase, inode, dev".to_string(),
+            Some(p) => format!("
+                {p}.id, {p}.abs_path, {p}.ext, {p}.size, {p}.sha1, {p}.mtime, {p}.atime, {p}.ctime,
+                {p}.ftype, {p}.canonical_id, {p}.flags, {p}.phase, {p}.inode, {p}.dev"),
+        }
     }
 
-    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+    fn from_row(row: &rusqlite::Row<'_>, prefix: Option<&str>) -> rusqlite::Result<Self> {
+        let upx = match prefix {
+            None => "",
+            Some(p) => &format!("{p}.")
+        };
         Ok(StrippedRecord {
-            id: FileId(row.get("id")?),
-            abs_path: row.get::<_, String>("abs_path")?.into(),
+            id: FileId(row.get(format!("{upx}id").as_str())?),
+            abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
             ext: row.get("ext")?,
-            size: row.get::<_, i64>("size")? as u64,
-            sha1: optional_sha1(row)?,
-            mtime: optional_rfc3339(row, "mtime")?,
-            atime: optional_rfc3339(row, "atime")?,
-            ctime: optional_rfc3339(row, "ctime")?,
-            ftype: optional_ftype(row, "ftype")?,
-            canonical_id: row.get::<_, Option<i64>>("canonical_id")?.map(FileId),
-            flags: FileFlags::from_i64(row.get::<_, i64>("flags")?),
-            phase: parse_phase(row)?,
-            inode_id: row.get::<_, Option<i64>>("inode")?.map(|v| v as u64),
-            device_id: row.get::<_, Option<i64>>("dev")?.map(|v| v as u64),
+            size: row.get::<_, i64>(format!("{upx}size").as_str())? as u64,
+            sha1: optional_sha1(row, upx)?,
+            mtime: optional_rfc3339(row, format!("mtime").as_str())?,
+            atime: optional_rfc3339(row, format!("atime").as_str())?,
+            ctime: optional_rfc3339(row, format!("ctime").as_str())?,
+            ftype: optional_ftype(row, format!("ftype").as_str())?,
+            canonical_id: row.get::<_, Option<i64>>(format!("{upx}canonical_id").as_str())?
+                .map(FileId),
+            flags: FileFlags::from_i64(row.get::<_, i64>(format!("{upx}flags").as_str())?),
+            phase: parse_phase(row, upx)?,
+            inode_id: row.get::<_, Option<i64>>(format!("{upx}inode").as_str())?
+                .map(|v| v as u64),
+            device_id: row.get::<_, Option<i64>>(format!("{upx}dev").as_str())?
+                .map(|v| v as u64),
         })
     }
 
@@ -167,11 +194,11 @@ impl SqlFileRow for StrippedRecord {
 }
 
 pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Result<Option<R>> {
-    let cols = R::sql_columns();
+    let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!("SELECT {cols} FROM files WHERE id = :id"))?;
     let mut rows = stmt.query(named_params! { ":id": file_id.0 })?;
     if let Some(row) = rows.next()? {
-        return Ok(Some(R::from_row(row)?));
+        return Ok(Some(R::from_row(row, None)?));
     }
     Ok(None)
 }
@@ -179,7 +206,7 @@ pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Resu
 // TODO: Delete?
 pub fn get_file_by_path<R: SqlFileRow>(conn: &Connection, abs_path: &Path) -> Result<Option<R>> {
     debug_assert_eq!(abs_path, abs_path.to_path_buf().clean(), "Got non-normalized path");
-    let cols = R::sql_columns();
+    let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(
         &format!("SELECT {cols} FROM files WHERE abs_path = :abs_path")
     )?;
@@ -187,7 +214,7 @@ pub fn get_file_by_path<R: SqlFileRow>(conn: &Connection, abs_path: &Path) -> Re
         named_params! { ":abs_path": abs_path.to_string_lossy() }
     )?;
     if let Some(row) = rows.next()? {
-        return Ok(Some(R::from_row(row)?));
+        return Ok(Some(R::from_row(row, None)?));
     }
     Ok(None)
 }
@@ -216,14 +243,14 @@ pub fn list_files_in_phase<R: SqlFileRow>(
     conn: &Connection,
     phase: FilePhase,
 ) -> Result<Vec<R>> {
-    let cols = R::sql_columns();
+    let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!(
         "SELECT {cols} FROM files WHERE phase = :phase ORDER BY id"
     ))?;
 
     let rows = stmt.query_map(
         named_params! { ":phase": phase.as_str() },
-        R::from_row,
+        |r| { R::from_row(r, None) },
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
@@ -296,15 +323,15 @@ pub(crate) fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
     .map_err(Into::into)
 }
 
-fn optional_sha1(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<[u8; 20]>> {
-    let sha1_blob: Option<Vec<u8>> = row.get("sha1")?;
+fn optional_sha1(row: &rusqlite::Row<'_>, prefix: &str) -> rusqlite::Result<Option<[u8; 20]>> {
+    let sha1_blob: Option<Vec<u8>> = row.get(format!("{prefix}sha1").as_str())?;
     Ok(sha1_blob
         .and_then(|b| b.try_into().ok())
         .map(|arr: [u8; 20]| arr))
 }
 
-fn parse_phase(row: &rusqlite::Row<'_>) -> rusqlite::Result<FilePhase> {
-    let raw: String = row.get("phase")?;
+fn parse_phase(row: &rusqlite::Row<'_>, prefix: &str) -> rusqlite::Result<FilePhase> {
+    let raw: String = row.get(format!("{prefix}phase").as_str())?;
     FilePhase::parse(&raw).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             0,
