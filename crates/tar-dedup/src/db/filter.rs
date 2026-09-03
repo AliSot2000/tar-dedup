@@ -87,17 +87,17 @@ pub fn get_rows_to_filter<R: SqlFileRow>(
         &format!("SELECT {} FROM files \
                       WHERE phase = {last_phase} {last_id_filter} \
                       ORDER BY id \
-                      LIMIT :batch_size", R::sql_columns()))?;
+                      LIMIT :batch_size", R::sql_columns(None)))?;
 
+    let row_mapper = |r:  &rusqlite::Row<'_>| -> rusqlite::Result<R> { R::from_row(r, None) };
     let rows = match last_id {
-        None => {
-            stmt.query_map(named_params! {":batch_size": batch_size}, R::from_row)?
+        None => stmt.query_map(
+                named_params! {":batch_size": batch_size},
+                row_mapper)?,
+        Some(lid) => stmt.query_map(
+                named_params! {":batch_size": batch_size, ":last_id": lid.0},
+                row_mapper)?
 
-        }
-        Some(lid) => {
-            stmt.query_map(
-                named_params! {":batch_size": batch_size, ":last_id": lid.0}, R::from_row)?
-        }
     };
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
