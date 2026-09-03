@@ -21,17 +21,6 @@ pub struct NewOutTreeRow {
     pub flags: OutTreeFlags,
 }
 
-// TODO Check if we need this.
-#[derive(Debug, Clone)]
-pub struct DuplicateOutPath {
-    pub abs_path: PathBuf,
-    pub file_id: FileId,
-    pub dev: Option<u64>,
-    pub inode: Option<u64>,
-    pub ftype: Option<FileType>,
-    pub link_dst: Option<PathBuf>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileId(pub i64);
 
