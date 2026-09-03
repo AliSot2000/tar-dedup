@@ -240,179 +240,207 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
     Ok(())
 }
 
-/// Resolve all ancestor paths in bottom up order
-/// Example: /path/to/dir will become
-///     /path/to
-///     /path
-///     /
-fn build_ancestors(path: &Path) -> Vec<PathBuf> {
-    let mut res = Vec::new();
-    let mut wp = path;
+/// Placement contract:
+/// We denote the root extraction dir eith `<ed>` e.g. `/home/user/Desktop/archive`
+///
+/// If absolute paths are given or absolute_names is true, the following happens
+/// `<ed>/var/docker/cache/...`
+/// Effectively anything that was under `/` on the scanned system now lands in `<ed>/`
+///
+/// Relative downwards paths are also mapped directly with a relative prevfix.
+/// e.g. `--input-dir ./a/b/c` will be mapped to `<ed>/a/b/c`
+/// current dir will also map to root so `--input-dir ./` is `<ed>/`
+/// paths that only move up will also convert to extraction root, so
+/// `../` or `../../` (or any number of parent dir) will all map to `<ed>/`
+///
+/// Relative paths up and down again map to the downwards prefix.
+/// `../../other/directory` turns into `<ed>/other/directory`
+///
+/// If multiple files map to the same directory, the tool will not complain and simply the first
+/// entry to extract to it, will own the path.
+pub fn populate_out_tree(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+    debug_assert!(config.paths.extraction_root().is_absolute(),
+                  "INVARIANT ERROR: extraction root is not absolute");
+    debug_assert!(!db.out_tree_is_built()?, "PRECONDITION FAILED: out tree built");
+
+    if config.placement.absolute_names {
+        populate_out_tree_abs(db, config, shutdown)?;
+    } else {
+        populate_out_tree_rel(db, config, shutdown)?;
+    }
+
+    ensure_parent(db)?;
+    db.set_out_tree_built()?;
+    Ok(())
+}
+
+/// Ensures parent exists for all non-directory rows inside the out_tree. This is needed in case
+/// a `--files-fromm` file had a file with `/path/to/not/covered/directory/file.txt`
+/// where `/path/to/other/*` is covered by recursive index. Creating file.txt would fail because
+/// there's no parent path.
+pub fn ensure_parent(db: &Database) -> Result<()> {
+    let mut current_parents: HashSet<PathBuf> = HashSet::new();
+    let mut parent_rows: Vec<NewOutTreeRow> = Vec::new();
+    let mut last_id = OutTreeId(0);
 
     loop {
-        let p = wp.parent();
-        match p {
-            None => break,
-            Some(p) => { res.push(p.to_path_buf()); wp = p; }
+        let entries = db.list_out_tree(
+            last_id, BATCH_SIZE, None, Some(false))?;
+        if entries.is_empty() { break }
+        last_id = entries.last().expect("PRECONDITION FAILED: Must have at least one").id;
+
+        for entry in entries {
+            let par = entry.abs_path.parent().expect("File needs Parent");
+            current_parents.insert(par.to_path_buf());
         }
+
+        for parent in &current_parents {
+            parent_rows.push(NewOutTreeRow {
+                abs_path: parent.clone(),
+                file_id: None,
+                flags: OutTreeFlags::default(),
+            })
+        }
+        db.insert_out_tree_rows(&parent_rows)?;
+        // Clear the accumulators before the next run to avoid huge structures in ram.
+        current_parents.clear();
+        parent_rows.clear();
     }
-    res
+
+    Ok(())
 }
 
-pub struct MaterializedRelLeaf {
-    pub id: FileId,
-    pub abs_path: PathBuf,
-    pub source_prefix: PathBuf,
-    pub source_id: i64,
+/// Build the out_tree table, if the user selected absolute names for the materialization method.
+fn populate_out_tree_abs(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+    debug_assert!(config.placement.absolute_names,
+        "PRECONDITION FAILED: Function builds absolute names");
+    let root = config.paths.extraction_root();
+    let mut last_id = FileId(0);
+
+    loop {
+        shutdown.check_in_flight()?;
+        let entries = db.list_materialized_entries(
+            Some(last_id), BATCH_SIZE, None, Some(false))?;
+        if entries.is_empty() {
+            break
+        }
+        last_id = entries.last().expect("non-empty batch").id;
+
+        // Process the entries
+        let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
+            &entries, &root, None);
+
+        db.insert_out_tree_rows(&processed)?;
+        // INFO ref table is left empty since we are working with abs_paths
+    }
+    Ok(())
 }
 
-/// Build a lookup table for all directories that need to be created based on the included leaves
-/// (non-directory entries)
-fn prepare_dir_look_up_table(db: &Database, config: &ExtractConfig, shutdown: &Shutdown)
-    -> Result<()> {
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
-        .build()
-        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
+/// Build the out_tree table, if the user selected no absolute names for the materialization method.
+/// Paths are populated on first-come-first-serve basis. I.e. if the user used
+/// --no-strict-separation, it is possible that parts of the tree were mapped twice and those names
+/// might collide. The sources are selected in ascending order (same order as adding and scanning
+/// initially) and their subtree is then materialized at its relative target.
+fn populate_out_tree_rel(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+    let root = config.paths.extraction_root();
+    let mut last_source_id = 0i64;
 
-    let shutdown = shutdown.clone();
+    loop {
+        let sources = db.list_sources(None, last_source_id, BATCH_SIZE)?;
+        if sources.is_empty() {
+            break;
+        }
+        last_source_id = sources.last().expect("non-empty batch").id;
 
-    // Create dir in relative mode.
-    if !config.placement.absolute_names {
-        let results: Mutex<Vec<Vec<(PathBuf, i64)>>> = Mutex::new(Vec::new());
-        let mut last_source_id = 0i64;
-        let mut source_leaf_vec: Vec<MaterializedRelLeaf> = Vec::new();
+        for source in sources {
+            let san_org_path = source.original_path.clean();
 
-        loop {
-            let sources = db.list_sources(
-                Some(true), Some(last_source_id), BATCH_SIZE)?;
-            if sources.is_empty() { break; }
-            last_source_id = sources.last().unwrap().id;
-
-            for source in sources {
-                let mut last_leaf_id = FileId(0);
-                loop {
-                    let leaves = db.list_materialized_leaves(
-                        Some(last_leaf_id),
-                        min(BATCH_SIZE, BATCH_SIZE - (source_leaf_vec.len() as u64)),
-                        Some(source.id)
-                    )?;
-                    if leaves.is_empty() { break }
-                    last_leaf_id = leaves.last().expect(
-                        "INVARIANT ERROR: At lest one element expected").id;
-
-                    // Construct structs with the full data so the parallel processes are independent.
-                    source_leaf_vec.extend(leaves.iter().map(|l| {
-                        MaterializedRelLeaf {
-                            id: l.id,
-                            abs_path: l.abs_path.clone(),
-                            source_prefix: source.abs_path.clone(),
-                            source_id: source.id,
-                        }
-                    }));
-
-                    // Parallel process if enough values present
-                    if (source_leaf_vec.len() as u64) == BATCH_SIZE {
-                        handle_pool_rel(&db, &shutdown, &mut source_leaf_vec, &results, &pool)?
-                    }
+            let extraction_base: PathBuf = if san_org_path.is_absolute() {
+                // Got root dir, simply return the extract root
+                if san_org_path == PathBuf::from("/") {
+                    root.to_path_buf()
+                } else {
+                    let stripped = san_org_path
+                        .strip_prefix("/")
+                        .expect("Absolute expects / at the beginning");
+                    root.join(stripped)
                 }
+            } else {
+                let (cut, _) = strip_leading_up(&san_org_path);
+                debug_assert!(!cut.starts_with("/"), "Relative does not expect a / at begin");
+                root.join(cut)
+            };
+
+            // File Loop
+            let mut last_id = FileId(0);
+            loop {
+                shutdown.check_in_flight()?;
+                let entries = db.list_materialized_entries(
+                    Some(last_id), BATCH_SIZE, Some(source.id), Some(false)
+                )?;
+                if entries.is_empty() { break }
+                last_id = entries.last().expect("non-empty batch").id;
+
+                let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
+                    &entries, &root, Some((&source.abs_path, &extraction_base)));
+
+                let out_ids = db.insert_out_tree_rows(&processed)?;
+                let ref_pairs: Vec<(OutTreeId, i64)> = out_ids
+                    .iter()
+                    .map(|id| { (id.clone(), source.id) })
+                    .collect();
+                db.insert_ref_out_rows(&ref_pairs)?;
             }
         }
-        // Last parallel call to empty
-        if !source_leaf_vec.is_empty() {
-            handle_pool_rel(&db, &shutdown, &mut source_leaf_vec, &results, &pool)?
-        }
-
-    // Create directories in absolute mode.
-    } else {
-        let results: Mutex<Vec<Vec<PathBuf>>> = Mutex::new(Vec::new());
-        let mut last_dir = FileId(0);
-        loop {
-            let dirs = db.list_materialized_leaves(Some(last_dir), BATCH_SIZE, None)?;
-            if dirs.is_empty() { break }
-            last_dir = dirs.last().unwrap().id;
-
-            let _ = handle_parallel_res(pool.install(|| {
-                dirs.par_iter().try_for_each(|record| -> Result<()> {
-                    shutdown.check_between_files()?;
-
-                    let ancestors = build_ancestors(&record.abs_path);
-                    results.lock().expect("prepare dir lock poisoned").push(ancestors);
-                    Ok(())
-                })
-            }), &shutdown)?;
-
-            let _future_vec: Vec<Vec<PathBuf>> = Vec::new();
-            let ancestors = std::mem::replace(
-                &mut *results.lock().expect("hash results lock"),
-                _future_vec);
-
-            let mut flat_ancestors = Vec::new();
-            flat_ancestors.extend(ancestors.into_iter().flatten());
-            db.insert_prep_ancestors_abs(&flat_ancestors)?;
-        }
     }
-    db.link_prep_ancestor_dir_ids()?;
     Ok(())
 }
 
-/// Handle the process of computing the ancestors for the rel branch.
-/// After ancestors are computed, ancestors are subsequently added to the database and
-/// the source_leaf_vec cleared.
-/// Code called twice hence separate function
-fn handle_pool_rel(
-    db: &Database,
-    shutdown: &Shutdown,
-
-    source_leaf_vec: &mut Vec<MaterializedRelLeaf>,
-    results: &Mutex<Vec<Vec<(PathBuf, i64)>>>,
-    pool: &ThreadPool) -> Result<()> {
-    debug_assert!(!source_leaf_vec.is_empty(),
-                  "INVARIANT ERROR: source_leaf_vec must not be empty");
-
-    // Do parallel processing
-    let _ = handle_parallel_res(pool.install(|| {
-        source_leaf_vec.par_iter().try_for_each(|record| -> Result<()> {
-            shutdown.check_between_files()?;
-
-            let ancestors = build_ancestors(&record.abs_path);
-            let pref_ancestors: Vec<(PathBuf, i64)> =
-                ancestors
-                    .into_iter()
-                    .filter(|a| a.starts_with(&record.source_prefix))
-                    .map(|p| (p, record.source_id))
-                    .collect();
-            results
-                .lock()
-                .expect("prepare dir lock poisoned")
-                .push(pref_ancestors);
-            Ok(())
+/// Given a vectors of StrippedRecords compute the new OutTreeRows
+fn build_new_out_tree_rows(
+    entries: &Vec<StrippedRecord>, root: &Path, sources: Option<(&Path, &Path)>)
+                           -> Vec<NewOutTreeRow> {
+    let processed: Vec<NewOutTreeRow> = entries
+        .iter()
+        .map(|r| {
+            let path = catalog_to_target_abs(root, &r.abs_path, sources);
+            let is_dir = match r.ftype {
+                None => false,
+                Some(t) => t == FileType::Directory
+            };
+            let mut of = OutTreeFlags::default();
+            of.set(OutTreeFlag::IsDirectory, is_dir);
+            NewOutTreeRow {
+                abs_path: path.clone(),
+                file_id: Some(r.id),
+                flags: of,
+            }
         })
-    }), &shutdown);
-
-    // Get results
-    let _future_vec: Vec<Vec<(PathBuf, i64)>> = Vec::new();
-    let ancestors = std::mem::replace(
-        &mut *results.lock().expect("hash results lock"),
-        _future_vec);
-
-    // Postprocess and store the results
-    let mut flat_ancestors = Vec::new();
-    flat_ancestors.extend(ancestors.into_iter().flatten());
-    db.insert_prep_ancestors_rel(&flat_ancestors)?;
-    source_leaf_vec.clear();
-    Ok(())
-
+        .collect();
+    processed
 }
 
-fn handle_parallel_res(res: Result<()>, shutdown: &Shutdown) -> Result<()> {
-    match res {
-        Ok(()) => Ok(()),
-        Err(Error::Interrupted) => {
-            let op = if shutdown.is_force() {"aborted"} else {"halted"};
-            tracing::info!("Place Phase {op}.");
-            Err(Error::Interrupted)
-        },
-        Err(e) => Err(e),
+/// Build the abs path where a given file is extracted to.
+fn catalog_to_target_abs(
+    extraction_root: &Path,
+    catalog_path: &Path,
+    relative_component: Option<(&Path, &Path)>,
+) -> PathBuf {
+    match relative_component {
+        None => {
+            let rel = catalog_path
+                .strip_prefix("/")
+                .expect(&format!(
+                    "INVARIANT ERROR: Catalogue Path MUST be absolute and start with /, got {}",
+                    catalog_path.display()
+                ));
+            extraction_root.join(rel)
+        }
+        Some((source_abs, source_base)) => {
+            let rel_stem = catalog_path
+                .strip_prefix(source_abs)
+                .expect("Source rows must start within source root");
+            source_base.join(rel_stem)
+        }
     }
 }
