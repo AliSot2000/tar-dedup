@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::config::{ExtractRuntimeState, RuntimeState};
 use crate::db::flags::{FileFlag, FileFlags, OutTreeFlag, OutTreeFlags, SourceFlags};
-use crate::db::types::{ArchiveSession, DuplicateOutPath, FileId, FilePhase, FilterExpression, GroupKey, NewFileRecord, NewOutTreeRow, OutTreeId, OutTreeRecord, SourceRecord, StrippedRecord};
+use crate::db::types::{ArchiveSession, FileId, FilePhase, FilterExpression, GroupKey, NewFileRecord, NewOutTreeRow, OutTreeId, OutTreeRecord, SourceRecord, StrippedRecord};
 use crate::error::Result;
 
 pub mod flags;
