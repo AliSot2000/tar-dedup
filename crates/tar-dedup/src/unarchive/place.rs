@@ -124,7 +124,9 @@ pub fn copy_canonicals_to_source(config: &ExtractConfig, db: &Database, shutdown
                 let res = copy_single_file(
                     record.id, &src, &dst, &shutdown, config.placement.no_reflink
                 );
-
+                if !config.process.cleanup.keep_stage {
+                    let _ = fs::remove_file(dst);
+                }
                 results.lock().expect("Canonial File Copy Lock poisoned").push(res);
                 Ok(())
             })
