@@ -47,6 +47,148 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     Ok(())
 }
 
+pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    let mut last_id = OutTreeId(0);
+    // let results = Mutex::new(Vec::new());
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(config.process.jobs)
+        .build()
+        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
+
+    if !config.placement.absolute_names {
+        let mut last_source = 0i64;
+        loop {
+            let sources = db.list_sources(
+                None, last_source, BATCH_SIZE)?;
+            if sources.is_empty() { break }
+            last_source = sources
+                .last().expect("PRECONDITION FAILED: At least one entry expected").id;
+
+            for source in sources {
+                loop {
+                    // TODO query only not materialized entries.
+                    let entries = db.list_out_tree(
+                        last_id, BATCH_SIZE, Some(source.id), Some(false))?;
+                    if entries.is_empty() { break }
+                    last_id = entries
+                        .last().expect("PRECONDITION FAILED: At least one entry expected").id;
+
+                    // let parallel = pool.install(|| {
+                    //     entries.par_iter().try_for_each(|rec| {
+                    //         let target = rec.abs_path;
+                    //
+                    //
+                    //     })
+                    // });
+                }
+            }
+        }
+    } else {
+
+    }
+
+    Ok(())
+}
+
+/// Function copies all extracted canonical files to the extraction destination and
+pub fn copy_canonicals_to_source(config: &ExtractConfig, db: &Database, shutdown: &Shutdown)
+                                 -> Result<()> {
+    let dir_name = match &config.placement.link_source {
+        None => PathBuf::from(".sources"),
+        Some(v)  => v.to_path_buf(),
+    };
+    let base_dir = config.paths.extraction_root().join(dir_name);
+    fs::create_dir_all(&base_dir)?;
+
+    let results: Mutex<Vec<std::result::Result<(FileId, bool), (FileId, Error)>>> =
+        Mutex::new(Vec::new());
+    let mut last_id = FileId(0);
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(config.process.jobs)
+        .build()
+        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
+
+    loop {
+        shutdown.check_in_flight()?;
+        let to_copy = db.list_canonical_files_for_move(
+            true, last_id, BATCH_SIZE)?;
+        if to_copy.is_empty() { break }
+        last_id = to_copy.last().expect("PRECONDITION FAILED: Not Empty").id;
+
+        // Parallel File Move
+        let parallel = pool.install(|| {
+            to_copy.par_iter().try_for_each(|record| -> Result<()> {
+                let cid = record.content_id().expect("Content id existed, when extracting.");
+                let src = config.paths.extract_cache_dir().join(&cid.0);
+                let dst = base_dir.join(&cid.0);
+                let res = copy_single_file(
+                    record.id, &src, &dst, &shutdown, config.placement.no_reflink
+                );
+
+                results.lock().expect("Canonial File Copy Lock poisoned").push(res);
+                Ok(())
+            })
+        });
+
+        // Check Pool Result
+        match parallel {
+            Ok(()) => (),
+            Err(Error::Interrupted) => (), // Exit
+            Err(e) => return Err(e)
+        }
+
+        // Get the results
+        let new_res = Vec::new();
+        let copied = std::mem::replace(
+            &mut *results.lock().expect("hash results lock"),
+            new_res);
+
+        for result in copied {
+            match result {
+                Err((id, err)) => {
+                    db.set_file_flag(id, FileFlag::ErrorWhilePlacing, true)?;
+                }
+                Ok((id, is_copy)) => {
+                    db.set_file_flag(id, FileFlag::AtLinkSource, true)?;
+                    db.set_file_flag(id, FileFlag::UsedRefLink, !is_copy)?;
+                }
+            }
+        }
+
+    }
+
+    Ok(())
+}
+
+fn copy_single_file(fid: FileId, src: &Path, dst: &Path, shutdown: &Shutdown, no_reflink: bool)
+    -> std::result::Result<(FileId, bool), (FileId, Error)> {
+
+    // Attempt to reflink
+    if !no_reflink {
+        let worked = reflink::reflink(src, dst);
+        if worked.is_ok() {
+            return Ok((fid, false))
+        }
+    }
+
+    // Failed, perform sparse copy
+    let spc_res = sparse_cp::sparse_copy_with_progress(
+        src,
+        dst,
+        4096,
+        |_, _, _| -> Result<()> { shutdown.check_in_flight() }
+    );
+
+    // Handle result
+    match spc_res {
+        Ok(_) => Ok((fid, true)),
+        Err(e) => {
+            let _ = fs::remove_file(dst);
+            Err((fid, e))
+        }
+    }
+}
+
 /// Function walks all the extraction directories, ensures there are no symlink on the path if
 /// selected, and errors out or r&r any given path entry that was not dir. If path segment does not
 /// exist, path es created.
