@@ -61,8 +61,6 @@ pub fn list_materialized_leaves(
         None => "SELECT f.id, f.abs_path
             FROM files f
             WHERE f.id > :last_id
-              AND f.ftype IS NOT NULL
-              AND f.ftype != :dir
               AND f.include_reason > 0
               AND f.exclude_reason = 0
             ORDER BY f.id
@@ -94,116 +92,6 @@ pub fn list_materialized_leaves(
             rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
         }
     }
-}
-
-fn map_materialized_leaf(row: &rusqlite::Row<'_>) -> rusqlite::Result<MaterializedLeaf> {
-    Ok(MaterializedLeaf {
-        id: FileId(row.get("id")?),
-        abs_path: row.get::<_, String>("abs_path")?.into(),
-    })
-}
-
-pub fn insert_prep_ancestors_abs(
-    conn: &Connection,
-    paths: &[PathBuf],
-) -> Result<()> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-    let mut stmt = conn.prepare(
-        "INSERT OR IGNORE INTO prep_ancestor (abs_path, dir_id)
-         VALUES (:abs_path, NULL)",
-    )?;
-    for path in paths {
-        stmt.execute(named_params! {
-            ":abs_path": path.to_string_lossy().as_ref(),
-        })?;
-    }
-    Ok(())
-}
-
-pub fn insert_prep_ancestors_rel(
-    conn: &Connection,
-    paths: &[(PathBuf, i64)],
-) -> Result<()> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-    let mut stmt = conn.prepare(
-        "INSERT OR IGNORE INTO prep_ancestor (abs_path, dir_id, source_id)
-         VALUES (:abs_path, NULL, :source_id)",
-    )?;
-    for (path, sid) in paths {
-        stmt.execute(named_params! {
-            ":abs_path": path.to_string_lossy().as_ref(),
-            ":source_id": sid,
-        })?;
-    }
-    Ok(())
-}
-
-pub fn link_prep_ancestor_dir_ids(conn: &Connection) -> Result<()> {
-    conn.execute(
-        "UPDATE prep_ancestor
-         SET dir_id = (
-             SELECT f.id FROM files f
-             WHERE f.ftype = :dir
-               AND rtrim(f.abs_path, '/') = rtrim(prep_ancestor.abs_path, '/')
-             LIMIT 1
-         )
-         WHERE dir_id IS NULL",
-        named_params! { ":dir": FileType::Directory.as_str() },
-    )?;
-    Ok(())
-}
-
-/// Directories implied by `prep_ancestor`. Requires a populated temp table.
-pub fn list_directories_from_prep(
-    conn: &Connection,
-    last_id: Option<FileId>,
-    batch_size: u64,
-    source_id: Option<i64>,
-) -> Result<Vec<StrippedRecord>> {
-    let cols = StrippedRecord::sql_columns();
-    let last_id = last_id.unwrap_or(FileId(0)).0;
-    let sql = match source_id {
-        Some(_) => format!(
-            "SELECT {cols}
-             FROM files f
-             JOIN prep_ancestor a ON f.id = a.dir_id
-             WHERE a.source_id = :source_id
-               AND f.id > :last_id
-             ORDER BY f.id
-             LIMIT :batch_size"
-        ),
-        None => format!(
-            "SELECT {cols}
-             FROM files
-             WHERE id IN (SELECT dir_id FROM prep_ancestor WHERE dir_id IS NOT NULL)
-               AND id > :last_id
-             ORDER BY id
-             LIMIT :batch_size"
-        ),
-    };
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = match source_id {
-        Some(sid) => stmt.query_map(
-            named_params! {
-                ":source_id": sid,
-                ":last_id": last_id,
-                ":batch_size": batch_size,
-            },
-            StrippedRecord::from_row,
-        )?,
-        None => stmt.query_map(
-            named_params! {
-                ":last_id": last_id,
-                ":batch_size": batch_size,
-            },
-            StrippedRecord::from_row,
-        )?,
-    };
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 pub fn list_canonical_files_for_move(
