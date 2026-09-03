@@ -558,22 +558,11 @@ impl Database {
         place::list_out_tree(&self.conn(), last_id, batch_size, source_id, only_dir)
     }
 
-    pub fn list_duplicate_out_paths_for_canonical(
-        &self,
-        canonical_id: FileId,
-    ) -> Result<Vec<DuplicateOutPath>> {
-        place::list_duplicate_out_paths_for_canonical(&self.conn(), canonical_id)
-    }
-
     pub fn count_out_tree_rows(&self) -> Result<u64> {
         place::count_out_tree_rows(&self.conn())
     }
 
     pub fn count_ref_out_rows(&self) -> Result<u64> {
         place::count_ref_out_rows(&self.conn())
-    }
-
-    pub fn out_paths_for_file_id(&self, file_id: FileId) -> Result<Vec<PathBuf>> {
-        place::out_paths_for_file_id(&self.conn(), file_id)
     }
 }
