@@ -7,7 +7,7 @@ use rusqlite::{Connection, named_params};
 /// Get all files that still need to be inspected
 pub fn get_entries_to_hash<R: SqlFileRow>(
     conn: &Connection, eager_filter: bool, detect_hardlinks: bool) -> Result<Vec<R>> {
-    let cols = R::sql_columns();
+    let cols = R::sql_columns(None);
     let phase = if eager_filter { "'filtered'" } else { "'inventoried'" };
     let filtered_selection = if eager_filter {
         "AND include_reason < 0 \
@@ -29,16 +29,19 @@ pub fn get_entries_to_hash<R: SqlFileRow>(
              {filtered_selection}"
     );
     let mut stmt = conn.prepare(&sql)?;
+    let row_mapper = |r: &rusqlite::Row<'_>| { R::from_row(r, None) };
     let rows = if detect_hardlinks {
         stmt.query_map(named_params! {
             ":sha_error": FileFlag::ErrorWhileHash.mask_i64(),
             ":flag": FileFlag::FileHardlinkCanonical.mask_i64(),
         },
-        R::from_row)?
+        row_mapper)?
     } else {
         stmt.query_map(
-            named_params! { ":sha_error": FileFlag::ErrorWhileHash.mask_i64() },
-            R::from_row
+            named_params! {
+                ":sha_error": FileFlag::ErrorWhileHash.mask_i64()
+            },
+            row_mapper
         )?
     };
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)

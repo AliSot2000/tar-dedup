@@ -33,9 +33,9 @@ pub fn list_files_to_stage<R: SqlFileRow>(conn: &Connection, retry_missing_sha: 
             AND include_reason > 0 \
             AND exclude_reason = 0 \
             {filter_sha}",
-                 R::sql_columns()))?;
+                 R::sql_columns(None)))?;
     let rows = stmt.query_map(
         [],
-        |row| R::from_row(row))?;
+        |row| R::from_row(row, None))?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }

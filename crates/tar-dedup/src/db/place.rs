@@ -200,13 +200,13 @@ pub fn set_dir_tree_built(conn: &Connection) -> Result<()> {
     meta::set_dir_tree_built(conn, true)
 }
 
-pub fn list_canonical_files_for_move(
+pub fn list_canonical_files_for_move<R: SqlFileRow>(
     conn: &Connection, filter: bool, last_id: FileId, batch_size: u64
-) -> Result<Vec<StrippedRecord>> {
+) -> Result<Vec<R>> {
     debug_assert!(last_id.0 >= 0,
                   "INVARIANT ERROR: Only > 0 FileIds handed out, 0 minimum lower bound");
 
-    let cols = StrippedRecord::sql_columns();
+    let cols = R::sql_columns(None);
     let sql_filt = if filter { " AND include_reason > 0 AND exclude_reason = 0" } else { "" };
     let mut stmt = conn.prepare(&format!("\
         SELECT {cols} FROM files \
@@ -226,7 +226,7 @@ pub fn list_canonical_files_for_move(
             ":batch_size": batch_size,
             ":moved": FileFlag::AtLinkSource.mask_i64()
         },
-        StrippedRecord::from_row
+        |r| R::from_row(r, None)
     )?;
     results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }

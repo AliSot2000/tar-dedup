@@ -48,7 +48,7 @@ pub fn list_sparsify_candidates<R: SqlFileRow>(
     conn: &Connection,
     min_pages: u64,
 ) -> Result<Vec<R>> {
-    let cols = R::sql_columns();
+    let cols = R::sql_columns(None);
     let has_sparse = FileFlag::HasSparse.mask_i64();
     let mut stmt = conn.prepare(&format!(
         "SELECT {cols} FROM files
@@ -67,7 +67,7 @@ pub fn list_sparsify_candidates<R: SqlFileRow>(
             ":min_pages": min_pages as i64,
             ":has_sparse": has_sparse,
         },
-        R::from_row,
+        |r| R::from_row(r, None),
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }

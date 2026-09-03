@@ -125,7 +125,7 @@ pub fn list_filtered_in_group<R: SqlFileRow>(
     sha1: &[u8; 20],
     size: u64,
 ) -> Result<Vec<R>> {
-    let cols = R::sql_columns();
+    let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!(
         "SELECT {cols} FROM files
          WHERE sha1 = :sha1 AND size = :size AND phase = 'filtered'
@@ -136,7 +136,7 @@ pub fn list_filtered_in_group<R: SqlFileRow>(
             ":sha1": sha1.as_slice(),
             ":size": size as i64,
         },
-        R::from_row,
+        |r| R::from_row(r, None),
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
