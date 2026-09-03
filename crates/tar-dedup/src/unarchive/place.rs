@@ -53,65 +53,27 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
 /// PRECONDITION: no_create_dir is false.
 pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &Shutdown)
     -> Result<()> {
+    // TODO info that this process cannot be gracefully interrupted.
     debug_assert!(config.paths.extraction_root().is_absolute(),
                   "INVARIANT ERROR: extraction root is not absolute");
-    // Prepare helper table
-    prepare_dir_look_up_table(&db, &config, &shutdown)?;
+    debug_assert!(db.out_tree_is_built().expect("out_tree meta"),
+            "PRECONDITION FAILED: OutTree must be built to run this function");
+    debug_assert!(!db.dir_tree_is_built().expect("dir_tree meta"),
+            "PRECONDITION FAILED: Only run if the dir tree is not built yet");
 
-    // Create dir in relative mode.
-    if !config.placement.absolute_names {
-        let mut last_source_id = 0i64;
-        loop {
-            let sources = db.list_sources(
-                Some(true), Some(last_source_id), BATCH_SIZE)?;
-            if sources.is_empty() { break }
-            last_source_id = sources.last().unwrap().id;
+    let mut last_id = OutTreeId(0);
+    let mut already_checked = config.paths.extraction_root().to_path_buf();
+    loop {
+        let dirs = db.list_out_tree(last_id, BATCH_SIZE, None, Some(true))?;
+        if dirs.is_empty() { break }
+        last_id = dirs.last().expect("PRECONDITION FAILED: Expected at least one entry").id;
 
-            for source in sources {
-                let (checked_prefix, _stripped) = strip_leading_up(
-                    &source.original_path.clean());
-                let source_base_dir = config.paths.extraction_root().join(checked_prefix);
-                let mut checked_path = source_base_dir.clone();
-
-                let mut last_dir = FileId(0);
-                loop {
-                    let dirs = db.list_directories_from_prep(
-                        Some(last_dir), BATCH_SIZE, Some(source.id))?;
-                    if dirs.is_empty() { break };
-                    last_dir = dirs.last().unwrap().id;
-
-                    for dir in dirs {
-                        shutdown.check_in_flight()?;
-                        let rel_stem = dir.abs_path.strip_prefix(&source.abs_path)
-                            .expect("Same Source => Same abs_path prefix");
-                        let target = source_base_dir.join(&rel_stem);
-                        build_path(&config, &mut checked_path, &target)?;
-                    }
-                }
-            }
-        }
-    // Create directories in absolute mode.
-    } else {
-        let mut last_dir = FileId(0);
-        let mut previous_check = PathBuf::new();
-        loop {
-            let dirs = db.list_directories_from_prep(
-                Some(last_dir), BATCH_SIZE, None)?;
-            if dirs.is_empty() { break }
-            last_dir = dirs.last().unwrap().id;
-
-            for dir in dirs {
-                shutdown.check_in_flight()?;
-                debug_assert!(dir.abs_path.is_absolute(),
-                              "INVARIANT ERROR: target_dir path is not absolute");
-
-                let target_dir = config.paths.extraction_root().join(
-                    dir.abs_path.strip_prefix("/").unwrap());
-                build_path(config, &mut previous_check, &target_dir)?;
-            }
+        for dir in dirs {
+            shutdown.check_in_flight()?;
+            build_path(&config, &mut already_checked, &dir.abs_path)?;
         }
     }
-    db.drop_prep_ancestor_table()?;
+    db.set_dir_tree_built()?;
     Ok(())
 }
 
