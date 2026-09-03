@@ -17,54 +17,17 @@ use std::sync::Mutex;
 
 const BATCH_SIZE: u64 = 10_000;
 
-// TODO Logging
-// TODO Progress
-
-pub fn run2(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    let files: Vec<FileRecord> = db.list_files_to_restore()?;
-    let total_bytes: u64 = files.iter().map(|f| f.size).sum();
-    let progress = ByteProgress::new("extract", total_bytes);
-
-    eprintln!(
-        "extract: materializing {} file(s) under {}",
-        files.len(),
-        config.paths.extraction_root().display()
-    );
-
-    for record in files {
-        shutdown.check_between_files()?;
-
-        let tar_name = record
-            .tar_member_name()
-            .expect("Invariant Error: FileRecord without sha1 found!");
-        let cache_path = config.paths.extract_cache_dir().join(&tar_name);
-        if !cache_path.is_file() {
-            return Err(Error::Config(format!(
-                "missing cached tar member `{tar_name}` for {}",
-                record.abs_path.display()
-            )));
-        }
-
-        //let dest = safe_output_path(config.paths.extraction_root(), &record.abs_path)?;
-        // if let Some(parent) = dest.parent() {
-        //     fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
-        // }
-
-        progress.set_file("extract", &record.abs_path);
-        //fs::copy(&cache_path, &dest).map_err(|e| Error::io(&dest, e))?;
-        // Lightweight mtime/owner until the permissions stage owns full metadata restore.
-        //apply_basic_metadata(config, &record, &dest)?;
-        db.mark_file_phase(record.id, FilePhase::AtDestination)?;
-        progress.inc(record.size);
+// TODO
+//  Logging
+//  Progress
+//  Rethink when we are pub and when private
+pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    if !db.out_tree_is_built()? {
+        populate_out_tree(db, config, shutdown)?;
     }
 
-    progress.finish("extract place complete");
-    Ok(())
-}
-
-pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // Step 1.1 empty out source root prior to starting extraction.
-    if config.placement.clean_target {
+    if config.placement.clean_target && config.placement.one_top_level.is_some(){
         assert!(!config.placement.no_create_dir,
                 "INVARIANT ERROR: clean_target => no_create_dir is false");
         fs::remove_dir_all(config.paths.extraction_root())?;
@@ -72,16 +35,15 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     }
 
     // Step 1.2 Create directoris if required
-    if !config.placement.no_create_dir {
+    if !config.placement.no_create_dir && !db.dir_tree_is_built()? {
         prepare_extraction_dir(&db, &config, shutdown)?;
     }
 
     // Step 2, move the canonical files into place for link_tree
     if config.placement.link_tree {
         tracing::info!("Moving canonical file in place for link tree...");
-        // TODO move that shit
+        copy_canonicals_to_source(&config, &db, &shutdown)?;
     }
-
     Ok(())
 }
 
