@@ -1,97 +1,203 @@
-use std::path::{Path, PathBuf};
-
-use rusqlite::{named_params, Connection};
+use rusqlite::{Connection, named_params};
 
 use crate::db::common::SqlFileRow;
-use crate::db::flags::FileFlag;
-use crate::db::types::{FileId, FileType, StrippedRecord};
+use crate::db::flags::OutTreeFlags;
+use crate::db::flags::{FileFlag, OutTreeFlag};
+use crate::db::meta;
+use crate::db::types::{FileId, NewOutTreeRow, OutTreeId, OutTreeRecord, StrippedRecord,
+};
 use crate::error::Result;
 
-/// Leaf row returned when scanning materialized non-directory entries.
-#[derive(Debug, Clone)]
-pub struct MaterializedLeaf {
-    pub id: FileId,
-    pub abs_path: PathBuf,
-}
-
-pub fn create_prep_ancestor_table(conn: &Connection, relative: bool) -> Result<()> {
-    if relative {
-        conn.execute_batch(
-            "CREATE TEMP TABLE prep_ancestor (
-                abs_path  TEXT NOT NULL,
-                dir_id    INTEGER,
-                source_id INTEGER NOT NULL,
-                PRIMARY KEY (abs_path, source_id)
-            );",
-        )?;
-    } else {
-        conn.execute_batch(
-            "CREATE TEMP TABLE prep_ancestor (
-                abs_path TEXT NOT NULL PRIMARY KEY,
-                dir_id   INTEGER
-            );",
-        )?;
-    }
-    Ok(())
-}
-
-pub fn drop_prep_ancestor_table(conn: &Connection) -> Result<()> {
-    conn.execute_batch("DROP TABLE IF EXISTS prep_ancestor;")?;
-    Ok(())
-}
-
-pub fn list_materialized_leaves(
+pub fn list_materialized_entries(
     conn: &Connection,
     last_id: Option<FileId>,
     batch_size: u64,
     source_id: Option<i64>,
-) -> Result<Vec<MaterializedLeaf>> {
+    only_dirs: Option<bool>,
+) -> Result<Vec<StrippedRecord>> {
     let last_id = last_id.unwrap_or(FileId(0)).0;
+    let columns = StrippedRecord::sql_columns();
+    let filter_dir = match only_dirs {
+        None => "",
+        Some(true) => " AND ftype = 'dir' ",
+        Some(false) => " AND ( ftype != 'dir' IR ftyoe IS NULL ) "
+    };
     let sql = match source_id {
-        Some(_) => "SELECT f.id, f.abs_path
+        Some(_) => &format!("SELECT {columns}
             FROM files f
             WHERE f.id > :last_id
-              AND f.ftype IS NOT NULL
-              AND f.ftype != :dir
               AND f.include_reason > 0
               AND f.exclude_reason = 0
               AND f.id IN (SELECT file_id FROM ref WHERE source_id = :source_id)
+              {filter_dir}
             ORDER BY f.id
-            LIMIT :batch_size",
-        None => "SELECT f.id, f.abs_path
+            LIMIT :batch_size"),
+        None => &format!("SELECT {columns}
             FROM files f
             WHERE f.id > :last_id
               AND f.include_reason > 0
               AND f.exclude_reason = 0
+              {filter_dir}
             ORDER BY f.id
-            LIMIT :batch_size",
+            LIMIT :batch_size"),
     };
     let mut stmt = conn.prepare(sql)?;
-    match source_id {
-        Some(sid) => {
-            let rows = stmt.query_map(
-                named_params! {
+    let params = match source_id {
+        Some(sid) => named_params! {
                     ":last_id": last_id,
-                    ":dir": FileType::Directory.as_str(),
-                    ":source_id": sid,
+                    ":source_id": sid.clone(),
                     ":batch_size": batch_size,
-                },
-                map_materialized_leaf,
-            )?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        }
-        None => {
-            let rows = stmt.query_map(
-                named_params! {
+        },
+        None => named_params! {
                     ":last_id": last_id,
-                    ":dir": FileType::Directory.as_str(),
                     ":batch_size": batch_size,
-                },
-                map_materialized_leaf,
-            )?;
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
-        }
+                }
+    };
+    let rows = stmt.query_map(params, StrippedRecord::from_row)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result<Vec<OutTreeId>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
     }
+    let mut insert = conn.prepare(
+        "INSERT OR IGNORE INTO out_tree (abs_path, file_id, flags)
+         VALUES (:abs_path, :file_id, :flags)",
+    )?;
+    for row in rows {
+        insert.execute(named_params! {
+            ":abs_path": row.abs_path.to_string_lossy().as_ref(),
+            ":file_id": row.file_id.map(|id| id.0),
+            ":flags": row.flags.to_i64(),
+        })?;
+    }
+    let mut ids = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id: i64 = conn.query_row(
+            "SELECT id FROM out_tree WHERE abs_path = :abs_path",
+            named_params! { ":abs_path": row.abs_path.to_string_lossy().as_ref() },
+            |r| r.get(0),
+        )?;
+        ids.push(OutTreeId(id));
+    }
+    Ok(ids)
+}
+
+pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Result<()> {
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn.prepare(
+        "INSERT OR IGNORE INTO ref_out (out_id, source_id)
+         VALUES (:out_id, :source_id)",
+    )?;
+    for (out_id, source_id) in pairs {
+        stmt.execute(named_params! {
+            ":out_id": out_id.0,
+            ":source_id": source_id,
+        })?;
+    }
+    Ok(())
+}
+
+impl OutTreeRecord {
+    fn from_sql(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutTreeRecord> {
+        let file_id: Option<i64> = row.get("file_id")?;
+        Ok(OutTreeRecord {
+            id: OutTreeId(row.get("id")?),
+            abs_path: row.get::<_, String>("abs_path")?.into(),
+            file_id: file_id.map(FileId),
+            flags: OutTreeFlags::from_i64(row.get("flags")?),
+        })
+    }
+}
+
+
+pub fn list_out_tree(
+    conn: &Connection,
+    last_id: OutTreeId,
+    batch_size: u64,
+    source_id: Option<i64>,
+    only_dir: Option<bool>,
+) -> Result<Vec<OutTreeRecord>> {
+    debug_assert!(last_id.0 >= 0, "ids > 0, last_id must be >= 0");
+    let dir_filter = if only_dir.is_some() {
+        " AND o.flags & :dir = :tgt"
+    } else { "" };
+    let source_filter = if source_id.is_some() {
+        " AND r.source_id = :source_id "
+    } else { "" };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT o.id, o.abs_path, o.file_id, o.flags
+            FROM out_tree o
+            JOIN ref_out r ON r.out_id = o.id
+            WHERE o.id > :last_id
+                {dir_filter}
+                {source_filter}
+            ORDER BY o.id
+            LIMIT :batch_size"))?;
+    let params = match (only_dir.is_some(), source_id.is_some()) {
+        (false, false) => named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size,
+        },
+        (false, true) => named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size,
+            ":source_id": source_id.unwrap(),
+        },
+        (true, false) => named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size,
+            ":dir": OutTreeFlag::IsDirectory.mask_i64(),
+            ":tgt": if only_dir.unwrap() { 1 } else { 0 },
+        },
+        (true, true) => named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size,
+            ":dir": OutTreeFlag::IsDirectory.mask_i64(),
+            ":tgt": if only_dir.unwrap() { 1 } else { 0 },
+            ":source_id": source_id.unwrap(),
+        },
+    };
+    let rows = stmt.query_map(
+        params,
+        OutTreeRecord::from_sql
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn count_out_tree_rows(conn: &Connection) -> Result<u64> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM out_tree",
+        [],
+        |row| row.get(0))?;
+    Ok(n as u64)
+}
+
+pub fn count_ref_out_rows(conn: &Connection) -> Result<u64> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM ref_out",
+        [],
+        |row| row.get(0))?;
+    Ok(n as u64)
+}
+
+pub fn out_tree_is_built(conn: &Connection) -> Result<bool> {
+    Ok(meta::get_out_tree_built(conn)?.unwrap_or(false))
+}
+
+pub fn dir_tree_is_built(conn: &Connection) -> Result<bool> {
+    Ok(meta::get_dir_tree_built(conn)?.unwrap_or(false))
+}
+
+pub fn set_out_tree_built(conn: &Connection) -> Result<()> {
+    meta::set_out_tree_built(conn, true)
+}
+
+pub fn set_dir_tree_built(conn: &Connection) -> Result<()> {
+    meta::set_dir_tree_built(conn, true)
 }
 
 pub fn list_canonical_files_for_move(
