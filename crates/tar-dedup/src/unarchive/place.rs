@@ -117,6 +117,8 @@ pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &
 
 /// Strip leading ../ in relative paths s.t. they do not escape from the extraction target.
 fn strip_leading_up(path: &Path) -> (PathBuf, u64) {
+    debug_assert_eq!(path, path.clean(),
+                     "INVARIANT ERROR: Function should only work on clean paths");
     let mut components = path.components().peekable();
     let mut ups = 0u64;
     while matches!(components.peek(), Some(Component::ParentDir)) {
