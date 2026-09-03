@@ -27,7 +27,18 @@ pub struct PlacementOptions {
     pub hardlink_reestablish: bool,
     pub clean_target: bool, // TODO implies no_create_dir is false!
     pub link_source: Option<PathBuf>,  // TODO CLI + san!!! (may be file name only), need not exist when starting extraction
-    pub no_reflink: bool // TODO cli
+    pub no_reflink: bool, // TODO cli
+    pub hard_link_grouping: HardLinkGrouping, // TODO cli
+}
+
+#[derive(Debug, Clone)]
+pub enum HardLinkGrouping {
+    /// Do not hard link any files which had the same (dev, inode) as on the source file system
+    None,
+    /// Only consider files within a tree of a single source for hard links.
+    Source,
+    /// Hard link files across all sources.
+    Global,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +113,7 @@ impl ExtractConfig {
                 clean_target: true,
                 link_source: None,
                 no_reflink: false,
+                hard_link_grouping: HardLinkGrouping::Global,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: args.restore_owner,
@@ -150,6 +162,7 @@ impl ExtractConfig {
                 clean_target: true,
                 link_source: None,
                 no_reflink: false,
+                hard_link_grouping: HardLinkGrouping::Global,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: false,
@@ -198,6 +211,7 @@ impl ExtractConfig {
                 clean_target: false,
                 link_source: None,
                 no_reflink: false,
+                hard_link_grouping: HardLinkGrouping::Global,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: false,
@@ -246,6 +260,7 @@ impl ExtractConfig {
                 clean_target: true, // TODO cli
                 link_source: None,
                 no_reflink: false,
+                hard_link_grouping: HardLinkGrouping::Global,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: false,
