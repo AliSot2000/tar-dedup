@@ -8,25 +8,26 @@ use crate::db::types::{FileId, NewOutTreeRow, OutTreeId, OutTreeRecord, Stripped
 };
 use crate::error::Result;
 
-pub fn list_materialized_entries(
+pub fn list_materialized_entries<R: SqlFileRow>(
     conn: &Connection,
     last_id: Option<FileId>,
     batch_size: u64,
     source_id: Option<i64>,
     only_dirs: Option<bool>,
-) -> Result<Vec<StrippedRecord>> {
+) -> Result<Vec<R>> {
     let last_id = last_id.unwrap_or(FileId(0)).0;
-    let columns = StrippedRecord::sql_columns();
+    let columns = R::sql_columns(Some("f"));
     let filter_dir = match only_dirs {
         None => "",
-        Some(true) => " AND ftype = 'dir' ",
-        Some(false) => " AND ( ftype != 'dir' IR ftyoe IS NULL ) "
+        Some(true) => " AND f.ftype = 'dir' ",
+        Some(false) => " AND f.ftype != 'dir' \
+                         AND f.ftype IS NOT NULL ) "
     };
     let sql = match source_id {
         Some(_) => &format!("SELECT {columns}
             FROM files f
             WHERE f.id > :last_id
-              AND f.include_reason > 0
+              AND f.include_reason < 0
               AND f.exclude_reason = 0
               AND f.id IN (SELECT file_id FROM ref WHERE source_id = :source_id)
               {filter_dir}
@@ -35,7 +36,7 @@ pub fn list_materialized_entries(
         None => &format!("SELECT {columns}
             FROM files f
             WHERE f.id > :last_id
-              AND f.include_reason > 0
+              AND f.include_reason < 0
               AND f.exclude_reason = 0
               {filter_dir}
             ORDER BY f.id
@@ -53,7 +54,10 @@ pub fn list_materialized_entries(
                     ":batch_size": batch_size,
                 }
     };
-    let rows = stmt.query_map(params, StrippedRecord::from_row)?;
+    let rows = stmt.query_map(
+        params,
+        |r| R::from_row(r, None)
+    )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
