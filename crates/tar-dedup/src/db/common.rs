@@ -92,12 +92,34 @@ impl SqlFileRow for FileRecord {
             None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, \
                 uid, gid, mode, ftype, xattr, acl, selinux, link_dst, \
                 include_reason, exclude_reason, canonical_id, flags, phase, \
-                new_name, inode, dev".to_string(),
+                new_name, inode, dev, major, minor".to_string(),
             Some(p) => format!("\
-                {p}.id, {p}.abs_path, {p}.ext, {p}.size, {p}.sha1, {p}.mtime, {p}.atime, {p}.ctime,
-                {p}.uid, {p}.gid, {p}.mode, {p}.ftype, {p}.xattr, {p}.acl, {p}.selinux,
-                {p}.link_dst, {p}.include_reason, {p}.exclude_reason, {p}.canonical_id, {p}.flags,
-                {p}.phase, {p}.new_name, {p}.inode, {p}.dev")
+                {p}.id AS \"{p}.id\",
+                {p}.abs_path AS \"{p}.abs_path\",
+                {p}.ext AS \"{p}.ext\",
+                {p}.size AS \"{p}.size\",
+                {p}.sha1 AS \"{p}.sha1\",
+                {p}.mtime AS \"{p}.mtime\",
+                {p}.atime AS \"{p}.atime\",
+                {p}.ctim AS \"{p}.ctime\",
+                {p}.uid AS \"{p}.uid\",
+                {p}.gid AS \"{p}.gid\",
+                {p}.mode AS \"{p}.mode\",
+                {p}.ftype AS \"{p}.ftype\",
+                {p}.xattr AS \"{p}.xattr\",
+                {p}.acl AS \"{p}.acl\",
+                {p}.selinux AS \"{p}.selinux\",
+                {p}.link_dst AS \"{p}.link_dst\",
+                {p}.include_reason AS \"{p}.include_reason\",
+                {p}.exclude_reason AS \"{p}.exclude_reason\",
+                {p}.canonical_id AS \"{p}.canonical_id\",
+                {p}.flag AS \"{p}.flags\",
+                {p}.phase AS \"{p}.phase\",
+                {p}.new_name AS \"{p}.new_name\",
+                {p}.inode AS \"{p}.inode\",
+                {p}.dev AS \"{p}.dev\",
+                {p}.major AS \"{p}.major\",
+                {p}.minor AS \"{p}.minor\"")
         }
 
     }
@@ -110,7 +132,7 @@ impl SqlFileRow for FileRecord {
         Ok(FileRecord {
             id: FileId(row.get(format!("{upx}id").as_str())?),
             abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
-            ext: row.get("ext")?,
+            ext: row.get(format!("{upx}ext").as_str())?,
             size: row.get::<_, i64>(format!("{upx}size").as_str())? as u64,
             sha1: optional_sha1(row, upx)?,
             mtime: optional_rfc3339(row, format!("{upx}mtime").as_str())?,
@@ -143,6 +165,10 @@ impl SqlFileRow for FileRecord {
                 .map(|v| v as u64),
             device_id: row.get::<_, Option<i64>>(format!("{upx}dev").as_str())?
                 .map(|v| v as u64),
+            major: row.get::<_, Option<i64>>(format!("{upx}major").as_str())?
+                .map(|v| v as u64),
+            minor: row.get::<_, Option<i64>>(format!("{upx}minor").as_str())?
+                .map(|v| v as u64),
         })
     }
 
@@ -157,8 +183,20 @@ impl SqlFileRow for StrippedRecord {
             None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, \
                 flags, phase, inode, dev".to_string(),
             Some(p) => format!("
-                {p}.id, {p}.abs_path, {p}.ext, {p}.size, {p}.sha1, {p}.mtime, {p}.atime, {p}.ctime,
-                {p}.ftype, {p}.canonical_id, {p}.flags, {p}.phase, {p}.inode, {p}.dev"),
+                {p}.id AS \"{p}.id\",
+                {p}.abs_path AS \"{p}.abs_path\",
+                {p}.ext AS \"{p}.ext\",
+                {p}.size AS \"{p}.size\",
+                {p}.sha1 AS \"{p}.sha1\",
+                {p}.mtime AS \"{p}.mtime\",
+                {p}.atime AS \"{p}.atime\",
+                {p}.ctime AS \"{p}.ctime\",
+                {p}.ftype AS \"{p}.ftype\",
+                {p}.canonical_id AS \"{p}.canonical_id\",
+                {p}.flags AS \"{p}.flags\",
+                {p}.phase AS \"{p}.phase\",
+                {p}.inode AS \"{p}.inode\",
+                {p}.dev AS \"{p}.dev\""),
         }
     }
 
@@ -170,13 +208,13 @@ impl SqlFileRow for StrippedRecord {
         Ok(StrippedRecord {
             id: FileId(row.get(format!("{upx}id").as_str())?),
             abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
-            ext: row.get("ext")?,
+            ext: row.get(format!("{upx}ext").as_str())?,
             size: row.get::<_, i64>(format!("{upx}size").as_str())? as u64,
             sha1: optional_sha1(row, upx)?,
-            mtime: optional_rfc3339(row, format!("mtime").as_str())?,
-            atime: optional_rfc3339(row, format!("atime").as_str())?,
-            ctime: optional_rfc3339(row, format!("ctime").as_str())?,
-            ftype: optional_ftype(row, format!("ftype").as_str())?,
+            mtime: optional_rfc3339(row, format!("{upx}mtime").as_str())?,
+            atime: optional_rfc3339(row, format!("{upx}atime").as_str())?,
+            ctime: optional_rfc3339(row, format!("{upx}ctime").as_str())?,
+            ftype: optional_ftype(row, format!("{upx}ftype").as_str())?,
             canonical_id: row.get::<_, Option<i64>>(format!("{upx}canonical_id").as_str())?
                 .map(FileId),
             flags: FileFlags::from_i64(row.get::<_, i64>(format!("{upx}flags").as_str())?),
