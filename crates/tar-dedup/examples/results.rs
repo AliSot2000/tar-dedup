@@ -109,6 +109,49 @@ fn print_ancestor_result(ancestors: &[PathBuf], start: &Path) -> () {
     println!();
 }
 
+/// Relative path of `..` components from `file`'s parent directory back to `dir`.
+///
+/// - `dir=/path/to/dir`, `file=/path/to/dir/sub/dir/file.txt` → `../../`
+/// - `dir=/path/to/dir`, `file=/path/to/dir/file.txt` → `.`
+///
+/// Panics if `file` is not under `dir`.
+fn relative_pardirs_to_dir(dir: &Path, file: &Path) -> PathBuf {
+    debug_assert!(dir.is_absolute(), "dir path must be absolute");
+    debug_assert!(file.is_absolute(), "file path must be absolute");
+    debug_assert_eq!(dir.clean(), dir, "dir path must be cleaned");
+    debug_assert_eq!(file.clean(), file, "dir path must be cleaned");
+    assert!(
+        file.starts_with(&dir),
+        "provided path is not child of target path: {} is not under {}",
+        file.display(),
+        dir.display()
+    );
+    let parent = file
+        .parent()
+        .expect("file path must have a parent directory");
+    let below = parent
+        .strip_prefix(&dir)
+        .expect("parent must be under dir after starts_with check");
+    // INFO Check exists but it should already be guaranteed not to exist.
+    // for c in below.components() {
+    //     if !matches!(c, Component::Normal(_)) {
+    //         assert!(false, "Absolute Path contained non-Normal intermediate entry.");
+    //     }
+    // }
+    let depth = below
+        .components()
+        .count();
+    if depth == 0 {
+        PathBuf::from(".")
+    } else {
+        let mut up = String::with_capacity(depth * 3);
+        for _ in 0..depth {
+            up.push_str("../");
+        }
+        PathBuf::from(up)
+    }
+}
+
 fn test_build_ancestor() -> () {
     let p1 = PathBuf::from("");
     let p2 = PathBuf::from("/");
@@ -184,4 +227,18 @@ fn main(){
     println!("Parent is: {}", base_child.parent().unwrap().display());
     println!("Joining {} with {}, got {}, expected {}", target.display(), base_child.display(), target_and_root.display(), target.display());
 
+    let base = Path::new("/path/to/dir");
+    println!(
+        "pardirs: {}",
+        relative_pardirs_to_dir(base, Path::new("/path/to/dir/sub/dir/file.txt")).display()
+    );
+    println!(
+        "pardirs: {}",
+        relative_pardirs_to_dir(base, Path::new("/path/to/dir/file.txt")).display()
+    );
+    // relative_pardirs_to_dir(base, Path::new("/path/file.txt")); // panic: not a child
+    println!(
+        "pardirs: {}",
+        relative_pardirs_to_dir(base, Path::new("/path/to/other/../dir/file.txt")).display()
+    );
 }
