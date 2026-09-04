@@ -24,11 +24,11 @@ pub struct PlacementOptions {
     pub link_tree: bool,
     pub use_hard_links: bool,
     pub absolute_links: bool, // TODO not possible with use_hard_links
-    pub hardlink_reestablish: bool,
     pub clean_target: bool, // TODO implies no_create_dir is false!
     pub link_source: Option<PathBuf>,  // TODO CLI + san!!! (may be file name only), need not exist when starting extraction
     pub no_reflink: bool, // TODO cli
     pub hard_link_grouping: HardLinkGrouping, // TODO cli
+    pub recreate_none_file_entries: bool, // TODO CLI
 }
 
 #[derive(Debug, Clone)]
