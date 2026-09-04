@@ -74,6 +74,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     let skipped = db.promote_non_sparsify_candidates_to_sparsified(config.sparse.min_pages)?;
     tracing::info!(count = skipped, "promoted non-candidates → sparsified");
 
+    // TODO batching!
     let candidates: Vec<StrippedRecord> = db.list_sparsify_candidates(config.sparse.min_pages)?;
     if candidates.is_empty() {
         sanity_no_deduped(db)?;
