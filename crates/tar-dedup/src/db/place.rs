@@ -184,7 +184,7 @@ pub fn list_out_tree(
     };
     let rows = stmt.query_map(
         params,
-        OutTreeRecord::from_sql
+        |r | OutTreeRecord::from_sql(r, None)
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
