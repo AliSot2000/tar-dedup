@@ -148,8 +148,9 @@ pub fn list_out_tree(
     let source_filter = if source_id.is_some() {
         " AND r.source_id = :source_id "
     } else { "" };
+    let cols = OutTreeRecord::sql_columns(Some("o"));
     let mut stmt = conn.prepare(&format!(
-        "SELECT o.id, o.abs_path, o.file_id, o.flags
+        "SELECT {cols}
             FROM out_tree o
             JOIN ref_out r ON r.out_id = o.id
             WHERE o.id > :last_id
