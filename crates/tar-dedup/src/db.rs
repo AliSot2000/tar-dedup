@@ -565,4 +565,10 @@ impl Database {
     pub fn count_ref_out_rows(&self) -> Result<u64> {
         place::count_ref_out_rows(&self.conn())
     }
+
+    pub fn list_out_tree_for_linking<R: SqlFileRow>(
+        &self, batch_size: u64, pending: bool)
+        -> Result<Vec<(R, OutTreeRecord)>> {
+        place::list_out_tree_for_linking(&self.conn(), batch_size, pending)
+    }
 }
