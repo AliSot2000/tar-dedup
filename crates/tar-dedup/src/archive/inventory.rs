@@ -228,6 +228,11 @@ pub fn handle_entry(
         None
     };
 
+    let (major, minor) = match ftype {
+        Some(FileType::CharacterDevice | FileType::BlockDevice) => get_file_rdev_parts(&meta),
+        _ => (None, None),
+    };
+
     // Optional data
     let xattrs = if config.capture.do_xattrs {
         match get_file_xattr(path) {
@@ -265,6 +270,8 @@ pub fn handle_entry(
         link_dst: link_dst.clone(),
         device_id: dev,
         inode_id: ino,
+        major,
+        minor,
     })? {
         *processed += 1;
         progress.inc(1);
@@ -383,11 +390,26 @@ fn get_file_ino(meta: &fs::Metadata) -> io::Result<u64> {
 }
 
 #[cfg(not(unix))]
-fn get_file_def() -> io::Result<u64> {
+fn get_file_ino(_meta: &fs::Metadata) -> io::Result<u64> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "file ino is not available on this platform",
     ))
+}
+
+#[cfg(unix)]
+fn get_file_rdev_parts(meta: &fs::Metadata) -> (Option<u64>, Option<u64>) {
+    use std::os::unix::fs::MetadataExt;
+    let rdev = meta.rdev();
+    (
+        Some(nix::sys::stat::major(rdev)),
+        Some(nix::sys::stat::minor(rdev)),
+    )
+}
+
+#[cfg(not(unix))]
+fn get_file_rdev_parts(_meta: &fs::Metadata) -> (Option<u64>, Option<u64>) {
+    (None, None)
 }
 
 /// Function attempts to figure out what a given soft link (chain) is pointing to.
