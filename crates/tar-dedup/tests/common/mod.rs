@@ -6,7 +6,7 @@ use tar_dedup::cli::ConflictPolicy;
 use tar_dedup::common::start::StartPolicy;
 use tar_dedup::config::{
     CleanupSettings, CompressionFormat, ExtractAttributeOptions, ExtractConfig, PathLayout,
-    PlacementOptions, ProcessOptions, ScanOptions,
+    PlacementOptions, ProcessOptions, ScanOptions, HardLinkGrouping,
 };
 use tar_dedup::db::flags::{SourceFlag, SourceFlags};
 use tar_dedup::db::types::{FileId, FilePhase, FileType, NewFileRecord, StrippedRecord};
@@ -40,6 +40,8 @@ pub fn insert_file(db: &Database, abs_path: &str, size: u64) -> FileId {
         link_dst: None,
         inode_id: None,
         device_id: None,
+        major: None,
+        minor: None,
     })
     .expect("insert file");
 
@@ -97,6 +99,8 @@ pub fn insert_materialized(
         link_dst: None,
         inode_id: None,
         device_id: None,
+        major: None,
+        minor: None,
     })
     .expect("insert file");
     db.apply_no_filter().expect("include all");
@@ -141,10 +145,11 @@ pub fn place_config(extraction_root: PathBuf, absolute_names: bool) -> ExtractCo
             link_tree: false,
             use_hard_links: false,
             absolute_links: false,
-            hardlink_reestablish: true,
             clean_target: false,
             link_source: None,
             no_reflink: false,
+            recreate_none_file_entries: true,
+            hard_link_grouping: HardLinkGrouping::None,
         },
         attributes: ExtractAttributeOptions {
             restore_owner: false,
