@@ -14,7 +14,7 @@ pub use compression::{
     infer_compression_from_suffix, resolve_compression, CompressionFormat, CompressionSettings,
 };
 pub use extract::{
-    ExtractAttributeOptions, ExtractConfig, PlacementOptions, ScanOptions,
+    ExtractAttributeOptions, ExtractConfig, PlacementOptions, ScanOptions, HardLinkGrouping,
 };
 pub use paths::{PathLayout, PathSource};
 pub use phases::{
