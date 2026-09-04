@@ -39,6 +39,46 @@ The interface for the program should
 - take -i (for input directory - will change later on)
 - take -C (for output directory)
 
+# Staging:
+Listing SQL conditions for given selection
+- `Inventory`: None
+- `Hash`: 
+   - phase = inventoried / filtered
+   - include < 0 && exclude = 0 if filtered
+   - is_hardlink_cacnonical (flag) if detect_hardlinks
+   - !sha_error (flag)
+   - sha1 is null
+   - ftype = 'file'
+- `Filter`:
+  - phase = inventoried / hashed
+  - (last_id / batch_size)
+- `Dedup`: 
+  - phase = hashed / filtered 
+  - Exclude Groups
+    - excluded: include_reason = 0 OR exclude_reason > 0
+  - File Type:
+    - ftype is NULL or ftype != file  
+  - Empty sha1
+    - sha1 IS NULL
+  - Singleton
+    - sha1 IS NOT NULL
+    - (sha1, size) in SELECT sha1, size FROM files WHERE sha1 IS NOT NULL GROUP BY sha1, size HAVING COUNT(*) = 1
+  - ⇒ (&&) phase, include < 0, exclude = 0, ftype = 'file', sha1 IS NOT NULL, GROUP (sha1, file_size) > 1
+- `Sparsify`:
+  - phase = 'deduped'
+  - ftype = 'file'
+  - canonical_id = id
+  - sha1 is not NULL // proxy for file is readable
+  - sparse_count > min_pages
+  - !has_sparse (flag)
+  - include < 0, exclude = 0
+- `Stage`: 
+  - phase = 'sparsified'
+  - ftype = 'file'
+  - canonical_id = id
+  - include_reason < 0
+  - exclude_reason = 0
+
 Feat:
 - Docker style progress (bottom all files, top each file being hashed)
 - Pass compression args to the different compression algos (e.g. -9 for xz) 
