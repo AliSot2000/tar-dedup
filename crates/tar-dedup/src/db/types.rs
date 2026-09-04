@@ -46,6 +46,8 @@ pub struct FileRecord {
     pub ftype: Option<FileType>,
     pub device_id: Option<u64>,
     pub inode_id: Option<u64>,
+    pub major: Option<u64>,
+    pub minor: Option<u64>,
     pub xattrs: Option<String>,
     pub posix_acl: Option<String>,
     pub selinux_ctx: Option<Vec<u8>>,
@@ -96,6 +98,8 @@ pub struct NewFileRecord {
     pub link_dst: Option<PathBuf>,
     pub device_id: Option<u64>,
     pub inode_id: Option<u64>,
+    pub major: Option<u64>,
+    pub minor: Option<u64>,
 }
 
 /// Enum represents all possible targets a symlink can have. `Unknown` is for dangling links that
