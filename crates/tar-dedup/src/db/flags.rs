@@ -248,12 +248,16 @@ define_flags! {
         Placed = 0,
         /// Payload was hard-linked to existing hard link group
         IsHardlink = 1,
+        /// Marks this file as the canonical (hard link target)
+        IsCanonical = 2,
+        /// Walked this abs_path already with another source. Do not hard link against these entries.
+        EntryWalked = 3,
         /// Copy/link into this output path failed.
-        ErrorWhilePlace = 2,
+        ErrorWhilePlace = 4,
         /// Metadata restore failed for this output path.
-        ErrorWhileApplyingMetadata = 3,
+        ErrorWhileApplyingMetadata = 5,
         /// Highlight directories to be able to scan them for dir tree creation.
-        IsDirectory = 4,
+        IsDirectory = 6,
     }
     /// Bitset stored in `out_tree.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
