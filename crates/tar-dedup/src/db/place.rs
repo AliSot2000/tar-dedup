@@ -251,3 +251,42 @@ pub fn list_canonical_files_for_move<R: SqlFileRow>(
     )?;
     results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
+
+/// List all rows (which aren't directories which cna be built.
+pub fn list_out_tree_for_linking<R: SqlFileRow>(
+    conn: &Connection, batch_size: u64, pending: bool)
+    -> Result<Vec<(R, OutTreeRecord)>> {
+    let file_cols = R::sql_columns(Some("can"));
+    let out_cols = OutTreeRecord::sql_columns(Some("o"));
+    let filter_placed = if pending {
+        " AND o.flags & :placement = 0 \
+          AND o.flags & :place_error = 0"
+    } else {
+        " AND o.flags & :placement = 1 \
+          AND o.flags & :place_error = 0"
+    };
+    let mut stmt = conn.prepare(&format!("\
+        SELECT {file_cols}, {out_cols} \
+        FROM files AS can \
+        JOIN files AS ent ON can.id = ent.canonical_id \
+        JOIN out_tree AS ON f.id = o.file_id \
+        WHERE f.ftype != 'dir' \
+            {filter_placed} \
+            AND f.flags & :moved = 1 \
+        ORDER BY o.id LIMIT :batch_size
+        "))?;
+    let results = stmt.query_map(
+        named_params! {
+            ":placement": OutTreeFlag::Placed.mask_i64(),
+            ":moved": FileFlag::AtLinkSource.mask_i64(),
+            ":batch_size": batch_size,
+            ":place_error": OutTreeFlag::ErrorWhilePlace.mask_i64(),
+        },
+        |row| {
+            let sr = R::from_row(row, Some("can"))?;
+            let or = OutTreeRecord::from_sql(row, Some("o"))?;
+            Ok((sr, or))
+        }
+    )?;
+    results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
