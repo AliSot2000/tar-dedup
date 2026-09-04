@@ -117,17 +117,20 @@ impl OutTreeRecord {
             abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
             file_id: file_id.map(FileId),
             flags: OutTreeFlags::from_i64(row.get(format!("{upx}flags").as_str())?),
+            canonical_id: OutTreeId(row.get(format!("{upx}canonical_id").as_str())?)
         })
     }
 
     fn sql_columns(prefix: Option<&str>) -> String {
         match prefix {
-            None => "id, abs_path, file_id, flags".to_string(),
+            None => "id, abs_path, file_id, flags, canonical_id".to_string(),
             Some(p) => format!("\
             {p}.id AS \"{p}.id\",
             {p}.abs_path AS \"{p}.abs_path\",
             {p}.file_id AS \"{p}.file_id\",
-            {p}.flags AS \"{p}.flags\""
+            {p}.flags AS \"{p}.flags\",
+            {p}.canonical_id AS \"{p}.canonical_id\"
+            "
             )
         }
     }
@@ -289,4 +292,55 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
         }
     )?;
     results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+/// Mark all entries in the out_tree which
+pub fn mark_all_canonical(conn: &Connection) -> Result<u64> {
+    //         SET flags = flags | :canonical | :walked \
+    let update = conn.execute(
+        "UPDATE out_tree \
+        SET canonical_id = id \
+        WHERE canonical_id IS NULL AND flags & :dir = 0",
+        named_params! {
+            ":canonical": OutTreeFlag::IsCanonical.mask_i64(),
+            ":walked" : OutTreeFlag::EntryWalked.mask_i64(),
+            ":dir": OutTreeFlag::IsDirectory.mask_i64(),
+        })?;
+   Ok(update as u64)
+}
+
+pub fn mark_global_canonical(conn: &Connection) -> Result<u64> {
+    let updated = conn.execute(" \
+        UPDATE out_tree SET canonical_id = id WHERE id IN
+            (SELECT MIN(out.id)
+            FROM files AS can
+            JOIN files AS tree ON can.id = tree.canonical_id
+            JOIN out_tree AS out ON tree.id = out.file_id
+        WHERE tree.ftype = 'file' AND out.canonical_id IS NULL
+        GROUP BY tree.dev, tree.inode)
+    ",
+[]
+    )?;
+    Ok(updated as u64)
+}
+
+pub fn mark_source_canonical(conn: &Connection, source_id: i64) -> Result<u64> {
+    let updated = conn.execute(
+        "
+        UPDATE out_tree SET canonical_id = id WHERE id IN
+            (SELECT MIN(tree.id) \
+            FROM files AS can \
+            JOIN files AS tree ON can.id = tree.canonical_id \
+            JOIN out_tree AS out ON tree.id = out.file_id \
+            JOIN ref_out ON ref_out.out_id = out.id \
+            WHERE ftype = 'file' \
+                AND out.canonical_id IS NULL \
+                AND ref_out.source_id = :source_id \
+            GROUP BY (can.sha1, can.size, tree.dev, tree.inode)) \
+    ",
+        named_params! {
+        ":source_id": source_id,
+    }
+    )?;
+    Ok(updated as u64)
 }

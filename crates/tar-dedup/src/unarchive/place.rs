@@ -1,6 +1,6 @@
 //! Place: copy/link cached payloads to final output paths.
 
-use crate::config::ExtractConfig;
+use crate::config::{ExtractConfig, HardLinkGrouping};
 use crate::db::Database;
 use crate::db::flags::{FileFlag, OutTreeFlag, OutTreeFlags};
 use crate::db::types::{FileId, FileRecord, FileType, NewOutTreeRow, OutTreeId, OutTreeRecord, StrippedRecord};
@@ -46,7 +46,36 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         tracing::info!("Moving canonical file in place for link tree...");
         copy_canonicals_to_source(&config, &db, &shutdown)?;
         link_into_place(&config, &db, &shutdown)?;
+    } else {
+        prepare_hardlink_canonicals(&config, &db, &shutdown)?;
     }
+    Ok(())
+}
+
+pub fn prepare_hardlink_canonicals(config: &ExtractConfig, db: &Database, shutdown: &Shutdown)
+    -> Result<()> {
+    match config.placement.hard_link_grouping {
+        HardLinkGrouping::None => db.mark_all_canonical()?,
+        HardLinkGrouping::Global => db.mark_global_canonical()?,
+        HardLinkGrouping::Source => {
+            if config.placement.absolute_names {
+                db.mark_global_canonical()?
+            } else {
+                let mut last_id = 0i64;
+                loop {
+                    let sources = db.list_sources(None, last_id, BATCH_SIZE)?;
+                    if sources.is_empty() { break }
+                    last_id = sources
+                        .last()
+                        .expect("PRECONDITION FAILED: At least one element expected").id;
+                }
+            }
+        }
+    }
+    if config.placement.absolute_names {
+
+    }
+
     Ok(())
 }
 
@@ -340,7 +369,6 @@ pub fn copy_canonicals_to_source(config: &ExtractConfig, db: &Database, shutdown
         }
 
     }
-
     Ok(())
 }
 
