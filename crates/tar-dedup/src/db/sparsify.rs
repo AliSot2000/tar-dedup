@@ -58,7 +58,7 @@ pub fn list_sparsify_candidates<R: SqlFileRow>(
              AND sha1 IS NOT NULL
              AND sparse_count >= :min_pages -- implies NOT NULL
              AND (flags & :has_sparse) = 0
-             AND include_reason > 0
+             AND include_reason < 0
              AND exclude_reason = 0
          ORDER BY id"
     ))?;

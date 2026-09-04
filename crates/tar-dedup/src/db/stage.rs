@@ -30,7 +30,7 @@ pub fn list_files_to_stage<R: SqlFileRow>(conn: &Connection, retry_missing_sha: 
             WHERE phase='sparsified' \
             AND ftype = 'file'\
             AND canonical_id = id \
-            AND include_reason > 0 \
+            AND include_reason < 0 \
             AND exclude_reason = 0 \
             {filter_sha}",
                  R::sql_columns(None)))?;
