@@ -12,6 +12,7 @@ pub struct OutTreeRecord {
     pub abs_path: PathBuf,
     pub file_id: Option<FileId>,
     pub flags: OutTreeFlags,
+    pub canonical_id: OutTreeId,
 }
 
 #[derive(Debug, Clone)]
