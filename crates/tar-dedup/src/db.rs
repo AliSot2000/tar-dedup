@@ -571,4 +571,8 @@ impl Database {
         -> Result<Vec<(R, OutTreeRecord)>> {
         place::list_out_tree_for_linking(&self.conn(), batch_size, pending)
     }
+
+    pub fn mark_all_canonical(&self) -> Result<u64> {
+        place::mark_all_canonical(&self.conn())
+    }
 }

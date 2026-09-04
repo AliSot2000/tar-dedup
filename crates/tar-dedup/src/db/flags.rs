@@ -248,9 +248,11 @@ define_flags! {
         Placed = 0,
         /// Payload was hard-linked to existing hard link group
         IsHardlink = 1,
+        // TODO DELETE PROBABLY
         /// Marks this file as the canonical (hard link target)
         IsCanonical = 2,
         /// Walked this abs_path already with another source. Do not hard link against these entries.
+        // TODO END DELETE
         EntryWalked = 3,
         /// Copy/link into this output path failed.
         ErrorWhilePlace = 4,
