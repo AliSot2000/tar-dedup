@@ -46,8 +46,8 @@ pub fn promote_to_deduped(conn: &Connection, file_id: FileId) -> Result<()> {
 
 /// Promote excluded entries to deduped
 pub fn promote_excluded_entries_to_deduped(conn: &Connection) -> Result<u64> {
-    let n = conn.execute("UPDATE files SET phase = 'filtered' \
-        WHERE include_reason = 0 OR exclude_reason > 0", [])?;
+    let n = conn.execute("UPDATE files SET phase = 'deduped' \
+        WHERE include_reason = 0 OR exclude_reason > 0 AND phase 'filtered'", [])?;
     Ok(n as u64)
 }
 
