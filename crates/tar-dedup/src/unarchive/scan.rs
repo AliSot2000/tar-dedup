@@ -518,6 +518,8 @@ mod tests {
             link_dst: None,
             device_id: None,
             inode_id: None,
+            major: None,
+            minor: None,
         })
         .expect("insert");
 
