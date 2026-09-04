@@ -45,51 +45,231 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     if config.placement.link_tree {
         tracing::info!("Moving canonical file in place for link tree...");
         copy_canonicals_to_source(&config, &db, &shutdown)?;
+        link_into_place(&config, &db, &shutdown)?;
     }
     Ok(())
 }
 
+enum SpecialErrors {
+    NixErr(nix::Error, PathBuf),
+    IoError(io::Error, PathBuf),
+}
+
 pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    let mut last_id = OutTreeId(0);
-    // let results = Mutex::new(Vec::new());
+    let dir_name = match &config.placement.link_source {
+        None => PathBuf::from(".sources"),
+        Some(v)  => v.to_path_buf(),
+    };
+    let base_dir = config.paths.extraction_root().join(&dir_name);
+    let results = Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(config.process.jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
+    let shutdown = shutdown.clone();
+    loop {
+        shutdown.check_between_files()?;
+        let entries: Vec<(FileRecord, OutTreeRecord)> = db.list_out_tree_for_linking(
+            BATCH_SIZE, true)?;
+        if entries.is_empty() { break }
 
-    if !config.placement.absolute_names {
-        let mut last_source = 0i64;
-        loop {
-            let sources = db.list_sources(
-                None, last_source, BATCH_SIZE)?;
-            if sources.is_empty() { break }
-            last_source = sources
-                .last().expect("PRECONDITION FAILED: At least one entry expected").id;
 
-            for source in sources {
-                loop {
-                    // TODO query only not materialized entries.
-                    let entries = db.list_out_tree(
-                        last_id, BATCH_SIZE, Some(source.id), Some(false))?;
-                    if entries.is_empty() { break }
-                    last_id = entries
-                        .last().expect("PRECONDITION FAILED: At least one entry expected").id;
+        let parallel = pool.install(|| {
+            entries.par_iter().try_for_each(
+                |(canonical, out)| -> Result<()> {
+                shutdown.check_between_files()?;
+                let ftype = canonical.ftype.expect("Only Extract known file types");
+                let result = if matches!(ftype, FileType::File) {
+                    let content_id = canonical
+                        .content_id()
+                        .expect("PRECONDITION: Moved successfully, concent_id must exist")
+                        .0;
+                    // Compute the target for link
+                    let link_target = if config.placement.absolute_links
+                        || config.placement.use_hard_links {
+                        base_dir.join(content_id)
+                    } else {
+                        let up = relative_pardirs_to_dir(
+                            config.paths.extraction_root(), &out.abs_path);
+                        up.join(&dir_name).join(content_id)
+                    };
+                    // Actually build the link
+                    let base_res = if config.placement.use_hard_links {
+                        fs::hard_link(link_target, &out.abs_path)
+                    } else {
+                        // TODO verify that this works
+                        std::os::unix::fs::symlink(link_target, &out.abs_path)
+                    };
+                    match base_res {
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(SpecialErrors::IoError(e, out.abs_path.to_path_buf())),
+                    }
+                } else {
+                    if config.placement.recreate_none_file_entries {
+                        build_other(
+                            &canonical, &out, ftype, config.placement.recreate_none_file_entries)
+                    } else {
+                        Ok(())
+                    }
+                };
+                results
+                    .lock()
+                    .expect("Result lock for link in place poisoned")
+                    .push((out.id, result.err()));
+                Ok(())
+            })
+        });
 
-                    // let parallel = pool.install(|| {
-                    //     entries.par_iter().try_for_each(|rec| {
-                    //         let target = rec.abs_path;
-                    //
-                    //
-                    //     })
-                    // });
+        // Check Pool Result
+        match parallel {
+            Ok(()) => (),
+            Err(Error::Interrupted) => (), // Exit
+            Err(e) => return Err(e)
+        }
+
+        // Get the results
+        let new_res = Vec::new();
+        let linked = std::mem::replace(
+            &mut *results.lock().expect("hash results lock"),
+            new_res);
+
+        // Apply results to db
+        for (id, err) in linked {
+            match err {
+                None => {
+                    let _ = db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
+                }
+                // TODO handle errors.
+                Some(SpecialErrors::IoError(e, p)) => {
+                    let _ = db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
+                    tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
+                }
+                Some(SpecialErrors::NixErr(e, p)) => {
+                    let _ = db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
+                    tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
                 }
             }
         }
-    } else {
-
     }
-
     Ok(())
+}
+
+/// Function recreates all special files it can. Importantly, files, directories and unknown
+/// types are not valid file types for the function and will cause a panic
+fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, ftype: FileType, try_special: bool)
+    -> std::result::Result<(), SpecialErrors> {
+    // TODO perm mask for created entries
+    match ftype {
+        FileType::File => panic!(
+            "PRECONDITION ERROR: build_other does not treat files"),
+        FileType::Directory => panic!(
+            "PRECONDITION ERROR: build_other does not treat directories"),
+        FileType::Unknown => panic!(
+            "PRECONDITION ERROR: build_other does not treat unknown"),
+        FileType::Socket => {
+            tracing::info!("Received Socket at {}, skipping", &out_tree.abs_path.display());
+            Ok(())
+        },
+        FileType::Symlink(_) => match &canonical.link_dst {
+            None => Ok(()),
+            Some(dst) => match std::os::unix::fs::symlink(dst, &out_tree.abs_path) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(SpecialErrors::IoError(e, out_tree.abs_path.to_path_buf()))
+            }
+        },
+        FileType::FIFO => {
+            if !try_special {
+                return Ok(())
+            }
+            match nix::unistd::mkfifo(&out_tree.abs_path, Mode::from_bits_truncate(0o644)) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(SpecialErrors::NixErr(e, out_tree.abs_path.to_path_buf()))
+            }
+        },
+        FileType::BlockDevice => {
+            if canonical.major.is_none() || canonical.minor.is_none() {
+                tracing::error!(
+                    "Could not create block device at {}, major and/or minor is missing",
+                    out_tree.abs_path.display()
+                );
+                return Ok(())
+            }
+            if !try_special {
+                return Ok(())
+            }
+            let dev = makedev(
+                canonical.major.unwrap() as u32, canonical.minor.unwrap()  as u32);
+            let create_res =  mknod(
+                &out_tree.abs_path, SFlag::S_IFBLK, Mode::from_bits_truncate(0o644), dev);
+            match create_res {
+                Ok(_) => Ok(()),
+                Err(e) => Err(SpecialErrors::NixErr(e, out_tree.abs_path.to_path_buf())),
+            }
+        },
+        FileType::CharacterDevice => {
+            if canonical.major.is_none() || canonical.minor.is_none() {
+                tracing::error!(
+                    "Could not create block device at {}, major and/or minor is missing",
+                    out_tree.abs_path.display()
+                );
+                return Ok(())
+            }
+            if !try_special {
+                return Ok(())
+            }
+            let dev = makedev(
+                canonical.major.unwrap() as u32, canonical.minor.unwrap()  as u32);
+            let create_res =  mknod(
+                &out_tree.abs_path, SFlag::S_IFCHR, Mode::from_bits_truncate(0o644), dev);
+            match create_res {
+                Ok(_) => Ok(()),
+                Err(e) => Err(SpecialErrors::NixErr(e, out_tree.abs_path.to_path_buf())),
+            }
+        }
+    }
+}
+
+/// Relative path of `..` components from `file`'s parent directory back to `dir`.
+///
+/// - `dir=/path/to/dir`, `file=/path/to/dir/sub/dir/file.txt` → `../../`
+/// - `dir=/path/to/dir`, `file=/path/to/dir/file.txt` → `.`
+///
+/// Panics if `file` is not under `dir`.
+fn relative_pardirs_to_dir(dir: &Path, file: &Path) -> PathBuf {
+    debug_assert!(dir.is_absolute(), "dir path must be absolute");
+    debug_assert!(file.is_absolute(), "file path must be absolute");
+    debug_assert_eq!(dir.clean(), dir, "dir path must be cleaned");
+    debug_assert_eq!(file.clean(), file, "dir path must be cleaned");
+    assert!(
+        file.starts_with(&dir),
+        "provided path is not child of target path: {} is not under {}",
+        file.display(),
+        dir.display()
+    );
+    let parent = file
+        .parent()
+        .expect("file path must have a parent directory");
+    let below = parent
+        .strip_prefix(&dir)
+        .expect("parent must be under dir after starts_with check");
+    // INFO Check exists but it should already be guaranteed not to exist.
+    // for c in below.components() {
+    //     if !matches!(c, Component::Normal(_)) {
+    //         assert!(false, "Absolute Path contained non-Normal intermediate entry.");
+    //     }
+    // }
+    let depth = below
+        .components()
+        .count();
+    if depth == 0 {
+        PathBuf::from(".")
+    } else {
+        let mut up = String::with_capacity(depth * 3);
+        for _ in 0..depth {
+            up.push_str("../");
+        }
+        PathBuf::from(up)
+    }
 }
 
 /// Function copies all extracted canonical files to the extraction destination and
