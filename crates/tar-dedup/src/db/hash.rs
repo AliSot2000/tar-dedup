@@ -23,7 +23,7 @@ pub fn get_entries_to_hash<R: SqlFileRow>(
     let sql = format!(
         "SELECT {cols} FROM files WHERE phase = {phase} \
              AND (flags & :sha_error) = 0 \
-             AND sha1 IS NOT NULL \
+             AND sha1 IS NULL \
              AND ftype = 'file' \
              {filter_hardlink_canonical} \
              {filtered_selection}"
