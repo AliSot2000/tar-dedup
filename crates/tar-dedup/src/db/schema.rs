@@ -86,6 +86,7 @@ CREATE INDEX IF NOT EXISTS idx_ref_file ON ref(file_id);
 
 CREATE TABLE IF NOT EXISTS out_tree (
     id       INTEGER PRIMARY KEY CHECK (id > 0),
+    canonical_id INTEGER REFERENCES out_tree(id),
     abs_path TEXT NOT NULL UNIQUE,
     file_id  INTEGER REFERENCES files(id),
     flags    INTEGER NOT NULL DEFAULT 0
