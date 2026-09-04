@@ -149,9 +149,9 @@ pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<(u64, u64)> {
          GROUP BY dev, inode
          HAVING COUNT(*) > 1
             AND SUM(CASE WHEN flags & :hardlinks != 0
-                          AND NOT (include_reason > 0 AND exclude_reason = 0)
+                          AND NOT (include_reason < 0 AND exclude_reason = 0)
                      THEN 1 ELSE 0 END) = 1
-            AND SUM(CASE WHEN include_reason > 0 AND exclude_reason = 0
+            AND SUM(CASE WHEN include_reason < 0 AND exclude_reason = 0
                      THEN 1 ELSE 0 END) > 0",
         named_params! {":hardlinks": hardlink_mask}
     )?;
@@ -172,7 +172,7 @@ pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<(u64, u64)> {
              SET flags = flags | :hardlinks
              WHERE id IN (
                  SELECT MIN(id) FROM files
-                 WHERE include_reason > 0 AND exclude_reason = 0
+                 WHERE include_reason < 0 AND exclude_reason = 0
                    AND (dev, inode) IN (SELECT dev, inode FROM stale_clusters)
                  GROUP BY dev, inode
              )",
