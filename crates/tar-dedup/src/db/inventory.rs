@@ -32,10 +32,10 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
     let changed = conn.execute(
         "INSERT OR IGNORE INTO files (
              abs_path, ext, size, mtime, atime, ctime, uid, gid, mode, ftype,
-             xattr, acl, selinux, phase, link_dst
+             xattr, acl, selinux, phase, link_dst, inode, dev, major, minor
          ) VALUES (
              :abs_path, :ext, :size, :mtime, :atime, :ctime, :uid, :gid, :mode, :ftype,
-             :xattr, :acl, :selinux, 'inventoried', :link_dst
+             :xattr, :acl, :selinux, 'inventoried', :link_dst, :inode, :dev, :major, :minor
          )",
         named_params! {
             ":abs_path": record.abs_path.to_string_lossy(),
@@ -55,6 +55,10 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
                 .link_dst
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
+            ":inode": record.inode_id.map(|v| v as i64),
+            ":dev": record.device_id.map(|v| v as i64),
+            ":major": record.major.map(|v| v as i64),
+            ":minor": record.minor.map(|v| v as i64),
         },
     )?;
     Ok(changed > 0)
@@ -203,6 +207,7 @@ pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
 mod tests {
     use super::*;
     use crate::db::flags::{SourceFlag, SourceFlags};
+    use crate::db::types::{FileRecord, FileType};
     use crate::db::Database;
     use std::path::{Path, PathBuf};
 
@@ -224,6 +229,8 @@ mod tests {
             link_dst: None,
             device_id: None,
             inode_id: None,
+            major: None,
+            minor: None,
         }
     }
 
@@ -252,5 +259,39 @@ mod tests {
                 .unwrap(),
             id
         );
+    }
+
+    #[test]
+    fn major_minor_null_for_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("t.sqlite")).unwrap();
+        assert!(db.insert_file(&record("/plain.txt")).unwrap());
+        let id = db.file_id_by_abs_path(Path::new("/plain.txt")).unwrap().unwrap();
+        let loaded: FileRecord = db.get_file_by_id(id).unwrap().expect("row");
+        assert_eq!(loaded.major, None);
+        assert_eq!(loaded.minor, None);
+    }
+
+    #[test]
+    fn major_minor_round_trip_for_char_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("t.sqlite")).unwrap();
+        let mut rec = record("/dev/nullish");
+        rec.ftype = Some(FileType::CharacterDevice);
+        rec.major = Some(1);
+        rec.minor = Some(3);
+        rec.device_id = Some(42);
+        rec.inode_id = Some(99);
+        assert!(db.insert_file(&rec).unwrap());
+        let id = db
+            .file_id_by_abs_path(Path::new("/dev/nullish"))
+            .unwrap()
+            .unwrap();
+        let loaded: FileRecord = db.get_file_by_id(id).unwrap().expect("row");
+        assert_eq!(loaded.ftype, Some(FileType::CharacterDevice));
+        assert_eq!(loaded.major, Some(1));
+        assert_eq!(loaded.minor, Some(3));
+        assert_eq!(loaded.device_id, Some(42));
+        assert_eq!(loaded.inode_id, Some(99));
     }
 }
