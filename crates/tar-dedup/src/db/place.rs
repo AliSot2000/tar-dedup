@@ -228,7 +228,7 @@ pub fn list_canonical_files_for_move<R: SqlFileRow>(
                   "INVARIANT ERROR: Only > 0 FileIds handed out, 0 minimum lower bound");
 
     let cols = R::sql_columns(None);
-    let sql_filt = if filter { " AND include_reason > 0 AND exclude_reason = 0" } else { "" };
+    let sql_filt = if filter { " AND include_reason < 0 AND exclude_reason = 0" } else { "" };
     let mut stmt = conn.prepare(&format!("\
         SELECT {cols} FROM files \
             WHERE flags & :extracted = 1 \
