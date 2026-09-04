@@ -120,6 +120,8 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         }
         Err(e) => Err(e),
     }
+
+    // TODO propagate remaining files.
 }
 
 struct IdError {
