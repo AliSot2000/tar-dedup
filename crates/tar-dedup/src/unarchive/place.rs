@@ -3,17 +3,19 @@
 use crate::config::ExtractConfig;
 use crate::db::Database;
 use crate::db::flags::{FileFlag, OutTreeFlag, OutTreeFlags};
-use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, StrippedRecord};
+use crate::db::types::{FileId, FileRecord, FileType, NewOutTreeRow, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 use nix::NixPath;
+use nix::libc::makedev;
+use nix::sys::stat::{Mode, SFlag, mknod};
 use path_clean::PathClean;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use std::collections::HashSet;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
+use std::{fs, io};
 
 const BATCH_SIZE: u64 = 10_000;
 
