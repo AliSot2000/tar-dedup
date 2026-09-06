@@ -1,4 +1,3 @@
-use nix::libc::{gid_t, uid_t};
 use rusqlite::{Connection, named_params, OptionalExtension};
 use std::iter::zip;
 use std::path::Path;
@@ -7,7 +6,6 @@ use crate::db::meta;
 use crate::db::types::{FileId, NewFileRecord};
 use crate::db::flags::FileFlag;
 use crate::error::Result;
-use nix::unistd::{Gid, Group, Uid, User};
 use path_clean::PathClean;
 
 pub fn file_id_by_abs_path(conn: &Connection, path: &Path) -> Result<Option<FileId>> {
@@ -32,10 +30,12 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
     let changed = conn.execute(
         "INSERT OR IGNORE INTO files (
              abs_path, ext, size, mtime, atime, ctime, uid, gid, mode, ftype,
-             xattr, acl, selinux, phase, link_dst, inode, dev, major, minor
+             xattr, acl, selinux, phase, link_dst, inode, dev, major, minor,
+             win_perm
          ) VALUES (
              :abs_path, :ext, :size, :mtime, :atime, :ctime, :uid, :gid, :mode, :ftype,
-             :xattr, :acl, :selinux, 'inventoried', :link_dst, :inode, :dev, :major, :minor
+             :xattr, :acl, :selinux, 'inventoried', :link_dst, :inode, :dev, :major, :minor,
+             :win_perm
          )",
         named_params! {
             ":abs_path": record.abs_path.to_string_lossy(),
@@ -59,6 +59,7 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
             ":dev": record.device_id.map(|v| v as i64),
             ":major": record.major.map(|v| v as i64),
             ":minor": record.minor.map(|v| v as i64),
+            ":win_perm": record.win_perm.as_deref(),
         },
     )?;
     Ok(changed > 0)
@@ -148,6 +149,9 @@ pub fn set_hardlink_canonicals(conn: &Connection) -> Result<u64> {
 
 #[cfg(unix)]
 pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
+    use nix::libc::{gid_t, uid_t};
+    use nix::unistd::{Gid, Group, Uid, User};
+
     // Get all present uids and gids
     let uids = get_all_uids(&conn)?;
     let gids = get_all_gids(&conn)?;
@@ -198,9 +202,10 @@ pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
-    // TODO Emmit to tracing, stderr
-    Err("Resolve Numeric Ids not available on this platform")
+pub fn resolve_numeric_ids(_conn: &Connection) -> Result<()> {
+    // No POSIX uid/gid namespace on this platform; owner resolution can be
+    // wired to Windows SIDs at a later point.
+    Ok(())
 }
 
 #[cfg(test)]
@@ -226,6 +231,7 @@ mod tests {
             xattrs: None,
             posix_acl: None,
             selinux_ctx: None,
+            win_perm: None,
             link_dst: None,
             device_id: None,
             inode_id: None,
