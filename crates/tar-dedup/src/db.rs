@@ -28,6 +28,7 @@ mod scan;
 mod rehash;
 pub mod place;
 mod permissions;
+mod integrity;
 
 pub use common::SqlFileRow;
 pub use extract::ExtractScanState;
@@ -527,13 +528,13 @@ impl Database {
         place::set_dir_tree_built(&self.conn())
     }
 
-    pub fn list_materialized_entries(
+    pub fn list_materialized_entries<R: SqlFileRow>(
         &self,
         last_id: Option<FileId>,
         batch_size: u64,
         source_id: Option<i64>,
         only_dirs: Option<bool>,
-    ) -> Result<Vec<StrippedRecord>> {
+    ) -> Result<Vec<R>> {
         place::list_materialized_entries(&self.conn(), last_id, batch_size, source_id, only_dirs)
     }
 
@@ -574,5 +575,22 @@ impl Database {
 
     pub fn mark_all_canonical(&self) -> Result<u64> {
         place::mark_all_canonical(&self.conn())
+    }
+
+    // --- integrity checks across the database
+    pub fn count_missing_dev_inode(&self) -> Result<u64> {
+        integrity::count_missing_dev_inode(&self.conn())
+    }
+    pub fn list_missing_dev_inode<R: SqlFileRow>(
+        &self, last_id: &FileId, batch_size: u64) -> Result<Vec<R>> {
+        integrity::list_missing_dev_inode(&self.conn(), last_id, batch_size)
+    }
+    pub fn count_double_canonical_dev_inode_group(&self) -> Result<u64> {
+        integrity::count_double_canonical_dev_inode_group(&self.conn())
+    }
+    pub fn list_double_canonical_dev_inode_group<R: SqlFileRow>(
+        &self, last_id: &FileId, batch_size: u64)
+        -> Result<Vec<R>> {
+        integrity::list_double_canonical_dev_inode_group(&self.conn(), last_id, batch_size)
     }
 }
