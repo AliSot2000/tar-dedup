@@ -1,0 +1,56 @@
+---
+description: Rust style — single functions, contract errors use expect
+alwaysApply: true
+---
+
+# Rust implementation style (tar-dedup)
+
+## One function when asked for one function
+
+When the user asks for **a** function (or "single function", "one populate function", etc.), implement **one** function. Do not split into helpers, wrappers, or parallel code paths unless the user asks or the language truly forces it (e.g. test-only modules).
+
+```rust
+// ❌ User asked for one populate function; agent added populate_abs, populate_rel,
+//    catalog_to_target_abs, ancestor_target_dirs, and thin wrappers.
+
+// ✅ One public entry point; keep logic inline or in existing shared helpers only
+//    when they already exist in the codebase.
+pub fn populate_out_tree(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+    // ...
+}
+```
+
+Prefer extending an existing function over introducing a small helper file or module.
+
+## Errors vs contracts — use `expect`, not defensive `?` spam
+
+Distinguish **user/input fault** from **internal contract violation**:
+
+| Situation | Use |
+|-----------|-----|
+| User config, CLI, paths, I/O the user controls | `Result` / `Error` propagated to caller |
+| Invariant the program establishes (schema init, prior pipeline stage, non-empty batch after check, FK row inserted by `ingest_filters` before `apply_no_filter`) | `expect("…")` or `debug_assert!` |
+
+Do **not** wrap every step in `map_err`, `ok_or_else`, or nested `Error::Config` when failure means a bug or broken invariant, not bad user input.
+
+```rust
+// ❌ Contract: batch is non-empty after is_empty check
+let last = batch.last().ok_or_else(|| Error::Config("empty batch".into()))?;
+
+// ✅
+let last = batch.last().expect("non-empty batch");
+```
+
+```rust
+// ❌ Do not "fix" pipeline functions by inserting rows the real pipeline already creates
+//    (e.g. extra filter_reason INSERT inside apply_no_filter).
+
+// ✅ Call the same setup the production path uses (e.g. ingest_filters), or rely on
+//    preconditions documented at the call site.
+```
+
+Before changing core pipeline code, read the **call site and upstream setup** (often a few lines above). Do not patch symptoms in leaf functions when the caller already guarantees the precondition.
+
+## Tests
+
+Test helpers may call production setup (`ingest_filters`, etc.) instead of reimplementing or weakening invariants in library code.
