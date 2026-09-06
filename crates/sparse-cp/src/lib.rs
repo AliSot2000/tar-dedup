@@ -25,31 +25,7 @@ pub struct SparseCopyStats {
 ///
 /// A short final chunk that is all zeros is **not** counted (it is not a full block).
 pub fn sparse_page_count(path: &Path, block_size: usize) -> io::Result<u64> {
-    if block_size == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "block_size must be > 0",
-        ));
-    }
-
-    let mut file = File::open(path)?;
-    let mut buf = vec![0u8; block_size];
-    let mut count = 0u64;
-
-    loop {
-        let n = read_fullish(&mut file, &mut buf)?;
-        if n == 0 {
-            break;
-        }
-        if n == block_size && is_all_zero(&buf[..n]) {
-            count += 1;
-        }
-        if n < block_size {
-            break;
-        }
-    }
-
-    Ok(count)
+    sparse_page_count_with_progress(path, block_size, |_, _, _| Ok::<(), io::Error>(()))
 }
 
 /// Like [`sparse_page_count`], but reports progress via `on_progress`.
@@ -103,7 +79,6 @@ pub fn sparse_copy(src: &Path, dst: &Path, block_size: usize) -> io::Result<Spar
     sparse_copy_with_progress(src, dst, block_size, |_, _, _| Ok::<(), io::Error>(()))
 }
 
-// TODO do this with arbitrary read/write+seek trait object.
 /// Same as [`sparse_copy`], with a progress callback after each block.
 ///
 /// `on_progress` may return `Err` to abort early (partial `dst` may exist). IO failures are
@@ -117,7 +92,7 @@ pub fn sparse_copy_with_progress<E, F>(
     src: &Path,
     dst: &Path,
     block_size: usize,
-    mut on_progress: F,
+    on_progress: F,
 ) -> Result<SparseCopyStats, E>
 where
     F: FnMut(u64, u64, Duration) -> Result<(), E>,
@@ -134,11 +109,36 @@ where
     let size_in = fs::metadata(src)?.len();
     copy_metadata_only(src, dst)?;
 
-    let mut out = OpenOptions::new().write(true).open(dst)?;
+    let mut reader = File::open(src)?;
+    let mut buf = vec![0u8; block_size];
+    sparse_copy_reader(&mut reader, dst, size_in, &mut buf, on_progress)
+}
+
+/// Drain any `Read` (file, tar member, cursor, …) into a sparse `dst`.
+///
+/// `size_in` is the logical size `dst` is truncated to up front and re-applied at the
+/// end. `buf` is the zero-detection block buffer; its length is used as the block size.
+/// All-zero blocks are seeked over instead of written; the reader is read to EOF.
+///
+/// `on_progress` follows the same contract as [`sparse_copy_with_progress`].
+pub fn sparse_copy_reader<E, F, R>(
+    reader: &mut R,
+    dst: &Path,
+    size_in: u64,
+    buf: &mut [u8],
+    mut on_progress: F,
+) -> Result<SparseCopyStats, E>
+where
+    R: Read + ?Sized,
+    F: FnMut(u64, u64, Duration) -> Result<(), E>,
+    E: From<io::Error>,
+{
+    let block_size = buf.len();
+    debug_assert!(block_size > 0, "INVARIANT ERROR: blocksize should be guarded to be > 0");
+
+    let mut out = OpenOptions::new().write(true).create(true).open(dst)?;
     out.set_len(size_in)?;
 
-    let mut inp = File::open(src)?;
-    let mut buf = vec![0u8; block_size];
     let mut pos = 0u64;
     let mut zero_blocks = 0u64;
     let mut bytes_saved = 0u64;
@@ -146,7 +146,7 @@ where
     on_progress(0, size_in, Duration::ZERO)?;
 
     loop {
-        let n = read_fullish(&mut inp, &mut buf)?;
+        let n = read_fullish(reader, buf)?;
         if n == 0 {
             break;
         }
@@ -226,10 +226,10 @@ fn is_all_zero(chunk: &[u8]) -> bool {
 }
 
 /// Read until `buf` is full or EOF; returns bytes read (may be short only at EOF).
-fn read_fullish(file: &mut File, buf: &mut [u8]) -> io::Result<usize> {
+fn read_fullish<R: Read + ?Sized>(reader: &mut R, buf: &mut [u8]) -> io::Result<usize> {
     let mut filled = 0;
     while filled < buf.len() {
-        match file.read(&mut buf[filled..])? {
+        match reader.read(&mut buf[filled..])? {
             0 => break,
             n => filled += n,
         }
@@ -276,6 +276,35 @@ mod tests {
         drop(dst);
 
         let stats = sparse_copy(src.path(), &dst_path, 4096).unwrap();
+        assert_eq!(stats.size_in, data.len() as u64);
+        assert_eq!(stats.zero_blocks, 2);
+        assert_eq!(stats.bytes_saved, 8192);
+
+        let copied = fs::read(&dst_path).unwrap();
+        assert_eq!(copied, data);
+    }
+
+    /// Same zero-skipping behaviour when the source is a reader (no path stat).
+    #[test]
+    fn sparse_copy_reader_from_cursor_skips_zero_blocks() {
+        let mut data = vec![1u8; 4096];
+        data.extend_from_slice(&[0u8; 8192]);
+        data.extend_from_slice(&[2u8; 4096]);
+
+        let dst = NamedTempFile::new().unwrap();
+        let dst_path = dst.path().to_path_buf();
+        drop(dst);
+
+        let mut cursor = std::io::Cursor::new(&data);
+        let mut buf = vec![0u8; 4096];
+        let stats = sparse_copy_reader(
+            &mut cursor,
+            &dst_path,
+            data.len() as u64,
+            &mut buf,
+            |_, _, _| Ok::<(), io::Error>(()),
+        )
+        .unwrap();
         assert_eq!(stats.size_in, data.len() as u64);
         assert_eq!(stats.zero_blocks, 2);
         assert_eq!(stats.bytes_saved, 8192);
