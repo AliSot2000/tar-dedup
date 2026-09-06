@@ -515,6 +515,7 @@ mod tests {
             xattrs: None,
             posix_acl: None,
             selinux_ctx: None,
+            win_perm: None,
             link_dst: None,
             device_id: None,
             inode_id: None,
