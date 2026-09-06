@@ -90,7 +90,7 @@ impl SqlFileRow for FileRecord {
     fn sql_columns(prefix: Option<&str>) -> String {
         match prefix {
             None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, \
-                uid, gid, mode, ftype, xattr, acl, selinux, link_dst, \
+                uid, gid, mode, ftype, xattr, acl, selinux, win_perm, link_dst, \
                 include_reason, exclude_reason, canonical_id, flags, phase, \
                 new_name, inode, dev, major, minor".to_string(),
             Some(p) => format!("\
@@ -109,6 +109,7 @@ impl SqlFileRow for FileRecord {
                 {p}.xattr AS \"{p}.xattr\",
                 {p}.acl AS \"{p}.acl\",
                 {p}.selinux AS \"{p}.selinux\",
+                {p}.win_perm AS \"{p}.win_perm\",
                 {p}.link_dst AS \"{p}.link_dst\",
                 {p}.include_reason AS \"{p}.include_reason\",
                 {p}.exclude_reason AS \"{p}.exclude_reason\",
@@ -145,6 +146,7 @@ impl SqlFileRow for FileRecord {
             xattrs: row.get(format!("{upx}xattr").as_str())?,
             posix_acl: row.get(format!("{upx}acl").as_str())?,
             selinux_ctx: row.get(format!("{upx}selinux").as_str())?,
+            win_perm: row.get(format!("{upx}win_perm").as_str())?,
             exclude_reason: row
                 .get::<_, Option<i64>>(format!("{upx}exclude_reason").as_str())?
                 .map(ExclusionId),
