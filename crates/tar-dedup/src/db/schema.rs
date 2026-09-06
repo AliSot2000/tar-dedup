@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS files (
     xattr         TEXT,
     acl           TEXT,
     selinux       BLOB,
+    win_perm      TEXT,   -- Windows attribute/DACL dump; NULL on unix
     link_dst      TEXT,
 
     -- Internal Stuff
