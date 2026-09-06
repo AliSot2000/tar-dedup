@@ -20,6 +20,9 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     let promoted = db.promote_unstageable_files(config.pipeline.retry_missing_sha)?;
     tracing::info!("Promoted {promoted} entries to staged which aren't eligible");
 
+    // TODO big db integrity check. The DB needs to be clean so it can be extracted correctly.
+    //  No hard link group (dev, inode) with more than one canonical_id
+
     // TODO progressbar
     // TODO batching
     // TODO logging
