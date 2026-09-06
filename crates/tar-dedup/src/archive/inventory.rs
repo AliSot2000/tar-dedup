@@ -93,6 +93,12 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
 
     db.resolve_numeric_ids()?;
     progress.finish("inventory complete");
+    let missing_dev_ino_count = db.count_missing_dev_inode()?;
+    if missing_dev_ino_count > 0 {
+        tracing::warn!("Encountered {missing_dev_ino_count} files without dev or inode information.\
+         Those files won't be captured by hardlink detection");
+    }
+    // TODO: Add inspect with query for missing files.
     tracing::info!(
         entries_processed = processed,
         total_unique_entries = db.count_entries()?,
