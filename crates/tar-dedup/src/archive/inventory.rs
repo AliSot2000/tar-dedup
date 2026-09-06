@@ -1,8 +1,8 @@
-use std::os::unix::fs::FileTypeExt;
-
 use walkdir::WalkDir;
 
-use crate::common::files::{get_file_times, original_extension};
+use crate::common::files::original_extension;
+#[cfg(windows)]
+use crate::common::files::get_file_times;
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::ArchiveConfig;
 use crate::db::Database;
@@ -16,7 +16,6 @@ use path_clean::PathClean;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -112,7 +111,8 @@ fn handle_from_files_line(
     progress: &CountProgress,
 ) -> Result<()> {
     let (line, ff) = element;
-    let fpath = Path::new(OsStr::from_bytes(ff)); // TODO force utf8
+    let fpath_os = os_str_from_bytes(ff);
+    let fpath = Path::new(&fpath_os); // TODO force utf8
     let from_files_disp_path = from_files_path.display();
 
     let abs_path = if fpath.is_absolute() {
@@ -318,6 +318,7 @@ pub fn handle_entry(
         xattrs,
         posix_acl,
         selinux_ctx,
+        win_perm: None,
         link_dst: link_dst.clone(),
         device_id: Some(dev),
         inode_id: Some(ino),
@@ -333,16 +334,14 @@ pub fn handle_entry(
 
 /// Handle a single dir entry.
 #[cfg(windows)]
-pub fn handle_entryo(
+pub fn handle_entry(
     path: &Path,
     source_id: i64,
-    config: &ArchiveConfig,
+    _config: &ArchiveConfig,
     db: &Database,
     progress: &CountProgress,
     processed: &mut u64)
     -> Result<()> {
-    use std::os::windows::fs::FileTypeExt;
-
     let mut enc_err = Vec::new();
 
     let meta = match fs::symlink_metadata(path) {
@@ -358,28 +357,37 @@ pub fn handle_entryo(
     let mtime = strip_transpose(path, times.0, &mut enc_err);
     let atime = strip_transpose(path, times.1, &mut enc_err);
     let ctime = strip_transpose(path, times.2, &mut enc_err);
-    let uid = strip_transpose(path, file_uid(&meta), &mut enc_err);
-    let gid = strip_transpose(path, file_gid(&meta), &mut enc_err);
-    let ftype = strip_transpose(
-        path, determine_file_type(&meta, &path), &mut enc_err);
+    let uid = None;
+    let gid = None;
+    let ftype = match determine_file_type(&meta, &path) {
+        Ok(t) => t,
+        Err((t, e)) => {
+            enc_err.push(e);
+            t
+        }
+    };
+
+    // Volume serial number + file index fill the `(dev, inode)` tuple; this is
+    // what feeds hardlink detection and the dedup pre-flight check.
     let dev = strip_transpose(path, get_file_dev(&meta), &mut enc_err);
     let ino = strip_transpose(path, get_file_ino(&meta), &mut enc_err);
 
-    let link_dst: Option<PathBuf> = if matches!(ftype, Some(FileType::Symlink(_))) {
+    let link_dst: Option<PathBuf> = if matches!(ftype, FileType::Symlink(_)) {
         strip_transpose(path, fs::read_link(path), &mut enc_err)
     } else {
         None
     };
 
-    let (major, minor) = match ftype {
-        Some(FileType::CharacterDevice | FileType::BlockDevice) => get_file_rdev_parts(&meta),
-        _ => (None, None),
-    };
+    // No device nodes on Windows.
+    let major = None;
+    let minor = None;
 
-    // Optional data
+    // Optional data. POSIX xattrs / ACLs / SELinux have no mapping here; the
+    // NTFS attributes are captured as a JSON blob instead.
     let xattrs = None;
     let posix_acl = None;
     let selinux_ctx = None;
+    let win_perm = Some(get_file_win_perms(&meta));
 
     if db.insert_file_and_ref(source_id, &NewFileRecord {
         abs_path: path.clean().to_path_buf(),
@@ -390,11 +398,12 @@ pub fn handle_entryo(
         ctime,
         uid,
         gid,
-        ftype,
-        mode: Some(mode),
+        ftype: Some(ftype),
+        mode: Some(file_mode(&meta, &ftype)),
         xattrs,
         posix_acl,
         selinux_ctx,
+        win_perm,
         link_dst: link_dst.clone(),
         device_id: dev,
         inode_id: ino,
@@ -406,6 +415,21 @@ pub fn handle_entryo(
         // TODO deal with the error vec!
     }
     Ok(())
+}
+
+/// Interpret a raw `-T` record as an `OsStr`. Unix keeps the lossless bytes;
+/// Windows (UTF-16 `OsStr`) treats the list as UTF-8 text with lossy fallback.
+fn os_str_from_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, OsStr> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::borrow::Cow::Borrowed(OsStr::from_bytes(bytes))
+    }
+    #[cfg(windows)]
+    {
+        let text = String::from_utf8_lossy(bytes);
+        std::borrow::Cow::Owned(OsStr::new(text.as_ref()).to_os_string())
+    }
 }
 
 fn strip_transpose<T>(path: &Path, source: io::Result<T>, errors: &mut Vec<FileStatError>)
@@ -458,71 +482,55 @@ fn files_from_reader(mut reader: impl BufRead, null: bool)
         })
 }
 
-#[cfg(unix)]
-fn file_uid(md: &fs::Metadata) -> io::Result<u32> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(md.uid())
+/// Synthesize a POSIX-style mode from the NTFS attributes. Directories read as
+/// `rwxr-xr-x`, regular files as `rw-r--r--`, symlinks as `rwxrwxrwx`; the
+/// read-only attribute clears the write bits (`0o222`).
+#[cfg(windows)]
+fn file_mode(meta: &fs::Metadata, ftype: &FileType) -> u32 {
+    use std::os::windows::fs::MetadataExt;
+
+    // FILE_ATTRIBUTE_READONLY
+    const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
+
+    let base = match ftype {
+        FileType::Directory => 0o755,
+        FileType::Symlink(_) => 0o777,
+        _ => 0o644,
+    };
+    if meta.file_attributes() & FILE_ATTRIBUTE_READONLY != 0 {
+        base & !0o222
+    } else {
+        base
+    }
 }
 
-#[cfg(not(unix))]
-fn file_uid(_md: &fs::Metadata) -> io::Result<u32> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "file uid is not available on this platform",
-    ))
-}
-
-#[cfg(unix)]
-fn file_gid(md: &fs::Metadata) -> io::Result<u32> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(md.gid())
-}
-
-#[cfg(not(unix))]
-fn file_gid(_md: &fs::Metadata) -> io::Result<u32> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "file uid is not available on this platform",
-    ))
-}
-
-#[cfg(unix)]
-fn file_mode(meta: &fs::Metadata) -> u32 {
-    use std::os::unix::fs::MetadataExt;
-    meta.mode()
-}
-
-#[cfg(not(unix))]
-fn file_mode(_meta: &std::fs::Metadata) -> u32 {
-    0o644
-}
-
-#[cfg(unix)]
+#[cfg(windows)]
 fn get_file_dev(meta: &fs::Metadata) -> io::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(meta.dev())
+    use std::os::windows::fs::MetadataExt;
+    meta.volume_serial_number()
+        .map(|v| v as u64)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "volume serial number is not available",
+            )
+        })
 }
 
-#[cfg(not(unix))]
-fn get_file_def() -> io::Result<u64> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "file dev is not available on this platform",
-    ))
-}
-
-#[cfg(unix)]
+#[cfg(windows)]
 fn get_file_ino(meta: &fs::Metadata) -> io::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(meta.ino())
+    use std::os::windows::fs::MetadataExt;
+    meta.file_index().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::Other, "file index is not available")
+    })
 }
 
-#[cfg(not(unix))]
-fn get_file_ino(_meta: &fs::Metadata) -> io::Result<u64> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "file ino is not available on this platform",
-    ))
+/// Serialize the NTFS `FILE_ATTRIBUTE_*` bitmask as a small JSON document so it
+/// can be round-tripped during restore (`win_perm` column). NULL on unix.
+#[cfg(windows)]
+fn get_file_win_perms(meta: &fs::Metadata) -> String {
+    use std::os::windows::fs::MetadataExt;
+    serde_json::json!({ "attributes": meta.file_attributes() }).to_string()
 }
 
 #[cfg(unix)]
@@ -535,16 +543,11 @@ fn get_file_rdev_parts(meta: &fs::Metadata) -> (Option<u64>, Option<u64>) {
     )
 }
 
-#[cfg(not(unix))]
-fn get_file_rdev_parts(_meta: &fs::Metadata) -> (Option<u64>, Option<u64>) {
-    (None, None)
-}
 
 /// Function attempts to figure out what a given soft link (chain) is pointing to.
 /// If a link is a part of a link cycle, a `Cycle` is emitted
 /// If a link returns a NotFound Error, `Dangling` is returned
 /// If a link target cannot be resolved (any other error e.g. permission error), `Unknown` is return
-#[cfg(unix)]
 fn resolve_link(e: &Path) -> FileStatResult<LinkType> {
     let mut visited = HashSet::new();
     let mut current = e.to_path_buf();
@@ -579,21 +582,41 @@ fn resolve_link(e: &Path) -> FileStatResult<LinkType> {
         };
 
         // Match valid target
-        return if ft.is_file() {
-            Ok(LinkType::File)
-        } else if ft.is_dir() {
-            Ok(LinkType::Directory)
-        } else if ft.is_fifo() {
-            Ok(LinkType::FIFO)
-        } else if ft.is_char_device() {
-            Ok(LinkType::CharacterDevice)
-        } else if ft.is_block_device() {
-            Ok(LinkType::BlockDevice)
-        } else if ft.is_socket() {
-            Ok(LinkType::Socket)
-        } else {
-            Ok(LinkType::Unknown)
-        }
+        return Ok(classify_link_target(ft));
+    }
+}
+
+/// Classify the resolved, non-symlink target of a link chain.
+#[cfg(unix)]
+fn classify_link_target(ft: fs::FileType) -> LinkType {
+    use std::os::unix::fs::FileTypeExt;
+    if ft.is_file() {
+        LinkType::File
+    } else if ft.is_dir() {
+        LinkType::Directory
+    } else if ft.is_fifo() {
+        LinkType::FIFO
+    } else if ft.is_char_device() {
+        LinkType::CharacterDevice
+    } else if ft.is_block_device() {
+        LinkType::BlockDevice
+    } else if ft.is_socket() {
+        LinkType::Socket
+    } else {
+        LinkType::Unknown
+    }
+}
+
+/// Windows link targets can only be files or directories (the symlink dir/file
+/// distinction comes from `is_symlink_dir` in the caller's `file_type()`).
+#[cfg(windows)]
+fn classify_link_target(ft: std::fs::FileType) -> LinkType {
+    if ft.is_file() {
+        LinkType::File
+    } else if ft.is_dir() {
+        LinkType::Directory
+    } else {
+        LinkType::Unknown
     }
 }
 
@@ -617,6 +640,8 @@ fn resolve_relative(link_path: &Path, target: &Path) -> PathBuf {
 #[cfg(unix)]
 fn determine_file_type(md: &fs::Metadata, path: &Path)
     -> std::result::Result<FileType, (FileType, FileStatError)> {
+    use std::os::unix::fs::FileTypeExt;
+
     // walkdir::DirEntry::file_type() is infallible.
     let ft = md.file_type();
     if ft.is_file() {
@@ -643,19 +668,22 @@ fn determine_file_type(md: &fs::Metadata, path: &Path)
 }
 
 #[cfg(windows)]
-fn determine_file_type(md: &fs::Metadata, path: &Path) -> io::Result<FileType> {
-    use std::os::windows::fs::FileTypeExt;
+fn determine_file_type(md: &fs::Metadata, path: &Path)
+    -> std::result::Result<FileType, (FileType, FileStatError)> {
+    // walkdir::DirEntry::file_type() is infallible.
     let ft = md.file_type();
 
-    // Iterate through all possible file types
     if ft.is_file() {
         Ok(FileType::File)
     } else if ft.is_dir() {
         Ok(FileType::Directory)
-    } else if ft.is_symlink_dir() {
-        Ok(FileType::Symlink(LinkType::Directory))
-    } else if ft.is_symlink_file() {
-        Ok(FileType::Symlink(LinkType::File))
+    } else if ft.is_symlink() {
+        // Resolve the chain: yields the eventual target type plus Dangling /
+        // Cycle / Unknown for broken or unresolvable links.
+        match resolve_link(path) {
+            Ok(lt) => Ok(FileType::Symlink(lt)),
+            Err(e) => Err((FileType::Symlink(LinkType::Unknown), e)),
+        }
     } else {
         Ok(FileType::Unknown)
     }
