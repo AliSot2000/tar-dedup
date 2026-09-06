@@ -1,4 +1,3 @@
-#[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
 
 use walkdir::WalkDir;
@@ -6,12 +5,13 @@ use walkdir::WalkDir;
 use crate::common::files::{get_file_times, original_extension};
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::ArchiveConfig;
-use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::Database;
+use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::types::{FileType, LinkType, NewFileRecord};
-use crate::error::{Error, FileStatError, Result};
+use crate::error::{Error, FileStatError, FileStatResult, Result};
 use crate::progress::CountProgress;
 use crate::shutdown::Shutdown;
+use chrono::{DateTime, Utc};
 use path_clean::PathClean;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -187,17 +187,13 @@ pub fn handle_dir(
     Ok(())
 }
 
-/// Handle a single dir entry.
-pub fn handle_entry(
-    path: &Path,
-    source_id: i64,
-    config: &ArchiveConfig,
-    db: &Database,
-    progress: &CountProgress,
-    processed: &mut u64)
-    -> Result<() > {
-    let mut enc_err = Vec::new();
-
+pub fn handle_entry_base(path: &Path,
+                         source_id: i64,
+                         config: &ArchiveConfig,
+                         db: &Database,
+                         progress: &CountProgress,
+                         processed: &mut u64)
+                         -> Result<()> {
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
 
     // Preflight: already inventoried — attach this source without restatting.
@@ -206,9 +202,156 @@ pub fn handle_entry(
         return Ok(());
     }
 
-    let meta = fs::symlink_metadata(path)
-        .map_err(|e| crate::error::Error::io(path, e))?;
-    let mode = file_mode(&meta);
+    handle_entry(&path, source_id, &config, &db, &progress, processed)
+}
+
+#[cfg(unix)]
+pub fn handle_entry(
+    path: &Path,
+    source_id: i64,
+    config: &ArchiveConfig,
+    db: &Database,
+    progress: &CountProgress,
+    processed: &mut u64)
+    -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut enc_err = Vec::new();
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            // TODO store error in db,
+            return Err(Error::io(path, e))
+        }
+    };
+
+    let mtime_s = meta.mtime();
+    let mtime_nsec = meta.mtime_nsec();
+    debug_assert!((0..1_000_000_000).contains(&mtime_nsec));
+    // TODO Error on NONE
+    let mtime: Option<DateTime<Utc>> = DateTime::from_timestamp(mtime_s, mtime_nsec as u32);
+    if mtime.is_none(){
+        tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
+            path.display(), mtime_s, mtime_nsec);
+    }
+
+    let atime_s = meta.atime();
+    let atime_nsec = meta.atime_nsec();
+    debug_assert!((0..1_000_000_000).contains(&atime_nsec));
+    // TODO Error on NONE
+    let atime: Option<DateTime<Utc>> = DateTime::from_timestamp(atime_s, atime_nsec as u32);
+    if atime.is_none(){
+        tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
+            path.display(), atime_s, atime_nsec);
+    }
+
+    let ctime_s = meta.mtime();
+    let ctime_nsec = meta.mtime_nsec();
+    debug_assert!((0..1_000_000_000).contains(&ctime_nsec));
+    // TODO Error on NONE
+    let ctime: Option<DateTime<Utc>> = DateTime::from_timestamp(ctime_s, ctime_nsec as u32);
+    if ctime.is_none(){
+        tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
+            path.display(), ctime_s, ctime_nsec);
+    }
+
+    let mode = meta.mode();
+    let uid = meta.uid();
+    let gid = meta.gid();
+    let dev = meta.dev();
+    let ino = meta.ino();
+
+    let ftype = match determine_file_type(&meta, &path) {
+        Ok(t) => t,
+        Err((t, e)) => {
+            enc_err.push(e);
+            t
+        }
+    };
+
+    let (link_dst, major, minor) = match ftype {
+        FileType::Symlink(_) => (strip_transpose(path, fs::read_link(path), &mut enc_err),
+                                 None,
+                                 None),
+        FileType::CharacterDevice | FileType::BlockDevice => {
+            let (maj, min) = get_file_rdev_parts(&meta);
+            (None, maj, min)
+        }
+        FileType::Unknown => {
+            tracing::error!("{} could not be classified into a valid file type.", path.display());
+            (None, None, None)
+        },
+        _ => (None, None, None)
+    };
+
+    // Optional data
+    let xattrs = if config.capture.do_xattrs {
+        match get_file_xattr(path) {
+            Err(e) => { enc_err.push(e); None},
+            Ok(md) => Some(md),
+        }
+    } else { None };
+    let posix_acl = if config.capture.do_posix_acl {
+        match get_file_acl(path) {
+            Err(e) => { enc_err.push(e); None},
+            Ok(md) => Some(md),
+        }
+    } else { None };
+    let selinux_ctx = if config.capture.do_selinux {
+        match get_file_selinux_data(path) {
+            Err(e) => { enc_err.push(e); None},
+            Ok(md) => Some(md),
+        }
+    } else { None };
+
+    if db.insert_file_and_ref(source_id, &NewFileRecord {
+        abs_path: path.clean().to_path_buf(),
+        ext: original_extension(&path),
+        size: meta.len(),
+        mtime,
+        atime,
+        ctime,
+        uid: Some(uid),
+        gid: Some(gid),
+        ftype: Some(ftype),
+        mode: Some(mode),
+        xattrs,
+        posix_acl,
+        selinux_ctx,
+        link_dst: link_dst.clone(),
+        device_id: Some(dev),
+        inode_id: Some(ino),
+        major,
+        minor,
+    })? {
+        *processed += 1;
+        progress.inc(1);
+        // TODO deal with the error vec!
+    }
+    Ok(())
+}
+
+/// Handle a single dir entry.
+#[cfg(windows)]
+pub fn handle_entryo(
+    path: &Path,
+    source_id: i64,
+    config: &ArchiveConfig,
+    db: &Database,
+    progress: &CountProgress,
+    processed: &mut u64)
+    -> Result<()> {
+    use std::os::windows::fs::FileTypeExt;
+
+    let mut enc_err = Vec::new();
+
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            // TODO store error in db,
+            return Err(Error::io(path, e))
+        }
+    };
 
     // Extract times, retaining the errors.
     let times = get_file_times(&meta);
@@ -234,24 +377,9 @@ pub fn handle_entry(
     };
 
     // Optional data
-    let xattrs = if config.capture.do_xattrs {
-        match get_file_xattr(path) {
-            Err(e) => { enc_err.push(e); None},
-            Ok(md) => Some(md),
-        }
-    } else { None };
-    let posix_acl = if config.capture.do_posix_acl {
-        match get_file_acl(path) {
-            Err(e) => { enc_err.push(e); None},
-            Ok(md) => Some(md),
-        }
-    } else { None };
-    let selinux_ctx = if config.capture.do_selinux {
-        match get_file_selinux_data(path) {
-            Err(e) => { enc_err.push(e); None},
-            Ok(md) => Some(md),
-        }
-    } else { None };
+    let xattrs = None;
+    let posix_acl = None;
+    let selinux_ctx = None;
 
     if db.insert_file_and_ref(source_id, &NewFileRecord {
         abs_path: path.clean().to_path_buf(),
@@ -417,7 +545,7 @@ fn get_file_rdev_parts(_meta: &fs::Metadata) -> (Option<u64>, Option<u64>) {
 /// If a link returns a NotFound Error, `Dangling` is returned
 /// If a link target cannot be resolved (any other error e.g. permission error), `Unknown` is return
 #[cfg(unix)]
-fn resolve_link(e: &Path) -> io::Result<LinkType> {
+fn resolve_link(e: &Path) -> FileStatResult<LinkType> {
     let mut visited = HashSet::new();
     let mut current = e.to_path_buf();
     debug_assert!(current.is_symlink(), "INVARIANT: Non-Link DirEntry supplied");
@@ -447,7 +575,7 @@ fn resolve_link(e: &Path) -> io::Result<LinkType> {
             }
             Ok(meta) => meta.file_type(),
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LinkType::Dangling),
-            Err(g) => return Err(g),
+            Err(g) => return Err(FileStatError::Io {path: current.to_path_buf(), source: g}),
         };
 
         // Match valid target
@@ -487,7 +615,8 @@ fn resolve_relative(link_path: &Path, target: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn determine_file_type(md: &fs::Metadata, path: &Path) -> io::Result<FileType> {
+fn determine_file_type(md: &fs::Metadata, path: &Path)
+    -> std::result::Result<FileType, (FileType, FileStatError)> {
     // walkdir::DirEntry::file_type() is infallible.
     let ft = md.file_type();
     if ft.is_file() {
@@ -501,7 +630,13 @@ fn determine_file_type(md: &fs::Metadata, path: &Path) -> io::Result<FileType> {
     } else if ft.is_char_device() {
         Ok(FileType::CharacterDevice)
     } else if ft.is_symlink() {
-        Ok(FileType::Symlink(resolve_link(&path)?))
+        let err_symlink = resolve_link(path);
+        match err_symlink {
+            Ok(lt) => Ok(FileType::Symlink(lt)),
+            Err(e) => Err((FileType::Symlink(LinkType::Unknown), e)),
+        }
+    } else if ft.is_socket() {
+        Ok(FileType::Socket)
     } else {
         Ok(FileType::Unknown)
     }
