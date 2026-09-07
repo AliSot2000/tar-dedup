@@ -236,7 +236,7 @@ pub fn count_out_tree_hardlinks(conn: &Connection, materialized: Option<bool>) -
     let (mat_filter, mat_masks) = out_tree_materialized_filter(materialized);
     let sql = format!(
         "SELECT COUNT(*) FROM out_tree \
-         WHERE flags & :dir = 0 AND canonical_id != id AND canonical_id IS NOT NULL {mat_filter}");
+         WHERE canonical_id != id AND canonical_id IS NOT NULL {mat_filter}");
     let n: i64 = match mat_masks {
         None => conn.query_row(
             &sql,
