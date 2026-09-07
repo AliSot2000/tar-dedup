@@ -2,6 +2,7 @@
 
 pub mod cleanup;
 pub mod files;
+pub mod perms;
 pub mod start;
 pub mod xattr;
 
@@ -23,3 +24,5 @@ pub const COPY_STEP_SIZE: u64 = 1024 * 1024 * 4;
 /// into ram. Worst case Estimate is 16kiB / Entry, so we try to be conservative with 100'000 as
 /// a batch size
 pub const DEFAULT_BATCH_SIZE: u64 = 100_000;
+
+// pub fn batched_iteration<F, >()
