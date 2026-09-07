@@ -452,7 +452,7 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
     results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
-/// Mark all entries in the out_tree which
+/// Mark all entries in the out_tree which are files (iff !dir) and mark them self-canonical.
 pub fn mark_all_canonical(conn: &Connection) -> Result<u64> {
     //         SET flags = flags | :canonical | :walked \
     let update = conn.execute(
@@ -460,8 +460,8 @@ pub fn mark_all_canonical(conn: &Connection) -> Result<u64> {
         SET canonical_id = id \
         WHERE canonical_id IS NULL AND flags & :dir = 0",
         named_params! {
-            ":canonical": OutTreeFlag::IsCanonical.mask_i64(),
-            ":walked" : OutTreeFlag::EntryWalked.mask_i64(),
+            // ":canonical": OutTreeFlag::IsCanonical.mask_i64(),
+            // ":walked" : OutTreeFlag::EntryWalked.mask_i64(),
             ":dir": OutTreeFlag::IsDirectory.mask_i64(),
         })?;
    Ok(update as u64)
