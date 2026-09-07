@@ -107,7 +107,7 @@ CREATE INDEX IF NOT EXISTS idx_ref_out_source ON ref_out(source_id);
 -- 1 = stream closed successfully,
 -- 2 = recovered/aborted
 CREATE TABLE IF NOT EXISTS archive_sessions (
-    id             INTEGER PRIMARY KEY,
+    id             INTEGER PRIMARY KEY CHECK (id > 0),
     archive_offset INTEGER NOT NULL DEFAULT 0,
     finalized      INTEGER NOT NULL DEFAULT 0,
     started_at     TEXT NOT NULL,
