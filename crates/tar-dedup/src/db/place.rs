@@ -4,7 +4,7 @@ use crate::db::common::SqlFileRow;
 use crate::db::flags::OutTreeFlags;
 use crate::db::flags::{FileFlag, OutTreeFlag};
 use crate::db::meta;
-use crate::db::types::{FileId, NewOutTreeRow, OutTreeId, OutTreeRecord, StrippedRecord,
+use crate::db::types::{FileId, NewOutTreeRow, OutTreeId, OutTreeRecord,
 };
 use crate::error::Result;
 
