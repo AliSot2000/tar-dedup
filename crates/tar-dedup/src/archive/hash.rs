@@ -1,8 +1,3 @@
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
-use std::sync::Mutex;
-
 use crate::common::files::{PreYield, warn_if_times_changed};
 use crate::config::ArchiveConfig;
 use crate::db::Database;
@@ -15,6 +10,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use sha1::{Digest, Sha1};
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+use std::sync::Mutex;
 
 pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let page_size = config.sparse.page_size;
