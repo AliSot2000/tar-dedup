@@ -327,7 +327,93 @@ pub fn list_canonical_files_for_move<R: SqlFileRow>(
     results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
-/// List all rows (which aren't directories which cna be built.
+pub fn list_out_tree_for_materialization<R: SqlFileRow>(
+    conn: &Connection, last_id: &OutTreeId, batch_size: u64)
+    -> Result<Vec<(R, OutTreeRecord)>> {
+    let file_cols = R::sql_columns(Some("c"));
+    let out_cols = OutTreeRecord::sql_columns(Some("o"));
+    let mut stmt = conn.prepare(&format!("
+        SELECT {file_cols}, {out_cols}
+        FROM out_tree AS o
+        JOIN files as f ON o.file_id = f.id
+        JOIN files as c ON f.canonical_id = c.id
+        WHERE o.id > :last_id
+            AND f.ftype = 'file'
+            AND o.canonical_id = o.id
+        ORDER BY o.id
+        LIMIT :batch_size
+    "))?;
+    let rows = stmt.query_map(
+        named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size},
+        |row| {
+            let sr = R::from_row(row, Some("c"))?;
+            let or = OutTreeRecord::from_sql(row, Some("o"))?;
+            Ok((sr, or))
+        }
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn list_out_tree_for_hardlinks(
+    conn: &Connection, last_id: &OutTreeId, batch_size: u64)
+    -> Result<Vec<(OutTreeRecord, OutTreeRecord)>> {
+    let tgt_cols = OutTreeRecord::sql_columns(Some("c"));
+    let out_cols = OutTreeRecord::sql_columns(Some("o"));
+    let mut stmt = conn.prepare(&format!("
+        SELECT {tgt_cols}, {out_cols}
+        FROM out_tree AS o
+        JOIN out_tree AS c ON o.canonical_id = c.id
+        JOIN files AS f ON o.file_id = f.id
+        WHERE o.id > :last_id
+            AND f.ftype = 'file'
+            AND o.canonical_id != o.id
+            AND o.canonical_id IS NOT NULL
+        ORDER BY o.id
+        LIMIT :batch_size
+    "))?;
+    let rows = stmt.query_map(
+        named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size},
+        |row| {
+            let sr = OutTreeRecord::from_sql(row, Some("c"))?;
+            let or = OutTreeRecord::from_sql(row, Some("o"))?;
+            Ok((sr, or))
+        }
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn list_out_tree_others<R: SqlFileRow>(conn: &Connection, last_id: &OutTreeId, batch_size: u64)
+    -> Result<Vec<(R, OutTreeRecord)>> {
+    let tgt_cols = R::sql_columns(Some("e"));
+    let out_cols = OutTreeRecord::sql_columns(Some("o"));
+    let mut stmt = conn.prepare(&format!("
+        SELECT {tgt_cols}, {out_cols}
+        FROM out_tree AS o
+        JOIN files AS e ON o.file_id = e.id
+        WHERE o.id > :last_id
+            AND e.ftype NOT IN ('file', 'dir', 'unknown')
+            AND o.canonical_id IS NULL
+        ORDER BY o.id
+        LIMIT :batch_size
+    "))?;
+    let rows = stmt.query_map(
+        named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size},
+        |row| {
+            let sr = R::from_row(row, Some("e"))?;
+            let or = OutTreeRecord::from_sql(row, Some("o"))?;
+            Ok((sr, or))
+        }
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+/// List all rows (which aren't directories) which remain to be linked into place
 pub fn list_out_tree_for_linking<R: SqlFileRow>(
     conn: &Connection, batch_size: u64, pending: bool)
     -> Result<Vec<(R, OutTreeRecord)>> {
