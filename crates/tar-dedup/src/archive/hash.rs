@@ -101,6 +101,18 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     let force = shutdown.is_force();
 
     // TODO dummy update of the remining entries.
+    let double_canonical = db.count_double_canonical_dev_inode_group()?;
+    if double_canonical > 0 {
+        if config.indexing.no_hardlink_detection {
+            // TODO different error needed
+            return Err(Error::Config(
+                format!("{double_canonical} Hard Linked Files modified while indexing")))
+        } else {
+            panic!("Encountered {double_canonical} Hard Link files. \
+            All hardlinks should be updated simultaneously");
+        }
+    }
+
     match parallel {
         Ok(()) => {
             bar.finish_with_message(format!("hashing complete ({hash_needed}/{hash_needed})"));
