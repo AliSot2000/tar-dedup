@@ -27,7 +27,7 @@ pub fn list_files_to_stage<R: SqlFileRow>(conn: &Connection, retry_missing_sha: 
     let filter_sha = if retry_missing_sha { "" } else { "AND sha1 IS NOT NULL" };
     let mut stmt = conn.prepare(
         &format!("SELECT {} FROM files \
-            WHERE phase='sparsified' \
+            WHERE phase = 'sparsified' \
             AND ftype = 'file' \
             AND canonical_id = id \
             AND include_reason < 0 \
