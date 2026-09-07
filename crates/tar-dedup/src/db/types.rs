@@ -44,7 +44,7 @@ pub struct FileRecord {
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     pub mode: Option<u32>,
-    pub ftype: Option<FileType>,
+    pub ftype: FileType,
     pub device_id: Option<u64>,
     pub inode_id: Option<u64>,
     pub major: Option<u64>,
@@ -73,7 +73,7 @@ pub struct StrippedRecord {
     pub mtime: Option<DateTime<Utc>>,
     pub atime: Option<DateTime<Utc>>,
     pub ctime: Option<DateTime<Utc>>,
-    pub ftype: Option<FileType>,
+    pub ftype: FileType,
     pub device_id: Option<u64>,
     pub inode_id: Option<u64>,
 
