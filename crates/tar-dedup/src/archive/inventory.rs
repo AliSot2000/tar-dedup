@@ -188,7 +188,7 @@ pub fn handle_dir(
             }
             Ok(entry) => entry,
         };
-        handle_entry(&entry.path(), source_id, &config, &db, &progress, processed)?;
+        handle_entry_base(&entry.path(), source_id, &config, &db, &progress, processed)?;
     }
     Ok(())
 }
