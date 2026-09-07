@@ -39,7 +39,6 @@ impl OutTreeRecord {
     }
 }
 
-
 pub fn list_materialized_entries<R: SqlFileRow>(
     conn: &Connection,
     last_id: Option<FileId>,
