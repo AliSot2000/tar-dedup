@@ -207,6 +207,72 @@ pub fn count_out_tree_rows(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+/// Function counts the number of entries marked as canonical inside the out_tree
+pub fn count_out_tree_canonicals(conn: &Connection, materialized: Option<bool>) -> Result<u64> {
+    let (mat_filter, mat_masks) = out_tree_materialized_filter(materialized);
+    let sql = format!(
+        "SELECT COUNT(*) FROM out_tree \
+         WHERE flags & :dir = 0 AND canonical_id = id {mat_filter}");
+    let n: i64 = match mat_masks {
+        None => conn.query_row(
+            &sql,
+            named_params! { ":dir": OutTreeFlag::IsDirectory.mask_i64() },
+            |row| row.get(0))?,
+        Some((placed, err)) => conn.query_row(
+            &sql,
+            named_params! {
+                ":dir": OutTreeFlag::IsDirectory.mask_i64(),
+                ":placed": placed,
+                ":err": err,
+            },
+            |row| row.get(0))?,
+    };
+    Ok(n as u64)
+}
+
+/// Function counts the number of entries in the out_tree table which are files and not canonical:
+/// canonical_id != id
+pub fn count_out_tree_hardlinks(conn: &Connection, materialized: Option<bool>) -> Result<u64> {
+    let (mat_filter, mat_masks) = out_tree_materialized_filter(materialized);
+    let sql = format!(
+        "SELECT COUNT(*) FROM out_tree \
+         WHERE flags & :dir = 0 AND canonical_id != id AND canonical_id IS NOT NULL {mat_filter}");
+    let n: i64 = match mat_masks {
+        None => conn.query_row(
+            &sql,
+            named_params! { ":dir": OutTreeFlag::IsDirectory.mask_i64() },
+            |row| row.get(0))?,
+        Sodocs: Docstringsme((placed, err)) => conn.query_row(
+            &sql,
+            named_params! {
+                ":dir": OutTreeFlag::IsDirectory.mask_i64(),
+                ":placed": placed,
+                ":err": err,
+            },
+            |row| row.get(0))?,
+    };
+    Ok(n as u64)
+}
+
+/// Build the `materialized` WHERE fragment and the `(placed, err)` masks it
+/// references. `None` → no filter (No masks bound). `Some(true)` → at least one
+/// of Placed / ErrorWhilePlace set. `Some(false)` → neither set.
+fn out_tree_materialized_filter(materialized: Option<bool>) -> (String, Option<(i64, i64)>) {
+    match materialized {
+        None => (String::new(), None),
+        Some(true) => (
+            " AND ((flags & :placed) != 0 OR (flags & :err) != 0)".to_string(),
+            Some((OutTreeFlag::Placed.mask_i64(), OutTreeFlag::ErrorWhilePlace.mask_i64())),
+        ),
+        Some(false) => (
+            " AND ((flags & :placed) = 0 AND (flags & :err) = 0)".to_string(),
+            Some((OutTreeFlag::Placed.mask_i64(), OutTreeFlag::ErrorWhilePlace.mask_i64())),
+        ),
+    }
+}
+
+// TODO other
+
 pub fn count_ref_out_rows(conn: &Connection) -> Result<u64> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM ref_out",
