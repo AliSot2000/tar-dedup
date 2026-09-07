@@ -430,8 +430,8 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
         SELECT {file_cols}, {out_cols} \
         FROM files AS can \
         JOIN files AS ent ON can.id = ent.canonical_id \
-        JOIN out_tree AS ON f.id = o.file_id \
-        WHERE f.ftype != 'dir' \
+        JOIN out_tree AS o ON f.id = o.file_id \
+        WHERE f.ftype NOT IN ('dir', 'unknown') \
             {filter_placed} \
             AND f.flags & :moved = 1 \
         ORDER BY o.id LIMIT :batch_size
