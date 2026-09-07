@@ -242,7 +242,7 @@ pub fn count_out_tree_hardlinks(conn: &Connection, materialized: Option<bool>) -
             &sql,
             named_params! { ":dir": OutTreeFlag::IsDirectory.mask_i64() },
             |row| row.get(0))?,
-        Sodocs: Docstringsme((placed, err)) => conn.query_row(
+        Some((placed, err)) => conn.query_row(
             &sql,
             named_params! {
                 ":dir": OutTreeFlag::IsDirectory.mask_i64(),
