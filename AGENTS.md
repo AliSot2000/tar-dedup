@@ -112,6 +112,14 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 
 ## Build / test / dev
 
+> **Tests are a work in progress — do not block on them.** The integration tests
+> (`crates/tar-dedup/tests/`) were partially written by another LLM with partial
+> information: they are incomplete, don't cover the whole codebase, and may rely on
+> outdated schema/API assumptions. Priority is finishing the construction and design
+> of the pipelines; the test suite is a follow-up task. If a test can't compile or
+> fails, treat that as expected, fix the production code on its own merits, and
+> defer test repair.
+
 - Dev shell: `nix develop` (flake) provides rust toolchain + native libs (`flake.nix`); on Debian install `libselinux-dev libclang-dev clang` instead.
 - Build: `cargo build` / `cargo build -p tar-dedup-cli`.
 - Test: `cargo test` (unit tests inline in modules; integration tests in `crates/tar-dedup/tests/`: `archive_footer.rs`, `db_extract.rs`, `out_tree.rs`, `types.rs`, `common/`).
