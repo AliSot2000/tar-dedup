@@ -1,6 +1,5 @@
 //! Rehash: verify extract-cache payloads against catalog SHA-1 digests.
 
-use std::fmt::format;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
