@@ -8,6 +8,8 @@ use crate::db::types::{FileId, NewOutTreeRow, OutTreeId, OutTreeRecord,
 };
 use crate::error::Result;
 
+/// Convenience implementations for the OutTreeRecord, function to parse sql rows to records and
+/// generate the columns to select
 impl OutTreeRecord {
     fn from_sql(row: &rusqlite::Row<'_>, prefix: Option<&str>) -> rusqlite::Result<OutTreeRecord> {
         let upx = match prefix {
@@ -39,6 +41,9 @@ impl OutTreeRecord {
     }
 }
 
+/// Function iterates through the files table to find all entries which should get materialized
+/// based on filtering (include, exclude filter) and on file type. Additionally, a source can be
+/// added s.t. only the files which are covered by this source are returned.
 pub fn list_materialized_entries<R: SqlFileRow>(
     conn: &Connection,
     last_id: Option<FileId>,
@@ -91,6 +96,8 @@ pub fn list_materialized_entries<R: SqlFileRow>(
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
+/// Insert a new OutTree row into the table. Function then returns the ids of all rows inserted
+/// based on the abs_path
 pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result<Vec<OutTreeId>> {
     if rows.is_empty() {
         return Ok(Vec::new());
@@ -118,6 +125,7 @@ pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result
     Ok(ids)
 }
 
+/// Function inserts the out_tref rows into the out_ref table
 pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Result<()> {
     if pairs.is_empty() {
         return Ok(());
@@ -135,6 +143,7 @@ pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Res
     Ok(())
 }
 
+/// Function lists all elements of the out_tree in batches
 pub fn list_out_tree(
     conn: &Connection,
     last_id: OutTreeId,
