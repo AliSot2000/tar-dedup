@@ -52,7 +52,7 @@ pub fn list_materialized_entries<R: SqlFileRow>(
     let filter_dir = match only_dirs {
         None => "",
         Some(true) => " AND f.ftype = 'dir' ",
-        Some(false) => " AND f.ftype != 'dir' " // INFO: ftype IS NOT NULL!
+        Some(false) => " AND f.ftype NOT IN ('dir') " // INFO: ftype IS NOT NULL!
     };
     let sql = match source_id {
         Some(_) => &format!("SELECT {columns}

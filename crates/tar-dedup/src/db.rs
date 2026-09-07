@@ -559,6 +559,29 @@ impl Database {
         place::list_out_tree(&self.conn(), last_id, batch_size, source_id, only_dir)
     }
 
+    pub fn list_out_tree_for_materialization<R: SqlFileRow>(
+        &self, last_id: &OutTreeId, batch_size: u64)
+        -> Result<Vec<(R, OutTreeRecord)>> {
+        place::list_out_tree_for_materialization(&self.conn(), last_id, batch_size)
+    }
+
+    pub fn list_out_tree_for_hardlinks(
+        &self, last_id: &OutTreeId, batch_size: u64)
+        -> Result<Vec<(OutTreeRecord, OutTreeRecord)>> {
+        place::list_out_tree_for_hardlinks(&self.conn(), last_id, batch_size)
+    }
+
+    pub fn list_out_tree_others<R: SqlFileRow>(&self, last_id: &OutTreeId, batch_size: u64)
+        -> Result<Vec<(R, OutTreeRecord)>> {
+        place::list_out_tree_others(&self.conn(), last_id, batch_size)
+    }
+
+    pub fn count_out_tree_canonicals(&self, materialized: Option<bool>) -> Result<u64> {
+        place::count_out_tree_canonicals(&self.conn(), materialized)
+    }
+    pub fn count_out_tree_hardlinks(&self, materialized: Option<bool>) -> Result<u64> {
+        place::count_out_tree_hardlinks(&self.conn(), materialized)
+    }
     pub fn count_out_tree_rows(&self) -> Result<u64> {
         place::count_out_tree_rows(&self.conn())
     }
@@ -575,6 +598,14 @@ impl Database {
 
     pub fn mark_all_canonical(&self) -> Result<u64> {
         place::mark_all_canonical(&self.conn())
+    }
+
+    pub fn mark_global_canonical(&self) -> Result<u64> {
+        place::mark_global_canonical(&self.conn())
+    }
+
+    pub fn mark_source_canonical(&self, source_id: i64) -> Result<u64> {
+        place::mark_source_canonical(&self.conn(), source_id)
     }
 
     // --- integrity checks across the database
