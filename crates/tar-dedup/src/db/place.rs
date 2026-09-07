@@ -467,19 +467,57 @@ pub fn mark_all_canonical(conn: &Connection) -> Result<u64> {
    Ok(update as u64)
 }
 
+/// Set one file as the canonical in the out_tree given hardlink groups (dev, inode)
+/// The (dev, inode) groups are formed across the entire external materialization tree.
 pub fn mark_global_canonical(conn: &Connection) -> Result<u64> {
-    let updated = conn.execute(" \
-        UPDATE out_tree SET canonical_id = id WHERE id IN
+    // Step 1: elect one out_tree row per (dev, inode) group as the canonical
+    // output row (self-link), using the group's dedup content canonical.
+    let updated = conn.execute(
+        "UPDATE out_tree SET canonical_id = id WHERE id IN
             (SELECT MIN(out.id)
-            FROM files AS can
-            JOIN files AS tree ON can.id = tree.canonical_id
-            JOIN out_tree AS out ON tree.id = out.file_id
-        WHERE tree.ftype = 'file' AND out.canonical_id IS NULL
-        GROUP BY tree.dev, tree.inode)
-    ",
-[]
+             FROM files AS can
+             JOIN files AS tree ON can.id = tree.canonical_id
+             JOIN out_tree AS out ON tree.id = out.file_id
+             WHERE tree.ftype = 'file'
+               AND out.canonical_id IS NULL
+               AND can.canonical_id = can.id
+               AND can.dev IS NOT NULL AND can.inode IS NOT NULL
+             GROUP BY can.dev, can.inode)",
+        [],
     )?;
-    Ok(updated as u64)
+
+    // Step 2: point every other out_tree row at the elected canonical row of
+    // its (dev, inode) group. The correlation is via the group's dedup
+    // content canonical (files.canonical_id = files.id) so members link to a
+    // real file payload of that group, not to an arbitrary same-inode row.
+    let updated2 = conn.execute(
+        "UPDATE out_tree SET canonical_id = (
+            SELECT MIN(w.id)
+            FROM out_tree AS w
+            JOIN files AS wf ON wf.id = w.file_id
+            JOIN files AS mf ON mf.id = out_tree.file_id
+            WHERE w.canonical_id = w.id
+              AND wf.canonical_id = wf.id
+              AND mf.dev = wf.dev
+              AND mf.inode = wf.inode
+              AND wf.ftype = 'file'
+         )
+         WHERE out_tree.canonical_id IS NULL
+           AND EXISTS (
+               SELECT 1
+               FROM out_tree AS w
+               JOIN files AS wf ON wf.id = w.file_id
+               JOIN files AS mf ON mf.id = out_tree.file_id
+               WHERE w.canonical_id = w.id
+                 AND wf.canonical_id = wf.id
+                 AND mf.dev = wf.dev
+                 AND mf.inode = wf.inode
+                 AND wf.ftype = 'file'
+           )",
+        [],
+    )?;
+
+    Ok((updated + updated2) as u64)
 }
 
 pub fn mark_source_canonical(conn: &Connection, source_id: i64) -> Result<u64> {
