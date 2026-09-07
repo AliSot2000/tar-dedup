@@ -629,3 +629,14 @@ pub enum ConflictPolicy {
     #[value(alias = "overwrite")]
     Replace,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum HardLinkGrouping {
+    /// Do not hard link any files which had the same (dev, inode) as on the source file system
+    None,
+    /// Only consider files within a tree of a single source for hard links.
+    Source,
+    /// Hard link files across all sources.
+    Global,
+}
