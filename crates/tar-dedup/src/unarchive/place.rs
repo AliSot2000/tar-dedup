@@ -3,7 +3,8 @@
 use crate::config::{ExtractConfig, HardLinkGrouping};
 use crate::db::Database;
 use crate::db::flags::{FileFlag, OutTreeFlag, OutTreeFlags};
-use crate::db::types::{FileId, FileRecord, FileType, NewOutTreeRow, OutTreeId, OutTreeRecord, StrippedRecord};
+#[warn(unused_imports)] // LinkType needed for linking back on windows.
+use crate::db::types::{FileId, FileRecord, FileType, LinkType, NewOutTreeRow, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 use nix::NixPath;
@@ -47,35 +48,254 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         copy_canonicals_to_source(&config, &db, &shutdown)?;
         link_into_place(&config, &db, &shutdown)?;
     } else {
-        prepare_hardlink_canonicals(&config, &db, &shutdown)?;
+        prepare_hardlink_canonicals(&config, &db)?;
+        let (ac, mc, ah, mh) = status_message_rebuilding(&db)?;
+        materialize_files(&config, &db, &shutdown)?;
+        materialize_hardlinks(&config, &db, &shutdown)?
+        // TODO build the rest.
     }
+    // TODO update files table.
     Ok(())
 }
 
-pub fn prepare_hardlink_canonicals(config: &ExtractConfig, db: &Database, shutdown: &Shutdown)
-    -> Result<()> {
-    match config.placement.hard_link_grouping {
-        HardLinkGrouping::None => db.mark_all_canonical()?,
-        HardLinkGrouping::Global => db.mark_global_canonical()?,
-        HardLinkGrouping::Source => {
-            if config.placement.absolute_names {
-                db.mark_global_canonical()?
-            } else {
-                let mut last_id = 0i64;
-                loop {
-                    let sources = db.list_sources(None, last_id, BATCH_SIZE)?;
-                    if sources.is_empty() { break }
-                    last_id = sources
-                        .last()
-                        .expect("PRECONDITION FAILED: At least one element expected").id;
+pub fn status_message_rebuilding(db: &Database) -> Result<(u64, u64, u64, u64)> {
+    let all_canonicals = db.count_out_tree_canonicals(None)?;
+    let all_hardlinks = db.count_out_tree_hardlinks(None)?;
+    let materialized_canonicals = db.count_out_tree_canonicals(Some(false))?;
+    let materialized_hardlinks = db.count_out_tree_hardlinks(Some(false))?;
+    tracing::info!("
+        Placement Phase:
+        {materialized_canonicals} of files already copied, {} remaining.
+        {materialized_hardlinks} of files already created, {} remaining.",
+        all_canonicals - materialized_canonicals,
+        all_hardlinks - materialized_hardlinks,
+    );
+    Ok((all_canonicals, materialized_canonicals, all_hardlinks, materialized_hardlinks))
+}
+
+pub fn materialize_files(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    let mut last_id = OutTreeId(0);
+
+    let cache_dir = config.paths.extract_cache_dir();
+    let shutdown = shutdown.clone();
+    let no_reflink = config.placement.no_reflink;
+
+    let results: Mutex<Vec<std::result::Result<(OutTreeId, bool), (OutTreeId, Error)>>> =
+        Mutex::new(Vec::new());
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(config.process.jobs)
+        .build()
+        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
+
+    loop {
+        shutdown.check_between_files()?;
+        let entries: Vec<(StrippedRecord, OutTreeRecord)> = db.list_out_tree_for_materialization(
+            &last_id, BATCH_SIZE)?;
+        if entries.is_empty() { break }
+        last_id = entries
+            .last().expect("PRECONDITION FAILED: at least one element should exist").1.id;
+
+        let parallel = pool.install(|| {
+            entries.par_iter().try_for_each(
+                |(canonical, target)| -> Result<()> {
+                    let id = canonical.content_id().expect(
+                        "PRECONDITION FAILED: Enqueued files must have a content_id");
+                    let src = cache_dir.join(id.0);
+
+                    // TODO handle unlink_first,
+                    // Todo handle newer, older
+
+                    let res = copy_single_file(
+                        target.id, &src, &target.abs_path, &shutdown, no_reflink);
+                    results.lock().expect("materialize files lock poisoned").push(res);
+                    Ok(())
+                })
+        });
+
+        match parallel {
+            Ok(_) => (),
+            Err(Error::Interrupted) => (), // INFO: need to finish iteration
+            Err(e) => return Err(e),
+        }
+
+        // Get the results
+        let new_res = Vec::new();
+        let copied = std::mem::replace(
+            &mut *results.lock().expect("hash results lock"),
+            new_res);
+
+        for result in copied {
+            match result {
+                Err((id, _err)) => {
+                    // TODO handle error
+                    db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
+                }
+                Ok((id, is_copy)) => {
+                    db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
+                    db.set_out_tree_flag(id, OutTreeFlag::UsedRefLink, !is_copy)?;
                 }
             }
         }
     }
-    if config.placement.absolute_names {
+    Ok(())
+}
 
+pub fn materialize_hardlinks(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    let mut last_id = OutTreeId(0);
+
+    let shutdown = shutdown.clone();
+
+    let results: Mutex<Vec<std::result::Result<OutTreeId, (OutTreeId, Error)>>> =
+        Mutex::new(Vec::new());
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(config.process.jobs)
+        .build()
+        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
+
+    loop {
+        shutdown.check_between_files()?;
+        let entries: Vec<(OutTreeRecord, OutTreeRecord)> = db.list_out_tree_for_hardlinks(
+            &last_id, BATCH_SIZE)?;
+        if entries.is_empty() { break }
+        last_id = entries
+            .last().expect("PRECONDITION FAILED: at least one element should exist").1.id;
+
+        let parallel = pool.install(|| {
+            entries.par_iter().try_for_each(
+                |(canonical, target)| -> Result<()> {
+                    let src = &canonical.abs_path;
+                    let dst = &target.abs_path;
+
+                    // TODO handle unlink_first,
+                    // Todo handle newer, older
+
+                    let res = match fs::hard_link(src, dst) {
+                        Ok(()) => Ok(target.id),
+                        Err(e) => Err((target.id, Error::io(dst, e))),
+                    };
+                    results.lock().expect("materialize files lock poisoned").push(res);
+                    Ok(())
+                })
+        });
+
+        match parallel {
+            Ok(_) => (),
+            Err(Error::Interrupted) => (), // INFO: need to finish iteration
+            Err(e) => return Err(e),
+        }
+
+        // Get the results
+        let new_res = Vec::new();
+        let copied = std::mem::replace(
+            &mut *results.lock().expect("hash results lock"),
+            new_res);
+
+        for result in copied {
+            match result {
+                Err((id, _err)) => {
+                    // TODO handle error
+                    db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
+                }
+                Ok(id) => {
+                    db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
+                    db.set_out_tree_flag(id, OutTreeFlag::IsHardlink, true)?;
+                }
+            }
+        }
     }
+    Ok(())
+}
 
+pub fn materialize_others(config: &ExtractConfig, db: &Database, shutdown: &Shutdown)
+    -> Result<()> {
+    let mut last_id = OutTreeId(0);
+
+    let shutdown = shutdown.clone();
+
+    let results: Mutex<Vec<std::result::Result<OutTreeId, (OutTreeId, SpecialErrors)>>> =
+        Mutex::new(Vec::new());
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(config.process.jobs)
+        .build()
+        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
+
+    loop {
+        shutdown.check_between_files()?;
+        let entries: Vec<(FileRecord, OutTreeRecord)> = db.list_out_tree_others(
+            &last_id, BATCH_SIZE)?;
+        if entries.is_empty() { break }
+        last_id = entries
+            .last().expect("PRECONDITION FAILED: at least one element should exist").1.id;
+
+        let parallel = pool.install(|| {
+            entries.par_iter().try_for_each(
+                |(canonical, target)| -> Result<()> {
+
+                    // TODO handle unlink_first,
+                    // Todo handle newer, older
+                    let base_res = build_other(
+                        &canonical, &target, config.placement.recreate_none_file_entries);
+
+                    let res = match base_res {
+                        Ok(()) => Ok(target.id),
+                        Err(e) => Err((target.id, e))
+                    };
+
+                    results.lock().expect("materialize files lock poisoned").push(res);
+                    Ok(())
+                })
+        });
+
+        match parallel {
+            Ok(_) => (),
+            Err(Error::Interrupted) => (), // INFO: need to finish iteration
+            Err(e) => return Err(e),
+        }
+
+        // Get the results
+        let new_res = Vec::new();
+        let copied = std::mem::replace(
+            &mut *results.lock().expect("hash results lock"),
+            new_res);
+
+        for result in copied {
+            match result {
+                Err((id, _err)) => {
+                    // TODO handle error
+                    db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
+                }
+                Ok(id) => {
+                    db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn prepare_hardlink_canonicals(config: &ExtractConfig, db: &Database)
+    -> Result<()> {
+    let updates: u64 = match config.placement.hard_link_grouping {
+        HardLinkGrouping::None => db.mark_all_canonical()?,
+        HardLinkGrouping::Global => db.mark_global_canonical()?,
+        HardLinkGrouping::Source => {
+            let mut last_id = 0i64;
+            let mut sum = 0u64;
+            loop {
+                let sources = db.list_sources(None, last_id, BATCH_SIZE)?;
+                if sources.is_empty() { break }
+                last_id = sources
+                    .last()
+                    .expect("PRECONDITION FAILED: At least one element expected").id;
+
+                for source in sources {
+                    sum += db.mark_source_canonical(source.id)?;
+                }
+            }
+            sum
+        }
+    };
+    tracing::info!("Number of materialized target {updates}");
     Ok(())
 }
 
@@ -107,11 +327,10 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
             entries.par_iter().try_for_each(
                 |(canonical, out)| -> Result<()> {
                 shutdown.check_between_files()?;
-                let ftype = canonical.ftype.expect("Only Extract known file types");
-                let result = if matches!(ftype, FileType::File) {
+                let result = if matches!(canonical.ftype, FileType::File) {
                     let content_id = canonical
                         .content_id()
-                        .expect("PRECONDITION: Moved successfully, concent_id must exist")
+                        .expect("PRECONDITION: Moved successfully, content_id must exist")
                         .0;
                     // Compute the target for link
                     let link_target = if config.placement.absolute_links
@@ -127,19 +346,21 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
                         fs::hard_link(link_target, &out.abs_path)
                     } else {
                         // TODO verify that this works
-                        std::os::unix::fs::symlink(link_target, &out.abs_path)
+                        #[cfg(unix)]
+                        {
+                            std::os::unix::fs::symlink(link_target, &out.abs_path)
+                        }
+                        #[cfg(windows)]
+                        {
+                            std::os::windows::fs::symlink_file(link_target, &out.abs_path)
+                        }
                     };
                     match base_res {
                         Ok(_) => Ok(()),
                         Err(e) => Err(SpecialErrors::IoError(e, out.abs_path.to_path_buf())),
                     }
                 } else {
-                    if config.placement.recreate_none_file_entries {
-                        build_other(
-                            &canonical, &out, ftype, config.placement.recreate_none_file_entries)
-                    } else {
-                        Ok(())
-                    }
+                    build_other(&canonical, &out, config.placement.recreate_none_file_entries)
                 };
                 results
                     .lock()
@@ -185,10 +406,9 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
 
 /// Function recreates all special files it can. Importantly, files, directories and unknown
 /// types are not valid file types for the function and will cause a panic
-fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, ftype: FileType, try_special: bool)
+fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bool)
     -> std::result::Result<(), SpecialErrors> {
-    // TODO perm mask for created entries
-    match ftype {
+    match canonical.ftype {
         FileType::File => panic!(
             "PRECONDITION ERROR: build_other does not treat files"),
         FileType::Directory => panic!(
@@ -199,9 +419,26 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, ftype: FileType
             tracing::info!("Received Socket at {}, skipping", &out_tree.abs_path.display());
             Ok(())
         },
+        #[cfg(unix)]
         FileType::Symlink(_) => match &canonical.link_dst {
             None => Ok(()),
             Some(dst) => match std::os::unix::fs::symlink(dst, &out_tree.abs_path) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(SpecialErrors::IoError(e, out_tree.abs_path.to_path_buf()))
+            }
+        },
+        #[cfg(windows)]
+        FileType::Symlink(LinkType::Directory) => match &canonical.link_dst {
+            None => Ok(()),
+            Some(dst) => match std::os::windows::fs::symlink_dir(dst, &out_tree.abs_path) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(SpecialErrors::IoError(e, out_tree.abs_path.to_path_buf()))
+            }
+        },
+        #[cfg(windows)]
+        FileType::Symlink(_) => match &canonical.link_dst {
+            None => Ok(()),
+            Some(dst) => match std::os::windows::fs::symlink_file(dst, &out_tree.abs_path) {
                 Ok(_) => Ok(()),
                 Err(e) => Err(SpecialErrors::IoError(e, out_tree.abs_path.to_path_buf()))
             }
@@ -358,7 +595,8 @@ pub fn copy_canonicals_to_source(config: &ExtractConfig, db: &Database, shutdown
 
         for result in copied {
             match result {
-                Err((id, err)) => {
+                Err((id, _err)) => {
+                    // TODO handle error
                     db.set_file_flag(id, FileFlag::ErrorWhilePlacing, true)?;
                 }
                 Ok((id, is_copy)) => {
@@ -372,8 +610,11 @@ pub fn copy_canonicals_to_source(config: &ExtractConfig, db: &Database, shutdown
     Ok(())
 }
 
-fn copy_single_file(fid: FileId, src: &Path, dst: &Path, shutdown: &Shutdown, no_reflink: bool)
-    -> std::result::Result<(FileId, bool), (FileId, Error)> {
+/// Copy a single file from a to b. Function implements a shutdown check to avoid long blocking
+/// Error contains the Error as well as the file id to link against,
+/// Ok contains the id as well as bool which is false if reflink was used and true if copy was used.
+fn copy_single_file<I>(fid: I, src: &Path, dst: &Path, shutdown: &Shutdown, no_reflink: bool)
+    -> std::result::Result<(I, bool), (I, Error)> {
 
     // Attempt to reflink
     if !no_reflink {
@@ -599,11 +840,9 @@ fn populate_out_tree_abs(db: &Database, config: &ExtractConfig, shutdown: &Shutd
 
     loop {
         shutdown.check_in_flight()?;
-        let entries = db.list_materialized_entries(
+        let entries: Vec<StrippedRecord> = db.list_materialized_entries(
             Some(last_id), BATCH_SIZE, None, Some(false))?;
-        if entries.is_empty() {
-            break
-        }
+        if entries.is_empty() { break }
         last_id = entries.last().expect("non-empty batch").id;
 
         // Process the entries
@@ -655,7 +894,7 @@ fn populate_out_tree_rel(db: &Database, config: &ExtractConfig, shutdown: &Shutd
             let mut last_id = FileId(0);
             loop {
                 shutdown.check_in_flight()?;
-                let entries = db.list_materialized_entries(
+                let entries: Vec<StrippedRecord> = db.list_materialized_entries(
                     Some(last_id), BATCH_SIZE, Some(source.id), Some(false)
                 )?;
                 if entries.is_empty() { break }
@@ -684,10 +923,7 @@ fn build_new_out_tree_rows(
         .iter()
         .map(|r| {
             let path = catalog_to_target_abs(root, &r.abs_path, sources);
-            let is_dir = match r.ftype {
-                None => false,
-                Some(t) => t == FileType::Directory
-            };
+            let is_dir = r.ftype == FileType::Directory;
             let mut of = OutTreeFlags::default();
             of.set(OutTreeFlag::IsDirectory, is_dir);
             NewOutTreeRow {
