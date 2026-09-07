@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS files (
 
     -- File Attributes
     size          INTEGER NOT NULL,
+    ftype         TEXT NOT NULL,
     sha1          BLOB,
     mtime         TEXT,
     atime         TEXT,
@@ -50,7 +51,6 @@ CREATE TABLE IF NOT EXISTS files (
     gid           INTEGER,
     groupname     TEXT,
     mode          INTEGER,
-    ftype         TEXT,
     inode         INTEGER,
     dev           INTEGER,
     major         INTEGER,
