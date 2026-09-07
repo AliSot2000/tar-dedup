@@ -520,23 +520,78 @@ pub fn mark_global_canonical(conn: &Connection) -> Result<u64> {
     Ok((updated + updated2) as u64)
 }
 
+/// Set one file as the canonical in the out_tree given hardlink groups (dev, inode)
+/// The (dev, inode) groups are formed across the subtree which is induced by the source_id.
+/// If multiple sources induce the same (or partially the same) tree, previously captured / marked
+/// those are not considered for canonical computation. E.g.
+///
+/// Source A covers:
+/// /path/to/dir
+/// Source B Covers:
+/// /path/to/dir/subdir
+///
+/// Suppose the following links
+/// /path/to/dir/link_a
+/// /path/to/dir/subdir/link_b
+/// /path/to/dir/subdir/link_c
+///
+/// If A is marked before B, link_a, link_b and link_c are linked together
+/// If B is marked before A, link_b, link_c are a group and link_a is a separate (non-linked) file.
 pub fn mark_source_canonical(conn: &Connection, source_id: i64) -> Result<u64> {
+    // Step 1: elect one out_tree row per (dev, inode) group as the canonical
+    // output row (self-link), using the group's dedup content canonical.
     let updated = conn.execute(
-        "
-        UPDATE out_tree SET canonical_id = id WHERE id IN
-            (SELECT MIN(tree.id) \
-            FROM files AS can \
-            JOIN files AS tree ON can.id = tree.canonical_id \
-            JOIN out_tree AS out ON tree.id = out.file_id \
-            JOIN ref_out ON ref_out.out_id = out.id \
-            WHERE ftype = 'file' \
-                AND out.canonical_id IS NULL \
-                AND ref_out.source_id = :source_id \
-            GROUP BY (can.sha1, can.size, tree.dev, tree.inode)) \
-    ",
-        named_params! {
-        ":source_id": source_id,
-    }
+        "UPDATE out_tree SET canonical_id = id WHERE id IN
+            (SELECT MIN(out.id)
+             FROM files AS can
+             JOIN files AS tree ON can.id = tree.canonical_id
+             JOIN out_tree AS out ON tree.id = out.file_id
+             JOIN ref_out ON ref_out.out_id = out.id
+             WHERE tree.ftype = 'file'
+               AND out.canonical_id IS NULL
+               AND can.canonical_id = can.id
+               AND can.dev IS NOT NULL AND can.inode IS NOT NULL
+               AND ref_out.source_id = :source_id
+             GROUP BY can.dev, can.inode)",
+        named_params! { ":source_id": source_id },
     )?;
-    Ok(updated as u64)
+
+    // Step 2: point every other out_tree row at the elected canonical row of
+    // its (dev, inode) group. The correlation is via the group's dedup
+    // content canonical (files.canonical_id = files.id) so members link to a
+    // real file payload of that group, not to an arbitrary same-inode row.
+    let updated2 = conn.execute(
+        "UPDATE out_tree SET canonical_id = (
+                SELECT MIN(w.id)
+                FROM out_tree AS w
+                JOIN files AS wf ON wf.id = w.file_id
+                JOIN files AS mf ON mf.id = out_tree.file_id
+                WHERE w.canonical_id = w.id
+                    AND wf.canonical_id = wf.id
+                    AND mf.dev = wf.dev
+                    AND mf.inode = wf.inode
+                    AND wf.ftype = 'file'
+                )
+            WHERE out_tree.canonical_id IS NULL
+                AND EXISTS (
+                    SELECT 1
+                    FROM ref_out AS ro
+                    WHERE ro.out_id = out_tree.id
+                        AND ro.source_id = :source_id
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM out_tree AS w
+                    JOIN files AS wf ON wf.id = w.file_id
+                    JOIN files AS mf ON mf.id = out_tree.file_id
+                    WHERE w.canonical_id = w.id
+                        AND wf.canonical_id = wf.id
+                        AND mf.dev = wf.dev
+                        AND mf.inode = wf.inode
+                        AND wf.ftype = 'file'
+                )",
+        named_params! { ":source_id": source_id },
+    )?;
+
+    Ok((updated + updated2) as u64)
 }
