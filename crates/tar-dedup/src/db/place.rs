@@ -423,8 +423,8 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
         " AND o.flags & :placement = 0 \
           AND o.flags & :place_error = 0"
     } else {
-        " AND o.flags & :placement = 1 \
-          AND o.flags & :place_error = 0"
+        " AND (o.flags & :placement = 1 \
+               OR o.flags & :place_error = 1)"
     };
     let mut stmt = conn.prepare(&format!("\
         SELECT {file_cols}, {out_cols} \
