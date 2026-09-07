@@ -464,6 +464,15 @@ pub struct ExtractArgs {
     )]
     pub remove_and_replace: bool,
 
+    /// On type mismatch at a path, remove the existing entry and extract the archive member.
+    #[arg(
+        long = "hard-link-grouping",
+        value_enum,
+        help_heading = "Overwrite Control",
+        value_name = "GROUPING-POLICY",
+    )]
+    pub hard_link_grouping: HardLinkGrouping,
+
     // --- Link Tree ---
 
     /// Build the restored tree from symlinks/hard links into the extract stage instead
