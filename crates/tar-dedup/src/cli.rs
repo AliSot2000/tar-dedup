@@ -514,6 +514,30 @@ pub struct ExtractArgs {
     )]
     pub restore_owner: bool,
 
+    /// Force owner for restored members: `NAME`, `UID`, or `NAME:UID`.
+    #[arg(long = "owner", value_name = "NAME[:UID]", help_heading = "File Attributes")]
+    pub owner: Option<String>,
+
+    /// Owner translation map file (GNU tar `--owner-map`).
+    #[arg(long = "owner-map", value_name = "FILE", help_heading = "File Attributes")]
+    pub owner_map: Option<PathBuf>,
+
+    /// Force group for restored members: `NAME`, `GID`, or `NAME:GID`.
+    #[arg(long = "group", value_name = "NAME[:GID]", help_heading = "File Attributes")]
+    pub group: Option<String>,
+
+    /// Group translation map file (GNU tar `--group-map`).
+    #[arg(long = "group-map", value_name = "FILE", help_heading = "File Attributes")]
+    pub group_map: Option<PathBuf>,
+
+    /// Apply the owner map recorded in the archive (ignored if any `--owner`/`--owner-map` given).
+    #[arg(long = "apply-stored-owner-map", default_value_t = false, help_heading = "File Attributes")]
+    pub apply_stored_owner_map: bool,
+
+    /// Apply the group map recorded in the archive (ignored if any `--group`/`--group-map` given).
+    #[arg(long = "apply-stored-group-map", default_value_t = false, help_heading = "File Attributes")]
+    pub apply_stored_group_map: bool,
+
     // --- Process Options ---
 
     /// Wipe extract work (`.estage`) and start over.
