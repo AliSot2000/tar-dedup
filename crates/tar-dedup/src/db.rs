@@ -582,6 +582,11 @@ impl Database {
     pub fn count_out_tree_hardlinks(&self, materialized: Option<bool>) -> Result<u64> {
         place::count_out_tree_hardlinks(&self.conn(), materialized)
     }
+
+    pub fn count_out_tree_others(&self, materialized: Option<bool>) -> Result<u64> {
+        place::count_out_tree_others(&self.conn(), materialized)
+    }
+
     pub fn count_out_tree_rows(&self) -> Result<u64> {
         place::count_out_tree_rows(&self.conn())
     }

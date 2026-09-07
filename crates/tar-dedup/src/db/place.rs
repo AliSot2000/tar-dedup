@@ -254,6 +254,30 @@ pub fn count_out_tree_hardlinks(conn: &Connection, materialized: Option<bool>) -
     Ok(n as u64)
 }
 
+/// Function counts the number of entries in the out_tree table which are not dirs, files or unknown
+/// canonical_id IS NULL (implied by mark canonical)
+pub fn count_out_tree_others(conn: &Connection, materialized: Option<bool>) -> Result<u64> {
+    let (mat_filter, mat_masks) = out_tree_materialized_filter(materialized);
+    let sql = format!(
+        "SELECT COUNT(*) FROM out_tree \
+         WHERE canonical_id IS NULL {mat_filter}");
+    let n: i64 = match mat_masks {
+        None => conn.query_row(
+            &sql,
+            named_params! { ":dir": OutTreeFlag::IsDirectory.mask_i64() },
+            |row| row.get(0))?,
+        Some((placed, err)) => conn.query_row(
+            &sql,
+            named_params! {
+                ":dir": OutTreeFlag::IsDirectory.mask_i64(),
+                ":placed": placed,
+                ":err": err,
+            },
+            |row| row.get(0))?,
+    };
+    Ok(n as u64)
+}
+
 /// Build the `materialized` WHERE fragment and the `(placed, err)` masks it
 /// references. `None` → no filter (No masks bound). `Some(true)` → at least one
 /// of Placed / ErrorWhilePlace set. `Some(false)` → neither set.
