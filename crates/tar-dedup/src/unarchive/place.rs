@@ -48,11 +48,15 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         copy_canonicals_to_source(&config, &db, &shutdown)?;
         link_into_place(&config, &db, &shutdown)?;
     } else {
+        // Step 2, compute hardlink canonicals in the extraction location, then
+        // first copy files, then hardlink, then create other types
+        // (symlinks, char-dev, block-dev, FIFO)
         prepare_hardlink_canonicals(&config, &db)?;
-        let (ac, mc, ah, mh) = status_message_rebuilding(&db)?;
+        let (ac, mc, ah, mh, ao, mo) = status_message_rebuilding(
+            &config, &db)?;
         materialize_files(&config, &db, &shutdown)?;
-        materialize_hardlinks(&config, &db, &shutdown)?
-        // TODO build the rest.
+        materialize_hardlinks(&config, &db, &shutdown)?;
+        materialize_others(&config, &db, &shutdown)?;
     }
     // TODO update files table.
     Ok(())
