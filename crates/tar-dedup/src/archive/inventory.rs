@@ -365,7 +365,7 @@ pub fn handle_entry(
     let ctime = strip_transpose(path, times.2, &mut enc_err);
     let uid = None;
     let gid = None;
-    let ftype = match determine_file_type(&meta, &path) {
+    let ftype: FileType = match determine_file_type(&meta, &path) {
         Ok(t) => t,
         Err((t, e)) => {
             enc_err.push(e);
