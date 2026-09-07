@@ -62,19 +62,37 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     Ok(())
 }
 
-pub fn status_message_rebuilding(db: &Database) -> Result<(u64, u64, u64, u64)> {
+/// Get the number of files, hardlinks and others. Also produce
+pub fn status_message_rebuilding(config: &ExtractConfig, db: &Database) -> Result<(u64, u64, u64, u64, u64, u64)> {
     let all_canonicals = db.count_out_tree_canonicals(None)?;
     let all_hardlinks = db.count_out_tree_hardlinks(None)?;
+    let all_other = db.count_out_tree_others(None)?;
     let materialized_canonicals = db.count_out_tree_canonicals(Some(false))?;
     let materialized_hardlinks = db.count_out_tree_hardlinks(Some(false))?;
+    let materialized_other = db.count_out_tree_others(Some(false))?;
+
+    let other_msg = if config.placement.recreate_none_file_entries {
+        &format!("{materialized_other} of other entries, {} remaining",
+                all_other - materialized_other)
+    } else {
+        ""
+    };
+
     tracing::info!("
         Placement Phase:
         {materialized_canonicals} of files already copied, {} remaining.
-        {materialized_hardlinks} of files already created, {} remaining.",
+        {materialized_hardlinks} of files already created, {} remaining.
+        {other_msg}",
         all_canonicals - materialized_canonicals,
         all_hardlinks - materialized_hardlinks,
     );
-    Ok((all_canonicals, materialized_canonicals, all_hardlinks, materialized_hardlinks))
+    Ok((all_canonicals,
+        materialized_canonicals,
+        all_hardlinks,
+        materialized_hardlinks,
+        all_other,
+        materialized_other
+    ))
 }
 
 pub fn materialize_files(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
