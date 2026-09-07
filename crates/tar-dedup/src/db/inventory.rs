@@ -294,7 +294,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let loaded: FileRecord = db.get_file_by_id(id).unwrap().expect("row");
-        assert_eq!(loaded.ftype, Some(FileType::CharacterDevice));
+        assert_eq!(loaded.ftype, FileType::CharacterDevice);
         assert_eq!(loaded.major, Some(1));
         assert_eq!(loaded.minor, Some(3));
         assert_eq!(loaded.device_id, Some(42));
