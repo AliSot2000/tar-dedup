@@ -254,12 +254,14 @@ define_flags! {
         /// Walked this abs_path already with another source. Do not hard link against these entries.
         // TODO END DELETE
         EntryWalked = 3,
+        /// Capture if we used reflnks or copies into place.
+        UsedRefLink = 4,
         /// Copy/link into this output path failed.
-        ErrorWhilePlace = 4,
+        ErrorWhilePlace = 5,
         /// Metadata restore failed for this output path.
-        ErrorWhileApplyingMetadata = 5,
+        ErrorWhileApplyingMetadata = 6,
         /// Highlight directories to be able to scan them for dir tree creation.
-        IsDirectory = 6,
+        IsDirectory = 7,
     }
     /// Bitset stored in `out_tree.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
