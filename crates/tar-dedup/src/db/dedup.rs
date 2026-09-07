@@ -1,8 +1,8 @@
-use rusqlite::{named_params, Connection};
+use rusqlite::{Connection, named_params};
 
 use crate::db::common::SqlFileRow;
 use crate::db::flags::FileFlag;
-use crate::db::types::{FileId, FilePhase, GroupKey};
+use crate::db::types::{FileId, GroupKey};
 use crate::error::Result;
 
 /// Set canonical column of the row identified by file_id
