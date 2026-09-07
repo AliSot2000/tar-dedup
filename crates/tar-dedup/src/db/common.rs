@@ -39,7 +39,7 @@ fn content_id_if_canonical(
 }
 
 impl FileRecord {
-    /// Self-canonical regular file with digest → content id.
+    /// Self-canonical regular file with digest → content id. (ftype = File && canonical_id = id)
     pub fn content_id(&self) -> Option<ContentId> {
         content_id_if_canonical(
             self.id,
@@ -47,7 +47,7 @@ impl FileRecord {
             self.sha1.as_ref(),
             self.size,
             &self.abs_path,
-            self.ftype?,
+            self.ftype,
         )
     }
 
@@ -71,7 +71,7 @@ impl StrippedRecord {
             self.sha1.as_ref(),
             self.size,
             &self.abs_path,
-            self.ftype?,
+            self.ftype,
         )
     }
 
@@ -142,7 +142,7 @@ impl SqlFileRow for FileRecord {
             uid: row.get::<_, Option<i64>>(format!("{upx}uid").as_str())?.map(|v| v as u32),
             gid: row.get::<_, Option<i64>>(format!("{upx}gid").as_str())?.map(|v| v as u32),
             mode: row.get::<_, Option<i64>>(format!("{upx}mode").as_str())?.map(|v| v as u32),
-            ftype: optional_ftype(row, format!("{upx}ftype").as_str())?,
+            ftype: parse_ftype(row, format!("{upx}ftype").as_str())?,
             xattrs: row.get(format!("{upx}xattr").as_str())?,
             posix_acl: row.get(format!("{upx}acl").as_str())?,
             selinux_ctx: row.get(format!("{upx}selinux").as_str())?,
@@ -216,7 +216,7 @@ impl SqlFileRow for StrippedRecord {
             mtime: optional_rfc3339(row, format!("{upx}mtime").as_str())?,
             atime: optional_rfc3339(row, format!("{upx}atime").as_str())?,
             ctime: optional_rfc3339(row, format!("{upx}ctime").as_str())?,
-            ftype: optional_ftype(row, format!("{upx}ftype").as_str())?,
+            ftype: parse_ftype(row, format!("{upx}ftype").as_str())?,
             canonical_id: row.get::<_, Option<i64>>(format!("{upx}canonical_id").as_str())?
                 .map(FileId),
             flags: FileFlags::from_i64(row.get::<_, i64>(format!("{upx}flags").as_str())?),
@@ -370,6 +370,7 @@ fn optional_sha1(row: &rusqlite::Row<'_>, prefix: &str) -> rusqlite::Result<Opti
         .map(|arr: [u8; 20]| arr))
 }
 
+// TODO joint string parsing function
 fn parse_phase(row: &rusqlite::Row<'_>, prefix: &str) -> rusqlite::Result<FilePhase> {
     let raw: String = row.get(format!("{prefix}phase").as_str())?;
     FilePhase::parse(&raw).map_err(|e| {
@@ -403,22 +404,21 @@ fn optional_rfc3339(
     }
 }
 
-fn optional_ftype(
+fn parse_ftype(
     row: &rusqlite::Row<'_>,
     column: &str,
-) -> rusqlite::Result<Option<FileType>> {
-    let raw: Option<String> = row.get(column)?;
-    match raw {
-        None => Ok(None),
-        Some(s) => FileType::parse(&s).map(Some).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e.to_string(),
-                )),
-            )
-        }),
-    }
+) -> rusqlite::Result<FileType> {
+    let raw: String = row.get(column)?;
+    FileType::parse(&raw).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+                )
+            ),
+        )
+    })
 }
+
