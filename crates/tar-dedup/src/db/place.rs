@@ -309,7 +309,6 @@ pub fn list_canonical_files_for_move<R: SqlFileRow>(
         SELECT {cols} FROM files \
             WHERE flags & :extracted = 1 \
                 AND flags & :moved = 0
-                AND ftype IS NOT NULL
                 AND ftype = 'file'
                 AND phase = 'rehashed'
                 AND id > :last_id
