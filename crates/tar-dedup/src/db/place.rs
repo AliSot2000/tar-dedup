@@ -271,8 +271,6 @@ fn out_tree_materialized_filter(materialized: Option<bool>) -> (String, Option<(
     }
 }
 
-// TODO other
-
 pub fn count_ref_out_rows(conn: &Connection) -> Result<u64> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM ref_out",
