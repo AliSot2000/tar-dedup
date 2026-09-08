@@ -85,3 +85,30 @@ pub fn list_double_canonical_dev_inode_group<R: SqlFileRow>(
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
+
+/// Check how many rows fail the implication name -> id
+pub fn count_id_implication(conn: &Connection) -> Result<u64> {
+    let res: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count
+        FROM files
+        WHERE (uid IS NULL AND username IS NOT NULL)
+            OR (gid IS NULL AND groupname IS NOT NULL)",
+        [],
+        |r| r.get("count"))?;
+    Ok(res as u64)
+}
+
+/// Check how many rows fail the implication name -> id
+pub fn count_missing_unix_infos(conn: &Connection) -> Result<u64> {
+    let res: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count
+        FROM files
+        WHERE uid IS NULL
+            OR gid IS NULL
+            OR mode IS NULL
+            OR inode IS NULL
+            OR dev IS NULL",
+        [],
+        |r| r.get("count"))?;
+    Ok(res as u64)
+}
