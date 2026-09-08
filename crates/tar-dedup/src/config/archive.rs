@@ -67,6 +67,7 @@ pub struct ArchivePipelineOptions {
     pub retry_missing_sha: bool,
     pub write_archive_footer: bool,
     pub clear_archive_meta: bool,
+    pub numeric_ids_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -253,6 +254,7 @@ impl ArchiveConfig {
                 retry_missing_sha: args.retry_missing_sha,
                 write_archive_footer: true,
                 clear_archive_meta: false,
+                numeric_ids_only: args.numeric_ids_only,
             },
         })
     }
@@ -321,6 +323,7 @@ impl ArchiveConfig {
                 retry_missing_sha: false,
                 write_archive_footer: true,
                 clear_archive_meta: false,
+                numeric_ids_only: false,
             },
         }
     }
