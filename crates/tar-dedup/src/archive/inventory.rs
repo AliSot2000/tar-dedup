@@ -103,6 +103,10 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         entries_processed = processed,
         total_unique_entries = db.count_entries()?,
         "inventory indexed");
+    let failed_implication = db.count_id_implication()?;
+    assert_eq!(failed_implication, 0, "INVARIANT FAILED: Number of files with username / groupname \
+        set but not uid / gid set MUST be 0");
+
     Ok(())
 }
 
