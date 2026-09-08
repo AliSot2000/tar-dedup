@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::cli::{ConflictPolicy, ExtractArgs, HardLinkGrouping};
+use crate::common::perms::{
+    MapResolutionTarget, OwnerGroupSource, infer_same_owner, parse_owner_group_args,
+    validate_for_mode,
+};
 use crate::common::start::StartPolicy;
 use crate::error::{Error, Result};
 
@@ -8,7 +12,8 @@ use super::compression::infer_compression_from_suffix;
 use super::paths::PathLayout;
 use super::process::{CleanupSettings, ProcessOptions};
 use super::{
-    default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path, ExtractStageLocation,
+    ExtractStageLocation,
+    default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_file,
 };
 
 #[derive(Debug, Clone)]
@@ -54,11 +59,69 @@ pub struct ExtractConfig {
     pub attributes: ExtractAttributeOptions,
     pub scan: ScanOptions,
     pub process: ProcessOptions,
+    pub owner_policy: OwnerGroupSource,
+    pub owner_group: OwnerGroupOptions,
+}
+
+/// Resolve which owner/group policy applies on extract from the CLI args.
+///
+/// Explicit `--owner`/`--group`/`--owner-map`/`--group-map` map to a CLI policy and
+/// take precedence over `--apply-stored-*`. Otherwise the stored policy is requested
+/// (`Stored`), to be fetched from the archive footprint by the caller.
+fn resolve_owner_policy_from_args(
+    args: &ExtractArgs,
+    directory: &Path,
+) -> Result<OwnerGroupSource> {
+    let has_cli = args.owner.is_some()
+        || args.group.is_some()
+        || args.owner_map.is_some()
+        || args.group_map.is_some();
+    if has_cli {
+        if args.apply_stored_owner_map || args.apply_stored_group_map {
+            tracing::warn!(
+                "--apply-stored-owner-map / --apply-stored-group-map ignored; \
+                 explicit --owner/--group/--owner-map/--group-map take precedence"
+            );
+        }
+        let owner_map = resolve_map_arg(args.owner_map.as_ref(),
+                                        "--owner-map", directory)?;
+        let group_map = resolve_map_arg(args.group_map.as_ref(),
+                                        "--group-map", directory)?;
         match parse_owner_group_args(
             args.owner.as_deref(),
             owner_map.as_deref(),
             args.group.as_deref(),
             group_map.as_deref(),
+        )? {
+            Some(policy) => {
+                if args.validate_maps {
+                    validate_for_mode(&policy, args.map_target)?;
+                }
+                Ok(OwnerGroupSource::Cli(policy))
+            }
+            None => Ok(OwnerGroupSource::None),
+        }
+    } else if args.apply_stored_owner_map || args.apply_stored_group_map {
+        Ok(OwnerGroupSource::Stored)
+    } else {
+        Ok(OwnerGroupSource::None)
+    }
+}
+
+/// Resolve a `--owner-map` / `--group-map` file path against `directory` and validate it.
+fn resolve_map_arg(
+    map: Option<&PathBuf>,
+    label: &str,
+    directory: &Path,
+) -> Result<Option<PathBuf>> {
+    match map {
+        None => Ok(None),
+        Some(p) => {
+            let resolved = resolve_path_to_abs_path(p, directory);
+            validate_file(&resolved, label)?;
+            Ok(Some(resolved))
+        }
+    }
 }
 
 impl ExtractConfig {
