@@ -211,6 +211,18 @@ impl ExtractConfig {
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
                 exit_after_stage: None,
             },
+            owner_policy,
+            owner_group: OwnerGroupOptions {
+                target: args.map_target,
+                validate_maps: args.validate_maps,
+                same_owner: if args.no_same_owner {
+                    false
+                } else if args.restore_owner {
+                    true
+                } else {
+                    infer_same_owner()
+                },
+            },
         })
     }
 
@@ -259,6 +271,12 @@ impl ExtractConfig {
                 no_errors: false,
                 cleanup: CleanupSettings::from_flags(false, false),
                 exit_after_stage: None,
+            },
+            owner_policy: OwnerGroupSource::None,
+            owner_group: OwnerGroupOptions {
+                target: MapResolutionTarget::NameId,
+                validate_maps: false,
+                same_owner: false,
             },
         }
     }
@@ -309,6 +327,12 @@ impl ExtractConfig {
                 cleanup: CleanupSettings::from_flags(false, false),
                 exit_after_stage: None,
             },
+            owner_policy: OwnerGroupSource::None,
+            owner_group: OwnerGroupOptions {
+                target: MapResolutionTarget::NameId,
+                validate_maps: false,
+                same_owner: false,
+            },
         }
     }
 
@@ -357,6 +381,12 @@ impl ExtractConfig {
                 no_errors: false,
                 cleanup: CleanupSettings::from_flags(false, false),
                 exit_after_stage: None,
+            },
+            owner_policy: OwnerGroupSource::None,
+            owner_group: OwnerGroupOptions {
+                target: MapResolutionTarget::NameId,
+                validate_maps: false,
+                same_owner: false,
             },
         }
     }
