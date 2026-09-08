@@ -317,6 +317,10 @@ pub struct ArchiveArgs {
         help_heading = "Process Options"
     )]
     pub retry_missing_sha: bool,
+
+    /// Do not resolve numeric ids to user/group names during inventory.
+    #[arg(long = "numeric-ids-only", default_value_t = false, help_heading = "Process Options")]
+    pub numeric_ids_only: bool,
 }
 
 #[derive(Debug, Args, Default)]
