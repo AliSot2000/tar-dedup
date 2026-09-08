@@ -642,4 +642,10 @@ impl Database {
         -> Result<Vec<R>> {
         integrity::list_double_canonical_dev_inode_group(&self.conn(), last_id, batch_size)
     }
+    pub fn count_id_implication(&self) -> Result<u64> {
+        integrity::count_id_implication(&self.conn())
+    }
+    pub fn count_missing_unix_infos(&self) -> Result<u64> {
+        integrity::count_missing_unix_infos(&self.conn())
+    }
 }
