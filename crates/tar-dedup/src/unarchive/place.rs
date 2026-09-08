@@ -335,6 +335,8 @@ pub fn prepare_hardlink_canonicals(config: &ExtractConfig, db: &Database) -> Res
     Ok(())
 }
 
+/// Iterate through the out_tree and reflink / copy all files into placed which are marked as
+/// (hardlink) canonicals. (out_tree.canonical_id = id)
 pub fn materialize_files(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
@@ -402,6 +404,8 @@ pub fn materialize_files(config: &ExtractConfig, db: &Database, shutdown: &Shutd
     Ok(())
 }
 
+/// Create all the hardlinks after the copy stage.
+/// PRECONDITION: Function must be called after the [`materialize_files`]
 pub fn materialize_hardlinks(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
@@ -468,6 +472,8 @@ pub fn materialize_hardlinks(config: &ExtractConfig, db: &Database, shutdown: &S
     Ok(())
 }
 
+/// Final step, pass through all the remaining entries which could be materialized:
+/// (symlink, fifo, character device, block device, socket)
 pub fn materialize_others(config: &ExtractConfig, db: &Database, shutdown: &Shutdown)
     -> Result<()> {
     let mut last_id = OutTreeId(0);
