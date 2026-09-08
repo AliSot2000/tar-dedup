@@ -501,17 +501,6 @@ pub struct ExtractArgs {
     )]
     pub absolute_links: bool,
 
-    /// Re-create hard links between extracted files that share `(dev, inode)` in the
-    /// archive catalog (default: on).
-    #[arg(
-        long = "hardlink-reestablish",
-        default_value_t = true,
-        action = ArgAction::SetTrue,
-        help_heading = "Link Tree"
-    )]
-    #[arg(long = "no-hardlink-reestablish", action = ArgAction::SetFalse)]
-    pub hardlink_reestablish: bool,
-
     // --- File Attributes ---
 
     /// Restore archived uid/gid when possible (GNU tar `--same-owner`; may require root).
