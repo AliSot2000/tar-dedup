@@ -6,8 +6,9 @@ use tar_dedup::cli::ConflictPolicy;
 use tar_dedup::common::start::StartPolicy;
 use tar_dedup::config::{
     CleanupSettings, CompressionFormat, ExtractAttributeOptions, ExtractConfig, PathLayout,
-    PlacementOptions, ProcessOptions, ScanOptions, HardLinkGrouping,
+    PlacementOptions, ProcessOptions, ScanOptions,
 };
+use tar_dedup::cli::HardLinkGrouping;
 use tar_dedup::db::flags::{SourceFlag, SourceFlags};
 use tar_dedup::db::types::{FileId, FilePhase, FileType, NewFileRecord, StrippedRecord};
 use tar_dedup::db::Database;
@@ -171,6 +172,7 @@ pub fn place_config(extraction_root: PathBuf, absolute_names: bool) -> ExtractCo
             cleanup: CleanupSettings::from_flags(false, false),
             exit_after_stage: None,
         },
+        owner_policy: tar_dedup::common::perms::OwnerGroupSource::None,
     }
 }
 
