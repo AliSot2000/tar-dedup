@@ -104,7 +104,8 @@ impl ArchiveConfig {
                 "at least one of `-i`/`--input-dir` or `-T`/`--files-from` is required".into(),
             ));
         }
-
+        
+        // TODO rethink accepted roots.
         let mut input_dirs = Vec::with_capacity(args.input_dirs.len());
         let mut accepted_roots: Vec<PathBuf> = Vec::with_capacity(args.input_dirs.len());
         for dir in &args.input_dirs {
