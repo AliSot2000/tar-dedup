@@ -9,6 +9,7 @@
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 
+use crate::common::perms::OwnerGroupPolicy;
 use crate::config::{ExtractPipelinePhase, PipelinePhase};
 use crate::db::common::{delete_meta, get_meta, upsert_meta};
 use crate::error::{Error, Result};
@@ -30,6 +31,7 @@ pub enum MetaKey {
     ScanTarLastMemberIndex,
     OutTreeBuilt,
     DirTreeBuilt,
+    ArchiveOwnerPolicy,
 }
 
 impl MetaKey {
@@ -49,6 +51,7 @@ impl MetaKey {
             Self::ScanTarLastMemberIndex => "scan_tar_last_member_index",
             Self::OutTreeBuilt => "out_tree_built",
             Self::DirTreeBuilt => "dir_tree_built",
+            Self::ArchiveOwnerPolicy => "archive_owner_policy",
         }
     }
 
@@ -68,6 +71,7 @@ impl MetaKey {
             "scan_tar_last_member_index" => Self::ScanTarLastMemberIndex,
             "out_tree_built" => Self::OutTreeBuilt,
             "dir_tree_built" => Self::DirTreeBuilt,
+            "archive_owner_policy" => Self::ArchiveOwnerPolicy,
             _ => return None,
         })
     }
@@ -88,6 +92,7 @@ impl MetaKey {
             Self::ScanTarLastMemberIndex,
             Self::OutTreeBuilt,
             Self::DirTreeBuilt,
+            Self::ArchiveOwnerPolicy,
         ]
     }
 }
@@ -109,6 +114,7 @@ pub enum MetaEntry {
     ScanTarLastMemberIndex(u64),
     OutTreeBuilt(bool),
     DirTreeBuilt(bool),
+    ArchiveOwnerPolicy(OwnerGroupPolicy),
 }
 
 impl MetaEntry {
@@ -128,6 +134,7 @@ impl MetaEntry {
             Self::ScanTarLastMemberIndex(_) => MetaKey::ScanTarLastMemberIndex,
             Self::OutTreeBuilt(_) => MetaKey::OutTreeBuilt,
             Self::DirTreeBuilt(_) => MetaKey::DirTreeBuilt,
+            Self::ArchiveOwnerPolicy(_) => MetaKey::ArchiveOwnerPolicy,
         }
     }
 
@@ -149,6 +156,8 @@ impl MetaEntry {
             | Self::DirTreeBuilt(v) => {
                 if *v { "1" } else { "0" }.to_string()
             }
+            Self::ArchiveOwnerPolicy(v) => serde_json::to_string(v)
+                .expect("owner/group policy serializable"),
         }
     }
 
@@ -185,6 +194,13 @@ impl MetaEntry {
             }
             MetaKey::OutTreeBuilt => Ok(Self::OutTreeBuilt(parse_bool(key, raw)?)),
             MetaKey::DirTreeBuilt => Ok(Self::DirTreeBuilt(parse_bool(key, raw)?)),
+            MetaKey::ArchiveOwnerPolicy => serde_json::from_str(raw)
+                .map(Self::ArchiveOwnerPolicy)
+                .map_err(|_| {
+                    Error::Config(format!(
+                        "invalid archive_owner_policy meta: {raw}"
+                    ))
+                }),
         }
     }
 }
@@ -397,6 +413,17 @@ pub fn get_dir_tree_built(conn: &Connection) -> Result<Option<bool>> {
 
 pub fn set_dir_tree_built(conn: &Connection, value: bool) -> Result<()> {
     set_entry(conn, &MetaEntry::DirTreeBuilt(value))
+}
+
+pub fn get_archive_owner_policy(conn: &Connection) -> Result<Option<OwnerGroupPolicy>> {
+    get_typed(conn, MetaKey::ArchiveOwnerPolicy, |e| match e {
+        MetaEntry::ArchiveOwnerPolicy(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_archive_owner_policy(conn: &Connection, value: &OwnerGroupPolicy) -> Result<()> {
+    set_entry(conn, &MetaEntry::ArchiveOwnerPolicy(value.clone()))
 }
 
 // TODO Delete the entirety of the archive keys.
