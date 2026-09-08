@@ -65,7 +65,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             let state = RuntimeState::new(config.process.jobs);
             db.save_runtime_state(&state)?;
             filter::ingest_filters(&db, &config)?;
-            if let Some(policy) = crate::common::perms::build_owner_group_policy(
+            if let Some(policy) = crate::common::perms::parse_owner_group_args(
                 config.owner_policy.owner.as_deref(),
                 config.owner_policy.owner_map.as_deref(),
                 config.owner_policy.group.as_deref(),

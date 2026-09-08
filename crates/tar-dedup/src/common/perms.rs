@@ -114,10 +114,9 @@ pub enum OwnerGroupSource {
     Cli(OwnerGroupPolicy),
 }
 
-/// Parse owner/group CLI args into a policy (shared by archive and extract).
-///
-/// Reads the map files (I/O is done here), so nothing else needs to touch the filesystem.
-pub fn build_owner_group_policy(
+/// Parse owner/group CLI args into a policy. Syntax-only: no `--map-target` /
+/// `--same-owner` gating happens here. Shared by archive and extract.
+pub fn parse_owner_group_args(
     owner: Option<&str>,
     owner_map: Option<&Path>,
     group: Option<&str>,

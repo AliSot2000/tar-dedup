@@ -54,6 +54,11 @@ pub struct ExtractConfig {
     pub attributes: ExtractAttributeOptions,
     pub scan: ScanOptions,
     pub process: ProcessOptions,
+        match parse_owner_group_args(
+            args.owner.as_deref(),
+            owner_map.as_deref(),
+            args.group.as_deref(),
+            group_map.as_deref(),
 }
 
 impl ExtractConfig {
