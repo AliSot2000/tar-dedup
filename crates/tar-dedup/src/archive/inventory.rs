@@ -91,7 +91,9 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         tracing::info!("Updated {rows} of hardlink groups to have one canonical");
     }
 
-    db.resolve_numeric_ids()?;
+    if !config.pipeline.numeric_ids_only {
+        db.resolve_numeric_ids()?;
+    }
     progress.finish("inventory complete");
     let missing_dev_ino_count = db.count_missing_dev_inode()?;
     if missing_dev_ino_count > 0 {
