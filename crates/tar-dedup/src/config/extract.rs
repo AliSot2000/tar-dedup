@@ -44,6 +44,13 @@ pub struct ExtractAttributeOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct OwnerGroupOptions {
+    pub target: MapResolutionTarget,
+    pub validate_maps: bool,
+    pub same_owner: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct ScanOptions {
     pub force_scan: bool,
     pub rehash: bool,
