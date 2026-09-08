@@ -1,6 +1,7 @@
 //! Place: copy/link cached payloads to final output paths.
 
-use crate::config::{ExtractConfig, HardLinkGrouping};
+use crate::config::{ExtractConfig};
+use crate::cli::HardLinkGrouping;
 use crate::db::Database;
 use crate::db::flags::{FileFlag, OutTreeFlag, OutTreeFlags};
 #[warn(unused_imports)] // LinkType needed for linking back on windows.
@@ -46,6 +47,7 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     if config.placement.link_tree {
         tracing::info!("Moving canonical file in place for link tree...");
         copy_canonicals_to_source(&config, &db, &shutdown)?;
+        // INFO: For linking, we ignore the canonical_id
         link_into_place(&config, &db, &shutdown)?;
     } else {
         // Step 2, compute hardlink canonicals in the extraction location, then
