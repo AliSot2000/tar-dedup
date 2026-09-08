@@ -508,13 +508,33 @@ pub struct ExtractArgs {
     // --- File Attributes ---
 
     /// Restore archived uid/gid when possible (GNU tar `--same-owner`; may require root).
+    /// Default: inferred from the effective uid of the extracting process.
     #[arg(
         long = "same-owner",
         visible_alias = "restore-owner",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "File Attributes"
     )]
     pub restore_owner: bool,
+
+    /// Do not restore archived ownership; files are owned by the extracting process.
+    #[arg(long = "no-same-owner", action = ArgAction::SetFalse, help_heading = "File Attributes")]
+    pub no_same_owner: bool,
+
+    /// How to emit the resolved owner/group: `ids`, `names`, or `name-id` (default).
+    #[arg(
+        long = "map-target",
+        value_name = "TARGET",
+        value_parser = clap::value_parser!(MapResolutionTarget),
+        default_value_t = MapResolutionTarget::NameId,
+        help_heading = "File Attributes"
+    )]
+    pub map_target: MapResolutionTarget,
+
+    /// Fail hard on map/override destinations that the chosen --map-target cannot emit.
+    #[arg(long = "validate-maps", default_value_t = false, help_heading = "File Attributes")]
+    pub validate_maps: bool,
 
     /// Force owner for restored members: `NAME`, `UID`, or `NAME:UID`.
     #[arg(long = "owner", value_name = "NAME[:UID]", help_heading = "File Attributes")]
