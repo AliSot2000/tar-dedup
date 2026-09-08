@@ -387,6 +387,19 @@ impl Database {
         meta::dump_meta(&*self.conn())
     }
 
+    pub fn set_archive_owner_policy(
+        &self,
+        policy: &crate::common::perms::OwnerGroupPolicy,
+    ) -> Result<()> {
+        meta::set_archive_owner_policy(&*self.conn(), policy)
+    }
+
+    pub fn get_archive_owner_policy(
+        &self,
+    ) -> Result<Option<crate::common::perms::OwnerGroupPolicy>> {
+        meta::get_archive_owner_policy(&*self.conn())
+    }
+
     pub fn sum_canonical_bytes_to_archive(&self, filter_sha: bool) -> Result<u64> {
         tar_writer::sum_canonical_bytes_to_archive(&*self.conn(), filter_sha)
     }
