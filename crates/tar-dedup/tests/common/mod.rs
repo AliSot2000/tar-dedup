@@ -3,10 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use tar_dedup::cli::ConflictPolicy;
+use tar_dedup::common::perms::MapResolutionTarget;
 use tar_dedup::common::start::StartPolicy;
 use tar_dedup::config::{
-    CleanupSettings, CompressionFormat, ExtractAttributeOptions, ExtractConfig, PathLayout,
-    PlacementOptions, ProcessOptions, ScanOptions,
+    CleanupSettings, CompressionFormat, ExtractAttributeOptions, ExtractConfig, OwnerGroupOptions,
+    PathLayout, PlacementOptions, ProcessOptions, ScanOptions,
 };
 use tar_dedup::cli::HardLinkGrouping;
 use tar_dedup::db::flags::{SourceFlag, SourceFlags};
@@ -173,6 +174,11 @@ pub fn place_config(extraction_root: PathBuf, absolute_names: bool) -> ExtractCo
             exit_after_stage: None,
         },
         owner_policy: tar_dedup::common::perms::OwnerGroupSource::None,
+        owner_group: OwnerGroupOptions {
+            target: MapResolutionTarget::NameId,
+            validate_maps: false,
+            same_owner: false,
+        },
     }
 }
 
