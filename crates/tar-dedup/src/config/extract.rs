@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::cli::{ConflictPolicy, ExtractArgs};
+use crate::cli::{ConflictPolicy, ExtractArgs, HardLinkGrouping};
 use crate::common::start::StartPolicy;
 use crate::error::{Error, Result};
 
@@ -29,16 +29,6 @@ pub struct PlacementOptions {
     pub no_reflink: bool, // TODO cli
     pub hard_link_grouping: HardLinkGrouping, // TODO cli
     pub recreate_none_file_entries: bool, // TODO CLI
-}
-
-#[derive(Debug, Clone)]
-pub enum HardLinkGrouping {
-    /// Do not hard link any files which had the same (dev, inode) as on the source file system
-    None,
-    /// Only consider files within a tree of a single source for hard links.
-    Source,
-    /// Hard link files across all sources.
-    Global,
 }
 
 #[derive(Debug, Clone)]
