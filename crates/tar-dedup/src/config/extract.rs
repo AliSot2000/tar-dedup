@@ -79,6 +79,19 @@ impl ExtractConfig {
         let decompression = infer_compression_from_suffix(&archive_path);
         let start_policy = StartPolicy::create_or_fresh(args.fresh);
 
+        // Emit warning
+        if args.absolute_names && matches!(args.hard_link_grouping, HardLinkGrouping::Source) {
+            tracing::warn!(
+                "Materializing with absolute names and per source hardlink recreation might cause \
+                disjoint subgroups of hardlinks that formerly were a single hardlink.");
+        }
+
+        // TODO clean_target and one_top_level IS NONE => warning, no effect.
+
+        // Stored vs CLI owner/group policy. Explicit --owner/--group/--map take precedence;
+        // --apply-stored-* fall back to the archive's recorded policy.
+        let owner_policy = resolve_owner_policy_from_args(args, &directory)?;
+
         Ok(Self {
             force: true, // TODO cli
             paths: PathLayout {
