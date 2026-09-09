@@ -1,11 +1,12 @@
 //! Place: copy/link cached payloads to final output paths.
 
-use crate::config::{ExtractConfig};
-use crate::cli::HardLinkGrouping;
+use crate::cli::{ConflictPolicy, HardLinkGrouping};
+use crate::common::files::get_file_times;
+use crate::config::ExtractConfig;
 use crate::db::Database;
 use crate::db::flags::{FileFlag, OutTreeFlag, OutTreeFlags};
 #[warn(unused_imports)] // LinkType needed for linking back on windows.
-use crate::db::types::{FileId, FileRecord, FileType, LinkType, NewOutTreeRow, OutTreeId, OutTreeRecord, StrippedRecord};
+use crate::db::types::{FileId, FileRecord, FileType, NewOutTreeRow, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 use nix::NixPath;
