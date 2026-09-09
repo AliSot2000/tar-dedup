@@ -51,6 +51,7 @@ pub trait WorkLayout {
     fn kept_db_parent(&self, mode: CleanupMode) -> &Path;
 }
 
+// TODO Needs to go into cli if not already preseent.
 /// Where extract places `{stem}.estage` (builder-only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExtractStageLocation {
