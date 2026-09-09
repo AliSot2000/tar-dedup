@@ -357,10 +357,13 @@ fn check_dst(label: &str, dst: &IdentitySpec, target: MapResolutionTarget) -> Re
 
 /// `--validate-maps`: verify a target name resolves on the extraction host.
 fn check_name_exists(label: &str, name: &String) -> Result<()> {
-    let exists = match label {
+    // The map-dst path passes `owner-map` / `group-map`; strip the suffix so the
+    // owner/group dispatch below matches.
+    let kind = label.strip_suffix("-map").unwrap_or(label);
+    let exists = match kind {
         "owner" => lookup_uid(name.as_ref()).is_some(),
         "group" => lookup_gid(name.as_ref()).is_some(),
-        _ => false, // defensive: only "owner"/"group" callers exist
+        _ => false, // defensive: only "owner"/"group" (and "-map" forms) callers exist
     };
     if exists {
         Ok(())
@@ -532,4 +535,701 @@ fn lookup_gid(name: &str) -> Option<u32> {
 #[cfg(not(unix))]
 fn lookup_gid(_name: &str) -> Option<u32> {
     None
+}
+
+// -------------------------------------------------------------------------------------------------
+// Testing
+// -------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    // -- platform-independent fixtures ------------------------------------------------
+
+    /// Write `contents` to a fresh temp file, returning (dir, path).
+    fn temp_map_file(contents: &str) -> (TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("map.txt");
+        std::fs::write(&path, contents).expect("write map file");
+        (dir, path)
+    }
+
+    fn spec(name: Option<&str>, id: Option<u32>) -> IdentitySpec {
+        IdentitySpec {
+            name: name.map(|s| s.to_string()),
+            id,
+        }
+    }
+
+    fn empty_policy() -> OwnerGroupPolicy {
+        OwnerGroupPolicy::default()
+    }
+
+    fn policy_with_map(map: IdentityMap, label: &str) -> OwnerGroupPolicy {
+        let mut p = empty_policy();
+        if label == "owner" {
+            p.owner_map = Some(map);
+        } else {
+            p.group_map = Some(map);
+        }
+        p
+    }
+
+    // -- unix-only fixtures (needed for host lookups) --------------------------------
+
+    #[cfg(unix)]
+    fn current_user() -> (u32, String) {
+        use nix::unistd::{Uid, User};
+        let uid = Uid::current().as_raw();
+        let name = User::from_uid(Uid::from_raw(uid))
+            .ok()
+            .flatten()
+            .expect("current user must resolve in passwd")
+            .name;
+        (uid, name)
+    }
+
+    #[cfg(unix)]
+    fn current_group() -> (u32, String) {
+        use nix::unistd::{Gid, Group};
+        let gid = Gid::current().as_raw();
+        let name = Group::from_gid(Gid::from_raw(gid))
+            .ok()
+            .flatten()
+            .expect("current group must resolve in group db")
+            .name;
+        (gid, name)
+    }
+
+    /// A name that is guaranteed not to resolve in the passwd/group db.
+    #[cfg(unix)]
+    fn nonexistent_user_name() -> String {
+        use nix::unistd::{User, Uid};
+        let mut i = 0u32;
+        loop {
+            let candidate = format!("nouser-{}-{}", std::process::id(), i);
+            if User::from_name(candidate.as_ref()).ok().flatten().is_none() {
+                return candidate;
+            }
+            i += 1;
+        }
+    }
+
+    #[cfg(unix)]
+    fn nonexistent_group_name() -> String {
+        use nix::unistd::{Group, Gid};
+        let mut i = 0u32;
+        loop {
+            let candidate = format!("nogroup-{}-{}", std::process::id(), i);
+            if Group::from_name(candidate.as_ref()).ok().flatten().is_none() {
+                return candidate;
+            }
+            i += 1;
+        }
+    }
+
+    // ================================================================================
+    // Suite 1 — IdentitySpec::parse
+    // ================================================================================
+
+    #[test]
+    fn identity_spec_parse_uid() {
+        let s = IdentitySpec::parse("+42").expect("+uid");
+        assert_eq!(s, IdentitySpec { name: None, id: Some(42) });
+        let s = IdentitySpec::parse("+0").expect("+0");
+        assert_eq!(s, IdentitySpec { name: None, id: Some(0) });
+    }
+
+    #[test]
+    fn identity_spec_parse_name() {
+        let s = IdentitySpec::parse("alice").expect("name");
+        assert_eq!(s, IdentitySpec { name: Some("alice".to_string()), id: None });
+    }
+
+    #[test]
+    fn identity_spec_parse_both() {
+        let s = IdentitySpec::parse("alice:42").expect("name:uid");
+        assert_eq!(s, IdentitySpec { name: Some("alice".to_string()), id: Some(42) });
+        let s = IdentitySpec::parse(":42").expect(":uid");
+        assert_eq!(s, IdentitySpec { name: None, id: Some(42) });
+        let s = IdentitySpec::parse("alice:").expect("name:");
+        assert_eq!(s, IdentitySpec { name: Some("alice".to_string()), id: None });
+    }
+
+    #[test]
+    fn identity_spec_parse_rejects_none_none() {
+        assert!(IdentitySpec::parse(":").is_err());
+        assert!(IdentitySpec::parse("").is_err());
+        assert!(IdentitySpec::parse("   ").is_err());
+    }
+
+    #[test]
+    fn identity_spec_parse_rejects_bad_numeric() {
+        assert!(IdentitySpec::parse("+abc").is_err());
+        assert!(IdentitySpec::parse("+").is_err());
+        assert!(IdentitySpec::parse("alice:abc").is_err());
+    }
+
+    #[test]
+    fn identity_spec_parse_numeric_name_warns_but_parses() {
+        // A bare all-digit string is a name (footgun guard emits a warning).
+        let s = IdentitySpec::parse("007").expect("name");
+        assert_eq!(s, IdentitySpec { name: Some("007".to_string()), id: None });
+    }
+
+    // ================================================================================
+    // Suite 2 — MapResolutionTarget
+    // ================================================================================
+
+    #[test]
+    fn map_target_from_str_valid() {
+        assert_eq!(
+            MapResolutionTarget::from_str("ids").unwrap(),
+            MapResolutionTarget::Ids);
+        assert_eq!(
+            MapResolutionTarget::from_str("names").unwrap(),
+            MapResolutionTarget::Names
+        );
+        assert_eq!(
+            MapResolutionTarget::from_str("name-id").unwrap(),
+            MapResolutionTarget::NameId
+        );
+        assert_eq!(
+            MapResolutionTarget::from_str("name_id").unwrap(),
+            MapResolutionTarget::NameId
+        );
+        assert_eq!(
+            MapResolutionTarget::from_str("id-name").unwrap(),
+            MapResolutionTarget::IdName
+        );
+        assert_eq!(
+            MapResolutionTarget::from_str("id_name").unwrap(),
+            MapResolutionTarget::IdName
+        );
+    }
+
+    #[test]
+    fn map_target_from_str_invalid() {
+        assert!(MapResolutionTarget::from_str("").is_err());
+        assert!(MapResolutionTarget::from_str("aösdkjfösldkfj").is_err());
+        assert!(MapResolutionTarget::from_str("ids ").is_err());
+    }
+
+    #[test]
+    fn map_target_as_str_roundtrip() {
+        let targets = [
+            MapResolutionTarget::Ids,
+            MapResolutionTarget::Names,
+            MapResolutionTarget::NameId,
+            MapResolutionTarget::IdName
+        ];
+        for t in targets {
+            assert_eq!(
+                MapResolutionTarget::from_str(t.as_str()).unwrap(),
+                t
+            );
+        }
+    }
+
+    #[test]
+    fn map_target_serde_roundtrip() {
+        let target = [
+            MapResolutionTarget::Ids,
+            MapResolutionTarget::Names,
+            MapResolutionTarget::NameId,
+            MapResolutionTarget::IdName
+        ];
+        for t in target {
+            let json = serde_json::to_string(&t)
+                .expect("serialize");
+            let back = serde_json::from_str::<MapResolutionTarget>(&json)
+                .expect("deserialize");
+            assert_eq!(back, t);
+        }
+    }
+
+    // ================================================================================
+    // Suite 3 — OwnerGroupPolicy serde + at_least_one_present
+    // ================================================================================
+
+    #[test]
+    fn policy_at_least_one_present() {
+        assert!(!empty_policy().at_least_one_present());
+
+        let p = policy_with_map(IdentityMap::default(), "owner");
+        assert!(p.at_least_one_present());
+
+        let mut p = empty_policy();
+        p.owner_override = Some(spec(Some("alice"), None));
+        assert!(p.at_least_one_present());
+
+        let mut p = empty_policy();
+        p.group_override = Some(spec(None, Some(42)));
+        assert!(p.at_least_one_present());
+    }
+
+    #[test]
+    fn policy_serde_roundtrip_full() {
+        let mut p = empty_policy();
+        p.owner_map = Some(IdentityMap::from_entries([
+            (spec(Some("alice"), None), spec(Some("bob"), Some(1000))),
+        ]));
+        p.group_map = Some(IdentityMap::from_entries([
+            (spec(None, Some(10)), spec(None, Some(2000))),
+        ]));
+        p.owner_override = Some(spec(Some("root"), None));
+        p.group_override = Some(spec(None, Some(0)));
+
+        let json = serde_json::to_string(&p)
+            .expect("serialize");
+        let back = serde_json::from_str::<OwnerGroupPolicy>(&json)
+            .expect("deserialize");
+        assert_eq!(back, p);
+        assert_eq!(back.owner_map.as_ref().unwrap().by_name.len(), 1);
+        assert_eq!(back.group_map.as_ref().unwrap().by_id.len(), 1);
+    }
+
+    #[test]
+    fn policy_serde_roundtrip_empty() {
+        let p = empty_policy();
+        let json = serde_json::to_string(&p)
+            .expect("serialize");
+        let back = serde_json::from_str::<OwnerGroupPolicy>(&json)
+            .expect("deserialize");
+        assert_eq!(back, p);
+        assert!(!back.at_least_one_present());
+    }
+
+    #[test]
+    fn policy_serde_roundtrip_partial() {
+        let mut p = empty_policy();
+        p.owner_map = Some(IdentityMap::from_entries([
+            (spec(Some("u1"), Some(1)), spec(Some("u2"), None)),
+        ]));
+        let json = serde_json::to_string(&p)
+            .expect("serialize");
+        let back = serde_json::from_str::<OwnerGroupPolicy>(&json)
+            .expect("deserialize");
+        assert_eq!(back, p);
+        assert!(back.group_map.is_none());
+        assert!(back.owner_override.is_none());
+        assert!(back.group_override.is_none());
+    }
+
+    #[test]
+    fn policy_all_none_from_parse_is_none() {
+        // An all-None policy can not be produced by parse_owner_group_args.
+        assert_eq!(
+            parse_owner_group_args(None, None, None, None).expect("parse"),
+            None
+        );
+    }
+
+    // ================================================================================
+    // Suite 4 — parse_owner_group_args
+    // ================================================================================
+
+    #[test]
+    fn parse_args_owner_only() {
+        let p = parse_owner_group_args(Some("alice"), None, None, None)
+            .expect("parse")
+            .expect("Some");
+        assert_eq!(p.owner_override, Some(spec(Some("alice"), None)));
+        assert!(p.group_override.is_none());
+        assert!(p.owner_map.is_none());
+        assert!(p.group_map.is_none());
+    }
+
+    #[test]
+    fn parse_args_group_only() {
+        let p = parse_owner_group_args(None, None, Some("staff"), None)
+            .expect("parse")
+            .expect("Some");
+        assert_eq!(p.group_override, Some(spec(Some("staff"), None)));
+        assert!(p.owner_override.is_none());
+        assert!(p.owner_map.is_none());
+        assert!(p.group_map.is_none());
+    }
+
+    #[test]
+    fn parse_args_owner_map_only() {
+        let (_dir, path) = temp_map_file("alice bob\n+42 +1000\n");
+        let p = parse_owner_group_args(None, Some(&path), None, None)
+            .expect("parse")
+            .expect("Some");
+        let om = p.owner_map.expect("owner_map Some");
+        assert_eq!(om.by_name.len(), 1);
+        assert_eq!(om.by_id.len(), 1);
+        assert!(p.group_map.is_none());
+        assert!(p.owner_override.is_none());
+    }
+
+    #[test]
+    fn parse_args_group_map_only() {
+        let (_dir, path) = temp_map_file("staff +2000\n");
+        let p = parse_owner_group_args(None, None, None, Some(&path))
+            .expect("parse")
+            .expect("Some");
+        let gm = p.group_map.expect("group_map Some");
+        assert_eq!(gm.by_name.len(), 1);
+        assert!(p.owner_map.is_none());
+        assert!(p.group_override.is_none());
+    }
+
+    #[test]
+    fn parse_args_all_combined() {
+        let (_d1, owner_file) = temp_map_file("alice bob\n");
+        let (_d2, group_file) = temp_map_file("staff +2000\n");
+        let p = parse_owner_group_args(
+            Some("ceo"),
+            Some(&owner_file),
+            Some("ops"),
+            Some(&group_file),
+        )
+        .expect("parse")
+        .expect("Some");
+        assert!(p.owner_map.is_some());
+        assert!(p.group_map.is_some());
+        assert_eq!(p.owner_override, Some(spec(Some("ceo"), None)));
+        assert_eq!(p.group_override, Some(spec(Some("ops"), None)));
+    }
+
+    #[test]
+    fn parse_args_none_is_none() {
+        assert_eq!(parse_owner_group_args(None, None, None, None).expect("parse"), None);
+    }
+
+    #[test]
+    fn parse_args_empty_map_file_is_none() {
+        let (_dir, path) = temp_map_file("   \n# comment\n\n");
+        let p = parse_owner_group_args(None, Some(&path), None, None)
+            .expect("parse");
+        assert_eq!(p, None);
+    }
+
+    #[test]
+    fn parse_args_comments_and_blank_lines() {
+        let (_dir, path) = temp_map_file("\n# leading comment\n alice bob \n\n+42 +1000 # trailing\n");
+        let p = parse_owner_group_args(None, Some(&path), None, None)
+            .expect("parse")
+            .expect("Some");
+        let om = p.owner_map.expect("map");
+        assert_eq!(om.by_name.len(), 1);
+        assert_eq!(om.by_id.len(), 1);
+        // `+42 +1000` keys by_id on the *source* id (42); dst is the `+1000`.
+        assert_eq!(om.by_id[&42], spec(None, Some(1000)));
+    }
+
+    #[test]
+    fn parse_args_errors() {
+        // `--owner=:` → (None, None) is rejected.
+        let err = parse_owner_group_args(Some(":"), None, None, None)
+            .expect_err("owner :");
+        assert!(matches!(err, Error::Config(_)));
+        // `--owner=+abc`.
+        let err = parse_owner_group_args(Some("+abc"), None, None, None)
+            .expect_err("+abc");
+        assert!(matches!(err, Error::Config(_)));
+        // map file with one field only.
+        let (_d1, one_field) = temp_map_file("just-one\n");
+        let err = parse_owner_group_args(None, Some(&one_field), None, None)
+            .expect_err("one field");
+        assert!(matches!(err, Error::Config(_)));
+        // map line where `to` is `:` (both empty).
+        let (_d2, bad_to) = temp_map_file("alice :\n");
+        let err = parse_owner_group_args(None, Some(&bad_to), None, None)
+            .expect_err("bad to");
+        assert!(matches!(err, Error::Config(_)));
+        // map line with invalid numeric in to.
+        let (_d3, bad_num) = temp_map_file("alice +xyz\n");
+        let err = parse_owner_group_args(None, Some(&bad_num), None, None)
+            .expect_err("bad numeric");
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[test]
+    fn parse_args_map_plus_override_is_some() {
+        // A partial (map only, override none) still yields Some.
+        let (_dir, path) = temp_map_file("alice bob\n");
+        let p = parse_owner_group_args(None, Some(&path), None, None)
+            .expect("parse")
+            .expect("Some");
+        assert!(p.at_least_one_present());
+    }
+
+    // ================================================================================
+    // Suite 5 — validate_for_mode  (unix-gated: needs host lookup)
+    // ================================================================================
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_ids_requires_id_override() {
+        let mut p = empty_policy();
+        p.owner_override = Some(spec(Some("alice"), None)); // name-only override
+        let err = validate_for_mode(&p, MapResolutionTarget::Ids)
+            .expect_err("ids name ovr");
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_ids_accepts_id_override() {
+        let (uid, _) = current_user();
+        let mut p = empty_policy();
+        p.owner_override = Some(spec(None, Some(uid))); // id-only, exists
+        validate_for_mode(&p, MapResolutionTarget::Ids)
+            .expect("ids + id override ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_ids_requires_id_dst() {
+        let map = IdentityMap::from_entries([
+            (spec(Some("src"), None), spec(Some("alice"), None)), // dst name-only
+        ]);
+        let p = policy_with_map(map, "owner");
+        let err = validate_for_mode(&p, MapResolutionTarget::Ids)
+            .expect_err("ids name dst");
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_ids_accepts_id_dst() {
+        let (uid, _) = current_user();
+        let map = IdentityMap::from_entries([
+            (spec(Some("src"), None), spec(None, Some(uid))),
+        ]);
+        let p = policy_with_map(map, "owner");
+        validate_for_mode(&p, MapResolutionTarget::Ids).expect("ids + id dst ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_names_requires_name_override() {
+        let mut p = empty_policy();
+        p.owner_override = Some(spec(None, Some(42))); // id-only override
+        let err = validate_for_mode(&p, MapResolutionTarget::Names)
+            .expect_err("names id ovr");
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_names_accepts_name_override() {
+        let (_, name) = current_user();
+        let mut p = empty_policy();
+        p.owner_override = Some(spec(Some(&name), None));
+        validate_for_mode(&p, MapResolutionTarget::Names)
+            .expect("names + name ovr ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_names_requires_name_dst() {
+        let map = IdentityMap::from_entries([
+            (spec(Some("src"), None), spec(None, Some(42))), // dst id-only
+        ]);
+        let p = policy_with_map(map, "owner");
+        let err = validate_for_mode(&p, MapResolutionTarget::Names)
+            .expect_err("names id dst");
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_names_accepts_name_dst() {
+        let (_, name) = current_user();
+        let map = IdentityMap::from_entries([
+            (spec(Some("src"), None), spec(Some(&name), None)),
+        ]);
+        let p = policy_with_map(map, "owner");
+        validate_for_mode(&p, MapResolutionTarget::Names)
+            .expect("names + name dst ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_host_name_exists() {
+        let (_, name) = current_user();
+        let map = IdentityMap::from_entries([
+            (spec(Some("src"), None), spec(Some(&name), None)),
+        ]);
+        let p = policy_with_map(map, "owner");
+        validate_for_mode(&p, MapResolutionTarget::NameId)
+            .expect("existing name ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_host_name_missing_errors() {
+        let missing = nonexistent_user_name();
+        let map = IdentityMap::from_entries([
+            (spec(Some("src"), None), spec(Some(&missing), None)),
+        ]);
+        let p = policy_with_map(map, "owner");
+        let err = validate_for_mode(&p, MapResolutionTarget::NameId)
+            .expect_err("missing name");
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_host_missing_override_errors() {
+        let missing = nonexistent_user_name();
+        let mut p = empty_policy();
+        p.owner_override = Some(spec(Some(&missing), None));
+        let err = validate_for_mode(&p, MapResolutionTarget::Names)
+            .expect_err("missing ovr name");
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_group_host_name() {
+        let (_, name) = current_group();
+        let map = IdentityMap::from_entries([
+            (spec(Some("src"), None), spec(Some(&name), None)),
+        ]);
+        let p = policy_with_map(map, "group");
+        validate_for_mode(&p, MapResolutionTarget::Names)
+            .expect("existing group name ok");
+    }
+
+    // ================================================================================
+    // Suite 6 — resolve_owner_group full matrix  (unix-gated)
+    // ================================================================================
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_ids_no_map_no_override() {
+        let (uid, name) = current_user();
+
+        // no-same-owner: leave unset
+        let r = resolve_case(Some(uid), Some(&name), IdentityMap::default(), None,
+                             MapResolutionTarget::Ids, false).expect("ok");
+        assert_eq!(r, None);
+
+        // same-owner: db uid applies
+        let r = resolve_case(Some(uid), Some(&name), IdentityMap::default(), None,
+                             MapResolutionTarget::Ids, true).expect("ok");
+        assert_eq!(r, Some(uid));
+    }
+
+    /// One row of the resolution matrix. `same_owner && !db` uses absent db identity.
+    fn resolve_case(
+        src_uid: Option<u32>,
+        src_name: Option<&str>,
+        map: IdentityMap,
+        ovr_arg: Option<&IdentitySpec>,
+        target: MapResolutionTarget,
+        same_owner: bool,
+    ) -> Result<Option<u32>> {
+        let mut p = empty_policy();
+        p.owner_map = if map.by_id.is_empty() && map.by_name.is_empty() { None }
+                      else { Some(map) };
+        p.owner_override = ovr_arg.map(|s| s.clone());
+        resolve_identity(
+            src_name, src_uid,
+            p.owner_map.as_ref().unwrap_or(&IdentityMap::default()),
+            p.owner_override.as_ref(),
+            target,
+            same_owner,
+            lookup_uid,
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_ids_same_owner_no_db() {
+        // src has no uid in the row; same_owner + no db → None.
+        let empty = IdentityMap::default();
+        let r = resolve_case(None, None, empty, None,
+                             MapResolutionTarget::Ids, true).expect("ok");
+        assert_eq!(r, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_names_no_map_no_override() {
+        let (uid, name) = current_user();
+
+        // !same_owner → None
+        let r = resolve_case(Some(uid), Some(&name), IdentityMap::default(), None,
+                             MapResolutionTarget::Names, false).expect("ok");
+        assert_eq!(r, None);
+
+        // same_owner + db name resolves → db uid
+        let r = resolve_case(Some(uid), Some(&name), IdentityMap::default(), None,
+                             MapResolutionTarget::Names, true).expect("ok");
+        assert_eq!(r, Some(uid));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_names_same_owner_unresolvable_db_name() {
+        let missing = nonexistent_user_name();
+        let empty = IdentityMap::default();
+        let r = resolve_case(None, Some(&missing), empty, None,
+                             MapResolutionTarget::Names, true).expect("ok");
+        assert_eq!(r, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_name_id_map_then_override_then_db() {
+        let (uid, name) = current_user();
+
+        // map has a name dst; resolver should pick it.
+        let map = IdentityMap::from_entries([
+            (spec(Some(&name), None), spec(Some(&name), None)),
+        ]);
+        let r = resolve_case(Some(uid), Some(&name), map, None,
+                             MapResolutionTarget::NameId, true).expect("ok");
+        assert_eq!(r, Some(uid));
+
+        // map dst name unresolvable → override name (existing) → db.
+        let missing = nonexistent_user_name();
+        let map = IdentityMap::from_entries([
+            (spec(Some(&name), None), spec(Some(&missing), None)),
+        ]);
+        let ovr = spec(Some(&name), None);
+        let r = resolve_case(Some(uid), Some(&name), map, Some(&ovr),
+                             MapResolutionTarget::NameId, true).expect("ok");
+        assert_eq!(r, Some(uid));
+
+        // override id used when name fails entirely under same_owner.
+        let map2 = IdentityMap::from_entries([
+            (spec(Some(&name), None), spec(Some(&missing), None)),
+        ]);
+        let ovr2 = spec(None, Some(uid));
+        let r = resolve_case(Some(uid), Some(&name), map2, Some(&ovr2),
+                             MapResolutionTarget::NameId, true).expect("ok");
+        assert_eq!(r, Some(uid));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_id_name_map_then_override_then_db() {
+        let (uid, name) = current_user();
+        // map dst id-only; IdName should pick the id first.
+        let map = IdentityMap::from_entries([
+            (spec(Some(&name), None), spec(None, Some(uid))),
+        ]);
+        let r = resolve_case(Some(uid), Some(&name), map, None,
+                             MapResolutionTarget::IdName, true).expect("ok");
+        assert_eq!(r, Some(uid));
+
+        // map dst name-only, override id; IdName picks override id before name.
+        let map2 = IdentityMap::from_entries([
+            (spec(Some(&name), None), spec(Some(&name), None)),
+        ]);
+        let ovr2 = spec(None, Some(uid));
+        let r = resolve_case(Some(uid), Some(&name), map2, Some(&ovr2),
+                             MapResolutionTarget::IdName, true).expect("ok");
+        assert_eq!(r, Some(uid));
+    }
 }
