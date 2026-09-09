@@ -61,7 +61,16 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         materialize_hardlinks(&config, &db, &shutdown)?;
         materialize_others(&config, &db, &shutdown)?;
     }
-    // TODO update files table.
+    let (placed, ref_linked, errored, skipped) = db.apply_flags_to_files()?;
+    tracing::info!(
+        "Updated File Table:
+        {placed} of entries placed,
+        {ref_linked} of entries were copied using reflink,
+        {errored} of entries which encountered an error,
+        {skipped} of entries skipped due to a placement conflict."
+    );
+    // TODO push the files records to the next phase
+    // TODO 
     Ok(())
 }
 

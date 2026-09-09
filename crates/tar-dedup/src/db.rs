@@ -626,6 +626,9 @@ impl Database {
         place::mark_source_canonical(&self.conn(), source_id)
     }
 
+    pub fn apply_flags_to_files(&self) -> Result<(u64, u64, u64, u64)> {
+        place::apply_flags_to_files(&self.conn())
+    }
     // --- integrity checks across the database
     pub fn count_missing_dev_inode(&self) -> Result<u64> {
         integrity::count_missing_dev_inode(&self.conn())

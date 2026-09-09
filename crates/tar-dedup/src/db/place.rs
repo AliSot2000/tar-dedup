@@ -617,3 +617,46 @@ pub fn mark_source_canonical(conn: &Connection, source_id: i64) -> Result<u64> {
 
     Ok((updated + updated2) as u64)
 }
+
+/// (placed, reflinked, errored, skipped)
+pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64)> {
+    // Placed if all are placed
+    let placed = conn.execute(
+        "UPDATE files SET flags = flags | :file_placed
+            WHERE files.id IN (SELECT file_id FROM out_tree)
+                AND files.id NOT IN (SELECT file_id FROM out_tree WHERE flags & :out_placed = 0)",
+        named_params! {
+            ":file_placed": FileFlag::Placed.mask_i64(),
+            ":out_placed": OutTreeFlag::Placed.mask_i64(),
+        },
+    )?;
+    // Reflinked if all are reflink
+    let reflinked = conn.execute(
+        "UPDATE files SET flags = flags | :file_reflink
+            WHERE files.id IN (SELECT file_id FROM out_tree)
+                AND files.id NOT IN (SELECT file_id FROM out_tree WHERE flags & :out_reflink = 0)",
+        named_params! {
+        ":file_reflink": FileFlag::UsedRefLink.mask_i64(),
+        ":out_reflink": OutTreeFlag::UsedRefLink.mask_i64()
+        },
+    )?;
+    // Errored if any are errored
+    let errored = conn.execute(
+        "UPDATE files SET flags = flags | :file_error
+            WHERE files.id IN (SELECT file_id FROM out_tree WHERE flags & :out_error = 0)",
+        named_params! {
+        ":file_reflink": FileFlag::ErrorWhilePlacing.mask_i64(),
+        ":out_reflink": OutTreeFlag::ErrorWhilePlace.mask_i64()
+        },
+    )?;
+    // Dkipped if any are skipped.
+    let skipped = conn.execute(
+        "UPDATE files SET flags = flags | :file_skipped
+            WHERE files.id IN (SELECT file_id FROM out_tree WHERE flags & :out_skipped = 0)",
+        named_params! {
+        ":file_skipped": FileFlag::Skipped.mask_i64(),
+        ":out_skipped": OutTreeFlag::Skipped.mask_i64()
+        },
+    )?;
+    Ok((placed as u64, reflinked as u64, errored as u64, skipped as u64))
+}
