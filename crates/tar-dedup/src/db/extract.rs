@@ -78,7 +78,7 @@ pub fn apply_snapshot_promote_unarchived(
         "UPDATE files
          SET phase = 'unarchived'
          WHERE phase = 'archived'
-           AND rel_path IN (SELECT rel_path FROM snap.files WHERE phase = 'archived')
+           AND abs_path IN (SELECT abs_path FROM snap.files WHERE phase = 'archived')
            AND (
                  (flags & :bit) != 0
               OR canonical_id IN (
