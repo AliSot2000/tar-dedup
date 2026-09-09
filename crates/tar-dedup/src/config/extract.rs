@@ -43,6 +43,9 @@ pub struct ExtractAttributeOptions {
     pub force_overwrite_dir: bool,
     pub apply_atime: bool,
     pub apply_mtime: bool,
+    pub no_xattrs: bool,
+    pub no_acls: bool,
+    pub no_selinux: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +53,8 @@ pub struct OwnerGroupOptions {
     pub target: MapResolutionTarget,
     pub validate_maps: bool,
     pub same_owner: bool,
+    pub apply_owner: bool,
+    pub apply_group: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +182,11 @@ impl ExtractConfig {
         // --apply-stored-* fall back to the archive's recorded policy.
         let owner_policy = resolve_owner_policy_from_args(args, &directory)?;
 
+        let (apply_owner, apply_group) = if matches!(owner_policy, OwnerGroupSource::Cli(_)) {
+            (false, false)
+        } else {
+            (args.apply_stored_owner_map, args.apply_stored_group_map)
+        };
         Ok(Self {
             force: true, // TODO cli
             paths: PathLayout {
@@ -209,6 +219,9 @@ impl ExtractConfig {
                 force_overwrite_dir: args.force_overwrite_dir,
                 apply_atime: args.apply_atime,
                 apply_mtime: args.apply_mtime,
+                no_xattrs: args.no_xattrs,
+                no_acls: args.no_acls,
+                no_selinux: args.no_selinux,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -241,6 +254,8 @@ impl ExtractConfig {
                     tracing::info!("Inferred: {argument}");
                     inferred_owner
                 },
+                apply_owner,
+                apply_group,
             },
         })
     }
@@ -279,6 +294,9 @@ impl ExtractConfig {
                 force_overwrite_dir: false,
                 apply_atime: false,
                 apply_mtime: false,
+                no_xattrs: false,
+                no_acls: false,
+                no_selinux: false,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -298,6 +316,8 @@ impl ExtractConfig {
                 target: MapResolutionTarget::NameId,
                 validate_maps: false,
                 same_owner: false,
+                apply_owner: false,
+                apply_group: false,
             },
         }
     }
@@ -336,6 +356,9 @@ impl ExtractConfig {
                 force_overwrite_dir: false,
                 apply_atime: false,
                 apply_mtime: false,
+                no_xattrs: false,
+                no_acls: false,
+                no_selinux: false,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -355,6 +378,8 @@ impl ExtractConfig {
                 target: MapResolutionTarget::NameId,
                 validate_maps: false,
                 same_owner: false,
+                apply_owner: false,
+                apply_group: false,
             },
         }
     }
@@ -393,6 +418,9 @@ impl ExtractConfig {
                 force_overwrite_dir: false,
                 apply_atime: false,
                 apply_mtime: false,
+                no_xattrs: false,
+                no_acls: false,
+                no_selinux: false,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -412,6 +440,8 @@ impl ExtractConfig {
                 target: MapResolutionTarget::NameId,
                 validate_maps: false,
                 same_owner: false,
+                apply_owner: false,
+                apply_group: false,
             },
         }
     }

@@ -570,6 +570,18 @@ pub struct ExtractArgs {
     #[arg(long = "apply-mtime", default_value_t = false, help_heading = "File Attributes")]
     pub apply_mtime: bool,
 
+    /// Do not apply archived extended attributes.
+    #[arg(long = "no-xattrs", default_value_t = false, help_heading = "File Attributes")]
+    pub no_xattrs: bool,
+
+    /// Do not apply archived POSIX ACLs.
+    #[arg(long = "no-acls", default_value_t = false, help_heading = "File Attributes")]
+    pub no_acls: bool,
+
+    /// Do not apply archived SELinux contexts.
+    #[arg(long = "no-selinux", default_value_t = false, help_heading = "File Attributes")]
+    pub no_selinux: bool,
+
     // --- Process Options ---
 
     /// Wipe extract work (`.estage`) and start over.
