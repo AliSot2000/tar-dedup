@@ -108,10 +108,6 @@ impl IdentityMap {
         }
         map
     }
-
-    fn is_empty(&self) -> bool {
-        self.by_name.is_empty() && self.by_id.is_empty()
-    }
 }
 
 /// How the chosen identity is emitted during extraction. Extract-only runtime state;
@@ -167,13 +163,24 @@ impl MapResolutionTarget {
 
 /// The full owner/group policy: two tables plus overrides.
 ///
-/// Stored verbatim in the archive `meta` table and applied at extraction.
+/// Any of the four may be present (mirrors tar's `--owner`/`--group`/`--owner-map`/
+/// `--group-map`). Stored verbatim in the archive `meta` table and applied at extraction.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerGroupPolicy {
-    pub owner_map: IdentityMap,
-    pub group_map: IdentityMap,
+    pub owner_map: Option<IdentityMap>,
+    pub group_map: Option<IdentityMap>,
     pub owner_override: Option<IdentitySpec>,
     pub group_override: Option<IdentitySpec>,
+}
+
+impl OwnerGroupPolicy {
+    /// True when at least one of the four identity sources is present.
+    pub fn at_least_one_present(&self) -> bool {
+        self.owner_map.is_some()
+            || self.group_map.is_some()
+            || self.owner_override.is_some()
+            || self.group_override.is_some()
+    }
 }
 
 /// Which user/group policy applies during extraction.
@@ -199,29 +206,34 @@ pub fn parse_owner_group_args(
     let owner_override = owner.map(IdentitySpec::parse).transpose()?;
     let group_override = group.map(IdentitySpec::parse).transpose()?;
 
-    // Parse owner-map, group-map
-    let owner_entries = owner_file
+    // Parse owner-map, group-map. An empty map file yields `None`.
+    let owner_map = owner_file
         .map(read_map_file_entries)
         .transpose()?
-        .unwrap_or_default();
-    let group_entries = group_file
+        .and_then(|entries| {
+            if entries.is_empty() {
+                None
+            } else {
+                Some(IdentityMap::from_entries(entries))
+            }
+        });
+    let group_map = group_file
         .map(read_map_file_entries)
         .transpose()?
-        .unwrap_or_default();
+        .and_then(|entries| {
+            if entries.is_empty() {
+                None
+            } else {
+                Some(IdentityMap::from_entries(entries))
+            }
+        });
 
-    // parse owner / group
-    let owner_map = IdentityMap::from_entries(owner_entries);
-    let group_map = IdentityMap::from_entries(group_entries);
-
-    if owner_map.is_empty()
-        && group_map.is_empty()
-        && owner_override.is_none()
-        && group_override.is_none() {
-
+    let policy = OwnerGroupPolicy { owner_map, group_map, owner_override, group_override };
+    if !policy.at_least_one_present() {
         return Ok(None);
     }
 
-    Ok(Some(OwnerGroupPolicy { owner_map, group_map, owner_override, group_override }))
+    Ok(Some(policy))
 }
 
 fn read_map_file_entries(path: &Path) -> Result<Vec<(IdentitySpec, IdentitySpec)>> {
@@ -281,9 +293,10 @@ pub fn validate_for_mode(
     policy: &OwnerGroupPolicy,
     target: MapResolutionTarget,
 ) -> Result<()> {
+    let empty_map = IdentityMap::default();
     let targets = [
-        ("owner", &policy.owner_map, &policy.owner_override),
-        ("group", &policy.group_map, &policy.group_override),
+        ("owner", policy.owner_map.as_ref().unwrap_or(&empty_map), &policy.owner_override),
+        ("group", policy.group_map.as_ref().unwrap_or(&empty_map), &policy.group_override),
     ];
     for (label, map, ovr) in targets {
         match target {
@@ -375,16 +388,17 @@ pub fn resolve_owner_group(
     target: MapResolutionTarget,
     same_owner: bool,
 ) -> Result<(Option<u32>, Option<u32>)> {
+    let empty_map = IdentityMap::default();
     let owner = resolve_identity(
         src_username, src_uid,
-        &policy.owner_map, policy.owner_override.as_ref(),
+        policy.owner_map.as_ref().unwrap_or(&empty_map), policy.owner_override.as_ref(),
         target,
         same_owner,
         lookup_uid,
     )?;
     let group = resolve_identity(
         src_groupname, src_gid,
-        &policy.group_map, policy.group_override.as_ref(),
+        policy.group_map.as_ref().unwrap_or(&empty_map), policy.group_override.as_ref(),
         target,
         same_owner,
         lookup_gid,
