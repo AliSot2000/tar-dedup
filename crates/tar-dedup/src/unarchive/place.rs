@@ -681,6 +681,9 @@ pub fn ensure_parent(db: &Database) -> Result<()> {
     let mut current_parents: HashSet<PathBuf> = HashSet::new();
     let mut parent_rows: Vec<NewOutTreeRow> = Vec::new();
     let mut last_id = OutTreeId(0);
+    let mut flags = OutTreeFlags::default();
+    flags.set(OutTreeFlag::IsDirectory, true);
+    let cref_flags = &flags;
 
     loop {
         let entries = db.list_out_tree(
@@ -697,7 +700,7 @@ pub fn ensure_parent(db: &Database) -> Result<()> {
             parent_rows.push(NewOutTreeRow {
                 abs_path: parent.clone(),
                 file_id: None,
-                flags: OutTreeFlags::default(),
+                flags: cref_flags.clone(),
             })
         }
         db.insert_out_tree_rows(&parent_rows)?;
