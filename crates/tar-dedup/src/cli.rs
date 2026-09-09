@@ -562,6 +562,14 @@ pub struct ExtractArgs {
     #[arg(long = "apply-stored-group-map", default_value_t = false, help_heading = "File Attributes")]
     pub apply_stored_group_map: bool,
 
+    /// Restore archived access times from the database (default: leave untouched).
+    #[arg(long = "apply-atime", default_value_t = false, help_heading = "File Attributes")]
+    pub apply_atime: bool,
+
+    /// Restore archived modification times from the database (default: leave untouched).
+    #[arg(long = "apply-mtime", default_value_t = false, help_heading = "File Attributes")]
+    pub apply_mtime: bool,
+
     // --- Process Options ---
 
     /// Wipe extract work (`.estage`) and start over.
