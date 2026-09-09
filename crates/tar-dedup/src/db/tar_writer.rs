@@ -146,7 +146,8 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Re
 
 /// Staged self-canonical file ids, ordered for packing: extension, size, id.
 /// When `filter_sha` is true, rows with `sha1 IS NULL` are omitted.
-/// TODO update selector like stage
+/// TODO perhaps sort by ext, size, filename, id.
+///  order by filename   replace(abs_path, rtrim(abs_path, replace(abs_path, '/', '')), '') ASC,
 pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Result<Vec<FileId>> {
     let filter = if filter_sha {
         " AND sha1 IS NOT NULL"
