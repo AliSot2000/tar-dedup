@@ -104,7 +104,7 @@ pub fn list_sources(
 ) -> Result<Vec<SourceRecord>> {
     debug_assert!(starting_id >= 0, "INVARIANT ERROR: starting_id >= 0, since ids start at 1");
     let dir_filter = match only_dirs {
-        Some(true) => " AND flags & :DirFlag = 1",
+        Some(true) => " AND flags & :DirFlag != 0",
         Some(false) => " AND flags & :DirFlag = 0",
         None => "",
     };
