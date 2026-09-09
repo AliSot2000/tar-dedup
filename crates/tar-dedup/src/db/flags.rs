@@ -203,6 +203,7 @@ define_flags! {
         AppendedPath = 11,
         /// `append_path` failed during the archive process.
         ErrorWhileArchive = 12,
+
         /// Payload for this content landed in the extract cache (canonical row only).
         /// Set after a successful `unpack`; cleared on catalog install normalization.
         FileExtracted = 13,
@@ -214,12 +215,16 @@ define_flags! {
         ErrorWhileRehashing = 16,
         /// Source ready for linking
         AtLinkSource = 17,
+        /// File has been placed in the output tree
+        Placed = 18,
+        /// File was skipped due to a conflict while placing.
+        Skipped = 19,
         /// Used RefLink (if false -> used (sparse) copy)
-        UsedRefLink = 18,
+        UsedRefLink = 20,
         /// An Error prevented the file from being placed in its correct position
-        ErrorWhilePlacing = 19,
+        ErrorWhilePlacing = 21,
         /// At least one error occurred while applying metadata
-        ErrorWhileApplyingMetadata = 20,
+        ErrorWhileApplyingMetadata = 22,
     }
     /// Bitset stored in `files.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,18 +253,16 @@ define_flags! {
         Placed = 0,
         /// Payload was hard-linked to existing hard link group
         IsHardlink = 1,
-        // TODO DELETE PROBABLY
-        /// Marks this file as the canonical (hard link target)
-        IsCanonical = 2,
-        /// Walked this abs_path already with another source. Do not hard link against these entries.
-        // TODO END DELETE
-        EntryWalked = 3,
         /// Capture if we used reflnks or copies into place.
-        UsedRefLink = 4,
+        UsedRefLink = 2,
+        /// File was considered but not placed due to a conflict
+        Skipped = 3,
         /// Copy/link into this output path failed.
-        ErrorWhilePlace = 5,
+        ErrorWhilePlace = 4,
         /// Metadata restore failed for this output path.
-        ErrorWhileApplyingMetadata = 6,
+        ErrorWhileApplyingMetadata = 5,
+        /// Metadata (mode, owner, times, xattr/acl/selinux) has been applied.
+        PermissionsApplied = 6,
         /// Highlight directories to be able to scan them for dir tree creation.
         IsDirectory = 7,
     }
