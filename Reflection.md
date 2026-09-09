@@ -72,12 +72,22 @@ Listing SQL conditions for given selection
   - sparse_count > min_pages
   - !has_sparse (flag)
   - include < 0, exclude = 0
-- `Stage`: 
+- `Stage`:  
+  - sha1 NOT NULL (optional)
   - phase = 'sparsified'
   - ftype = 'file'
   - canonical_id = id
   - include_reason < 0
   - exclude_reason = 0
+- `Archive`:
+  - canonical_id = id
+  - phase = 'staged'
+  - ftype = 'file'
+  - include_reason < 0
+  - exclude_reason = 0
+
+- `Extract`:
+  - 
 
 Feat:
 - Docker style progress (bottom all files, top each file being hashed)
