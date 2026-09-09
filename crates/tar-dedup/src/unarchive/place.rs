@@ -70,7 +70,19 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         {skipped} of entries skipped due to a placement conflict."
     );
     // TODO push the files records to the next phase
-    // TODO 
+    if !config.process.cleanup.keep_stage {
+        match fs::remove_dir_all(config.paths.extract_cache_dir()) {
+            Ok(_) => (),
+            Err(e) => {
+                tracing::warn!("Failed to clean up stage directors '{}' with error {}",
+                    config.paths.extract_cache_dir().display(),
+                    e
+                )
+            }
+            // TODO store error
+            // TODO fail fast
+        };
+    }
     Ok(())
 }
 
@@ -822,6 +834,22 @@ pub fn status_message_rebuilding(config: &ExtractConfig, db: &Database)
     ))
 }
 
+// fn pre_materialization_check(config: &ExtractConfig, target_path: &Path, ftype: FileType)
+//     -> Result<bool> {
+//     // File not present, continue
+//     if target_path.exists() {
+//        return Ok(true);
+//     }
+//
+//     // PRECONDITION: File exists
+//     let metadata = target_path.metadata()?;
+//     if !matches!(config.placement.conflict_policy, ConflictPolicy::Replace) {
+//         let times = get_file_times(&metadata);
+//         let (mtime, atime, ctime) = times;
+//     }
+//
+//     Ok(true)
+// }
 
 // -------------------------------------------------------------------------------------------------
 // Util
