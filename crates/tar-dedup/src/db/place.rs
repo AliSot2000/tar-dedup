@@ -329,7 +329,7 @@ pub fn list_canonical_files_for_move<R: SqlFileRow>(
     let sql_filt = if filter { " AND include_reason < 0 AND exclude_reason = 0" } else { "" };
     let mut stmt = conn.prepare(&format!("\
         SELECT {cols} FROM files \
-            WHERE flags & :extracted = 1 \
+            WHERE flags & :extracted != 0
                 AND flags & :moved = 0
                 AND ftype = 'file'
                 AND phase = 'rehashed'
@@ -445,8 +445,8 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
         " AND o.flags & :placement = 0 \
           AND o.flags & :place_error = 0"
     } else {
-        " AND (o.flags & :placement = 1 \
-               OR o.flags & :place_error = 1)"
+        " AND (o.flags & :placement != 0 \
+               OR o.flags & :place_error != 0)"
     };
     let mut stmt = conn.prepare(&format!("\
         SELECT {file_cols}, {out_cols} \
@@ -455,7 +455,7 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
         JOIN out_tree AS o ON f.id = o.file_id \
         WHERE f.ftype NOT IN ('dir', 'unknown') \
             {filter_placed} \
-            AND f.flags & :moved = 1 \
+            AND f.flags & :moved != 0 \
         ORDER BY o.id LIMIT :batch_size
         "))?;
     let results = stmt.query_map(
