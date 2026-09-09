@@ -524,7 +524,7 @@ pub struct ExtractArgs {
     #[arg(long = "no-same-owner", action = ArgAction::SetFalse, help_heading = "File Attributes")]
     pub no_same_owner: bool,
 
-    /// How to emit the resolved owner/group: `ids`, `names`, or `name-id` (default).
+    /// How to emit the resolved owner/group: `ids`, `names`, `name-id`, or `id-name` (default `name-id`).
     #[arg(
         long = "map-target",
         value_name = "TARGET",

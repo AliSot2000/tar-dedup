@@ -128,6 +128,8 @@ pub enum MapResolutionTarget {
     /// Emit a name first, fall back to an id. Default.
     #[default]
     NameId,
+    /// Emit an id first, fall back to a name.
+    IdName,
 }
 
 impl FromStr for MapResolutionTarget {
@@ -138,8 +140,9 @@ impl FromStr for MapResolutionTarget {
             "ids" => Ok(Self::Ids),
             "names" => Ok(Self::Names),
             "name-id" | "name_id" => Ok(Self::NameId),
+            "id-name" | "id_name" => Ok(Self::IdName),
             other => Err(format!(
-                "invalid --map-target `{other}` (expected ids, names, or name-id)"
+                "invalid --map-target `{other}` (expected ids, names, name-id, or id-name)"
             )),
         }
     }
@@ -157,6 +160,7 @@ impl MapResolutionTarget {
             Self::Ids => "ids",
             Self::Names => "names",
             Self::NameId => "name-id",
+            Self::IdName => "id-name",
         }
     }
 }
@@ -418,6 +422,9 @@ fn resolve_identity(
         MapResolutionTarget::NameId => {
             resolve_name_id(resolved_target, src_name, src_id, ovr, same_owner, lookup)
         },
+        MapResolutionTarget::IdName => {
+            resolve_id_name(resolved_target, src_name, src_id, ovr, same_owner, lookup)
+        },
     })
 }
 
@@ -479,7 +486,21 @@ fn resolve_name_id(
         .or_else(|| resolve_ids(chosen, db_id, ovr, same_owner))
 }
 
-/// Name → numeric id, if the name exists on this system.
+/// `id-name`: the mirror of `name-id`.
+/// Id first: map.id → override.id → (same_owner ? db.id). Fall back to the name chain.
+fn resolve_id_name(
+    chosen: Option<&IdentitySpec>,
+    db_name: Option<&str>,
+    db_id: Option<u32>,
+    ovr: Option<&IdentitySpec>,
+    same_owner: bool,
+    lookup: fn(&str) -> Option<u32>,
+) -> Option<u32> {
+    resolve_ids(chosen, db_id, ovr, same_owner)
+        .or_else(|| resolve_names(chosen, db_name, ovr, same_owner, lookup))
+}
+
+/// Name → numeric id, if the username exists on this system.
 #[cfg(unix)]
 fn lookup_uid(name: &str) -> Option<u32> {
     use nix::unistd::User;
@@ -491,6 +512,7 @@ fn lookup_uid(_name: &str) -> Option<u32> {
     None
 }
 
+/// Name → numeric id, if the groupname exists on this system.
 #[cfg(unix)]
 fn lookup_gid(name: &str) -> Option<u32> {
     use nix::unistd::Group;
