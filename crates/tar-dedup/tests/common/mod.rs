@@ -159,6 +159,8 @@ pub fn place_config(extraction_root: PathBuf, absolute_names: bool) -> ExtractCo
             restore_owner: false,
             no_overwrite_dir: false,
             force_overwrite_dir: false,
+            apply_atime: false,
+            apply_mtime: false,
         },
         scan: ScanOptions {
             force_scan: false,

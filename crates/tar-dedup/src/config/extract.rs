@@ -41,6 +41,8 @@ pub struct ExtractAttributeOptions {
     pub restore_owner: bool,
     pub no_overwrite_dir: bool,
     pub force_overwrite_dir: bool,
+    pub apply_atime: bool,
+    pub apply_mtime: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +206,8 @@ impl ExtractConfig {
                 restore_owner: args.restore_owner,
                 no_overwrite_dir: args.no_overwrite_dir,
                 force_overwrite_dir: args.force_overwrite_dir,
+                apply_atime: args.apply_atime,
+                apply_mtime: args.apply_mtime,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -272,6 +276,8 @@ impl ExtractConfig {
                 restore_owner: false,
                 no_overwrite_dir: false,
                 force_overwrite_dir: false,
+                apply_atime: false,
+                apply_mtime: false,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -327,6 +333,8 @@ impl ExtractConfig {
                 restore_owner: false,
                 no_overwrite_dir: false,
                 force_overwrite_dir: false,
+                apply_atime: false,
+                apply_mtime: false,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -382,6 +390,8 @@ impl ExtractConfig {
                 restore_owner: false,
                 no_overwrite_dir: false,
                 force_overwrite_dir: false,
+                apply_atime: false,
+                apply_mtime: false,
             },
             scan: ScanOptions {
                 force_scan: false,
