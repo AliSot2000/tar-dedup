@@ -29,9 +29,9 @@ pub struct ExtractScanState {
 /// Copy an embedded catalog into the extract work DB.
 pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<()> {
     if db_path.is_file() {
-        std::fs::remove_file(db_path).map_err(|e| Error::io(db_path, e))?;
+        fs::remove_file(db_path).map_err(|e| Error::io(db_path, e))?;
     }
-    std::fs::copy(snapshot_path, db_path).map_err(|e| Error::io(db_path, e))?;
+    fs::copy(snapshot_path, db_path).map_err(|e| Error::io(db_path, e))?;
     Ok(())
 }
 
