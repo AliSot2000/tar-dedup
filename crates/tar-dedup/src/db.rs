@@ -512,7 +512,7 @@ impl Database {
     }
 
     pub fn skip_rehash(&self) -> Result<u64> {
-        extract::skip_rehash(&*self.conn())
+        rehash::skip_rehash(&*self.conn())
     }
 
     pub fn init_extract_runtime_state(&self) -> Result<()> {
