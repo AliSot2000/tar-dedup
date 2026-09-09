@@ -207,26 +207,8 @@ pub fn parse_owner_group_args(
     let group_override = group.map(IdentitySpec::parse).transpose()?;
 
     // Parse owner-map, group-map. An empty map file yields `None`.
-    let owner_map = owner_file
-        .map(read_map_file_entries)
-        .transpose()?
-        .and_then(|entries| {
-            if entries.is_empty() {
-                None
-            } else {
-                Some(IdentityMap::from_entries(entries))
-            }
-        });
-    let group_map = group_file
-        .map(read_map_file_entries)
-        .transpose()?
-        .and_then(|entries| {
-            if entries.is_empty() {
-                None
-            } else {
-                Some(IdentityMap::from_entries(entries))
-            }
-        });
+    let owner_map = parse_map_file(owner_file)?;
+    let group_map = parse_map_file(group_file)?;
 
     let policy = OwnerGroupPolicy { owner_map, group_map, owner_override, group_override };
     if !policy.at_least_one_present() {
@@ -234,6 +216,20 @@ pub fn parse_owner_group_args(
     }
 
     Ok(Some(policy))
+}
+
+/// Parse a file and build an IdentityMap
+fn parse_map_file(map_file: Option<&Path>) -> Result<Option<IdentityMap>> {
+    Ok(map_file
+        .map(read_map_file_entries)
+        .transpose()?
+        .and_then(|entries| {
+            if entries.is_empty() {
+                None
+            } else {
+                Some(IdentityMap::from_entries(entries))
+            }
+        }))
 }
 
 fn read_map_file_entries(path: &Path) -> Result<Vec<(IdentitySpec, IdentitySpec)>> {
