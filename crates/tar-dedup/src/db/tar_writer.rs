@@ -135,7 +135,9 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Re
          WHERE canonical_id = id 
             AND phase IN ('staged', 'archived') 
             {filter} 
-            AND NOT (ftype IS NULL OR ftype != 'file')"),
+            AND ftype = 'file'
+            AND include_reason < 0
+            AND exclude_reason = 0"),
         [],
         |row| row.get("total"),
     )?;
@@ -156,7 +158,9 @@ pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Res
          WHERE canonical_id = id 
             AND phase = 'staged' 
             {filter} 
-            AND NOT (ftype IS NULL OR ftype != 'file')
+            AND ftype = 'file'
+            AND include_reason < 0
+            AND exclude_reason = 0
          ORDER BY ext ASC, size ASC, id ASC"
     ))?;
     let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId))?;
@@ -175,7 +179,9 @@ pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Resu
          WHERE canonical_id = id 
             AND phase = 'archived' 
             {filter}
-            AND NOT (ftype IS NULL OR ftype != 'file')"),
+            AND ftype = 'file'
+            AND include_reason < 0
+            AND exclude_reason = 0"),
         [],
         |row| row.get("total"),
     )?;
@@ -197,7 +203,7 @@ pub fn promote_ineligible_to_archived(conn: &Connection, filter_sha: bool) -> Re
          WHERE phase = 'staged'
            AND (
                 canonical_id IS NULL OR canonical_id != id
-             OR ftype IS NULL OR ftype != 'file'
+             OR ftype != 'file'
              {sha_clause}
            )"
     );
