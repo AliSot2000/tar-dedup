@@ -35,6 +35,8 @@ pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<
     Ok(())
 }
 
+// TODO this should not technically be necessary. The we should be able to run the integrity checks
+//  when extracting
 /// Normalize a freshly installed catalog so stream handling is provenance-agnostic.
 /// Clears [`FileFlag::FileExtracted`] and forces candidate rows to `archived`.
 /// Must not run on a resumed work DB.
@@ -58,6 +60,7 @@ pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+// TODO rework and rethink this function.
 /// Snapshot confirmation: promote `archived` → `unarchived` for paths the snapshot
 /// lists as archived whose payload has been extracted (canonical carries
 /// [`FileFlag::FileExtracted`]), fanning phase out over `canonical_id`.
@@ -132,6 +135,8 @@ pub fn promote_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
     )?;
     Ok(n as u64)
 }
+
+// TODO integrity check that only filter allow files are extracted.
 
 /// Mark every content-id named payload sitting in the extract cache as extracted.
 /// Catches members that were unpacked but not flagged (interrupt between the two).
