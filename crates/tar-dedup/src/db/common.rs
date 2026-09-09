@@ -90,7 +90,7 @@ impl SqlFileRow for FileRecord {
     fn sql_columns(prefix: Option<&str>) -> String {
         match prefix {
             None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, \
-                uid, gid, mode, ftype, xattr, acl, selinux, win_perm, link_dst, \
+                uid, gid, username, groupname, mode, ftype, xattr, acl, selinux, win_perm, link_dst, \
                 include_reason, exclude_reason, canonical_id, flags, phase, \
                 new_name, inode, dev, major, minor".to_string(),
             Some(p) => format!("\
@@ -104,6 +104,8 @@ impl SqlFileRow for FileRecord {
                 {p}.ctim AS \"{p}.ctime\",
                 {p}.uid AS \"{p}.uid\",
                 {p}.gid AS \"{p}.gid\",
+                {p}.username AS \"{p}.username\",
+                {p}.groupname AS \"{p}.groupname\",
                 {p}.mode AS \"{p}.mode\",
                 {p}.ftype AS \"{p}.ftype\",
                 {p}.xattr AS \"{p}.xattr\",
@@ -141,6 +143,8 @@ impl SqlFileRow for FileRecord {
             ctime: optional_rfc3339(row, format!("{upx}ctime").as_str())?,
             uid: row.get::<_, Option<i64>>(format!("{upx}uid").as_str())?.map(|v| v as u32),
             gid: row.get::<_, Option<i64>>(format!("{upx}gid").as_str())?.map(|v| v as u32),
+            username: row.get(format!("{upx}username").as_str())?,
+            groupname: row.get(format!("{upx}groupname").as_str())?,
             mode: row.get::<_, Option<i64>>(format!("{upx}mode").as_str())?.map(|v| v as u32),
             ftype: parse_ftype(row, format!("{upx}ftype").as_str())?,
             xattrs: row.get(format!("{upx}xattr").as_str())?,
