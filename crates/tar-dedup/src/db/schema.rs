@@ -102,6 +102,23 @@ CREATE TABLE IF NOT EXISTS ref_out (
 );
 CREATE INDEX IF NOT EXISTS idx_ref_out_source ON ref_out(source_id);
 
+CREATE TABLE IF NOT EXISTS errors (
+    id INTEGER PRIMARY KEY CHECK (id > 0),
+    file_id INTEGER REFERENCES files(id),
+    out_tree_id INTEGER REFERENCES out_tree(id),
+    abs_path TEXT,
+    error_msg TEXT NOT NULL,
+    error_type: TEXT,
+    error_misc: TEXT, --present for everything you want to store but don't know what it is going to
+    --be like. Probably an enum with content and json serde.
+    error_datetime: TEXT NOT NULL
+)
+CREATE INDEX IF NOT EXISTS idx_errors_id ON errors(id);
+CREATE INDEX IF NOT EXISTS idx_errors_time ON errors(error_datetime);
+CREATE INDEX IF NOT EXISTS idx_errors_file_id ON errors(file_id) WHERE file_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_errors_out_tree_id ON errors(out_tree_id) WHERE out_tree_id IS NOT NULL;
+
+
 -- finalized:
 -- 0 = open/interrupted,
 -- 1 = stream closed successfully,
