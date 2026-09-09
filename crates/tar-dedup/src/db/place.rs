@@ -8,39 +8,6 @@ use crate::db::types::{FileId, NewOutTreeRow, OutTreeId, OutTreeRecord,
 };
 use crate::error::Result;
 
-/// Convenience implementations for the OutTreeRecord, function to parse sql rows to records and
-/// generate the columns to select
-impl OutTreeRecord {
-    fn from_sql(row: &rusqlite::Row<'_>, prefix: Option<&str>) -> rusqlite::Result<OutTreeRecord> {
-        let upx = match prefix {
-            None => "",
-            Some(p) => &format!("{p}."),
-        };
-        let file_id: Option<i64> = row.get(format!("{upx}file_id").as_str())?;
-        Ok(OutTreeRecord {
-            id: OutTreeId(row.get(format!("{upx}id").as_str())?),
-            abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
-            file_id: file_id.map(FileId),
-            flags: OutTreeFlags::from_i64(row.get(format!("{upx}flags").as_str())?),
-            canonical_id: OutTreeId(row.get(format!("{upx}canonical_id").as_str())?)
-        })
-    }
-
-    fn sql_columns(prefix: Option<&str>) -> String {
-        match prefix {
-            None => "id, abs_path, file_id, flags, canonical_id".to_string(),
-            Some(p) => format!("\
-            {p}.id AS \"{p}.id\",
-            {p}.abs_path AS \"{p}.abs_path\",
-            {p}.file_id AS \"{p}.file_id\",
-            {p}.flags AS \"{p}.flags\",
-            {p}.canonical_id AS \"{p}.canonical_id\"
-            "
-            )
-        }
-    }
-}
-
 /// Function iterates through the files table to find all entries which should get materialized
 /// based on filtering (include, exclude filter) and on file type. Additionally, a source can be
 /// added s.t. only the files which are covered by this source are returned.

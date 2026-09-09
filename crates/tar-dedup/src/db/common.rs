@@ -5,10 +5,8 @@ use path_clean::PathClean;
 use rusqlite::{Connection, named_params};
 
 use crate::db::content_id::{content_id_from_digest, sparse_member_name};
-use crate::db::flags::{FileFlag, FileFlags};
-use crate::db::types::{
-    ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, StrippedRecord,
-};
+use crate::db::flags::{FileFlag, FileFlags, OutTreeFlags};
+use crate::db::types::{ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::error::Result;
 
 /// Row type that can be SELECTed from `files` and mapped from a rusqlite row.
@@ -234,6 +232,39 @@ impl SqlFileRow for StrippedRecord {
 
     fn content_id(&self) -> Option<ContentId> {
         StrippedRecord::content_id(self)
+    }
+}
+
+/// Convenience implementations for the OutTreeRecord, function to parse sql rows to records and
+/// generate the columns to select
+impl OutTreeRecord {
+    pub fn from_sql(row: &rusqlite::Row<'_>, prefix: Option<&str>) -> rusqlite::Result<OutTreeRecord> {
+        let upx = match prefix {
+            None => "",
+            Some(p) => &format!("{p}."),
+        };
+        let file_id: Option<i64> = row.get(format!("{upx}file_id").as_str())?;
+        Ok(OutTreeRecord {
+            id: OutTreeId(row.get(format!("{upx}id").as_str())?),
+            abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
+            file_id: file_id.map(FileId),
+            flags: OutTreeFlags::from_i64(row.get(format!("{upx}flags").as_str())?),
+            canonical_id: OutTreeId(row.get(format!("{upx}canonical_id").as_str())?)
+        })
+    }
+
+    pub fn sql_columns(prefix: Option<&str>) -> String {
+        match prefix {
+            None => "id, abs_path, file_id, flags, canonical_id".to_string(),
+            Some(p) => format!("\
+            {p}.id AS \"{p}.id\",
+            {p}.abs_path AS \"{p}.abs_path\",
+            {p}.file_id AS \"{p}.file_id\",
+            {p}.flags AS \"{p}.flags\",
+            {p}.canonical_id AS \"{p}.canonical_id\"
+            "
+            )
+        }
     }
 }
 
