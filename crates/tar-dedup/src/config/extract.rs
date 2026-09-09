@@ -163,6 +163,13 @@ impl ExtractConfig {
 
         // TODO clean_target and one_top_level IS NONE => warning, no effect.
 
+        if args.no_same_owner && args.restore_owner {
+            tracing::warn!(
+                "Got --no-same-owner and --same-owner or --restore-owner. Option is inferred \
+                from process uid and both flags are ignored."
+            );
+        }
+
         // Stored vs CLI owner/group policy. Explicit --owner/--group/--map take precedence;
         // --apply-stored-* fall back to the archive's recorded policy.
         let owner_policy = resolve_owner_policy_from_args(args, &directory)?;
@@ -220,7 +227,14 @@ impl ExtractConfig {
                 } else if args.restore_owner {
                     true
                 } else {
-                    infer_same_owner()
+                    let inferred_owner = infer_same_owner();
+                    let argument = if inferred_owner {
+                        "--same-owner"
+                    } else {
+                        "--no-same-owner"
+                    };
+                    tracing::info!("Inferred: {argument}");
+                    inferred_owner
                 },
             },
         })
