@@ -161,6 +161,9 @@ pub fn place_config(extraction_root: PathBuf, absolute_names: bool) -> ExtractCo
             force_overwrite_dir: false,
             apply_atime: false,
             apply_mtime: false,
+            no_xattrs: false,
+            no_acls: false,
+            no_selinux: false,
         },
         scan: ScanOptions {
             force_scan: false,
@@ -180,6 +183,8 @@ pub fn place_config(extraction_root: PathBuf, absolute_names: bool) -> ExtractCo
             target: MapResolutionTarget::NameId,
             validate_maps: false,
             same_owner: false,
+            apply_group: false,
+            apply_owner: false,
         },
     }
 }
