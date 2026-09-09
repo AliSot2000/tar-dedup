@@ -43,6 +43,8 @@ pub struct FileRecord {
     pub ctime: Option<DateTime<Utc>>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
+    pub username: Option<String>,
+    pub groupname: Option<String>,
     pub mode: Option<u32>,
     pub ftype: FileType,
     pub device_id: Option<u64>,
