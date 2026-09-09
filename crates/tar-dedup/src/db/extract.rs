@@ -223,14 +223,16 @@ pub fn count_extracted_paths(conn: &Connection) -> Result<u64> {
 pub fn count_non_appended_by_ftype(conn: &Connection) -> Result<Vec<(String, u64)>> {
     let bit = FileFlag::AppendedPath.mask_i64();
     let mut stmt = conn.prepare(
-        "SELECT COALESCE(ftype, 'null') AS ft, COUNT(*) AS count
+        "SELECT COALESCE(ftype, 'unknown') AS ft, COUNT(*) AS count
          FROM files
          WHERE (flags & :bit) = 0
          GROUP BY ftype
          ORDER BY ft",
     )?;
-    let rows = stmt.query_map(named_params! { ":bit": bit }, |row| {
-        Ok((row.get::<_, String>("ft")?, row.get::<_, i64>("count")? as u64))
+    let rows = stmt.query_map(
+        named_params! { ":bit": bit },
+        |row| {
+            Ok((row.get::<_, String>("ft")?, row.get::<_, i64>("count")? as u64))
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
