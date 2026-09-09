@@ -629,6 +629,29 @@ impl Database {
     pub fn apply_flags_to_files(&self) -> Result<(u64, u64, u64, u64)> {
         place::apply_flags_to_files(&self.conn())
     }
+
+    // --- permissions (metadata restore) ---
+
+    pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(
+        &self, batch_size: u64)
+        -> Result<Vec<(R, OutTreeRecord)>> {
+        permissions::list_out_tree_for_permissions_non_dir::<R>(&self.conn(), batch_size)
+    }
+
+    pub fn list_out_tree_for_permissions_dirs<R: SqlFileRow>(
+        &self, batch_size: u64)
+        -> Result<Vec<(Option<R>, OutTreeRecord)>> {
+        permissions::list_out_tree_for_permissions_dirs::<R>(&self.conn(), batch_size)
+    }
+
+    pub fn count_out_tree_for_permissions(&self) -> Result<u64> {
+        permissions::count_out_tree_for_permissions_non_dir(&self.conn())
+    }
+
+    pub fn count_out_tree_for_permissions_dirs(&self) -> Result<u64> {
+        permissions::count_out_tree_for_permissions_dirs(&self.conn())
+    }
+
     // --- integrity checks across the database
     pub fn count_missing_dev_inode(&self) -> Result<u64> {
         integrity::count_missing_dev_inode(&self.conn())
