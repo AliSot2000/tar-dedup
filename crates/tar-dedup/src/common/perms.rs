@@ -1,80 +1,55 @@
 //! Owner / group identity maps: parsing (CLI + map files) and extraction-time resolution.
 //!
 //! Pure logic, no DB access. The maps are plain data ([`OwnerGroupPolicy`], [`IdentityMap`],
-//! [`PairSpec`]) that can be serialized to the `meta` table; the persistence lives in
+//! [`IdentitySpec`]) that can be serialized to the `meta` table; the persistence lives in
 //! `db/meta.rs`. Reused by both the archive (persist) and extract (resolve) commands.
+//!
+//! Map-file grammar (GNU tar `--owner-map` / `--group-map`), symmetric for both fields:
+//!   `FROM <ws>+ TO`, one entry per line; blank lines and `#`-to-end-of-line comments ignored.
+//!   `FROM` / `TO` are each an [`IdentitySpec`]: `+UID`, `NAME`, or `NAME:UID`.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// One identity whose name/id maps to a target (`from:to` pair, GNU tar `--owner-map` style).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IdentityMap {
-    /// `source name → target string` (target may be a name or a numeric id).
-    pub by_name: HashMap<String, String>,
-    /// `source id → target string` (target may be a name or a numeric id).
-    pub by_id: HashMap<u32, String>,
-}
-
-impl IdentityMap {
-    /// Fold `from:to` entries into the map. A numeric `from` goes into [`Self::by_id`], anything
-    /// else into [`Self::by_name`]. Entries are validated to be non-empty.
-    pub fn from_entries<I>(entries: I) -> Result<Self>
-    where
-        I: IntoIterator<Item = (String, String)>,
-    {
-        let mut map = Self::default();
-        for (from, to) in entries {
-            let from = from.trim();
-            let to = to.trim();
-            if from.is_empty() || to.is_empty() {
-                return Err(Error::Config(format!(
-                    "owner/group map entry must be `from:to`, got `{from}:{to}`"
-                )));
-            }
-            if let Ok(id) = from.parse::<u32>() {
-                map.by_id.insert(id, to.to_string());
-            } else {
-                map.by_name.insert(from.to_string(), to.to_string());
-            }
-        }
-        Ok(map)
-    }
-
-    fn is_empty(&self) -> bool {
-        self.by_name.is_empty() && self.by_id.is_empty()
-    }
-}
-
-/// A `NAME`, `UID`, or `NAME:UID` override (GNU tar `--owner` / `--group`).
+/// One side of a map row, or an `--owner` / `--group` override value.
 ///
-/// When either side is empty it is inferred from the other (`NAME` alone → numeric id resolved
-/// at apply time, `UID` alone → name only for display).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PairSpec {
+/// Grammar: `+UID` → [`Self::id`]; `NAME` → [`Self::name`]; `NAME:UID` → both.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct IdentitySpec {
     pub name: Option<String>,
     pub id: Option<u32>,
 }
 
-impl PairSpec {
-    /// Parse `NAME`, `UID`, or `NAME:UID`.
+impl IdentitySpec {
+    /// Parse `+UID`, `NAME`, or `NAME:UID`.
+    ///
+    /// A bare all-digit name is accepted (as a name) with a warning that `+UID` was
+    /// probably intended — the suggested "footgun guard".
     pub fn parse(s: &str) -> Result<Self> {
         let s = s.trim();
         if s.is_empty() {
-            return Err(Error::Config("empty `--owner`/`--group` value".into()));
+            return Err(Error::Config("empty identity spec".into()));
         }
-        match s.split_once(':') {
+        if let Some(rest) = s.strip_prefix('+') {
+            let id = rest.parse::<u32>().map_err(|_| {
+                Error::Config(format!("invalid numeric suffix in identity spec `{s}`"))
+            })?;
+            return Ok(Self { name: None, id: Some(id) });
+        }
+        match s.split_once(":") {
             None => {
-                if let Ok(id) = s.parse::<u32>() {
-                    Ok(Self { name: None, id: Some(id) })
-                } else {
-                    Ok(Self { name: Some(s.to_string()), id: None })
+                if s.parse::<u32>().ok().is_some() {
+                    tracing::warn!(
+                        "identity spec `{s}` looks numeric; did you mean `+{s}` (a uid)?"
+                    );
                 }
+                Ok(Self { name: Some(s.to_string()), id: None })
             }
             Some((name, id)) => {
                 let name = if name.is_empty() { None } else { Some(name.to_string()) };
@@ -82,24 +57,119 @@ impl PairSpec {
                     None
                 } else {
                     Some(id.parse::<u32>().map_err(|_| {
-                        Error::Config(format!("invalid `--owner`/`--group` id: `{id}`"))
+                        Error::Config(format!("invalid id in identity spec `{s}`"))
                     })?)
                 };
+                if name.is_none() && id.is_none() {
+                    return Err(Error::Config(format!(
+                        "identity spec `{s}` must carry a name or an id"
+                    )));
+                }
                 Ok(Self { name, id })
             }
         }
     }
 }
 
-/// The full owner/group policy: two tables plus optional force-all overrides.
+/// A translation table. Values are the destination [`IdentitySpec`].
+///
+/// A source spec is inserted under both keys when it carries both a name and an id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentityMap {
+    /// `source name → destination spec`.
+    pub by_name: HashMap<String, IdentitySpec>,
+    /// `source id → destination spec`.
+    pub by_id: HashMap<u32, IdentitySpec>,
+}
+
+impl IdentityMap {
+    /// Fold `from → to` entries into the table. `from` with a name populates [`Self::by_name`],
+    /// `from` with an id populates [`Self::by_id`] (a `NAME:UID` source populates both).
+    pub fn from_entries<I>(entries: I) -> Self
+    where
+        I: IntoIterator<Item = (IdentitySpec, IdentitySpec)>,
+    {
+        let mut map = Self::default();
+        for (from, to) in entries {
+            debug_assert!(
+                from.name.is_some() || from.id.is_some(),
+                "IdentitySpec source must carry a name or an id"
+            );
+            debug_assert!(
+                to.name.is_some() || to.id.is_some(),
+                "IdentitySpec destination must carry a name or an id"
+            );
+            if let Some(name) = &from.name {
+                map.by_name.insert(name.clone(), to.clone());
+            }
+            if let Some(id) = &from.id {
+                map.by_id.insert(*id, to.clone());
+            }
+        }
+        map
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_name.is_empty() && self.by_id.is_empty()
+    }
+}
+
+/// How the chosen identity is emitted during extraction. Extract-only runtime state;
+/// never persisted to the archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum MapResolutionTarget {
+    /// Always emit a numeric id. Errors on a name-only destination (parse/load when
+    /// validation is enabled, warnings otherwise).
+    Ids,
+    /// Always emit a name. Falls back to override → db name; a missing db name is an
+    /// error on apply (no numeric upgrade).
+    Names,
+    /// Emit a name first, fall back to an id. Default.
+    #[default]
+    NameId,
+}
+
+impl FromStr for MapResolutionTarget {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "ids" => Ok(Self::Ids),
+            "names" => Ok(Self::Names),
+            "name-id" | "name_id" => Ok(Self::NameId),
+            other => Err(format!(
+                "invalid --map-target `{other}` (expected ids, names, or name-id)"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for MapResolutionTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl MapResolutionTarget {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ids => "ids",
+            Self::Names => "names",
+            Self::NameId => "name-id",
+        }
+    }
+}
+
+/// The full owner/group policy: two tables plus overrides.
 ///
 /// Stored verbatim in the archive `meta` table and applied at extraction.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerGroupPolicy {
-    pub owner: IdentityMap,
-    pub group: IdentityMap,
-    pub owner_override: Option<PairSpec>,
-    pub group_override: Option<PairSpec>,
+    pub owner_map: IdentityMap,
+    pub group_map: IdentityMap,
+    pub owner_override: Option<IdentitySpec>,
+    pub group_override: Option<IdentitySpec>,
 }
 
 /// Which user/group policy applies during extraction.
@@ -118,96 +188,295 @@ pub enum OwnerGroupSource {
 /// `--same-owner` gating happens here. Shared by archive and extract.
 pub fn parse_owner_group_args(
     owner: Option<&str>,
-    owner_map: Option<&Path>,
+    owner_file: Option<&Path>,
     group: Option<&str>,
-    group_map: Option<&Path>,
+    group_file: Option<&Path>,
 ) -> Result<Option<OwnerGroupPolicy>> {
-    let owner_override = owner.map(PairSpec::parse).transpose()?;
-    let group_override = group.map(PairSpec::parse).transpose()?;
+    let owner_override = owner.map(IdentitySpec::parse).transpose()?;
+    let group_override = group.map(IdentitySpec::parse).transpose()?;
 
-    let owner_entries = owner_map.map(read_map_file).transpose()?.unwrap_or_default();
-    let group_entries = group_map.map(read_map_file).transpose()?.unwrap_or_default();
+    // Parse owner-map, group-map
+    let owner_entries = owner_file
+        .map(read_map_file_entries)
+        .transpose()?
+        .unwrap_or_default();
+    let group_entries = group_file
+        .map(read_map_file_entries)
+        .transpose()?
+        .unwrap_or_default();
 
-    let owner = IdentityMap::from_entries(owner_entries)?;
-    let group = IdentityMap::from_entries(group_entries)?;
+    // parse owner / group
+    let owner_map = IdentityMap::from_entries(owner_entries);
+    let group_map = IdentityMap::from_entries(group_entries);
 
-    if owner.is_empty() && group.is_empty() && owner_override.is_none() && group_override.is_none()
-    {
+    if owner_map.is_empty()
+        && group_map.is_empty()
+        && owner_override.is_none()
+        && group_override.is_none() {
+
         return Ok(None);
     }
 
-    Ok(Some(OwnerGroupPolicy { owner, group, owner_override, group_override }))
+    Ok(Some(OwnerGroupPolicy { owner_map, group_map, owner_override, group_override }))
 }
 
-fn read_map_file(path: &Path) -> Result<Vec<(String, String)>> {
+fn read_map_file_entries(path: &Path) -> Result<Vec<(IdentitySpec, IdentitySpec)>> {
     let text = fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
-    Ok(parse_map_lines(&text))
+    parse_map_lines(&text)
 }
 
-/// Split a map file into non-empty `from`/`to` pairs (GNU tar `--owner-map` format,
-/// `from:to` per line; blank lines and `#` comments skipped).
-pub fn parse_map_lines(text: &str) -> Vec<(String, String)> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(|line| line.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
-        .collect()
+/// Split a map file into `from → to` pairs: symmetric `FROM <ws>+ TO`, blank lines and
+/// `#`-to-EOL comments ignored.
+pub fn parse_map_lines(text: &str) -> Result<Vec<(IdentitySpec, IdentitySpec)>> {
+    let mut out: Vec<(IdentitySpec, IdentitySpec)> = Vec::new();
+    for line in text.lines() {
+        // Remove comment
+        let line = strip_comment(line).trim();
+        // Remove empty lines
+        if line.is_empty() {
+            continue;
+        }
+        // Actual parsing of from, to
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() != 2 {
+            return Err(Error::Config(format!(
+                "owner/group map line must be `FROM <ws> TO`, got: `{line}`"
+            )));
+        }
+        let from = IdentitySpec::parse(&fields[0])?;
+        let to = IdentitySpec::parse(&fields[1])?;
+        out.push((from, to));
+    }
+    Ok(out)
 }
 
-/// Resolve the extraction `(uid, gid)` for one entry from the given policy.
-///
-/// Order per identity: force-all override → name table → id table → passthrough.
-pub fn resolve_owner_group(
-    uid: Option<u32>,
-    gid: Option<u32>,
-    username: Option<&str>,
-    groupname: Option<&str>,
+/// Drop `#`-to-end-of-line comments (`#` introduced anywhere in the line).
+fn strip_comment(line: &str) -> &str {
+    match line.split_once("#") {
+        Some((pre, _)) => pre,
+        None => line,
+    }
+}
+
+/// True when `--same-owner` should apply by default (the extracting process is root).
+/// Windows has no root concept; always `false`.
+#[cfg(unix)]
+pub fn infer_same_owner() -> bool {
+    use nix::unistd::Uid;
+    Uid::effective().is_root()
+}
+
+#[cfg(not(unix))]
+pub fn infer_same_owner() -> bool {
+    false
+}
+
+/// Apply `--validate-maps`: hard-error on destinations that the target mode cannot emit.
+/// Without validation this is the per-load warning path.
+pub fn validate_for_mode(
     policy: &OwnerGroupPolicy,
-) -> (Option<u32>, Option<u32>) {
+    target: MapResolutionTarget,
+) -> Result<()> {
+    let targets = [
+        ("owner", &policy.owner_map, &policy.owner_override),
+        ("group", &policy.group_map, &policy.group_override),
+    ];
+    for (label, map, ovr) in targets {
+        match target {
+            MapResolutionTarget::Ids => {
+                let ovr_id_not_present = ovr
+                    .as_ref()
+                    .map(|s| s.id.is_none())
+                    .unwrap_or(false);
+                // Raise error, if the id is missing.
+                if ovr_id_not_present {
+                    return Err(Error::Config(format!(
+                        "--map-target=ids requires the {label} override to carry a numeric id"
+                    )))
+                }
+            }
+            MapResolutionTarget::Names if ovr
+                .as_ref()
+                .map(|s| s.name.is_none())
+                .unwrap_or(false) => {
+
+                return Err(Error::Config(format!(
+                    "--map-target=names requires the {label} override to carry a name"
+                )))
+            }
+            _ => {}
+        }
+        // The override, if present, must also resolve on this host.
+        if let Some(n) = ovr.as_ref().and_then(|s| s.name.as_ref()) {
+            check_name_exists(label, n)?;
+        }
+
+        let map_label = format!("{label}-map");
+        // Check by name section of OwnerGroupPolicy
+        for (_src, map_dst) in &map.by_name {
+            check_dst(&map_label, map_dst, target)?;
+        }
+        // Check by id section of the OwnerGroupPolicy
+        for (_src, map_dst) in &map.by_id {
+            check_dst(&map_label, map_dst, target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Check that a given destination identity spec exists for a given --map-target.
+/// check id is present for Ids, and check that name is present for Names
+fn check_dst(label: &str, dst: &IdentitySpec, target: MapResolutionTarget) -> Result<()> {
+    match target {
+        MapResolutionTarget::Ids if dst.id.is_none() => Err(Error::Config(format!(
+            "--map-target=ids requires numeric destinations; {label} entry has only a name"
+        ))),
+        MapResolutionTarget::Names if dst.name.is_none() => Err(Error::Config(format!(
+            "--map-target=names requires named destinations; {label} entry has only an id"
+        ))),
+        _ => Ok(()),
+    }?;
+    if let Some(n) = &dst.name {
+        check_name_exists(label, n)?;
+    }
+    Ok(())
+}
+
+/// `--validate-maps`: verify a target name resolves on the extraction host.
+fn check_name_exists(label: &str, name: &String) -> Result<()> {
+    let exists = match label {
+        "owner" => lookup_uid(name.as_ref()).is_some(),
+        "group" => lookup_gid(name.as_ref()).is_some(),
+        _ => false, // defensive: only "owner"/"group" callers exist
+    };
+    if exists {
+        Ok(())
+    } else {
+        Err(Error::Config(format!(
+            "--validate-maps: {label} name `{name}` does not exist on the extraction host"
+        )))
+    }
+}
+
+/// Resolve the extraction `(uid, gid)` for one entry.
+///
+/// Returns `(None, None)` when nothing should be applied (leave the file owned by the
+/// extracting process). See the module docs for the per-target chains.
+pub fn resolve_owner_group(
+    src_uid: Option<u32>,
+    src_gid: Option<u32>,
+    src_username: Option<&str>,
+    src_groupname: Option<&str>,
+    policy: &OwnerGroupPolicy,
+    target: MapResolutionTarget,
+    same_owner: bool,
+) -> Result<(Option<u32>, Option<u32>)> {
     let owner = resolve_identity(
-        username,
-        uid,
-        &policy.owner,
-        policy.owner_override.as_ref(),
+        src_username, src_uid,
+        &policy.owner_map, policy.owner_override.as_ref(),
+        target,
+        same_owner,
         lookup_uid,
-    );
+    )?;
     let group = resolve_identity(
-        groupname,
-        gid,
-        &policy.group,
-        policy.group_override.as_ref(),
+        src_groupname, src_gid,
+        &policy.group_map, policy.group_override.as_ref(),
+        target,
+        same_owner,
         lookup_gid,
-    );
-    (owner, group)
+    )?;
+    Ok((owner, group))
 }
 
 fn resolve_identity(
-    name: Option<&str>,
-    id: Option<u32>,
+    src_name: Option<&str>,
+    src_id: Option<u32>,
     map: &IdentityMap,
-    override_spec: Option<&PairSpec>,
+    ovr: Option<&IdentitySpec>,
+    target: MapResolutionTarget,
+    same_owner: bool,
+    lookup: fn(&str) -> Option<u32>,
+) -> Result<Option<u32>> {
+    // Step 1: pick the identity spec to emit. Matches map by name then by uid.
+    let resolved_src_id = src_id.and_then(|i| map.by_id.get(&i));
+    let resolved_target: Option<&IdentitySpec> = src_name
+        .as_ref()
+        .and_then(|n| map.by_name.get(*n))
+        .or_else(|| resolved_src_id);
+
+    // Step 2: resolve per target mode. Each chain applies the map override
+    // first, then the `--owner`/`--group` override, then — only under
+    // `--same-owner` — the archived (db) identity. A `None` from a chain means
+    // "leave ownership unset" and must not be resurrected here.
+    Ok(match target {
+        MapResolutionTarget::Ids => {
+            resolve_ids(resolved_target, src_id, ovr, same_owner)
+        },
+        MapResolutionTarget::Names => {
+            resolve_names(resolved_target, src_name, ovr, same_owner, lookup)
+        }
+        MapResolutionTarget::NameId => {
+            resolve_name_id(resolved_target, src_name, src_id, ovr, same_owner, lookup)
+        },
+    })
+}
+
+/// `ids`: map.id → override.id → (same_owner ? db_id : None).
+fn resolve_ids(
+    chosen: Option<&IdentitySpec>,
+    db_id: Option<u32>,
+    ovr: Option<&IdentitySpec>,
+    same_owner: bool,
+) -> Option<u32> {
+    let ovr_id = ovr.as_ref().and_then(|s| s.id);
+    let db_res_id = if same_owner {
+        db_id
+    } else {
+        None
+    };
+    chosen
+        .as_ref()
+        .and_then(|s| s.id) // Id from Map
+        .or_else(|| ovr_id) // Id from override
+        .or_else(|| db_res_id) // Id from db (same-owner only)
+}
+
+/// `names`: map.name → override.name → (same_owner ? db_name : None).
+/// Missing/unresolvable db name ends in `None` (no numeric upgrade).
+fn resolve_names(
+    chosen: Option<&IdentitySpec>,
+    db_name: Option<&str>,
+    ovr: Option<&IdentitySpec>,
+    same_owner: bool,
     lookup: fn(&str) -> Option<u32>,
 ) -> Option<u32> {
-    if let Some(spec) = override_spec {
-        if let Some(v) = spec.id.or_else(|| spec.name.as_deref().and_then(lookup)) {
-            return Some(v);
-        }
-    }
-    if let Some(n) = name {
-        if let Some(target) = map.by_name.get(n) {
-            if let Some(v) = target.parse::<u32>().ok().or_else(|| lookup(target)) {
-                return Some(v);
-            }
-        }
-    }
-    if let Some(i) = id {
-        if let Some(target) = map.by_id.get(&i) {
-            if let Some(v) = target.parse::<u32>().ok().or_else(|| lookup(target)) {
-                return Some(v);
-            }
-        }
-    }
-    id
+    let ovr_name = ovr.as_ref().and_then(|s| s.name.clone());
+    let db_map_name = if same_owner {
+        db_name.map(|s| s.to_string())
+    } else {
+        None
+    };
+    let eff_name: Option<String> = chosen
+        .as_ref()
+        .and_then(|s| s.name.clone()) // Name from map
+        .or_else(|| ovr_name) // Name from override
+        .or_else(|| db_map_name); // Name from db (same-owner only)
+    eff_name.and_then(|n| lookup(n.as_ref()))
+}
+
+/// `name-id`:
+///   --no-same-owner: map.name → override.name → map.id → override.id → (nothing)
+///   --same-owner:    map.name → override.name → db.name → map.id → override.id → db.uid → (apply)
+fn resolve_name_id(
+    chosen: Option<&IdentitySpec>,
+    db_name: Option<&str>,
+    db_id: Option<u32>,
+    ovr: Option<&IdentitySpec>,
+    same_owner: bool,
+    lookup: fn(&str) -> Option<u32>,
+) -> Option<u32> {
+    resolve_names(chosen, db_name, ovr, same_owner, lookup)
+        .or_else(|| resolve_ids(chosen, db_id, ovr, same_owner))
 }
 
 /// Name → numeric id, if the name exists on this system.
