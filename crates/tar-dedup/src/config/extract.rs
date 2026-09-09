@@ -85,6 +85,7 @@ fn resolve_owner_policy_from_args(
         || args.group.is_some()
         || args.owner_map.is_some()
         || args.group_map.is_some();
+
     if has_cli {
         if args.apply_stored_owner_map || args.apply_stored_group_map {
             tracing::warn!(
@@ -159,7 +160,7 @@ impl ExtractConfig {
         // Emit warning
         if args.absolute_names && matches!(args.hard_link_grouping, HardLinkGrouping::Source) {
             tracing::warn!(
-                "Materializing with absolute names and per source hardlink recreation might cause \
+                "Materializing with --absolute-names and per source hardlink recreation might cause \
                 disjoint subgroups of hardlinks that formerly were a single hardlink.");
         }
 
