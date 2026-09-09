@@ -875,6 +875,7 @@ mod tests {
             .expect("Some");
         let gm = p.group_map.expect("group_map Some");
         assert_eq!(gm.by_name.len(), 1);
+        assert_eq!(gm.by_name[&String::from("staff")], spec(None, Some(2000)));
         assert!(p.owner_map.is_none());
         assert!(p.group_override.is_none());
     }
@@ -919,8 +920,26 @@ mod tests {
         let om = p.owner_map.expect("map");
         assert_eq!(om.by_name.len(), 1);
         assert_eq!(om.by_id.len(), 1);
+        // `alice bob` → by_name keyed on the source name.
+        assert_eq!(om.by_name[&String::from("alice")], spec(Some("bob"), None));
         // `+42 +1000` keys by_id on the *source* id (42); dst is the `+1000`.
         assert_eq!(om.by_id[&42], spec(None, Some(1000)));
+    }
+
+    #[test]
+    fn parse_args_name_uid_both_sides() {
+        // A `NAME:UID NAME:UID` line populates BOTH by_name and by_id on the
+        // source, and the dst carries both name and id.
+        let (_dir, path) = temp_map_file("alice:42 bob:7\n");
+        let p = parse_owner_group_args(None, Some(&path), None, None)
+            .expect("parse")
+            .expect("Some");
+        let om = p.owner_map.expect("map");
+        assert_eq!(om.by_name.len(), 1);
+        assert_eq!(om.by_id.len(), 1);
+        let expected_dst = spec(Some("bob"), Some(7));
+        assert_eq!(om.by_name[&String::from("alice")], expected_dst);
+        assert_eq!(om.by_id[&42], expected_dst);
     }
 
     #[test]
