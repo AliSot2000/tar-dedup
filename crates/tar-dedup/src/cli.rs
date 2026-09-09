@@ -635,7 +635,7 @@ pub enum ExitAfterStageArg {
 pub enum ConflictPolicy {
     /// Keep existing files; warn on conflict (GNU tar `--keep-old-files`).
     #[value(alias = "keep-old-files")]
-    PreserveExisting,
+    PreferOlder,
     /// Keep whichever copy has the newer mtime (GNU tar `--keep-newer-files`).
     #[value(alias = "keep-newer-files")]
     PreferNewer,
