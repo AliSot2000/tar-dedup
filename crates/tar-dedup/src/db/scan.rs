@@ -1,0 +1,260 @@
+use crate::db::content_id::parse_content_id;
+use crate::db::{flags, ExtractScanState, meta};
+use crate::db::flags::FileFlag;
+use crate::error::Error;
+use rusqlite::{named_params, Connection};
+use std::fs;
+use std::path::Path;
+use crate::config::ExtractRuntimeState;
+use crate::db::extract::{load_extract_runtime_state, save_extract_runtime_state};
+
+/// Mark every content-id named payload sitting in the extract cache as extracted.
+/// Catches members that were unpacked but not flagged (interrupt between the two).
+/// Promotion stays with snapshot confirmation / [`promote_extracted_to_unarchived`].
+pub fn flush_cached_payloads(conn: &Connection, cache_dir: &Path) -> crate::error::Result<u64> {
+    let mut marked = 0u64;
+    if cache_dir.is_dir() {
+        for entry in fs::read_dir(cache_dir).map_err(|e| Error::io(cache_dir, e))? {
+            let entry = entry.map_err(|e| Error::io(cache_dir, e))?;
+            let ft = entry.file_type().map_err(|e| Error::io(&entry.path(), e))?;
+            if !ft.is_file() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Ok((_, _, file_id, _)) = parse_content_id(name) else {
+                continue;
+            };
+            flags::set_file_flag(conn, file_id, FileFlag::FileExtracted,true)?;
+            marked += 1;
+        }
+    }
+    Ok(marked)
+}
+
+/// End-of-scan salvage: promote every `FileExtracted` canonical (and dependents)
+/// that is still `archived` → `unarchived`. Used when `from_footer || force_scan`.
+pub fn promote_extracted_to_unarchived(conn: &Connection) -> crate::error::Result<u64> {
+    let bit = FileFlag::FileExtracted.mask_i64();
+    let n = conn.execute(
+        "UPDATE files
+         SET phase = 'unarchived'
+         WHERE phase = 'archived'
+           AND (
+                 (flags & :bit) != 0
+              OR canonical_id IN (
+                     SELECT id FROM files WHERE (flags & :bit) != 0
+                 )
+           )",
+        named_params! { ":bit": bit },
+    )?;
+    Ok(n as u64)
+}
+
+pub fn record_snapshot_ingested(conn: &mut Connection) -> crate::error::Result<u32> {
+    let mut scan = load_extract_scan_state(conn)?;
+    scan.snapshots_ingested = scan.snapshots_ingested.saturating_add(1);
+    save_extract_scan_state(conn, &scan)?;
+    // Keep ExtractRuntimeState in sync when present.
+    if let Some(mut runtime) = load_extract_runtime_state(conn)? {
+        runtime.snapshots_ingested = scan.snapshots_ingested;
+        save_extract_runtime_state(conn, &runtime)?;
+    }
+    Ok(scan.snapshots_ingested)
+}
+
+// TODO rework and rethink this function.
+/// Snapshot confirmation: promote `archived` → `unarchived` for paths the snapshot
+/// lists as archived whose payload has been extracted (canonical carries
+/// [`FileFlag::FileExtracted`]), fanning phase out over `canonical_id`.
+pub fn apply_snapshot_promote_unarchived(
+    conn: &Connection,
+    snapshot_path: &Path,
+) -> crate::error::Result<u64> {
+    let path = snapshot_path.to_string_lossy();
+    let bit = FileFlag::FileExtracted.mask_i64();
+    conn.execute(
+        "ATTACH DATABASE :path AS snap",
+        named_params! { ":path": path.as_ref() },
+    )?;
+    let promoted = conn.execute(
+        "UPDATE files
+         SET phase = 'unarchived'
+         WHERE phase = 'archived'
+           AND abs_path IN (SELECT abs_path FROM snap.files WHERE phase = 'archived')
+           AND (
+                 (flags & :bit) != 0
+              OR canonical_id IN (
+                     SELECT id FROM files WHERE (flags & :bit) != 0
+                 )
+           )",
+        named_params! { ":bit": bit },
+    )?;
+    // Descendants of already-unarchived canonicals.
+    conn.execute(
+        "UPDATE files
+         SET phase = 'unarchived'
+         WHERE phase = 'archived'
+           AND canonical_id IS NOT NULL
+           AND canonical_id IN (SELECT id FROM files WHERE phase = 'unarchived')",
+        [],
+    )?;
+    conn.execute("DETACH DATABASE snap", [])?;
+    Ok(promoted as u64)
+}
+
+
+/// Canonical rows with `AppendedPath` but without `FileExtracted`.
+pub fn count_missing_payloads(conn: &Connection) -> crate::error::Result<u64> {
+    let appended = FileFlag::AppendedPath.mask_i64();
+    let extracted = FileFlag::FileExtracted.mask_i64();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files
+         WHERE canonical_id = id
+           AND (flags & :appended) != 0
+           AND (flags & :extracted) = 0",
+        named_params! {
+            ":appended": appended,
+            ":extracted": extracted,
+        },
+        |row| row.get("count"),
+    )?;
+    Ok(count as u64)
+}
+
+/// Rows still `archived` whose canonical has `FileExtracted` (awaiting confirmation).
+pub fn count_unconfirmed_extracted(conn: &Connection) -> crate::error::Result<u64> {
+    let bit = FileFlag::FileExtracted.mask_i64();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files
+         WHERE phase = 'archived'
+           AND (
+                 (flags & :bit) != 0
+              OR canonical_id IN (
+                     SELECT id FROM files WHERE (flags & :bit) != 0
+                 )
+           )",
+        named_params! { ":bit": bit },
+        |row| row.get("count"),
+    )?;
+    Ok(count as u64)
+}
+
+
+/// Canonical rows carrying `FileExtracted`.
+pub fn count_extracted_canonical(conn: &Connection) -> crate::error::Result<u64> {
+    let bit = FileFlag::FileExtracted.mask_i64();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files
+         WHERE canonical_id = id AND (flags & :bit) != 0",
+        named_params! { ":bit": bit },
+        |row| row.get("count"),
+    )?;
+    Ok(count as u64)
+}
+
+/// All rows in canonical groups that have `FileExtracted` on the canonical.
+pub fn count_extracted_paths(conn: &Connection) -> crate::error::Result<u64> {
+    let bit = FileFlag::FileExtracted.mask_i64();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files
+         WHERE (flags & :bit) != 0
+            OR canonical_id IN (
+                   SELECT id FROM files WHERE (flags & :bit) != 0
+               )",
+        named_params! { ":bit": bit },
+        |row| row.get("count"),
+    )?;
+    Ok(count as u64)
+}
+
+/// `(ftype_label, count)` for rows that lack `AppendedPath` which aren't file. Also excludes the 
+/// number of filter_excluded files
+pub fn count_non_appended_by_ftype(conn: &Connection) -> crate::error::Result<Vec<(String, u64)>> {
+    let bit = FileFlag::AppendedPath.mask_i64();
+    let mut stmt = conn.prepare(
+        "SELECT ftype AS ft, COUNT(*) AS count
+         FROM files
+         WHERE (flags & :bit) = 0
+            AND include_reason < 0
+            AND exclude_reason = 0
+         GROUP BY ftype
+         ORDER BY ft",
+    )?;
+    let rows = stmt.query_map(
+        named_params! { ":bit": bit },
+        |row| {
+            Ok((row.get::<_, String>("ft")?, row.get::<_, i64>("count")? as u64))
+        })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState) -> crate::error::Result<()> {
+    meta::with_meta_txn(conn, |conn| {
+        meta::set_scan_tar_saw_manifest_db(conn, state.saw_manifest_db)?;
+        meta::set_scan_tar_saw_any_members(conn, state.saw_any_members)?;
+        meta::set_scan_tar_complete(conn, state.scan_complete)?;
+        match state.last_member_index {
+            Some(index) => meta::set_scan_tar_last_member_index(conn, index)?,
+            None => meta::delete_scan_tar_last_member_index(conn)?,
+        }
+        meta::set_scan_tar_from_footer(conn, state.from_footer)?;
+        meta::set_extract_snapshots_ingested(conn, state.snapshots_ingested)?;
+        Ok(())
+    })
+}
+
+
+/// Copy an embedded catalog into the extract work DB.
+pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> crate::error::Result<()> {
+    if db_path.is_file() {
+        fs::remove_file(db_path).map_err(|e| Error::io(db_path, e))?;
+    }
+    fs::copy(snapshot_path, db_path).map_err(|e| Error::io(db_path, e))?;
+    Ok(())
+}
+
+pub fn init_extract_runtime_state(conn: &mut Connection) -> crate::error::Result<()> {
+    if load_extract_runtime_state(conn)?.is_none() {
+        save_extract_runtime_state(conn, &ExtractRuntimeState::new())?;
+    }
+    Ok(())
+}
+
+// TODO this should not technically be necessary. The we should be able to run the integrity checks
+//  when extracting
+/// Normalize a freshly installed catalog so stream handling is provenance-agnostic.
+/// Clears [`FileFlag::FileExtracted`] and forces candidate rows to `archived`.
+/// Must not run on a resumed work DB.
+pub fn normalize_installed_catalog(conn: &mut Connection) -> crate::error::Result<()> {
+    let bit = FileFlag::FileExtracted.mask_i64();
+    conn.execute(
+        "UPDATE files SET flags = flags & ~:bit",
+        named_params! { ":bit": bit },
+    )?;
+    // Candidate regular-file rows (and anything still mid-pipeline) → archived.
+    conn.execute(
+        "UPDATE files
+         SET phase = 'archived'
+         WHERE phase IN (
+             'inventoried', 'hashed', 'filtered', 'deduped', 'sparsified',
+             'staged', 'archived'
+         )",
+        [],
+    )?;
+    meta::clear_archive_meta(conn)?;
+    Ok(())
+}
+
+pub fn load_extract_scan_state(conn: &Connection) -> crate::error::Result<ExtractScanState> {
+    Ok(ExtractScanState {
+        saw_manifest_db: meta::get_scan_tar_saw_manifest_db(conn)?.unwrap_or(false),
+        saw_any_members: meta::get_scan_tar_saw_any_members(conn)?.unwrap_or(false),
+        scan_complete: meta::get_scan_tar_complete(conn)?.unwrap_or(false),
+        last_member_index: meta::get_scan_tar_last_member_index(conn)?,
+        from_footer: meta::get_scan_tar_from_footer(conn)?.unwrap_or(false),
+        snapshots_ingested: meta::get_extract_snapshots_ingested(conn)?.unwrap_or(0),
+    })
+}
