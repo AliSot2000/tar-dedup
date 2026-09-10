@@ -102,7 +102,7 @@ fn process_batches(
                 Some(r) => apply_one(config, &r, &out, policy),
             };
             if errors.is_empty() {
-                db.set_out_tree_flag(out.id, OutTreeFlag::PermissionsApplied, true)?;
+                db.set_out_tree_flag(out.id, OutTreeFlag::AppliedMetadata, true)?;
             } else {
                 // TODO deal with errors by pushing them into the db.
                 db.set_out_tree_flag(
