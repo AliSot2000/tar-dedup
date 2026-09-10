@@ -146,24 +146,28 @@ fn count_out_tree_for_permissions(conn: &Connection, dirs: bool) -> Result<u64> 
 }
 
 /// (metadata applied, metadata with error)
-pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64)> {
-    // Placed if all are placed
+///
+/// `AppliedPermissions` ↔ every `out_tree` row referencing the file has
+/// [`OutTreeFlag::AppliedMetadata`]. `ErrorWhileApplyingPermissions` ↔ at least one
+/// row referencing the file has [`OutTreeFlag::ErrorWhileApplyingMetadata`].
+pub fn apply_permissions_flags_to_files(conn: &Connection) -> Result<(u64, u64)> {
+    // AppliedPermissions: only when ALL out_tree rows for the file are applied.
     let applied = conn.execute(
-        "UPDATE files SET flags = flags | :file_placed
+        "UPDATE files SET flags = flags | :file_applied
             WHERE files.id IN (SELECT file_id FROM out_tree)
-                AND files.id NOT IN (SELECT file_id FROM out_tree WHERE flags & :out_placed = 0)",
+                AND files.id NOT IN (SELECT file_id FROM out_tree WHERE flags & :out_applied = 0)",
         named_params! {
-            ":file_placed": FileFlag::AppliedMetadata.mask_i64(),
-            ":out_placed": OutTreeFlag::PermissionsApplied.mask_i64(),
+            ":file_applied": FileFlag::AppliedMetadata.mask_i64(),
+            ":out_applied": OutTreeFlag::AppliedMetadata.mask_i64(),
         },
     )?;
-    // Errored if any are errored
+    // ErrorWhileApplyingPermissions: ANY out_tree row for the file errored.
     let errored = conn.execute(
         "UPDATE files SET flags = flags | :file_error
-            WHERE files.id IN (SELECT file_id FROM out_tree WHERE flags & :out_error = 0)",
+            WHERE files.id IN (SELECT file_id FROM out_tree WHERE flags & :out_error != 0)",
         named_params! {
-        ":file_reflink": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
-        ":out_reflink": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64()
+            ":file_error": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
+            ":out_error": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
         },
     )?;
     Ok((applied as u64, errored as u64))

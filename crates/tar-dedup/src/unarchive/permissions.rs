@@ -58,6 +58,16 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         process_batches(config, db, shutdown, policy.as_ref(), true)?;
     }
 
+    // Propagate out_tree metadata flags up to the files table:
+    // AppliedPermissions iff ALL rows applied; ErrorWhileApplyingPermissions iff ANY errored.
+    let (applied, errored) = db.apply_permissions_flags_to_files()?;
+    tracing::info!(
+        applied_files = applied,
+        errored_files = errored,
+        "permissions: propagated metadata flags to files"
+    );
+    // TODO finish up the db promote to permissions
+
     Ok(())
 }
 
