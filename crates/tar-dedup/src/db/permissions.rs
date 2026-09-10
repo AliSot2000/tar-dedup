@@ -48,7 +48,7 @@ pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(
         named_params! {
             ":batch_size": batch_size,
             ":placed": OutTreeFlag::Placed.mask_i64(),
-            ":applied": OutTreeFlag::PermissionsApplied.mask_i64(),
+            ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
             ":error": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
             ":is_dir": OutTreeFlag::IsDirectory.mask_i64(),
         },
@@ -86,7 +86,7 @@ pub fn list_out_tree_for_permissions_dirs<R: SqlFileRow>(
     let rows = stmt.query_map(
         named_params! {
             ":batch_size": batch_size,
-            ":applied": OutTreeFlag::PermissionsApplied.mask_i64(),
+            ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
             ":is_dir": OutTreeFlag::IsDirectory.mask_i64(),
         },
         |row| {
@@ -119,7 +119,7 @@ fn count_out_tree_for_permissions(conn: &Connection, dirs: bool) -> Result<u64> 
             "FROM out_tree o",
             "AND o.flags & :is_dir != 0",
             named_params! {
-                ":applied": OutTreeFlag::PermissionsApplied.mask_i64(),
+                ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
                 ":is_dir": OutTreeFlag::IsDirectory.mask_i64(),
             }
         )
@@ -129,7 +129,7 @@ fn count_out_tree_for_permissions(conn: &Connection, dirs: bool) -> Result<u64> 
             "AND o.flags & :is_dir = 0 AND o.canonical_id = o.id",
             named_params! {
                 ":placed": OutTreeFlag::Placed.mask_i64(),
-                ":applied": OutTreeFlag::PermissionsApplied.mask_i64(),
+                ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
                 ":error": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
                 ":is_dir": OutTreeFlag::IsDirectory.mask_i64(),
             }
