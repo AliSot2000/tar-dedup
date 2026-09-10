@@ -444,55 +444,51 @@ impl Database {
     // --- Extract pipeline ---
 
     pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<()> {
-        extract::install_initial_manifest(snapshot_path, db_path)
+        scan::install_initial_manifest(snapshot_path, db_path)
     }
 
     pub fn normalize_installed_catalog(&self) -> Result<()> {
-        extract::normalize_installed_catalog(&mut *self.conn_mut())
+        scan::normalize_installed_catalog(&mut *self.conn_mut())
     }
 
     pub fn apply_snapshot_promote_unarchived(&self, snapshot_path: &Path) -> Result<u64> {
-        extract::apply_snapshot_promote_unarchived(&*self.conn(), snapshot_path)
-    }
-
-    pub fn mark_file_extracted(&self, file_id: FileId) -> Result<()> {
-        extract::mark_file_extracted(&*self.conn(), file_id)
+        scan::apply_snapshot_promote_unarchived(&*self.conn(), snapshot_path)
     }
 
     pub fn promote_extracted_to_unarchived(&self) -> Result<u64> {
-        extract::promote_extracted_to_unarchived(&*self.conn())
+        scan::promote_extracted_to_unarchived(&*self.conn())
     }
 
     pub fn flush_cached_payloads(&self, cache_dir: &Path) -> Result<u64> {
-        extract::flush_cached_payloads(&*self.conn(), cache_dir)
+        scan::flush_cached_payloads(&*self.conn(), cache_dir)
     }
 
     pub fn count_missing_payloads(&self) -> Result<u64> {
-        extract::count_missing_payloads(&*self.conn())
+        scan::count_missing_payloads(&*self.conn())
     }
 
     pub fn count_unconfirmed_extracted(&self) -> Result<u64> {
-        common::count_unconfirmed_extracted(&*self.conn())
+        scan::count_unconfirmed_extracted(&*self.conn())
     }
 
     pub fn count_extracted_canonical(&self) -> Result<u64> {
-        extract::count_extracted_canonical(&*self.conn())
+        scan::count_extracted_canonical(&*self.conn())
     }
 
     pub fn count_extracted_paths(&self) -> Result<u64> {
-        extract::count_extracted_paths(&*self.conn())
+        scan::count_extracted_paths(&*self.conn())
     }
 
     pub fn count_non_appended_by_ftype(&self) -> Result<Vec<(String, u64)>> {
-        extract::count_non_appended_by_ftype(&*self.conn())
+        scan::count_non_appended_by_ftype(&*self.conn())
     }
 
     pub fn load_extract_scan_state(&self) -> Result<extract::ExtractScanState> {
-        extract::load_extract_scan_state(&*self.conn())
+        scan::load_extract_scan_state(&*self.conn())
     }
 
     pub fn save_extract_scan_state(&self, state: &extract::ExtractScanState) -> Result<()> {
-        extract::save_extract_scan_state(&mut *self.conn_mut(), state)
+        scan::save_extract_scan_state(&mut *self.conn_mut(), state)
     }
 
     pub fn load_extract_runtime_state(&self) -> Result<Option<ExtractRuntimeState>> {
@@ -504,7 +500,7 @@ impl Database {
     }
 
     pub fn record_snapshot_ingested(&self) -> Result<u32> {
-        extract::record_snapshot_ingested(&mut *self.conn_mut())
+        scan::record_snapshot_ingested(&mut *self.conn_mut())
     }
 
     pub fn list_files_to_restore<R: SqlFileRow>(&self) -> Result<Vec<R>> {
@@ -516,7 +512,7 @@ impl Database {
     }
 
     pub fn init_extract_runtime_state(&self) -> Result<()> {
-        extract::init_extract_runtime_state(&mut *self.conn_mut())
+        scan::init_extract_runtime_state(&mut *self.conn_mut())
     }
 
     pub fn list_canonical_files_for_move(
