@@ -15,6 +15,7 @@ use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
 use path_clean::PathClean;
 use tar::Entry;
+use crate::db::flags::FileFlag;
 
 const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";
 
@@ -31,13 +32,14 @@ const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at 
 
 /// Walk the tar stream: load catalog (footer or leading manifest), cache payloads, promote.
 pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Result<Database> {
+    // INFO: Noop if dir exists!
     fs::create_dir_all(config.paths.extract_cache_dir())
         .map_err(|e| Error::io(&config.paths.extract_cache_dir(), e))?;
 
     let resume_db = db_path.is_file();
     // Only a first pass installs the footer catalog; later passes inherit the fact
     // that it came from a footer through `ExtractScanState::from_footer`.
-    let opt_db = read_footer(&config.paths.temp_db(), db_path);
+    let opt_db = read_footer(&config.paths.archive_path, db_path);
     let footer_this_pass = !resume_db && opt_db.is_ok();
 
     let mut db = if resume_db {
@@ -161,6 +163,8 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
 
     report_scan_completeness(&sdb, scan.from_footer, config.scan.force_scan)?;
 
+    // TODO better errors.
+
     let paths = sdb.count_files_in_phase(FilePhase::Unarchived)?;
     let source = if scan.from_footer {
         "footer"
@@ -226,12 +230,13 @@ fn process_entry(
 
                 if let Some(buf) = force_buffer.as_mut() {
                     for fid in buf.drain(..) {
-                        ref_db.mark_file_extracted(fid)?;
+                        ref_db.set_file_flag(fid, FileFlag::FileExtracted, true)?;
                     }
                 }
                 // Confirm from this snapshot after marking buffered extracts.
                 ref_db.apply_snapshot_promote_unarchived(snapshot_tmp)?;
             } else {
+                // TODO can db be None here?
                 let ldb = db.as_ref().expect(OPT_DB_ERROR);
                 copy_database(snapshot_tmp, entry)?;
                 ldb.apply_snapshot_promote_unarchived(snapshot_tmp)?;
@@ -249,6 +254,7 @@ fn process_entry(
             // PRECONDITION: either force_scan && no db is true or we saw at least one member.
             let entry_dst = local_dst.join(name);
             entry.unpack(&entry_dst).map_err(|e| Error::io(&entry_dst, e))?;
+            // TODO above, store error and write later to db.
 
             if config.scan.force_scan && db.is_none() {
                 let buf = force_buffer.as_mut().expect(
@@ -257,7 +263,7 @@ fn process_entry(
                 buf.push(fid);
             } else {
                 let ldb = db.as_ref().expect(OPT_DB_ERROR);
-                ldb.mark_file_extracted(fid)?;
+                ldb.set_file_flag(fid, FileFlag::FileExtracted, true)?;
             }
         },
         (other, _) => {
