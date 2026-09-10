@@ -112,3 +112,5 @@ pub fn count_missing_unix_infos(conn: &Connection) -> Result<u64> {
         |r| r.get("count"))?;
     Ok(res as u64)
 }
+
+// TODO integrity check that only filter allow files are extracted.
