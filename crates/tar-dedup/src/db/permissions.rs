@@ -8,7 +8,7 @@
 use rusqlite::{Connection, named_params};
 
 use crate::db::common::SqlFileRow;
-use crate::db::flags::OutTreeFlag;
+use crate::db::flags::{FileFlag, OutTreeFlag};
 use crate::db::types::OutTreeRecord;
 use crate::error::Result;
 
@@ -143,4 +143,28 @@ fn count_out_tree_for_permissions(conn: &Connection, dirs: bool) -> Result<u64> 
     );
     let n: i64 = conn.query_row(&sql, params, |row| row.get(0))?;
     Ok(n as u64)
+}
+
+/// (metadata applied, metadata with error)
+pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64)> {
+    // Placed if all are placed
+    let applied = conn.execute(
+        "UPDATE files SET flags = flags | :file_placed
+            WHERE files.id IN (SELECT file_id FROM out_tree)
+                AND files.id NOT IN (SELECT file_id FROM out_tree WHERE flags & :out_placed = 0)",
+        named_params! {
+            ":file_placed": FileFlag::AppliedMetadata.mask_i64(),
+            ":out_placed": OutTreeFlag::PermissionsApplied.mask_i64(),
+        },
+    )?;
+    // Errored if any are errored
+    let errored = conn.execute(
+        "UPDATE files SET flags = flags | :file_error
+            WHERE files.id IN (SELECT file_id FROM out_tree WHERE flags & :out_error = 0)",
+        named_params! {
+        ":file_reflink": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
+        ":out_reflink": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64()
+        },
+    )?;
+    Ok((applied as u64, errored as u64))
 }

@@ -223,8 +223,10 @@ define_flags! {
         UsedRefLink = 20,
         /// An Error prevented the file from being placed in its correct position
         ErrorWhilePlacing = 21,
+        /// File materialized corectly with metadata applied.
+        AppliedMetadata = 22,
         /// At least one error occurred while applying metadata
-        ErrorWhileApplyingMetadata = 22,
+        ErrorWhileApplyingMetadata = 23,
     }
     /// Bitset stored in `files.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
