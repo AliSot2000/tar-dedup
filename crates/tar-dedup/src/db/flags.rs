@@ -264,7 +264,7 @@ define_flags! {
         /// Metadata restore failed for this output path.
         ErrorWhileApplyingMetadata = 5,
         /// Metadata (mode, owner, times, xattr/acl/selinux) has been applied.
-        PermissionsApplied = 6,
+        AppliedMetadata = 6,
         /// Highlight directories to be able to scan them for dir tree creation.
         IsDirectory = 7,
     }
