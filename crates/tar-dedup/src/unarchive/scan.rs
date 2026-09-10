@@ -141,6 +141,7 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
              MUST NOT exist when force_scan is false"
         );
     }
+    // INFO: Leave extracted stage directors for user to inspect.
 
     // PRECONDITION: Archive contained at least one element and at least a database and we
     //   fully consumed teh archive.
