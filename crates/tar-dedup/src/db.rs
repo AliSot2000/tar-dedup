@@ -652,6 +652,10 @@ impl Database {
         permissions::count_out_tree_for_permissions_dirs(&self.conn())
     }
 
+    pub fn apply_permissions_flags_to_files(&self) -> Result<(u64, u64)> {
+        permissions::apply_permissions_flags_to_files(&self.conn())
+    }
+
     // --- integrity checks across the database
     pub fn count_missing_dev_inode(&self) -> Result<u64> {
         integrity::count_missing_dev_inode(&self.conn())
