@@ -52,8 +52,7 @@ fn mark_file_extracted_sets_canonical_only_not_phase() {
         FilePhase::Archived,
     );
 
-    db.mark_file_extracted(canonical_id)
-        .expect("mark extracted");
+    db.set_file_flag(canonical_id, FileFlag::FileExtracted, true).expect("mark extracted");
 
     let canonical = db
         .get_file_by_id::<FileRecord>(canonical_id)
@@ -80,8 +79,8 @@ fn apply_snapshot_promotes_extracted_canonical_and_duplicates() {
         "member-id",
         FilePhase::Archived,
     );
-    db.mark_file_extracted(canonical_id)
-        .expect("mark extracted");
+    db.set_file_flag(canonical_id, FileFlag::FileExtracted, true).expect("mark extracted");
+
 
     let snapshot_path = dir.path().join("progress.sqlite");
     common::write_archived_snapshot(&snapshot_path, &["canonical.txt"]);
@@ -128,7 +127,7 @@ fn promote_extracted_to_unarchived_salvage() {
         "member-id",
         FilePhase::Archived,
     );
-    db.mark_file_extracted(canonical_id).expect("mark");
+    db.set_file_flag(canonical_id, FileFlag::FileExtracted, true).expect("mark extracted");
 
     let n = db.promote_extracted_to_unarchived().expect("promote");
     assert!(n >= 1);
@@ -200,7 +199,7 @@ fn count_missing_and_extracted_reports() {
     assert_eq!(db.count_missing_payloads().expect("missing"), 1);
     assert_eq!(db.count_extracted_canonical().expect("canonical"), 0);
 
-    db.mark_file_extracted(canonical_id).expect("extracted");
+    db.set_file_flag(canonical_id, FileFlag::FileExtracted, true).expect("mark extracted");
     assert_eq!(db.count_missing_payloads().expect("missing"), 0);
     assert_eq!(db.count_extracted_canonical().expect("canonical"), 1);
     assert_eq!(db.count_extracted_paths().expect("paths"), 2);
