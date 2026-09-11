@@ -75,11 +75,17 @@ pub enum FileStatError {
     #[error("selinux error at {path}: {source}")]
     SELinux { path: PathBuf, source: selinux::errors::Error },
 
+    #[error("nix (syscall) error at {path}: {source}")]
+    Nix { path: PathBuf, source: nix::Error },
+
     #[error("posix qualfier parse error at {path}: {source}")]
     PosixQualifierParser { path: PathBuf, source: PosixQualifierParserError},
     
     #[error("bBase64 decoding error at {path}: {source}")]
     Base64DecodingError { path: PathBuf, source: base64::DecodeError},
+
+    #[error("general error at {path:?}: {message}")]
+    General { path: Option<PathBuf>, message: String },
 }
 
 impl FileStatError {
@@ -101,5 +107,35 @@ impl FileStatError {
     pub fn posix_qualifier_parser(path: &std::path::Path, source: PosixQualifierParserError) 
         -> Self {
         Self::PosixQualifierParser {path: path.to_path_buf(), source}
+    }
+    pub fn nix(path: &std::path::Path, source: nix::Error) -> Self {
+        Self::Nix { path: path.to_path_buf(), source }
+    }
+    pub fn general(path: Option<&std::path::Path>, message: String) -> Self {
+        Self::General { path: path.map(|p| p.to_path_buf()), message }
+    }
+
+    /// Human-readable discriminator (and, where available, underlying detail) of the
+    /// error, e.g. `"Io/PermissionDenied"` or `"Nix/EACCES"` — stored as `error_type`.
+    pub fn kind(&self) -> String {
+        match self {
+            Self::Io { source, .. } => match source.kind() {
+                std::io::ErrorKind::Other => "Io/Other".to_string(),
+                std::io::ErrorKind::PermissionDenied => "Io/PermissionDenied".to_string(),
+                std::io::ErrorKind::NotFound => "Io/NotFound".to_string(),
+                std::io::ErrorKind::AlreadyExists => "Io/AlreadyExists".to_string(),
+                std::io::ErrorKind::InvalidInput => "Io/InvalidInput".to_string(),
+                std::io::ErrorKind::Unsupported => "Io/Unsupported".to_string(),
+                other => format!("Io/{}", other),
+            },
+            Self::Json { .. } => "Json".to_string(),
+            Self::Xattrs { .. } => "Xattrs".to_string(),
+            Self::PosixAcl { .. } => "PosixAcl".to_string(),
+            Self::SELinux { .. } => "SELinux".to_string(),
+            Self::Nix { source, .. } => format!("Nix/{}", source),
+            Self::PosixQualifierParser { .. } => "PosixQualifierParser".to_string(),
+            Self::Base64DecodingError { .. } => "Base64DecodingError".to_string(),
+            Self::General { .. } => "General".to_string(),
+        }
     }
 }

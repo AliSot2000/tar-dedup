@@ -188,6 +188,7 @@ pub fn handle_dir(
     while let Some(element) = iter.next() {
         shutdown.check_in_flight()?;
         let entry = match element {
+            // TODO Capture error into db!
             Err(e) => {
                 tracing::error!("Failed to access element with error: {e}"); // TODO fail fast
                 continue;
@@ -240,7 +241,7 @@ pub fn handle_entry(
     let mtime_s = meta.mtime();
     let mtime_nsec = meta.mtime_nsec();
     debug_assert!((0..1_000_000_000).contains(&mtime_nsec));
-    // TODO Error on NONE
+    // TODO Error on NONE -> into db
     let mtime: Option<DateTime<Utc>> = DateTime::from_timestamp(mtime_s, mtime_nsec as u32);
     if mtime.is_none(){
         tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
@@ -250,7 +251,7 @@ pub fn handle_entry(
     let atime_s = meta.atime();
     let atime_nsec = meta.atime_nsec();
     debug_assert!((0..1_000_000_000).contains(&atime_nsec));
-    // TODO Error on NONE
+    // TODO Error on NONE -> into db
     let atime: Option<DateTime<Utc>> = DateTime::from_timestamp(atime_s, atime_nsec as u32);
     if atime.is_none(){
         tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
@@ -260,7 +261,7 @@ pub fn handle_entry(
     let ctime_s = meta.mtime();
     let ctime_nsec = meta.mtime_nsec();
     debug_assert!((0..1_000_000_000).contains(&ctime_nsec));
-    // TODO Error on NONE
+    // TODO Error on NONE -> into db
     let ctime: Option<DateTime<Utc>> = DateTime::from_timestamp(ctime_s, ctime_nsec as u32);
     if ctime.is_none(){
         tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
@@ -339,8 +340,24 @@ pub fn handle_entry(
     })? {
         *processed += 1;
         progress.inc(1);
-        // TODO deal with the error vec!
     }
+
+    // Persist the accumulated per-file errors (xattr/ACL/SELinux/ftype/times/read-link).
+    if !enc_err.is_empty() {
+        let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+        let file_id = db.file_id_by_abs_path(path)?;
+        for error in enc_err {
+            recorder.record(
+                file_id,
+                None,
+                crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
+                error,
+                crate::db::flags::ErrorFlags::default(),
+            );
+        }
+        recorder.flush()?;
+    }
+
     Ok(())
 }
 

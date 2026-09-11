@@ -92,8 +92,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                 let ra = db.set_file_flag(e.id, FileFlag::ErrorWhileHash, true)?;
                 assert_eq!(ra, 1, "Rows affected must be 1. Got {ra}. \
                 0 - row vanished, >1 id constraint violated.");
-                // Todo capture error
-                // Todo logging / error
+                record_hash_error(config, db, &e);
             }
         }
     }
@@ -131,6 +130,35 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         }
         Err(e) => Err(e),
     }
+}
+
+/// Record a per-file hash failure in the persistent error log (best-effort).
+fn record_hash_error(config: &ArchiveConfig, db: &crate::db::Database, e: &&IdError) {
+    if config.process.no_errors {
+        return;
+    }
+    let mut recorder = crate::db::Recorder::new(db, true);
+    let err = match &e.err {
+        crate::error::Error::Io { path, source } => {
+            // Note: `io::Error` is not Clone; carry the message over instead.
+            crate::error::FileStatError::Io {
+                path: path.clone(),
+                source: std::io::Error::new(std::io::ErrorKind::Other, source.to_string()),
+            }
+        }
+        other => crate::error::FileStatError::General {
+            path: None,
+            message: other.to_string(),
+        },
+    };
+    recorder.record(
+        Some(e.id),
+        None,
+        crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Hash),
+        err,
+        crate::db::flags::ErrorFlags::default(),
+    );
+    let _ = recorder.flush();
 }
 
 struct IdError {

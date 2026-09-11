@@ -19,14 +19,19 @@ use crate::common::perms::{OwnerGroupPolicy, OwnerGroupSource, resolve_owner_gro
 use crate::common::xattr::{set_file_acl, set_file_selinux_data, set_file_xattrs};
 use crate::config::ExtractConfig;
 use crate::db::Database;
-use crate::db::flags::OutTreeFlag;
+use crate::db::flags::{ErrorFlags, OutTreeFlag};
 use crate::db::types::{FileRecord, OutTreeRecord};
+use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
 
 const BATCH_SIZE: u64 = 10_000;
 
 pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    // Errors encountered while applying metadata are recorded per-file; the recorder
+    // flushes them in a single txn at the end (unless `--no-errors`).
+    let mut recorder = Recorder::new(db, !config.process.no_errors);
+    let phase = ErrorPhase::Extract(crate::config::ExtractPipelinePhase::Permissions);
     // Resolve the owner/group policy: stored in the archive or provided on the CLI.
     let policy: Option<OwnerGroupPolicy> = match &config.owner_policy {
         OwnerGroupSource::None => None,
@@ -51,12 +56,14 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     };
 
     // Files (and non-directory entries) first.
-    process_batches(config, db, shutdown, policy.as_ref(), false)?;
+    process_batches(&mut recorder, phase, config, db, shutdown, policy.as_ref(), false)?;
 
     // Directories, only when `--overwrite-dir` is requested.
     if config.attributes.force_overwrite_dir {
-        process_batches(config, db, shutdown, policy.as_ref(), true)?;
+        process_batches(&mut recorder, phase, config, db, shutdown, policy.as_ref(), true)?;
     }
+
+    recorder.flush()?;
 
     // Propagate out_tree metadata flags up to the files table:
     // AppliedPermissions iff ALL rows applied; ErrorWhileApplyingPermissions iff ANY errored.
@@ -72,6 +79,8 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
 }
 
 fn process_batches(
+    recorder: &mut Recorder,
+    phase: ErrorPhase,
     config: &ExtractConfig,
     db: &Database,
     shutdown: &Shutdown,
@@ -104,14 +113,22 @@ fn process_batches(
             if errors.is_empty() {
                 db.set_out_tree_flag(out.id, OutTreeFlag::AppliedMetadata, true)?;
             } else {
-                // TODO deal with errors by pushing them into the db.
+                // Record per-error in the persistent error log.
+                for error in errors {
+                    recorder.record(
+                        out.file_id,
+                        Some(out.id),
+                        phase.clone(),
+                        error,
+                        ErrorFlags::default(),
+                    );
+                }
                 db.set_out_tree_flag(
                     out.id, OutTreeFlag::ErrorWhileApplyingMetadata, true)?;
                 if config.process.fail_fast {
                     return Err(Error::Other(anyhow::anyhow!(
-                        "metadata restore failed for {} with {} error(s)",
-                        out.abs_path.display(),
-                        errors.len()
+                        "metadata restore failed for {}",
+                        out.abs_path.display()
                     )));
                 }
             }

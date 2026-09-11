@@ -16,6 +16,7 @@ use crate::common::{SNAPSHOT_TAR_NAME, SNAPSHOT_INIT_TAR_NAME};
 // TODO Consider the transition state of the files that are ingested.
 
 pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
     // Crash / force leftover: truncate incomplete stream C, keep finished A..B.
     recover_incomplete_session(config, db)?;
 
@@ -99,6 +100,24 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                     path = %record.abs_path.to_string_lossy(),
                     error = %e,
                     "archive append_path failed; marking ErrorWhileArchive and continuing"
+                );
+                recorder.record(
+                    Some(record.id),
+                    None,
+                    crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
+                    match e {
+                        crate::error::Error::Io { path, source } =>
+                            crate::error::FileStatError::Io {
+                                path: path.clone(),
+                                source: std::io::Error::new(
+                                    std::io::ErrorKind::Other, source.to_string()),
+                            },
+                        other => crate::error::FileStatError::General {
+                            path: None,
+                            message: other.to_string(),
+                        },
+                    },
+                    crate::db::flags::ErrorFlags::default(),
                 );
                 db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
                 // Do not set AppendedPath — member was not successfully written.
