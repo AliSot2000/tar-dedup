@@ -3,13 +3,14 @@ use crate::config::ArchiveConfig;
 use crate::db::flags::FileFlag;
 use crate::db::types::StrippedRecord;
 use crate::db::Database;
-use crate::error::Result;
+use crate::error::{FileStatError, Result};
 use path_clean::PathClean;
 use std::fs;
 use std::os::unix::fs::symlink;
 
 use crate::shutdown::Shutdown;
 
+// TODO const ERROR_OHASE
 const EXPECTED_CANONICAL: &str = "stage: Expected only canonical files. \
                             Got wrong file type or non-canonical file";
 
@@ -26,6 +27,8 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     // TODO progressbar
     // TODO batching
     // TODO logging
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    let phase = crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Stage);
     let file_vec: Vec<StrippedRecord> = db.list_files_to_stage(config.pipeline.retry_missing_sha)?;
     let total_files = file_vec.len();
     for record in file_vec {
@@ -49,12 +52,36 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         );
         debug_assert_eq!(source_path, source_path.clean(), "Source Paths must be normalized");
         let target = config.paths.stage_dir().join(tar_name);
+        // TODO stage flags + fail fast
         if target.exists() {
-            fs::remove_file(&target).map_err(|e| crate::error::Error::io(&target, e))?;
+            match fs::remove_file(&target) {
+                Ok(()) => (),
+                Err(e) => {
+                    recorder.record_file(
+                        record.id,
+                        phase.clone(),
+                        FileStatError::io(&target, std::io::Error::new(e.kind(), e.to_string())),
+                        crate::db::flags::ErrorFlags::default(),
+                    );
+                    return Err(crate::error::Error::io(&target, e));
+                }
+            }
         }
-        symlink(&source_path, &target).map_err(|e| crate::error::Error::io(&target, e))?;
+        match symlink(&source_path, &target) {
+            Ok(()) => (),
+            Err(e) => {
+                recorder.record_file(
+                    record.id,
+                    phase.clone(),
+                    FileStatError::io(&target, std::io::Error::new(e.kind(), e.to_string())),
+                    crate::db::flags::ErrorFlags::default(),
+                );
+                return Err(crate::error::Error::io(&target, e));
+            }
+        }
         db.mark_file_phase(record.id, crate::db::types::FilePhase::Staged)?;
     }
+    recorder.flush()?;
     tracing::info!("Staged {} files", total_files);
     // Live DB already lives in the flat work dir (`snapshot.sqlite`); tar-writer
     // stages a copy via `.snapshot-for-tar.sqlite` when appending to the archive.
