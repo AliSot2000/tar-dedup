@@ -87,6 +87,12 @@ Listing SQL conditions for given selection
   - exclude_reason = 0
 
 - `Extract`:
+  Nothing read! Updates as follows:
+  - Canonical File in Extract stream gets successfully extracted -> Flag::FileExtracted (for canonical file and children), phase in (staged, archived)
+  - Snapshot-db found -> update db, set phase = 'archived' where file.id in snapshot.id where phase = 'archived'
+  - Promote cached: update to phase to extracted where FileExtracted is set.
+  - Lastly, promote everything else (as usual)
+- `Rehash`:
   - 
 
 Feat:
