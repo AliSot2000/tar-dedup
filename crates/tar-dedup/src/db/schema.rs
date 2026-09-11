@@ -110,9 +110,9 @@ CREATE TABLE IF NOT EXISTS errors (
     error_msg TEXT NOT NULL,
     error_type TEXT,
     phase TEXT NOT NULL,
-    error_misc: TEXT, --present for everything you want to store but don't know what it is going to
+    error_misc TEXT, --present for everything you want to store but don't know what it is going to
     --be like. Probably an enum with content and json serde.
-    error_datetime: TEXT NOT NULL,
+    error_datetime TEXT NOT NULL,
     flags INTEGER NOT NULL DEFAULT 0
 )
 CREATE INDEX IF NOT EXISTS idx_errors_id ON errors(id);
