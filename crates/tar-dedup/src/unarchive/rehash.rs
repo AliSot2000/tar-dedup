@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::config::ExtractConfig;
@@ -25,10 +25,13 @@ enum RehashOutcome {
     Mismatch(FileId),
     /// IO / missing cache / missing expected digest.
     Error(FileId),
+    /// Rehash failed; carries the file id, message and (best-effort) cache path.
+    Failed(FileId, String, Option<PathBuf>),
 }
 
 pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // TODO promote all files that aren't elected to rehash
+    // TODO also filer for sha.
     let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?; // TODO that's wrong
     let total = pending.len() as u64;
     let already_hashed= 0;
@@ -144,7 +147,7 @@ fn rehash_one(stage_dir: &Path, record: &StrippedRecord, shutdown: &Shutdown) ->
                 error = %e,
                 "rehash failed"
             );
-            return RehashOutcome::Error(id);
+            return RehashOutcome::Failed(id, e.to_string(), Some(path.to_path_buf()));
         }
     };
 
@@ -183,13 +186,26 @@ fn stat_and_apply_outcomes(
             RehashOutcome::Error(id) => {
                 db.set_file_flag(*id, FileFlag::ErrorWhileRehashing, true)?;
                 db.mark_file_phase(*id, FilePhase::Rehashed)?;
-                recorder.record(
-                    Some(*id),
-                    None,
+                recorder.record_file(
+                    *id,
                     crate::db::ErrorPhase::Extract(crate::config::ExtractPipelinePhase::Rehash),
                     crate::error::FileStatError::General {
                         path: None,
                         message: format!("rehash failed for file {}", id.0),
+                    },
+                    crate::db::flags::ErrorFlags::default(),
+                );
+                errors += 1;
+            }
+            RehashOutcome::Failed(id, message, path) => {
+                db.set_file_flag(*id, FileFlag::ErrorWhileRehashing, true)?;
+                db.mark_file_phase(*id, FilePhase::Rehashed)?;
+                recorder.record_file(
+                    *id,
+                    crate::db::ErrorPhase::Extract(crate::config::ExtractPipelinePhase::Rehash),
+                    crate::error::FileStatError::General {
+                        path: path.clone(),
+                        message: message.clone(),
                     },
                     crate::db::flags::ErrorFlags::default(),
                 );
