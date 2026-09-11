@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS errors (
     --be like. Probably an enum with content and json serde.
     error_datetime TEXT NOT NULL,
     flags INTEGER NOT NULL DEFAULT 0
-)
+);
 CREATE INDEX IF NOT EXISTS idx_errors_id ON errors(id);
 CREATE INDEX IF NOT EXISTS idx_errors_time ON errors(error_datetime);
 CREATE INDEX IF NOT EXISTS idx_errors_file_id ON errors(file_id) WHERE file_id IS NOT NULL;
