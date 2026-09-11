@@ -413,7 +413,7 @@ fn establish_group_state(
         }
     };
 
-    // TODO Rethink fail fast: Error on compare -> Fail the round or Panic?
+    // TODO fail fast error. Error out of group up to user.
     let candidates: Vec<StrippedRecord> = members
         .into_iter()
         .filter(|m| {
