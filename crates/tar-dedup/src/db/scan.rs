@@ -8,6 +8,7 @@ use std::path::Path;
 use crate::config::ExtractRuntimeState;
 use crate::db::extract::{load_extract_runtime_state, save_extract_runtime_state};
 
+// TODO probably should not live here but in the scan.rs file of unarchive/
 /// Mark every content-id named payload sitting in the extract cache as extracted.
 /// Catches members that were unpacked but not flagged (interrupt between the two).
 /// Promotion stays with snapshot confirmation / [`promote_extracted_to_unarchived`].
@@ -170,7 +171,7 @@ pub fn count_extracted_paths(conn: &Connection) -> crate::error::Result<u64> {
     Ok(count as u64)
 }
 
-/// `(ftype_label, count)` for rows that lack `AppendedPath` which aren't file. Also excludes the 
+/// `(ftype_label, count)` for rows that lack `AppendedPath` which aren't file. Also excludes the
 /// number of filter_excluded files
 pub fn count_non_appended_by_ftype(conn: &Connection) -> crate::error::Result<Vec<(String, u64)>> {
     let bit = FileFlag::AppendedPath.mask_i64();
