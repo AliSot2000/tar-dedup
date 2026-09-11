@@ -596,6 +596,10 @@ pub struct ExtractArgs {
     )]
     pub fail_fast: bool,
 
+    /// Do not record per-file errors in the database.
+    #[arg(long = "no-errors", default_value_t = false, help_heading = "Process Options")]
+    pub no_errors: bool,
+
     /// After success, keep a timestamped copy of snapshot.sqlite next to the archive.
     #[arg(long = "keep-db", help_heading = "Process Options")]
     pub keep_db: bool,
