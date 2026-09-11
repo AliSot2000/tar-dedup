@@ -31,7 +31,7 @@ Rust workspace, edition 2024, `rust-version = 1.95`. Three crates:
 - `unarchive.rs` — extract pipeline orchestrator.
 - `cli.rs` — all `clap` arg structs + `ExitAfterStageArg`, `ConflictPolicy`.
 - `config.rs` — config builders (`ArchiveConfig`, `ExtractConfig`, `ResumeConfig`); submodules `config/{archive,compression,extract,paths,phases,process,resume}`.
-- `db.rs` — `Database` facade over `rusqlite`, delegating to `db/{schema,types,flags,inventory,hash,filter,dedup,sparsify,stage,tar_writer,extract,place,rehash,scan,common,meta,content_id,permissions,source}`.
+- `db.rs` — `Database` facade over `rusqlite`, delegating to `db/{schema,types,flags,inventory,hash,filter,dedup,sparsify,stage,tar_writer,extract,place,rehash,scan,errors,integrity,common,meta,content_id,permissions,source}`.
 - `archive_footer.rs` — the seekable sqlite trailer appended to finished archives.
 - `common.rs` — shared constants (`COPY_STEP_SIZE` 4 MiB, `DEFAULT_BATCH_SIZE` 100_000, manifest/snapshot tar names).
 - `tar_reader.rs`, `tar_writer.rs` — tar stream plumbing.
@@ -77,6 +77,7 @@ sparsified → staged → archived`), tracked in `FilePhase` (`db/types.rs`).
 - `out_tree(id, canonical_id, abs_path UNIQUE, file_id, flags)` — extraction destination tree.
 - `ref_out(out_id, source_id)`.
 - `archive_sessions(id, archive_offset, finalized, started_at, finished_at)` — tar stream sessions.
+- `errors(id, file_id, out_tree_id, abs_path, error_msg, error_type, phase, error_misc, error_datetime, flags)` — persistent error log (see `db/errors.rs`); `flags` holds an `ErrorFlags` bitset (`ErrorFlag::SessionError` marks config/session scoped rows).
 
 Indexes: `files(sha1, size)`, `files(canonical_id)`, `files(phase)`, `files(abs_path)`, `out_tree(file_id)`, `out_tree(abs_path)`.
 
@@ -107,6 +108,7 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 - **`expect` for contract violations, `Result` for user/input faults.** Schema init, prior-stage invariants, FK rows inserted by the caller → `expect("…")`. Do not sprinkle `ok_or_else(|| Error::Config(...))` in leaf functions.
 - **Read the call site before editing pipeline code.** Leaf pipeline functions assume preconditions established upstream; don't "fix" them by re-inserting rows or weakening invariants.
 - Errors: `crate::error::Error` (config vs io vs interrupted). `Error::Interrupted` is handled by the phase loop to save state and exit cleanly.
+- **Persistent error log** (`errors` table, `db/errors.rs`): every non-halting filesystem error should become a `FileStatError` (add variants like `Nix`/`General` as needed), be pushed into a `Recorder` (`db::Recorder::new(db, enabled)`), and flushed in a single transaction at a batch/phase boundary (or on `Drop`). `--no-errors` (`config.process.no_errors`) disables recording. Do not swallow an FS error down to a bare `Error`/flag without persisting it. `ErrorScope` is an OR-able bitset over `File`/`OutTree`/`Session` for querying.
 - No code comments unless they explain tricky invariants; match existing style.
 - `FileType`/`LinkType` round-trip through `as_str()`/`parse()` — keep those in sync when adding variants.
 
