@@ -1,16 +1,17 @@
 //! Scan/untar: footer-first catalog, else leading `manifest.sqlite`; cache payloads.
 
 use std::fs;
-use std::io::{BufReader, Read, copy};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::io;
 
 use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::archive_footer::read_footer;
 use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
 use crate::db::types::{FileId, FilePhase};
-use crate::db::{Database, ExtractScanState};
-use crate::error::{Error, Result};
+use crate::db::{Database, ErrorPhase, ExtractScanState, RecordDraft, Recorder};
+use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
 use path_clean::PathClean;
@@ -18,9 +19,7 @@ use tar::Entry;
 use crate::db::flags::FileFlag;
 
 const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";
-
-// TODO Fail fast option for - what if extract fails.
-// TODO progress bar / spinner when we have a long decompress skip on resume.
+const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(crate::config::ExtractPipelinePhase::ScanTar);
 
 // INFO: State Model for a File and its associated canonical row in the db:
 //    0. File seen in the stream
@@ -30,9 +29,67 @@ const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at 
 //    4. Promote all FileExtracted = True && phase= 'sparsified' | 'archived' => phase='unarchived'
 //    5. Promote remaining entries in DB to 'unarchived'
 
+/// Record a session-scoped scan error. Errors are buffered in the shared
+/// speculative [`Recorder`] and persisted at a phase boundary (once a database is
+/// available); if the scan aborts first, [`Recorder::flush`]/`Drop` reports the loss.
+fn record_session_error(recorder: &mut Recorder, error: FileStatError) {
+    recorder.push(RecordDraft::session(ERROR_PHASE, error));
+}
+
+/// Record a per-file scan error (e.g. a failed payload `unpack`). The target row
+/// is referenced by `file_id`.
+fn record_file_scan_error(
+    recorder: &mut Recorder,
+    file_id: FileId,
+    error: FileStatError,
+) {
+    recorder.record_file(
+        file_id,
+        ERROR_PHASE,
+        error,
+        crate::db::flags::ErrorFlags::default(),
+    );
+}
+
+/// Convert a tar-stream io error into the crate `Error`, buffering a session-scoped
+/// scan error first (best-effort; a failed record is ignored, the stream error wins).
+fn io_error_with_session_scan_error(
+    archive_path: &Path,
+    recorder: &mut Recorder,
+    e: io::Error,
+) -> Error {
+    let file_stat = FileStatError::io(
+        archive_path,
+        io::Error::new(e.kind(), e.to_string()),
+    );
+    record_session_error(recorder, file_stat);
+    Error::io(archive_path, e)
+}
+
+/// Best-effort persist the buffered scan errors against the pass's database, when
+/// one exists. The database is used transiently (no stored reference), so it may
+/// be a value that is created and dropped within the scan frame. Without a
+/// database, [`Recorder::flush`] reports the loss.
+fn flush_scan_recorder(recorder: &mut Recorder, db: Option<&Database>) -> Result<()> {
+    match db {
+        Some(d) => {
+            recorder.flush_into(d)?;
+            Ok(())
+        }
+        None => {
+            recorder.flush()?;
+            Ok(())
+        }
+    }
+}
+
 /// Walk the tar stream: load catalog (footer or leading manifest), cache payloads, promote.
 pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Result<Database> {
+    // Errors are buffered speculatively; the database may not exist until the
+    // first catalog member is installed. The boundary flush below persists them.
+    let mut recorder = Recorder::speculative(!config.process.no_errors);
     // INFO: Noop if dir exists!
+    // INFO: If we can't create an extract stage, we can only abort.
     fs::create_dir_all(config.paths.extract_cache_dir())
         .map_err(|e| Error::io(&config.paths.extract_cache_dir(), e))?;
 
@@ -45,7 +102,7 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
     let mut db = if resume_db {
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
-        remove_temp_db(&config.paths.temp_db());
+        remove_temp_db(&mut recorder, &config.paths.temp_db());
         Some(opened)
     } else if footer_this_pass {
         fs::rename(config.paths.temp_db(), db_path).map_err(|e| Error::io(db_path, e))?;
@@ -58,7 +115,6 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
     };
 
     let local_dst = config.paths.extract_cache_dir();
-    let snapshot_tmp = config.paths.work_dir.join(".snapshot-ingest.tmp");
 
     let mut force_buffer: Option<Vec<FileId>> =
         if config.scan.force_scan { Some(Vec::new()) } else { None };
@@ -85,9 +141,11 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
         open_tar_archive(&config.paths.archive_path, config.decompression)?;
 
     // FEATURE: Switch to seek for tar
-    for (member_index, entry) in archive
+    for (member_index, wrapped_entry) in archive
         .entries()
-        .map_err(|e| Error::io(&config.paths.archive_path, e))?
+        .map_err(|e| io_error_with_session_scan_error(
+            &config.paths.archive_path, &mut recorder, e
+        ))?
         .enumerate()
     {
         let member_index = member_index as u64;
@@ -98,20 +156,39 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
 
         // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
         if member_index < resume_from {
-            entry.map_err(|e| Error::io(&config.paths.archive_path, e))?;
+            wrapped_entry.map_err(|e| io_error_with_session_scan_error(
+                &config.paths.archive_path, &mut recorder, e
+            ))?;
             continue;
         }
 
-        let mut entry = entry.map_err(|e| Error::io(&config.paths.archive_path, e))?;
-        let path = entry
+        let mut entry = wrapped_entry
+            .map_err(|e| io_error_with_session_scan_error(
+                &config.paths.archive_path, &mut recorder, e
+        ))?;
+        // INFO: On Unix, this should never produce an error
+        //  On Windows, this causes an error, if the path is not valid utf-8
+        let path = match entry
             .path()
-            .map_err(|e| Error::Other(anyhow::anyhow!("tar entry path: {e}")))?;
-        let name = entry_name(&path)?;
+            .map_err(|e| io_error_with_session_scan_error(
+                &config.paths.archive_path, &mut recorder, e
+            )) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let name = match entry_name(&path) {
+            Ok(n) => n,
+            Err(e) => {
+                record_session_error(&mut recorder, e.to_file_stat(Some(&path)));
+                return Err(e);
+            }
+        };
 
-        // TODO Verbose Logging
+        tracing::info!("Index: {} Path: {}", member_index, path.display());
 
-        process_entry(config, db_path, &local_dst, &name, &snapshot_tmp,
+        process_entry(config, db_path, &local_dst, &name,
                       &mut db, &mut entry, &mut force_buffer, &mut scan,
+                      &mut recorder,
         )?;
 
         scan.saw_any_members = true;
@@ -126,22 +203,31 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
     // Persist observations before any early return / interrupt propagation.
     store_progress_in_db(&mut db, &scan)?;
 
-    if stopped { return Err(Error::Interrupted); }
+    if stopped {
+        // Best-effort persist whatever was buffered against the pass's database.
+        flush_scan_recorder(&mut recorder, db.as_ref())?;
+        return Err(Error::Interrupted);
+    }
 
-    if !scan.saw_any_members { return Err(Error::Config("Archive is Empty".to_string())); }
+    if !scan.saw_any_members {
+        flush_scan_recorder(&mut recorder, db.as_ref())?;
+        return Err(Error::Config("Archive is Empty".to_string()));
+    }
 
     if db.is_none() {
+        // Nothing to attach the buffered errors to; the flush reports the loss.
+        flush_scan_recorder(&mut recorder, db.as_ref())?;
         if config.scan.force_scan {
             return Err(Error::Config(
                 "Archive did not contain database. Cannot continue extraction".to_string(),
             ));
+        } else {
+            panic!(
+                "INVARIANT ERROR: No Database with at least one canonical file. \
+                 MUST NOT happen when force_scan is false"
+            );
         }
-        panic!(
-            "INVARIANT ERROR: No Database with at least one canonical file. \
-             MUST NOT exist when force_scan is false"
-        );
     }
-    // INFO: Leave extracted stage directors for user to inspect.
 
     // PRECONDITION: Archive contained at least one element and at least a database and we
     //   fully consumed teh archive.
@@ -164,8 +250,6 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
 
     report_scan_completeness(&sdb, scan.from_footer, config.scan.force_scan)?;
 
-    // TODO better errors.
-
     let paths = sdb.count_files_in_phase(FilePhase::Unarchived)?;
     let source = if scan.from_footer {
         "footer"
@@ -183,7 +267,7 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
         "extract: catalog from {source}, {paths} path(s) unarchived"
     );
 
-    let _ = fs::remove_file(&snapshot_tmp);
+    let _ = fs::remove_file(config.paths.temp_snapshot());
     Ok(sdb)
 }
 
@@ -194,22 +278,28 @@ fn process_entry(
     db_path: &Path,
     local_dst: &Path,
     name: &str,
-    snapshot_tmp: &Path,
     db: &mut Option<Database>,
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
     force_buffer: &mut Option<Vec<FileId>>,
     scan: &mut ExtractScanState,
+    recorder: &mut Recorder,
 ) -> Result<()> {
     match (name, scan.saw_any_members) {
+        // Spec conform: No db, initial snapshot is first.
         (SNAPSHOT_INIT_TAR_NAME, false) => {
-            install_database(db_path, snapshot_tmp, db, entry, scan)?;
+            install_database(db_path, &config.paths.temp_db(), db, entry, scan,
+                             recorder)?;
             scan.saw_manifest_db = true;
         },
+        // Not Spec: Abort
+        // INFO: No truncated case where initial db is not first element.
+        //  So unconditionally rejected.
         (SNAPSHOT_INIT_TAR_NAME, true) => {
             return Err(Error::Config(
                 "Found manifest.sqlite not at the beginning of the archive".to_string(),
             ));
-        },
+        }
+        // Not Spec: First Member is Snapshot.
         (SNAPSHOT_TAR_NAME, false) => {
             if !config.scan.force_scan {
                 return Err(Error::Config(format!(
@@ -217,15 +307,16 @@ fn process_entry(
                          attempt to bypass with --force-scan"
                 )));
             } else {
-                install_database(db_path, snapshot_tmp, db, entry, scan)?;
+                install_database(db_path, &config.paths.temp_db(), db, entry, scan,
+                                 recorder)?;
             }
             let ref_db = db.as_ref().expect(OPT_DB_ERROR);
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
         },
         (SNAPSHOT_TAR_NAME, true) => {
             if config.scan.force_scan && db.is_none() {
-                copy_database(&snapshot_tmp,entry)?;
-                *db = Some(open_initial_database(snapshot_tmp, db_path)?);
+                captured_copy_database(&config.paths.temp_db(), entry, recorder)?;
+                *db = Some(open_initial_database(&config.paths.temp_db(), db_path)?);
                 let ref_db = db.as_ref().expect(OPT_DB_ERROR);
                 scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
 
@@ -235,12 +326,14 @@ fn process_entry(
                     }
                 }
                 // Confirm from this snapshot after marking buffered extracts.
-                ref_db.apply_snapshot_promote_unarchived(snapshot_tmp)?;
+                ref_db.apply_snapshot_promote_unarchived(&config.paths.temp_db())?;
             } else {
-                // TODO can db be None here?
+                assert!(config.force || db.is_some(),
+                        "INVARIANT ERROR: without force, the first member of an archive MUST be an \
+                        initial db");
                 let ldb = db.as_ref().expect(OPT_DB_ERROR);
-                copy_database(snapshot_tmp, entry)?;
-                ldb.apply_snapshot_promote_unarchived(snapshot_tmp)?;
+                let _ = captured_copy_database(&config.paths.temp_snapshot(), entry, recorder)?;
+                ldb.apply_snapshot_promote_unarchived(&config.paths.temp_snapshot())?;
                 scan.snapshots_ingested = ldb.record_snapshot_ingested()?;
             }
         },
@@ -254,8 +347,18 @@ fn process_entry(
             }
             // PRECONDITION: either force_scan && no db is true or we saw at least one member.
             let entry_dst = local_dst.join(name);
-            entry.unpack(&entry_dst).map_err(|e| Error::io(&entry_dst, e))?;
-            // TODO above, store error and write later to db.
+            match entry.unpack(&entry_dst) {
+                Ok(_) => (),
+                Err(e) => {
+                    let err = Error::io(&entry_dst, e);
+                    record_file_scan_error(
+                        recorder,
+                        fid,
+                        err.to_file_stat(Some(&entry_dst)),
+                    );
+                    return Err(err);
+                }
+            };
 
             if config.scan.force_scan && db.is_none() {
                 let buf = force_buffer.as_mut().expect(
@@ -384,7 +487,7 @@ fn report_scan_completeness(
 }
 
 /// Remove temp database and handle errors. If database does not exist, now error is emitted.
-fn remove_temp_db(temp_db: &PathBuf) -> () {
+fn remove_temp_db(recorder: &mut Recorder, temp_db: &PathBuf) -> () {
     if !temp_db.exists() {
         return ();
     }
@@ -393,8 +496,11 @@ fn remove_temp_db(temp_db: &PathBuf) -> () {
     if res.is_err() {
         let err = res.err().expect("MUST BE ERROR HERE");
         tracing::warn!("Failed to remove temp database with error: {err}");
+        record_session_error(
+            recorder,
+            FileStatError::io(temp_db, io::Error::new(err.kind(), err.to_string())),
+        );
     }
-
 }
 
 /// Store progress in db
@@ -414,11 +520,32 @@ fn store_progress_in_db(db: &mut Option<Database>, scan: &ExtractScanState) -> R
     Ok(())
 }
 
-/// Copy the database out of the archive to `dst`.
-fn copy_database<R: Read>(dst: &Path, entry: &mut R) -> Result<()> {
-    let mut out = fs::File::create(dst).map_err(|e| Error::io(dst, e))?;
-    copy(entry, &mut out).map_err(|e| Error::io(dst, e))?;
-    Ok(())
+/// Copy the database out of the archive to `dst`, capturing an io failure in the
+/// persistent error log (best-effort; a failed record is ignored) before re-raising.
+fn captured_copy_database<R: Read>(
+    dst: &Path,
+    entry: &mut R,
+    recorder: &mut Recorder,
+) -> Result<()> {
+    match fs::File::create(dst) {
+        Ok(mut out) => match io::copy(entry, &mut out) {
+            Ok(_) => {
+                drop(out);
+                Ok(())
+            }
+            Err(e) => {
+                drop(out);
+                let err = Error::io(dst, e);
+                record_session_error(recorder, err.to_file_stat(Some(dst)));
+                Err(err)
+            }
+        },
+        Err(e) => {
+            let err = Error::io(dst, e);
+            record_session_error(recorder, err.to_file_stat(Some(dst)));
+            Err(err)
+        }
+    }
 }
 
 /// Install catalog from `temp` into `target`, normalize, and init extract runtime state.
@@ -437,13 +564,26 @@ fn install_database(
     db: &mut Option<Database>,
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
     scan: &mut ExtractScanState,
+    recorder: &mut Recorder,
 ) -> Result<()> {
     if scan.from_footer {
-        copy(entry, &mut std::io::sink())
-            .map_err(|e| Error::io("std::io::sink()", e))?;
+        match io::copy(entry, &mut io::sink()) {
+            Ok(_) => (),
+            Err(e) => {
+                let err = Error::io(db_path, e);
+                record_session_error(recorder, err.to_file_stat(Some(db_path)));
+                return Err(err);
+            }
+        }
     } else {
-        copy_database(snapshot_tmp, entry)?;
-        *db = Some(open_initial_database(snapshot_tmp, db_path)?);
+        let _ = captured_copy_database(snapshot_tmp, entry, recorder)?;
+        match open_initial_database(snapshot_tmp, db_path) {
+            Ok(opened) => *db = Some(opened),
+            Err(e) => {
+                record_session_error(recorder, e.to_file_stat(Some(db_path)));
+                return Err(e);
+            }
+        }
     }
     Ok(())
 }
