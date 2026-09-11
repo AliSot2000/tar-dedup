@@ -6,6 +6,8 @@ pub mod perms;
 pub mod start;
 pub mod xattr;
 
+use crate::error::Result;
+
 // Constants reused across the project that need to be coherent.
 
 /// Name for the first database that is added to an archive to record what was considered initially.
@@ -25,4 +27,44 @@ pub const COPY_STEP_SIZE: u64 = 1024 * 1024 * 4;
 /// a batch size
 pub const DEFAULT_BATCH_SIZE: u64 = 100_000;
 
-// pub fn batched_iteration<F, >()
+/// Perform the batched loop with a step id. Arguments work as follows:
+/// [`new_id`]: Function must return the lower bound for ids. Typically 0, since we start id at 1
+/// [`get_entries`]: Function that gets the next batch starting with last_id, u64 is for batch_size
+/// [`get_id`]: Function gets the id from an entry. This function MUST return an id.
+/// [`process_entries`]: Once the entries are ready, hand control to "loop body" function
+/// [`batch_size`]: Determines the max size of batches from the get_entries function.
+pub fn batched_stepped_loop<ID, ENTRY>(
+    init_id: fn() -> ID,
+    get_entries: fn(&ID, u64) -> Result<Vec<ENTRY>>,
+    get_id: fn(&ENTRY) -> ID,
+    process_entries: fn(Vec<ENTRY>) -> Result<()>,
+    batch_size: u64)
+    -> Result<()> {
+
+    let mut last_id: ID = init_id();
+    loop {
+        let entries = get_entries(&last_id, batch_size)?;
+        if entries.is_empty() { break }
+        let vec_last = entries
+            .last()
+            .expect("PRECONDITION FAILED: At least one element expect.");
+        last_id = get_id(vec_last);
+
+        process_entries(entries)?;
+    }
+    Ok(())
+}
+
+pub fn batched_loop<ENTRY>(
+    get_entries: fn(u64) -> Result<Vec<ENTRY>>,
+    process_entries: fn(Vec<ENTRY>) -> Result<()>,
+    batch_size: u64)
+    -> Result<()> {
+
+    loop {
+        let entries = get_entries(batch_size)?;
+        if entries.is_empty() { break }
+        process_entries(entries)?;
+    }
+    Ok(())
+}
