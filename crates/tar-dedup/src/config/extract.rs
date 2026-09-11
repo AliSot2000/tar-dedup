@@ -232,7 +232,7 @@ impl ExtractConfig {
                 start_policy,
                 jobs: 1,
                 fail_fast: args.fail_fast,
-                no_errors: false,
+                no_errors: args.no_errors,
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
                 exit_after_stage: None,
             },
