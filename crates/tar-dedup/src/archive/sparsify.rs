@@ -10,14 +10,16 @@ use crate::common::files::{warn_if_times_changed, PreYield};
 use crate::config::ArchiveConfig;
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::db::Database;
-use crate::error::{Error, Result};
+use crate::error::{Error, FileStatError, Result};
 use crate::progress::CountProgress;
 use crate::shutdown::Shutdown;
 
 enum SparseOutcome {
     Ok(FileId),
-    Err(FileId),
+    Err(FileId, FileStatError),
 }
+
+// TODO add const ERROR_PHASE
 
 /// Deletes `path` on drop unless [`keep`](Self::keep) was called.
 struct TempSparseFile {
@@ -93,14 +95,26 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     let parallel = run_pool(config, shutdown, &bar, &results, checked);
 
     let outcomes = results.into_inner().expect("sparsify results lock");
+    let saved = outcomes.len();
     let mut ok = 0u64;
     let mut err = 0u64;
-    for outcome in &outcomes {
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    for outcome in outcomes {
         match outcome {
-            SparseOutcome::Ok(id) => { db.mark_sparsified_sparse(*id)?; ok += 1; }
-            SparseOutcome::Err(id) => { db.mark_sparsified_error(*id)?; err += 1; }
+            SparseOutcome::Ok(id) => { db.mark_sparsified_sparse(id)?; ok += 1; }
+            SparseOutcome::Err(id, error) => {
+                db.mark_sparsified_error(id)?;
+                recorder.record_file(
+                    id,
+                    crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Sparsify),
+                    error,
+                    crate::db::flags::ErrorFlags::default(),
+                );
+                err += 1;
+            }
         }
     }
+    recorder.flush()?;
 
     match parallel {
         Ok(()) => {
@@ -116,7 +130,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         Err(Error::Interrupted) => {
             bar.abandon();
             tracing::warn!(
-                saved = outcomes.len(),
+                saved,
                 "sparsify interrupted; completed files saved"
             );
             Err(Error::Interrupted)
@@ -175,12 +189,12 @@ fn run_pool(
                     drop(tmp);
                     Err(Error::Interrupted)
                 }
-                Err(_) => {
+                Err(e) => {
                     drop(tmp);
                     results
                         .lock()
                         .expect("sparsify results lock poisoned")
-                        .push(SparseOutcome::Err(record.id));
+                        .push(SparseOutcome::Err(record.id, e.to_file_stat(Some(&record.abs_path))));
                     bar.inc(1);
                     Ok(())
                 }
