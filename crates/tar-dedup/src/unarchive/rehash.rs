@@ -83,7 +83,9 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     });
 
     let outcomes = results.lock().expect("rehash results lock").clone();
-    let counts = stat_and_apply_outcomes(db, &outcomes)?;
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    let counts = stat_and_apply_outcomes(db, &mut recorder, &outcomes)?;
+    recorder.flush()?;
 
     let force = shutdown.is_force();
     match parallel {
@@ -159,7 +161,11 @@ fn rehash_one(stage_dir: &Path, record: &StrippedRecord, shutdown: &Shutdown) ->
 }
 
 /// Update the database from a single outcome
-fn stat_and_apply_outcomes(db: &Database, outcomes: &[RehashOutcome]) -> Result<(u64, u64, u64)> {
+fn stat_and_apply_outcomes(
+    db: &Database,
+    recorder: &mut crate::db::Recorder,
+    outcomes: &[RehashOutcome],
+) -> Result<(u64, u64, u64)> {
     let mut matches = 0u64;
     let mut mismatches = 0u64;
     let mut errors = 0u64;
@@ -177,6 +183,16 @@ fn stat_and_apply_outcomes(db: &Database, outcomes: &[RehashOutcome]) -> Result<
             RehashOutcome::Error(id) => {
                 db.set_file_flag(*id, FileFlag::ErrorWhileRehashing, true)?;
                 db.mark_file_phase(*id, FilePhase::Rehashed)?;
+                recorder.record(
+                    Some(*id),
+                    None,
+                    crate::db::ErrorPhase::Extract(crate::config::ExtractPipelinePhase::Rehash),
+                    crate::error::FileStatError::General {
+                        path: None,
+                        message: format!("rehash failed for file {}", id.0),
+                    },
+                    crate::db::flags::ErrorFlags::default(),
+                );
                 errors += 1;
             }
         }

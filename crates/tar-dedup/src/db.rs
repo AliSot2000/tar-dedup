@@ -11,6 +11,8 @@ use crate::error::Result;
 pub mod flags;
 pub mod types;
 
+pub use errors::{ErrorPhase, ErrorRecord, RecordDraft};
+
 mod tar_writer;
 mod common;
 mod dedup;
@@ -29,6 +31,7 @@ mod rehash;
 pub mod place;
 mod permissions;
 mod integrity;
+mod errors;
 
 pub use common::SqlFileRow;
 pub use extract::ExtractScanState;
@@ -507,6 +510,10 @@ impl Database {
         extract::list_files_to_restore(&*self.conn())
     }
 
+    pub fn list_files_to_rehash<R: SqlFileRow>(&self, batch_size: u64) -> Result<Vec<R>> {
+        rehash::list_files_to_rehash(&self.conn(), batch_size)
+    }
+
     pub fn skip_rehash(&self) -> Result<u64> {
         rehash::skip_rehash(&*self.conn())
     }
@@ -652,7 +659,47 @@ impl Database {
         permissions::apply_permissions_flags_to_files(&self.conn())
     }
 
+    // --- errors (persistent error log) ---
+
+    pub fn insert_errors<I: IntoIterator<Item = errors::RecordDraft>>(
+        &self, drafts: I) -> Result<u64> {
+        errors::insert_errors(&mut *self.conn_mut(), drafts)
+    }
+
+    pub fn get_record_by_id(&self, id: i64) -> Result<Option<errors::ErrorRecord>> {
+        errors::get_record_by_id(&self.conn(), id)
+    }
+
+    pub fn get_records_by_file_id(&self, file_id: FileId)
+        -> Result<Vec<errors::ErrorRecord>> {
+        errors::get_records_by_file_id(&self.conn(), file_id)
+    }
+
+    pub fn get_records_by_out_tree_id(&self, out_tree_id: OutTreeId)
+        -> Result<Vec<errors::ErrorRecord>> {
+        errors::get_records_by_out_tree_id(&self.conn(), out_tree_id)
+    }
+
+    pub fn list_records(
+        &self,
+        scope: flags::ErrorScope,
+        reemit: Option<(bool, i64)>,
+        last_id: i64,
+        batch_size: u64,
+    ) -> Result<Vec<errors::ErrorRecord>> {
+        errors::list_records(&self.conn(), scope, reemit, last_id, batch_size)
+    }
+
+    pub fn count_records(
+        &self,
+        scope: flags::ErrorScope,
+        reemit: Option<(bool, i64)>,
+    ) -> Result<u64> {
+        errors::count_records(&self.conn(), scope, reemit)
+    }
+
     // --- integrity checks across the database
+    
     pub fn count_missing_dev_inode(&self) -> Result<u64> {
         integrity::count_missing_dev_inode(&self.conn())
     }
@@ -673,5 +720,75 @@ impl Database {
     }
     pub fn count_missing_unix_infos(&self) -> Result<u64> {
         integrity::count_missing_unix_infos(&self.conn())
+    }
+}
+
+/// Batching recorder for the persistent error log. Accumulates drafts and flushes
+/// them in one transaction. When `enabled` is `false` (the `--no-errors` flag),
+/// drafts are dropped.
+pub struct Recorder<'a> {
+    db: &'a Database,
+    buf: Vec<errors::RecordDraft>,
+    enabled: bool,
+}
+
+impl<'a> Recorder<'a> {
+    pub fn new(db: &'a Database, enabled: bool) -> Self {
+        Self { db, buf: Vec::new(), enabled }
+    }
+
+    pub fn record(
+        &mut self,
+        file_id: Option<FileId>,
+        out_tree_id: Option<OutTreeId>,
+        phase: errors::ErrorPhase,
+        error: crate::error::FileStatError,
+        flags: flags::ErrorFlags,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        self.buf.push(errors::RecordDraft {
+            file_id,
+            out_tree_id,
+            phase,
+            error,
+            flags,
+        });
+    }
+
+    pub fn push(&mut self, draft: errors::RecordDraft) {
+        if self.enabled {
+            self.buf.push(draft);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// Flush buffered drafts in a single transaction. Clears the buffer.
+    pub fn flush(&mut self) -> Result<u64> {
+        if self.buf.is_empty() {
+            return Ok(0);
+        }
+        let drafts = self.buf.drain(..);
+        let n = self.db.insert_errors(drafts.into_iter())?;
+        Ok(n)
+    }
+}
+
+impl Drop for Recorder<'_> {
+    fn drop(&mut self) {
+        if !self.buf.is_empty() {
+            // Best-effort flush so errors are not lost if a phase forgets to flush.
+            // Log-only: a failing flush reports the count but never aborts.
+            tracing::info!("flushing remaining errors to db");
+            match self.flush() {
+                Ok(n) if n > 0 => tracing::info!(flushed = n, "errors flushed"),
+                Ok(_) => {}
+                Err(e) => tracing::error!(error = %e, "failed to flush remaining errors"),
+            }
+        }
     }
 }
