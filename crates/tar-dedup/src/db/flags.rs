@@ -398,6 +398,40 @@ pub fn set_out_tree_flag(
     Ok(rows_affected as u64)
 }
 
+define_flags! {
+    /// Bit index into [`ErrorFlags`] (not the mask itself). Stored in `errors.flags`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[repr(u64)]
+    pub enum ErrorFlag {
+        /// The error is not tied to any specific file/out_tree row — a session- or
+        /// config-scoped error (e.g. an unreadable filter file, a bad regex).
+        SessionError = 0,
+        /// Errors worth surfacing again at the end of the run (e.g. odd or
+        /// correctness-affecting); a `reemit_filter` selects on this bit.
+        Reemit = 1,
+    }
+    /// Bitset stored in `errors.flags`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ErrorFlags;
+}
+
+define_flags! {
+    /// Which error partitions to select when listing. OR-able: empty bitset = all.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[repr(u64)]
+    pub enum ErrorScopePart {
+        /// Records bound to a `files` row (`file_id IS NOT NULL`).
+        File = 0,
+        /// Records bound to an `out_tree` row.
+        OutTree = 1,
+        /// Session/config-scoped records (neither id set).
+        Session = 2,
+    }
+    /// Bitset stored in `errors.flags`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ErrorScope;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
