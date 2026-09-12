@@ -34,7 +34,7 @@ Rust workspace, edition 2024, `rust-version = 1.95`. Three crates:
 - `db.rs` — `Database` facade over `rusqlite`, delegating to `db/{schema,types,flags,inventory,hash,filter,dedup,sparsify,stage,tar_writer,extract,place,rehash,scan,errors,integrity,common,meta,content_id,permissions,source}`.
 - `archive_footer.rs` — the seekable sqlite trailer appended to finished archives.
 - `common.rs` — shared constants (`COPY_STEP_SIZE` 4 MiB, `DEFAULT_BATCH_SIZE` 100_000, manifest/snapshot tar names).
-- `tar_reader.rs`, `tar_writer.rs` — tar stream plumbing.
+- `tar_reader.rs`, `tar_builder` — tar stream plumbing.
 - `compression.rs`, `progress.rs`, `shutdown.rs`, `error.rs`.
 
 ## Two pipelines, one SQLite state machine
@@ -53,7 +53,7 @@ needs a phase; `resume` only allows overriding `--jobs` / `--exit-after-stage`.
 4. `dedup.rs` — group by `(sha1, size)`; elect canonical (self-link); dupes point `canonical_id` at it.
 5. `sparsify.rs` — `sparse-cp` materializes hole-y files into the work dir when `--sparsify`.
 6. `stage.rs` — symlink canonical work-dir payloads under the stage root.
-7. `tar_writer.rs` — write canonical files + `manifest.sqlite` / `snapshot.sqlite` into a (compressed) tar stream; finalize, then `archive_footer::write_footer`.
+7. `tar_builder` — write canonical files + `manifest.sqlite` / `snapshot.sqlite` into a (compressed) tar stream; finalize, then `archive_footer::write_footer`.
 
 Each phase drives `files.phase` forward (`inventoried → hashed → filtered → deduped →
 sparsified → staged → archived`), tracked in `FilePhase` (`db/types.rs`).
