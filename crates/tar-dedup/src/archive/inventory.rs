@@ -5,7 +5,7 @@ use crate::common::files::original_extension;
 use crate::common::files::get_file_times;
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::ArchiveConfig;
-use crate::db::Database;
+use crate::db::{Database, ErrorPhase};
 use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::types::{FileType, LinkType, NewFileRecord};
 use crate::error::{Error, FileStatError, FileStatResult, Result};
@@ -19,14 +19,20 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
+
+
 pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    // TODO Better errors.
     // TODO on restart - delete the db and start from the beginning
     tracing::info!("Inventory pass cannot be gracefully interrupted. \
                     If force aborted, inventory needs to be run again to ensure consistent \
                     snapshot of filesystem.");
     let mut processed = 0u64;
     let progress = CountProgress::new("inventory");
+
+    // One recorder for the whole pass; auto-flush bounds the buffer on error-heavy
+    // filesystems, and the final flush happens on drop even if the pass aborts.
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
 
     // Handle input directories
     for (index, input_dir) in config.inputs.input_dirs.iter().enumerate() {
@@ -50,7 +56,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
             SourceFlags::default().with(SourceFlag::IsDirectory, true),
         )?;
         handle_dir(&config, &db, &shutdown, source_id, &input_dir.absolute_path,
-                   &mut processed, &progress)?;
+                   &mut processed, &progress, &mut recorder)?;
     }
 
     // Handle from-files
@@ -65,7 +71,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                 };
 
                 handle_from_files_line((line, &path), &files_file, &config, &db, &shutdown,
-                                       &mut processed, &progress)?
+                                       &mut processed, &progress, &mut recorder)?
             }
             continue;
         }
@@ -77,12 +83,13 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         debug_assert!(&files_file.clean() == files_file,
                       "Path should be minimal");
 
+        // TODO capture error
         let file = fs::read(files_file)
             .map_err(|e| Error::io(files_file, e))?;
 
         for element in files_from_records(&file, config.inputs.files_from_null) {
             handle_from_files_line(element, &files_file, &config, &db, &shutdown, &mut processed,
-                                   &progress)?
+                                   &progress, &mut recorder)?
         }
     }
     // Set hardlink canonicals if and only if, we want to collapse the hardlinks and
@@ -94,6 +101,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     if !config.pipeline.numeric_ids_only {
         db.resolve_numeric_ids()?;
     }
+    recorder.flush()?;
     progress.finish("inventory complete");
     let missing_dev_ino_count = db.count_missing_dev_inode()?;
     if missing_dev_ino_count > 0 {
@@ -121,6 +129,7 @@ fn handle_from_files_line(
     shutdown: &Shutdown,
     processed: &mut u64,
     progress: &CountProgress,
+    recorder: &mut crate::db::Recorder,
 ) -> Result<()> {
     let (line, ff) = element;
     let fpath_os = os_str_from_bytes(ff);
@@ -155,7 +164,7 @@ fn handle_from_files_line(
         SourceFlags::default().with(SourceFlag::IsDirectory, abs_path.is_dir()),
     )?;
     handle_dir(&config, &db, &shutdown, source_id, &abs_path,
-               processed, &progress)?;
+               processed, &progress, recorder)?;
 
     Ok(())
 }
@@ -173,7 +182,8 @@ pub fn handle_dir(
     source_id: i64,
     start_dir: &Path,
     processed: &mut u64,
-    progress: &CountProgress)
+    progress: &CountProgress,
+    recorder: &mut crate::db::Recorder)
     -> Result<()> {
 
     let mut iter = WalkDir::new(&start_dir)
@@ -188,14 +198,24 @@ pub fn handle_dir(
     while let Some(element) = iter.next() {
         shutdown.check_in_flight()?;
         let entry = match element {
-            // TODO Capture error into db!
             Err(e) => {
+                // Failed to access a single element while walking; the file row
+                // may or may not exist, so this is recorded without a file_id.
+                recorder.record_session(
+                    ERROR_PHASE,
+                    FileStatError::General {
+                        path: Some(start_dir.to_path_buf()),
+                        message: format!("Failed to access element with error: {e}"),
+                    },
+                    crate::db::flags::ErrorFlags::default(),
+                );
                 tracing::error!("Failed to access element with error: {e}"); // TODO fail fast
                 continue;
             }
             Ok(entry) => entry,
         };
-        handle_entry_base(&entry.path(), source_id, &config, &db, &progress, processed)?;
+        handle_entry_base(&entry.path(), source_id, &config, &db, &progress, processed,
+                          recorder)?;
     }
     Ok(())
 }
@@ -205,7 +225,8 @@ pub fn handle_entry_base(path: &Path,
                          config: &ArchiveConfig,
                          db: &Database,
                          progress: &CountProgress,
-                         processed: &mut u64)
+                         processed: &mut u64,
+                         recorder: &mut crate::db::Recorder)
                          -> Result<()> {
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
 
@@ -215,7 +236,7 @@ pub fn handle_entry_base(path: &Path,
         return Ok(());
     }
 
-    handle_entry(&path, source_id, &config, &db, &progress, processed)
+    handle_entry(&path, source_id, &config, &db, &progress, processed, recorder)
 }
 
 #[cfg(unix)]
@@ -225,7 +246,8 @@ pub fn handle_entry(
     config: &ArchiveConfig,
     db: &Database,
     progress: &CountProgress,
-    processed: &mut u64)
+    processed: &mut u64,
+    recorder: &mut crate::db::Recorder)
     -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
@@ -233,7 +255,19 @@ pub fn handle_entry(
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) => {
-            // TODO store error in db,
+            // File row cannot be created without metadata; record with the path
+            // alone so the failure is not lost when the phase aborts.
+recorder.record_session(
+                    crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
+                    FileStatError::Io {
+                        path: path.to_path_buf(),
+                        source: std::io::Error::new(e.kind(), e.to_string()),
+                    },
+                    crate::db::flags::ErrorFlags::default(),
+                );
+            // The recorder is shared per-pass; flush everything before returning
+            // the error so this record is not lost to the abort.
+            recorder.flush()?;
             return Err(Error::io(path, e))
         }
     };
@@ -241,31 +275,37 @@ pub fn handle_entry(
     let mtime_s = meta.mtime();
     let mtime_nsec = meta.mtime_nsec();
     debug_assert!((0..1_000_000_000).contains(&mtime_nsec));
-    // TODO Error on NONE -> into db
     let mtime: Option<DateTime<Utc>> = DateTime::from_timestamp(mtime_s, mtime_nsec as u32);
     if mtime.is_none(){
         tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
             path.display(), mtime_s, mtime_nsec);
+        enc_err.push(FileStatError::general(
+            Some(path),
+            format!("Implausible mtime: {mtime_s}s, {mtime_nsec}nsec")));
     }
 
     let atime_s = meta.atime();
     let atime_nsec = meta.atime_nsec();
     debug_assert!((0..1_000_000_000).contains(&atime_nsec));
-    // TODO Error on NONE -> into db
     let atime: Option<DateTime<Utc>> = DateTime::from_timestamp(atime_s, atime_nsec as u32);
     if atime.is_none(){
         tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
             path.display(), atime_s, atime_nsec);
+    enc_err.push(FileStatError::general(
+            Some(path),
+            format!("Implausible atime: {atime_s}s, {atime_nsec}nsec")));
     }
 
     let ctime_s = meta.mtime();
     let ctime_nsec = meta.mtime_nsec();
     debug_assert!((0..1_000_000_000).contains(&ctime_nsec));
-    // TODO Error on NONE -> into db
     let ctime: Option<DateTime<Utc>> = DateTime::from_timestamp(ctime_s, ctime_nsec as u32);
     if ctime.is_none(){
         tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
             path.display(), ctime_s, ctime_nsec);
+    enc_err.push(FileStatError::general(
+            Some(path),
+            format!("Implausible ctime: {ctime_s}s, {ctime_nsec}nsec")));
     }
 
     let mode = meta.mode();
@@ -291,6 +331,7 @@ pub fn handle_entry(
             (None, maj, min)
         }
         FileType::Unknown => {
+            // INFO: Error not stored, since it is obvious from unknown.
             tracing::error!("{} could not be classified into a valid file type.", path.display());
             (None, None, None)
         },
@@ -344,20 +385,18 @@ pub fn handle_entry(
 
     // Persist the accumulated per-file errors (xattr/ACL/SELinux/ftype/times/read-link).
     if !enc_err.is_empty() {
-        let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
-        let file_id = db.file_id_by_abs_path(path)?;
+        // Row was just inserted above, so the id must exist.
+        let file_id = db.file_id_by_abs_path(path)?.expect(
+            "INVARIANT ERROR: file was inserted, id lookup must succeed");
         for error in enc_err {
-            recorder.record(
+            recorder.record_file(
                 file_id,
-                None,
                 crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
                 error,
                 crate::db::flags::ErrorFlags::default(),
             );
         }
-        recorder.flush()?;
     }
-
     Ok(())
 }
 
@@ -369,7 +408,8 @@ pub fn handle_entry(
     _config: &ArchiveConfig,
     db: &Database,
     progress: &CountProgress,
-    processed: &mut u64)
+    processed: &mut u64,
+    recorder: &mut crate::db::Recorder)
     -> Result<()> {
     let mut enc_err = Vec::new();
 
