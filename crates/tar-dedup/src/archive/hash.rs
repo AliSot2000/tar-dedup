@@ -77,12 +77,13 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         })
     });
 
-    // TODO flow system later on.
+    // INFO: flow system later on.
     let _future_vec = Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new();
     let hashed = std::mem::replace(
         &mut *results.lock().expect("hash results lock"),
         _future_vec);
 
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
     for res in &hashed {
         match res {
             Ok((id, digest, zero_blocks)) => {
@@ -92,24 +93,20 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                 let ra = db.set_file_flag(e.id, FileFlag::ErrorWhileHash, true)?;
                 assert_eq!(ra, 1, "Rows affected must be 1. Got {ra}. \
                 0 - row vanished, >1 id constraint violated.");
-                record_hash_error(config, db, &e);
+                record_hash_error(&mut recorder, &e);
             }
         }
     }
+    recorder.flush()?;
 
     let force = shutdown.is_force();
 
     // TODO dummy update of the remining entries.
+
     let double_canonical = db.count_double_canonical_dev_inode_group()?;
     if double_canonical > 0 {
-        if config.indexing.no_hardlink_detection {
-            // TODO different error needed
-            return Err(Error::Config(
-                format!("{double_canonical} Hard Linked Files modified while indexing")))
-        } else {
-            panic!("Encountered {double_canonical} Hard Link files. \
-            All hardlinks should be updated simultaneously");
-        }
+        panic!("Encountered {double_canonical} Hard Link files. \
+            which have two different hashes. Assuming files modified while hashing. ");
     }
 
     match parallel {
@@ -133,32 +130,26 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
 }
 
 /// Record a per-file hash failure in the persistent error log (best-effort).
-fn record_hash_error(config: &ArchiveConfig, db: &crate::db::Database, e: &&IdError) {
-    if config.process.no_errors {
-        return;
-    }
-    let mut recorder = crate::db::Recorder::new(db, true);
-    let err = match &e.err {
-        crate::error::Error::Io { path, source } => {
-            // Note: `io::Error` is not Clone; carry the message over instead.
-            crate::error::FileStatError::Io {
-                path: path.clone(),
-                source: std::io::Error::new(std::io::ErrorKind::Other, source.to_string()),
-            }
-        }
+/// The errors from `hash_file` are downcast to a [`FileStatError`]; the error's
+/// own `Io` path is used as the fallback when it cannot be derived.
+fn record_hash_error(recorder: &mut crate::db::Recorder, e: &&IdError) {
+    let err_path = e.err.io_path();
+    let file_stat = match &e.err {
+        crate::error::Error::Io { path, source } => crate::error::FileStatError::Io {
+            path: path.clone(),
+            source: std::io::Error::new(source.kind(), source.to_string()),
+        },
         other => crate::error::FileStatError::General {
-            path: None,
-            message: other.to_string(),
+            path: err_path,
+            message: format!("{other}"),
         },
     };
-    recorder.record(
-        Some(e.id),
-        None,
+    recorder.record_file(
+        e.id,
         crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Hash),
-        err,
+        file_stat,
         crate::db::flags::ErrorFlags::default(),
     );
-    let _ = recorder.flush();
 }
 
 struct IdError {
