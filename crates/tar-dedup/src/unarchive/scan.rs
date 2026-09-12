@@ -267,6 +267,7 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
         "extract: catalog from {source}, {paths} path(s) unarchived"
     );
 
+    let _ = fs::remove_file(config.paths.temp_db());
     let _ = fs::remove_file(config.paths.temp_snapshot());
     Ok(sdb)
 }
