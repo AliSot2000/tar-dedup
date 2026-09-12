@@ -9,7 +9,18 @@
 - [ ] Parallel compression (Dedup, Sparsify, Stage, Archive)
 - [X] Filter first
 - [ ] Force utf8 (any non-utf8 string panics and aborts.)
+- [ ] list / inspect command (go through the db and dump the files. csv, parameter to list the columns which we want. 
+      (join filter, join filter, join source))
+- [ ] query (query by file, out_tree or error table.)
 
+# NOW TODO
+- [ ] Placement Conflict Handling
+- [ ] Mode parsing
+- [ ] Filename rewriting
+- [ ] Progress
+- [ ] Batching
+- [ ] Resume
+- [ ] Filter on extract
 
 ## General:
 - [ ] Testing
@@ -17,7 +28,7 @@
 - [X] Sequential / Parallel where possible
 - [ ] Add Version of Tool to metadata
 - [ ] Add Platform to metadata
-- [ ] Capture Errors in database for review.
+- [X] Capture Errors in database for review.
 - [X] need to add source root -i flag to the metadata (solved as source table)
 - [ ] Add --batch-size arg to control batch size for single threaded phases
 - [ ] Add archive process started, archive process ended time stamps to the db.
@@ -40,7 +51,7 @@
 ### Filter
 - [X] Research Filtering options of tar
 - [X] Implement filtering on top of paths in the database.
-- [ ] Parent resolve filter
+- [X] Parent resolve filter
 
 ### Hash
 - ~~[ ] Docker style output (by default)~~
@@ -74,16 +85,16 @@ Should be done?
 
 ### Move / Place
 - [ ] Move eager (DDFE)
-- [ ] Link into Place (!! Does not allow for apply permissions) => Do user vs read only
+- [X] Link into Place (!! Does not allow for apply permissions) => Do user vs read only
 
 ### Apply permissions
-- [ ] Apply permissions to the files (bottom up - in case the user does not have the same rights as the user creating the files initially)
+- [X] Apply permissions to the files (bottom up - in case the user does not have the same rights as the user creating the files initially)
 - [ ] Apply permissions eagerly (DDFE) + Warning might lock you out of file.
 
 ### Clear
-- [ ] Clean up database and stage dir, in case the dir was not cleared already
+- [X] Clean up database and stage dir, in case the dir was not cleared already
 - [ ] Emit any errors
-- [ ] Delete database if needed.
+- [X] Delete database if needed.
 
 # Tar Command TODOs:
 
@@ -217,7 +228,7 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 | `-T`     | `--files-from=FILE`               | IMPLEMENTED | get names to extract or create from FILE                                                |                                                                                      | inventory / archive |
 |          | `--unquote`                       | DISCARDED   | unquote input file or member names (default)                                            |                                                                                      | filter / archive    |
 |          | `--verbatim-files-from`           | DISCARDED   | `-T` reads file names verbatim (no escape or option handling)                           |                                                                                      | filter / archive    |
-| `-X`     | `--exclude-from=FILE`             | FEATURE     | exclude patterns listed in FILE                                                         |                                                                                      | filter / archive    |
+| `-X`     | `--exclude-from=FILE`             | IMPLEMENTED | exclude patterns listed in FILE                                                         |                                                                                      | filter / archive    |
 
 ### File name matching options (affect both exclude and include patterns)
 
@@ -240,6 +251,20 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 |          | `--no-ignore-command-error` | DISCARDED | treat non-zero exit codes of children as error |                                            | -                  |
 | `-O`     | `--to-stdout`               | FEATURE   | extract files to standard output               | Listed in Reflection specials.             | place / extract    |
 |          | `--to-command=COMMAND`      | DISCARDED | pipe extracted files to another program        |                                            | -                  |
+
+### Handling of extended file attributes
+
+| shortopt | longopt                 | implement   | description                                | comment                                                    | phase[s] / command    |
+|----------|-------------------------|-------------|--------------------------------------------|------------------------------------------------------------|-----------------------|
+|          | `--acls`                | IMPLEMENTED | Enable the POSIX ACLs support              | Captured at inventory (`do_posix_acl`); no CLI toggle yet. | permissions / extract |
+|          | `--selinux`             | IMPLEMENTED | Enable the SELinux context support         | Captured when available.                                   | permissions / extract |
+|          | `--xattrs`              | IMPLEMENTED | Enable extended attributes support         | Captured at inventory.                                     | permissions / extract |
+|          | `--no-acls`             | IMPLEMENTED | Disable the POSIX ACLs support             | Config knob exists; not on CLI.                            | permissions / extract |
+|          | `--no-selinux`          | IMPLEMENTED | Disable the SELinux context support        | Same.                                                      | permissions / extract |
+|          | `--no-xattrs`           | IMPLEMENTED | Disable extended attributes support        | Same.                                                      | permissions / extract |
+|          | `--xattrs-exclude=MASK` | FEATURE     | specify the exclude pattern for xattr keys |                                                            | permissions / extract |
+|          | `--xattrs-include=MASK` | FEATURE     | specify the include pattern for xattr keys |                                                            | permissions / extract |
+
 
 ---
 
@@ -266,10 +291,10 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 
 | shortopt | longopt                                        | implement    | description                                                                                           | comment                                                                                   | phase[s] / command    |
 |----------|------------------------------------------------|--------------|-------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|-----------------------|
-|          | `--atime-preserve[=METHOD]`                    | TO_IMPLEMENT | preserve access times on dumped files                                                                 | Times captured in inventory; restore policy unclear. TODO: Investigate inventory process. | permissions / extract |
+|          | `--atime-preserve[=METHOD]`                    | IMPLEMENTED  | preserve access times on dumped files                                                                 | Times captured in inventory; restore policy unclear. TODO: Investigate inventory process. | permissions / extract |
 |          | `--mtime=DATE-OR-FILE`                         | DISCARDED    | set mtime for added files from DATE-OR-FILE                                                           |                                                                                           | permissions / extract |
 |          | `--clamp-mtime`                                | DISCARDED    | only set time when the file is more recent than what was given with `--mtime`                         | No `--mtime` force path yet.                                                              | permissions / extract |
-| `-m`     | `--touch`                                      | TO_IMPLEMENT | don't extract file modified time                                                                      | ???`Just leave the mtime in place ???                                                     | permissions / extract |
+| `-m`     | `--touch`                                      | IMPLEMENTED  | don't extract file modified time                                                                      | ???`Just leave the mtime in place ???                                                     | permissions / extract |
 |          | `--group=NAME`                                 | IMPLEMENTED  | force NAME as group for added files                                                                   |                                                                                           | permissions / extract |
 |          | `--group-map=FILE`                             | IMPLEMENTED  | use FILE to map file owner GIDs and names                                                             |                                                                                           | permissions / extract |
 |          | `--owner=NAME`                                 | IMPLEMENTED  | force NAME as owner for added files                                                                   |                                                                                           | permissions / extract |
@@ -284,19 +309,6 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 |          | `--mode=CHANGES`                               | TO_IMPLEMENT | force (symbolic) mode CHANGES for added files                                                         | ??? What is this ???                                                                      | permissions / extract |
 |          | `--sort=ORDER`                                 | DISCARDED    | directory sorting order: none (default), name or inode                                                | Staging orders by ext/size/id for compression. Inode not recorded research!               | inventory / archive   |
 | `-s`     | `--preserve-order`, `--same-order`             | DISCARDED    | member arguments are listed in the same order as the files in the archive                             | CLI file-list order not used.                                                             |                       |
-
-### Handling of extended file attributes
-
-| shortopt | longopt                 | implement    | description                                | comment                                                    | phase[s] / command    |
-|----------|-------------------------|--------------|--------------------------------------------|------------------------------------------------------------|-----------------------|
-|          | `--acls`                | IMPLEMENTED  | Enable the POSIX ACLs support              | Captured at inventory (`do_posix_acl`); no CLI toggle yet. | permissions / extract |
-|          | `--selinux`             | IMPLEMENTED  | Enable the SELinux context support         | Captured when available.                                   | permissions / extract |
-|          | `--xattrs`              | IMPLEMENTED  | Enable extended attributes support         | Captured at inventory.                                     | permissions / extract |
-|          | `--no-acls`             | TO_IMPLEMENT | Disable the POSIX ACLs support             | Config knob exists; not on CLI.                            | permissions / extract |
-|          | `--no-selinux`          | TO_IMPLEMENT | Disable the SELinux context support        | Same.                                                      | permissions / extract |
-|          | `--no-xattrs`           | TO_IMPLEMENT | Disable extended attributes support        | Same.                                                      | permissions / extract |
-|          | `--xattrs-exclude=MASK` | FEATURE      | specify the exclude pattern for xattr keys |                                                            | permissions / extract |
-|          | `--xattrs-include=MASK` | FEATURE      | specify the include pattern for xattr keys |                                                            | permissions / extract |
 
 ### File name transformations
 
