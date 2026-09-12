@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 use crate::common::xattr::PosixQualifierParserError;
 
@@ -38,6 +38,42 @@ impl Error {
 
     pub fn is_interrupted(&self) -> bool {
         matches!(self, Self::Interrupted)
+    }
+
+    /// The path an erring filesystem operation was about, when `Io`.
+    pub fn io_path(&self) -> Option<PathBuf> {
+        match self {
+            Self::Io { path, .. } => Some(path.clone()),
+            _ => None,
+        }
+    }
+
+    /// Convert an `Error` into a [`FileStatError`] for the persistent error log.
+    /// `fallback` is used as the path when the error has none (non-`Io` variants).
+    /// The `io::Error` is not `Clone`, so the message is carried over instead.
+    pub fn to_file_stat(&self, fallback: Option<&Path>) -> FileStatError {
+        match self {
+            Self::Io { path, source } => FileStatError::Io {
+                path: path.clone(),
+                source: std::io::Error::new(source.kind(), source.to_string()),
+            },
+            Self::Database(e) => FileStatError::General {
+                path: fallback.map(|p| p.to_path_buf()),
+                message: format!("database error: {e}"),
+            },
+            Self::Config(m) => FileStatError::General {
+                path: fallback.map(|p| p.to_path_buf()),
+                message: format!("invalid configuration: {m}"),
+            },
+            Self::Interrupted => FileStatError::General {
+                path: fallback.map(|p| p.to_path_buf()),
+                message: "interrupted".to_string(),
+            },
+            Self::Other(e) => FileStatError::General {
+                path: fallback.map(|p| p.to_path_buf()),
+                message: e.to_string(),
+            },
+        }
     }
 }
 
