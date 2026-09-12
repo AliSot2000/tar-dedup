@@ -219,14 +219,17 @@ define_flags! {
         Placed = 18,
         /// File was skipped due to a conflict while placing.
         Skipped = 19,
+        /// At the target destination was a preexisting entry which was overwritten during the
+        /// extraction or which prevented the extraction
+        Overwrite = 20,
         /// Used RefLink (if false -> used (sparse) copy)
-        UsedRefLink = 20,
+        UsedRefLink = 21,
         /// An Error prevented the file from being placed in its correct position
-        ErrorWhilePlacing = 21,
+        ErrorWhilePlacing = 22,
         /// File materialized corectly with metadata applied.
-        AppliedMetadata = 22,
+        AppliedMetadata = 23,
         /// At least one error occurred while applying metadata
-        ErrorWhileApplyingMetadata = 23,
+        ErrorWhileApplyingMetadata = 24,
     }
     /// Bitset stored in `files.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,14 +262,17 @@ define_flags! {
         UsedRefLink = 2,
         /// File was considered but not placed due to a conflict
         Skipped = 3,
+        /// At the target destination was a preexisting entry which was overwritten during the
+        /// extraction or which prevented the extraction
+        Overwrite = 4,
         /// Copy/link into this output path failed.
-        ErrorWhilePlace = 4,
+        ErrorWhilePlace = 5,
         /// Metadata restore failed for this output path.
-        ErrorWhileApplyingMetadata = 5,
+        ErrorWhileApplyingMetadata = 6,
         /// Metadata (mode, owner, times, xattr/acl/selinux) has been applied.
-        AppliedMetadata = 6,
+        AppliedMetadata = 7,
         /// Highlight directories to be able to scan them for dir tree creation.
-        IsDirectory = 7,
+        IsDirectory = 8,
     }
     /// Bitset stored in `out_tree.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
