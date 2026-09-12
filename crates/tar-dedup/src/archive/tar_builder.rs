@@ -18,7 +18,7 @@ use crate::common::{SNAPSHOT_TAR_NAME, SNAPSHOT_INIT_TAR_NAME};
 pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
     // Crash / force leftover: truncate incomplete stream C, keep finished A..B.
-    recover_incomplete_session(config, db)?;
+    recover_incomplete_session(config, db, &mut recorder)?;
 
     let archive_offset = archive_file_len(&config.paths.archive_path);
     check_archive_bytes_out(db, archive_offset)?;
@@ -51,7 +51,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         progress.set_message(
             &format!("archive writing {SNAPSHOT_INIT_TAR_NAME} (initial manifest)")
         );
-        append_snapshot(&mut writer, config, db, shutdown, true)?;
+        append_snapshot(&mut writer, config, db, shutdown, true, &mut recorder)?;
     }
 
     // TODO add batching
@@ -81,7 +81,20 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         let source = config.paths.stage_dir().join(&tar_name);
 
         // Stage path is a symlink; compare inventory times against the real target.
-        let target = std::fs::canonicalize(&source).map_err(|e| Error::io(&source, e))?;
+        let target = match std::fs::canonicalize(&source) {
+            Ok(t) => t,
+            Err(e) => {
+                let err = Error::io(&source, e);
+                recorder.record_file(
+                    record.id,
+                    crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
+                    err.to_file_stat(None),
+                    crate::db::flags::ErrorFlags::default(),
+                );
+                db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
+                return Err(err);
+            }
+        };
         warn_if_times_changed(&target, record.mtime, record.atime, record.ctime);
 
         progress.set_file("archive", &record.abs_path);
@@ -101,9 +114,8 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                     error = %e,
                     "archive append_path failed; marking ErrorWhileArchive and continuing"
                 );
-                recorder.record(
-                    Some(record.id),
-                    None,
+                recorder.record_file(
+                    record.id,
                     crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
                     match e {
                         crate::error::Error::Io { path, source } =>
@@ -139,6 +151,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         session_id,
         bytes_in_base,
         final_archive,
+        &mut recorder,
     )?;
 
     if stopped {
@@ -146,6 +159,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         return Err(Error::Interrupted);
     }
 
+    recorder.flush()?;
     progress.finish("archive complete");
     Ok(())
 }
@@ -170,13 +184,19 @@ fn check_archive_bytes_out(db: &Database, archive_len: u64) -> Result<()> {
 /// Truncate archive to the incomplete session's start offset, mark session aborted,
 /// and clear [`FileFlag::AppendedPath`] on non-`archived` rows only.
 /// Prior finalized sessions (and their archived files, including sticky `AppendedPath`) stay intact.
-fn recover_incomplete_session(config: &ArchiveConfig, db: &Database) -> Result<()> {
+/// Recover from an incomplete session; the whole archive file is session-scoped,
+/// so failures are recorded against the session (not any single file).
+fn recover_incomplete_session(
+    config: &ArchiveConfig,
+    db: &Database,
+    recorder: &mut crate::db::Recorder,
+) -> Result<()> {
     let open_session = match db.open_archive_session()? {
         None => return Ok(()),
         Some(s) => s,
     };
 
-    truncate_archive_at(&config.paths.archive_path, open_session.archive_offset)?;
+    truncate_archive_at(&config.paths.archive_path, open_session.archive_offset, recorder)?;
     db.abort_incomplete_archive_session(&open_session)?;
     
     tracing::info!(
@@ -188,17 +208,32 @@ fn recover_incomplete_session(config: &ArchiveConfig, db: &Database) -> Result<(
 }
 
 /// Truncate archive to `offset` (end of previous finished stream / start of incomplete one).
-fn truncate_archive_at(path: &Path, offset: u64) -> Result<()> {
+fn truncate_archive_at(path: &Path, offset: u64, recorder: &mut crate::db::Recorder) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
+    let phase = crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive);
     let err_converter = |e| Error::io(path, e);
     let file = OpenOptions::new()
         .write(true)
         .open(path)
         .map_err(err_converter)?;
-    file.set_len(offset).map_err(err_converter)?;
-    file.sync_all().map_err(err_converter)?;
+    match file.set_len(offset) {
+        Ok(()) => (),
+        Err(e) => {
+            let err = Error::io(path, e);
+            recorder.push(crate::db::RecordDraft::session(phase, err.to_file_stat(Some(path))));
+            return Err(err);
+        }
+    }
+    match file.sync_all() {
+        Ok(()) => (),
+        Err(e) => {
+            let err = Error::io(path, e);
+            recorder.push(crate::db::RecordDraft::session(phase, err.to_file_stat(Some(path))));
+            return Err(err);
+        }
+    }
     if offset == 0 {
         // Empty archive file: remove so next session starts clean.
         drop(file);
@@ -228,12 +263,23 @@ fn append_snapshot(
     db: &Database,
     shutdown: &Shutdown,
     is_init: bool,
+    recorder: &mut crate::db::Recorder,
 ) -> Result<()> {
 
     db.checkpoint()?;
     let src = config.paths.db_path();
     let staging = config.paths.work_dir.join(".snapshot-for-tar.sqlite");
-    std::fs::copy(&src, &staging).map_err(|e| Error::io(&staging, e))?;
+    match std::fs::copy(&src, &staging) {
+        Ok(_) => (),
+        Err(e) => {
+            let err = Error::io(&staging, e);
+            recorder.push(crate::db::RecordDraft::session(
+                crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
+                err.to_file_stat(Some(&staging)),
+            ));
+            return Err(err);
+        }
+    }
     let tar_dst = if is_init { SNAPSHOT_INIT_TAR_NAME } else { SNAPSHOT_TAR_NAME };
     // INFO: append_path might return return interrupted error!
     let result = writer.append_path(&staging, tar_dst, shutdown, |_| ());
@@ -250,6 +296,7 @@ fn end_session(
     session_id: i64,
     bytes_in_base: u64,
     write_tar_eof: bool,
+    recorder: &mut crate::db::Recorder,
 ) -> Result<()> {
     db.promote_pending_archived()?;
     // Full archive pass only: every remaining row has been considered (or was ineligible).
@@ -259,7 +306,7 @@ fn end_session(
     db.stamp_archive_session_finished_at(session_id)?;
 
     progress.set_message(format!("archive writing {SNAPSHOT_TAR_NAME} (progress)").as_str());
-    if let Err(e) = append_snapshot(&mut writer, config, db, shutdown, false) {
+    if let Err(e) = append_snapshot(&mut writer, config, db, shutdown, false, recorder) {
         if e.is_interrupted() && shutdown.is_force() {
             return force_abort_session(writer, db, progress);
         }
@@ -289,7 +336,16 @@ fn end_session(
                 }
                 db.checkpoint()?;
                 // Footer catalog is always xz -9e, independent of tar stream compression.
-                archive_footer::write_footer(&config.paths.archive_path, &config.paths.db_path())?;
+                match archive_footer::write_footer(&config.paths.archive_path, &config.paths.db_path()) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        recorder.push(crate::db::RecordDraft::session(
+                            crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
+                            e.to_file_stat(Some(&config.paths.db_path())),
+                        ));
+                        return Err(e);
+                    }
+                }
             }
             Ok(())
         }
