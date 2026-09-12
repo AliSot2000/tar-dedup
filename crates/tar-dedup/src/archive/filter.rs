@@ -155,10 +155,13 @@ struct FilterResult {
 
 /// Parse the arguments and add them into the database.
 pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    let phase = crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Filter);
     // Handle the include files
     handle_filter(
         &config.filter.include_patterns, &config.filter.include_from, "include",
-        &|from, line, query| db.add_include_pattern(from, line, query))?;
+        &|from, line, query| db.add_include_pattern(from, line, query),
+        &mut recorder, phase)?;
 
     if db.count_filters(Some(false))? == 0 {
         let res = db.add_include_pattern("internal", None, ".*")?;
@@ -167,7 +170,9 @@ pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
 
     handle_filter(
         &config.filter.exclude_patterns, &config.filter.exclude_from, "exclude",
-        &|from, line, query| db.add_exclude_pattern(from, line, query))?;
+        &|from, line, query| db.add_exclude_pattern(from, line, query),
+        &mut recorder, phase)?;
+    recorder.flush()?;
     Ok(())
 }
 
@@ -176,11 +181,15 @@ fn handle_filter(
     pattern: &Vec<String>,
     files: &Vec<PathBuf>,
     operation: &str,
-    insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>) -> Result<()>{
+    insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
+    recorder: &mut crate::db::Recorder,
+    phase: crate::db::ErrorPhase,
+) -> Result<()>{
 
     // Scan single argument expression
     for (idx, query) in pattern.iter().enumerate() {
-        handle_query(&format!("--{operation}"), query, operation, idx as u64, insert_fn)?;
+        handle_query(&format!("--{operation}"), query, operation, idx as u64, insert_fn,
+                     recorder, phase)?;
     }
 
     // Scan files with content.
@@ -189,6 +198,14 @@ fn handle_filter(
         let file_content = match fs::read_to_string(file) {
             Ok(fc) => fc,
             Err(e) => {
+                recorder.record_session(
+                    phase.clone(),
+                    crate::error::FileStatError::Io {
+                        path: file.clone(),
+                        source: std::io::Error::new(e.kind(), e.to_string()),
+                    },
+                    crate::db::flags::ErrorFlags::default(),
+                );
                 tracing::error!("Could not read {operation} file: {pp} with error {e}");
                 continue;
                 // TODO: Raise error without fail-fast
@@ -200,7 +217,7 @@ fn handle_filter(
             }
             let san_path = file.to_string_lossy();
             handle_query(&format!("--{operation}-from={san_path}"), expression, operation,
-                         idx as u64, insert_fn)?;
+                         idx as u64, insert_fn, recorder, phase)?;
 
         }
     }
@@ -209,12 +226,22 @@ fn handle_filter(
 
 /// Take care of inserting a single query into the database.
 fn handle_query(source: &str, query: &str, operation: &str, line: u64,
-                insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>) -> Result<()> {
+                insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
+                recorder: &mut crate::db::Recorder,
+                phase: crate::db::ErrorPhase) -> Result<()> {
     if Regex::new(query).is_ok() {
         let res = insert_fn(source, Some(line), query)?;
         assert_eq!(res, 1, "DB Failed, expected 1 row to get added, got {res}");
     } else {
-        // TODO: Raise error without fail-fast
+        recorder.record_session(
+            phase.clone(),
+            crate::error::FileStatError::General {
+                path: None,
+                message: format!("Failed to parse {operation} pattern from {source}, \
+                                 line: {line}, expression: {query}"),
+            },
+            crate::db::flags::ErrorFlags::default(),
+        );
         tracing::error!(
             "Failed to parse {operation} pattern from {source}, line: {line}, expression: {query}"
         );
