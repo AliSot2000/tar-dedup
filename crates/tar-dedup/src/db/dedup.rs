@@ -44,6 +44,7 @@ pub fn promote_to_deduped(conn: &Connection, file_id: FileId) -> Result<()> {
     Ok(())
 }
 
+// TODO handle eager_filter
 /// Promote excluded entries to deduped
 pub fn promote_excluded_entries_to_deduped(conn: &Connection) -> Result<u64> {
     let n = conn.execute("UPDATE files SET phase = 'deduped' \
@@ -51,6 +52,7 @@ pub fn promote_excluded_entries_to_deduped(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+// TODO handle eager_filter
 /// Non-regular / unknown types (and NULL ftype): nothing to byte-compare.
 pub fn promote_non_file_filtered_to_deduped(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
@@ -61,6 +63,7 @@ pub fn promote_non_file_filtered_to_deduped(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+// TODO handle eager_filter
 /// Missing digest (e.g. unreadable at hash time): do not compare.
 pub fn promote_null_sha1_filtered_to_deduped(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
@@ -71,6 +74,7 @@ pub fn promote_null_sha1_filtered_to_deduped(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+// TODO handle eager_filter
 /// Unique `(sha1, size)` content: no compare round.
 pub fn promote_singleton_filtered_to_deduped(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
@@ -119,6 +123,7 @@ pub fn pending_duplicate_groups(conn: &Connection) -> Result<Vec<GroupKey>> {
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
+// TODO handle eager_filter
 /// Filtered members of one `(sha1, size)` group, ordered by id.
 pub fn list_filtered_in_group<R: SqlFileRow>(
     conn: &Connection,
@@ -159,6 +164,7 @@ pub fn clear_check_with_canonical_completed(
     Ok(())
 }
 
+// TODO handle eager_filter
 /// Promote remaining pending members to `deduped`, leaving `canonical_id` NULL.
 /// Returns how many rows were updated.
 pub fn promote_errored_pending_to_deduped(
@@ -188,6 +194,7 @@ pub fn count_check_with_canonical_completed(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+// TODO handle eager_filter
 /// Active round canonicals: `Filtered` with `canonical_id = id`.
 pub fn count_active_canonicals(conn: &Connection, sha1: &[u8; 20], size: u64) -> Result<u64> {
     let n: i64 = conn.query_row(
@@ -204,6 +211,7 @@ pub fn count_active_canonicals(conn: &Connection, sha1: &[u8; 20], size: u64) ->
     Ok(n as u64)
 }
 
+// TODO handle eager_filter
 /// Promote the single active canonical in the group to `Deduped`.
 ///
 /// Panics unless exactly one row is updated.
@@ -226,6 +234,7 @@ pub fn promote_active_canonical_in_group(conn: &Connection, sha1: &[u8; 20], siz
     );
 }
 
+// TODO handle eager_filter
 /// Rows that could become the next round's canonical (Filtered, no canonical, no error flag).
 pub fn count_electable_pending(conn: &Connection, sha1: &[u8; 20], size: u64) -> Result<u64> {
     let error_bit = FileFlag::ErrorWhileDedup.mask_i64();
