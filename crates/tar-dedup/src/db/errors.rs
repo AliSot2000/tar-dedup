@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, Utc, ParseError};
 use rusqlite::{Connection, named_params, OptionalExtension};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::config::{ExtractPipelinePhase, PipelinePhase};
 use crate::db::flags::{ErrorFlag, ErrorFlags, ErrorScope};
@@ -98,11 +98,9 @@ fn error_msg(e: &FileStatError) -> String {
 }
 
 /// Insert a batch of drafts in a single transaction. Returns rows inserted.
-pub fn insert_errors<I>(conn: &mut Connection, drafts: I) -> Result<u64>
-where
-    I: IntoIterator<Item = RecordDraft>,
-{
-    let drafts: Vec<RecordDraft> = drafts.into_iter().collect();
+/// Borrows the drafts: on failure (rollback) they are left untouched so the
+/// caller may retain and retry them.
+pub fn insert_errors(conn: &mut Connection, drafts: &[RecordDraft]) -> Result<u64> {
     let count = drafts.len();
     if count == 0 {
         return Ok(0);
@@ -233,15 +231,19 @@ pub fn count_records(
 /// Build SQL fragments (SQLite booleans + bits are inlined as integer literals).
 fn build_filters(scope: ErrorScope, reemit: Option<(bool, i64)>) -> (String, String) {
     let bits = scope.bits();
-    let f = (bits >> 0) & 1;
-    let o = (bits >> 1) & 1;
-    let s = (bits >> 2) & 1;
     // Empty bitset (all zero) → every partition matches.
-    let scope_clause = format!(
-        "AND 1 = ({f} AND file_id IS NOT NULL) \
-           OR 1 = ({o} AND out_tree_id IS NOT NULL) \
-           OR 1 = ({s} AND file_id IS NULL AND out_tree_id IS NULL)"
-    );
+    let scope_clause = if bits == 0 {
+        String::new()
+    } else {
+        let f = (bits >> 0) & 1;
+        let o = (bits >> 1) & 1;
+        let s = (bits >> 2) & 1;
+        format!(
+            "AND 1 = ({f} AND file_id IS NOT NULL) \
+               OR 1 = ({o} AND out_tree_id IS NOT NULL) \
+               OR 1 = ({s} AND file_id IS NULL AND out_tree_id IS NULL)"
+        )
+    };
     let reemit_clause = match reemit {
         None => String::new(),
         Some((true, mask)) => format!("AND (flags & {mask}) != 0"),
