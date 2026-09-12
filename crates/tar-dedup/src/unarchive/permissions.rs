@@ -97,9 +97,7 @@ fn process_batches(
                 .map(|(r, o)| (Some(r), o))
                 .collect()
         };
-        if batch.is_empty() {
-            break;
-        }
+        if batch.is_empty() { break }
 
         for (record, out) in batch {
             shutdown.check_between_files()?;
