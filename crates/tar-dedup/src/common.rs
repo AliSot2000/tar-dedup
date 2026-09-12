@@ -27,6 +27,9 @@ pub const COPY_STEP_SIZE: u64 = 1024 * 1024 * 4;
 /// a batch size
 pub const DEFAULT_BATCH_SIZE: u64 = 100_000;
 
+/// Number of ErrorRecordDrafts at a time in ram before attempting to auto flush;
+pub const DEFAULT_AUTO_FLUSH_LIMIT: u64 = 10_000;
+
 /// Perform the batched loop with a step id. Arguments work as follows:
 /// [`new_id`]: Function must return the lower bound for ids. Typically 0, since we start id at 1
 /// [`get_entries`]: Function that gets the next batch starting with last_id, u64 is for batch_size
