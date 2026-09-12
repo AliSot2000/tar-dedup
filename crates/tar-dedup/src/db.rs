@@ -661,8 +661,7 @@ impl Database {
 
     // --- errors (persistent error log) ---
 
-    pub fn insert_errors<I: IntoIterator<Item = errors::RecordDraft>>(
-        &self, drafts: I) -> Result<u64> {
+    pub fn insert_errors(&self, drafts: &[errors::RecordDraft]) -> Result<u64> {
         errors::insert_errors(&mut *self.conn_mut(), drafts)
     }
 
