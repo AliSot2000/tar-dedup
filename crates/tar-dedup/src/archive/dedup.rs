@@ -10,18 +10,19 @@ use crate::config::ArchiveConfig;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, GroupKey, StrippedRecord};
 use crate::db::Database;
-use crate::error::{Error, Result};
+use crate::error::{Error, FileStatError, Result};
 use crate::progress::{io_buffer, CountProgress};
 use crate::shutdown::Shutdown;
 
 // TODO: Filter (dev, inode) == (dev, inode) early and mark as finished.
 
 /// One finished compare: both keys always present.
-/// `Ok(equal)` on a completed byte compare; `Err(file_id)` for the side that failed IO.
+/// `Ok(equal)` on a completed byte compare; `Err((file_id, error))` for the side
+/// that failed IO, carrying the downcast [`FileStatError`] for the error log.
 struct CompareOutcome {
     canonical_id: FileId,
     candidate_id: FileId,
-    equal: std::result::Result<bool, FileId>,
+    equal: std::result::Result<bool, (FileId, FileStatError)>,
 }
 
 struct ComparePair {
@@ -121,7 +122,7 @@ fn compare_one(
         false => match files_equal(&pair.canonical_path, &pair.candidate_path, shutdown) {
             Ok(v) => Ok(v),
             Err(Error::Interrupted) => return Err(Error::Interrupted),
-            Err(Error::Io { path, .. }) => Err(io_error_file_id(pair, &path)),
+            Err(e @ Error::Io { .. }) => Err(compare_error_file_id(pair, &e)),
             Err(e) => panic!("unexpected compare error (not Io/Interrupted): {e}"),
         },
         true => Ok(true),
@@ -138,8 +139,14 @@ fn compare_one(
     Ok(())
 }
 
-fn io_error_file_id(pair: &ComparePair, path: &Path) -> FileId {
-    if path == pair.canonical_path {
+/// Downcast a compare `Error` into the failing side's `(file_id, FileStatError)`.
+/// `files_equal` only ever produces `Io` errors (or `Interrupted`, handled above),
+/// so the path is reliable; anything else is treated as a panic predicate.
+fn compare_error_file_id(pair: &ComparePair, e: &Error) -> (FileId, FileStatError) {
+    let path = e.io_path().expect(
+        "compare produced a non-Io, non-Interrupted error; \
+         files_equal only ever returns Io or Interrupted");
+    let file_id = if path == pair.canonical_path {
         pair.canonical_id
     } else if path == pair.candidate_path {
         pair.candidate_id
@@ -151,7 +158,8 @@ fn io_error_file_id(pair: &ComparePair, path: &Path) -> FileId {
             pair.canonical_path.display(),
             pair.candidate_path.display(),
         );
-    }
+    };
+    (file_id, e.to_file_stat(None))
 }
 
 // =================================================================================================
@@ -224,6 +232,7 @@ fn run_pool(
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
     loop {
         shutdown.check_between_files()?;
 
@@ -258,9 +267,11 @@ fn run_pool(
 
         // Flush finished compares either way; unfinished pairs stay pending.
         let outcomes = results.into_inner().expect("dedup results lock");
-        for outcome in &outcomes {
-            apply_outcome(db, outcome)?;
+        let saved = outcomes.len();
+        for outcome in outcomes {
+            apply_outcome(db, &mut recorder, outcome)?;
         }
+        recorder.flush()?;
 
         match parallel {
             Ok(()) => {
@@ -271,7 +282,7 @@ fn run_pool(
             }
             Err(Error::Interrupted) => {
                 tracing::warn!(
-                    saved = outcomes.len(),
+                    saved,
                     "dedup interrupted; completed compares saved, round not ended"
                 );
                 return Err(Error::Interrupted);
@@ -332,7 +343,15 @@ fn prepare_round(
         }
     }
 
-    // Deal with errored out groups (=> no members, no candidate, no new candidates)
+    // Deal with errored out groups (=> no members, no candidate, no new candidates).
+    // With `fail_fast` this is a halting condition: every member errored, so the whole
+    // group (and the files already recorded against it) surfaces to the user.
+    if config.process.fail_fast && !errored_only_groups.is_empty() {
+        return Err(Error::Config(format!(
+            "dedup fail-fast: {} group(s) could not elect a canonical (compare error(s) recorded)",
+            errored_only_groups.len()
+        )));
+    }
     for key in &errored_only_groups {
         let n = db.promote_errored_pending_to_deduped(&key.sha1, key.size)?;
         db.clear_check_with_canonical_completed(&key.sha1, key.size)?;
@@ -430,7 +449,8 @@ fn establish_group_state(
 
 /// Function applied to an element of the results array.
 /// Updates the candidate file on successful compare and sets the error flag to the file causing it.
-fn apply_outcome(db: &Database, outcome: &CompareOutcome) -> Result<()> {
+fn apply_outcome(db: &Database, recorder: &mut crate::db::Recorder, outcome: CompareOutcome)
+    -> Result<()> {
     match outcome.equal {
         Ok(true) => {
             db.set_canonical(outcome.candidate_id, outcome.canonical_id)?;
@@ -442,8 +462,14 @@ fn apply_outcome(db: &Database, outcome: &CompareOutcome) -> Result<()> {
                 true,
             )?;
         }
-        Err(failed) => {
+        Err((failed, error)) => {
             db.set_file_flag(failed, FileFlag::ErrorWhileDedup, true)?;
+            recorder.record_file(
+                failed,
+                crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Dedup),
+                error,
+                crate::db::flags::ErrorFlags::default(),
+            );
         }
     }
     Ok(())
