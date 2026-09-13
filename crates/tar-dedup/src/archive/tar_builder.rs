@@ -5,7 +5,7 @@ use crate::archive_footer;
 use crate::common::files::warn_if_times_changed;
 use crate::config::ArchiveConfig;
 use crate::db::Database;
-use crate::db::flags::FileFlag;
+use crate::db::flags::{FileFlag, ErrorFlags};
 use crate::db::types::StrippedRecord;
 use crate::error::{Error, Result};
 use crate::progress::ByteProgress;
@@ -89,7 +89,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                     record.id,
                     crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
                     err.to_file_stat(None),
-                    crate::db::flags::ErrorFlags::default(),
+                    ErrorFlags::default(),
                 );
                 db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
                 return Err(err);
@@ -129,7 +129,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                             message: other.to_string(),
                         },
                     },
-                    crate::db::flags::ErrorFlags::default(),
+                    ErrorFlags::default(),
                 );
                 db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
                 // Do not set AppendedPath — member was not successfully written.
@@ -222,7 +222,7 @@ fn truncate_archive_at(path: &Path, offset: u64, recorder: &mut crate::db::Recor
         Ok(()) => (),
         Err(e) => {
             let err = Error::io(path, e);
-            recorder.push(crate::db::RecordDraft::session(phase, err.to_file_stat(Some(path))));
+            recorder.session(phase, err.to_file_stat(Some(path)), ErrorFlags::default());
             return Err(err);
         }
     }
@@ -230,7 +230,7 @@ fn truncate_archive_at(path: &Path, offset: u64, recorder: &mut crate::db::Recor
         Ok(()) => (),
         Err(e) => {
             let err = Error::io(path, e);
-            recorder.push(crate::db::RecordDraft::session(phase, err.to_file_stat(Some(path))));
+            recorder.session(phase, err.to_file_stat(Some(path)), ErrorFlags::default());
             return Err(err);
         }
     }
@@ -273,10 +273,11 @@ fn append_snapshot(
         Ok(_) => (),
         Err(e) => {
             let err = Error::io(&staging, e);
-            recorder.push(crate::db::RecordDraft::session(
+            recorder.session(
                 crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
                 err.to_file_stat(Some(&staging)),
-            ));
+                ErrorFlags::default(),
+            );
             return Err(err);
         }
     }
@@ -339,10 +340,11 @@ fn end_session(
                 match archive_footer::write_footer(&config.paths.archive_path, &config.paths.db_path()) {
                     Ok(()) => (),
                     Err(e) => {
-                        recorder.push(crate::db::RecordDraft::session(
+                        recorder.session(
                             crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
                             e.to_file_stat(Some(&config.paths.db_path())),
-                        ));
+                            ErrorFlags::default(),
+                        );
                         return Err(e);
                     }
                 }
