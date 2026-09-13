@@ -76,6 +76,7 @@ pub struct ExtractConfig {
     pub owner_policy: OwnerGroupSource,
     pub owner_group: OwnerGroupOptions,
     pub mode_policy: ModeSource,
+    pub strip_components: u32,
 }
 
 /// Resolve which owner/group policy applies on extract from the CLI args.
@@ -278,6 +279,7 @@ impl ExtractConfig {
                 apply_group,
             },
             mode_policy,
+            strip_components: args.strip_components,
         })
     }
 
@@ -341,6 +343,7 @@ impl ExtractConfig {
                 apply_group: false,
             },
             mode_policy: ModeSource::None,
+            strip_components: 0,
         }
     }
 
@@ -404,6 +407,7 @@ impl ExtractConfig {
                 apply_group: false,
             },
             mode_policy: ModeSource::None,
+            strip_components: 0,
         }
     }
 
@@ -467,6 +471,7 @@ impl ExtractConfig {
                 apply_group: false,
             },
             mode_policy: ModeSource::None,
+            strip_components: 0,
         }
     }
 }
