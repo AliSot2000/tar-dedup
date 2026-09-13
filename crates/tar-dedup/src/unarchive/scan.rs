@@ -10,13 +10,13 @@ use crate::archive_footer::read_footer;
 use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
 use crate::db::types::{FileId, FilePhase};
-use crate::db::{Database, ErrorPhase, ExtractScanState, RecordDraft, Recorder};
+use crate::db::{Database, ErrorPhase, ExtractScanState, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
 use path_clean::PathClean;
 use tar::Entry;
-use crate::db::flags::FileFlag;
+use crate::db::flags::{FileFlag, ErrorFlags};
 
 const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(crate::config::ExtractPipelinePhase::ScanTar);
@@ -33,7 +33,7 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(crate::config::ExtractPipeli
 /// speculative [`Recorder`] and persisted at a phase boundary (once a database is
 /// available); if the scan aborts first, [`Recorder::flush`]/`Drop` reports the loss.
 fn record_session_error(recorder: &mut Recorder, error: FileStatError) {
-    recorder.push(RecordDraft::session(ERROR_PHASE, error));
+    recorder.session(ERROR_PHASE, error, ErrorFlags::default());
 }
 
 /// Record a per-file scan error (e.g. a failed payload `unpack`). The target row
@@ -47,7 +47,7 @@ fn record_file_scan_error(
         file_id,
         ERROR_PHASE,
         error,
-        crate::db::flags::ErrorFlags::default(),
+        ErrorFlags::default(),
     );
 }
 
