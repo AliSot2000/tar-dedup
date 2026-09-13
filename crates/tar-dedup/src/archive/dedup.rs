@@ -122,8 +122,8 @@ fn compare_one(
         false => match files_equal(&pair.canonical_path, &pair.candidate_path, shutdown) {
             Ok(v) => Ok(v),
             Err(Error::Interrupted) => return Err(Error::Interrupted),
-            Err(e @ Error::Io { .. }) => Err(compare_error_file_id(pair, &e)),
-            Err(e) => panic!("unexpected compare error (not Io/Interrupted): {e}"),
+            Err(e @ Error::FileStat(_)) => Err(compare_error_file_id(pair, &e)),
+            Err(e) => panic!("unexpected compare error (not FileStat/Interrupted): {e}"),
         },
         true => Ok(true),
     };
@@ -140,8 +140,9 @@ fn compare_one(
 }
 
 /// Downcast a compare `Error` into the failing side's `(file_id, FileStatError)`.
-/// `files_equal` only ever produces `Io` errors (or `Interrupted`, handled above),
-/// so the path is reliable; anything else is treated as a panic predicate.
+/// `files_equal` only ever produces `FileStat` errors wrapping `Io` (or
+/// `Interrupted`, handled above), so the path is reliable; anything else is
+/// treated as a panic predicate.
 fn compare_error_file_id(pair: &ComparePair, e: &Error) -> (FileId, FileStatError) {
     let path = e.io_path().expect(
         "compare produced a non-Io, non-Interrupted error; \
