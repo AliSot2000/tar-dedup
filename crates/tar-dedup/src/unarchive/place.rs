@@ -461,11 +461,25 @@ pub fn materialize_files(
                         "PRECONDITION FAILED: Enqueued files must have a content_id");
                     let src = cache_dir.join(id.0);
 
-                    // TODO handle unlink_first,
-                    // Todo handle newer, older
-
-                    let res = copy_single_file(
-                        target.id, &src, &target.abs_path, &shutdown, no_reflink);
+                    let res =
+                        match captured_check_path(&config, &src, &canonical) {
+                        Err(e) => Err((target.id, Error::FileStat(e))),
+                        Ok((false, conflict, removed)) => Ok(MaterializeResult {
+                            id: target.id.clone(),
+                            placed: false, conflict, removed, used_copy: false
+                        }) ,
+                        Ok((true, conflict, removed)) => {
+                            tracing::info!("Materializing to {}", target.abs_path.display());
+                            match copy_single_file(
+                                target.id, &src, &target.abs_path, &shutdown, no_reflink) {
+                                Err(e) => Err(e),
+                                Ok((id, used_copy)) => Ok(MaterializeResult {
+                                    id: id.clone(),
+                                    placed: true, conflict, removed, used_copy
+                                })
+                            }
+                        }
+                    };
                     results.lock().expect("materialize files lock poisoned").push(res);
                     Ok(())
                 })
@@ -1196,5 +1210,144 @@ fn catalog_to_target_abs(
                 .expect("Source rows must start within source root");
             source_base.join(rel_stem)
         }
+    }
+}
+/// Perform the pre-materialize check.
+/// First perform the conflict policy check based on mtime, then check the file type, lastly, if
+/// required remove previous file.
+/// On error, the file on the file system wins.
+/// Result:
+/// - first bool is true iff the file can be written to the path
+/// - second bool is true iff there was a conflict which resolved in favor of extracting
+/// - third bool is true iff there was a file was removed during the prep process.
+fn captured_check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
+                       -> std::result::Result<(bool, bool, bool), FileStatError> {
+    if !tgt.exists() {
+        return Ok((true, false, false))
+    };
+
+    // PRECONDITION: Path exists
+    let file_metadata = match tgt.symlink_metadata() {
+        Err(e) => {
+            return if config.placement.silent_conflicts {
+                tracing::info!(
+                        "Leaving {}, could not assess conflict due to inaccessible file metadata",
+                        tgt.display());
+                Ok((false, true, false))
+            } else {
+                Err(FileStatError::Io { path: tgt.to_path_buf(), source: e })
+            }
+        }
+        Ok(m) => m,
+    };
+
+    // Check the times with the conflict policy
+    if !matches!(config.placement.conflict_policy, ConflictPolicy::Replace) {
+        // mtime of record
+        let db_mtime = match rec.mtime {
+            None => {
+                if !config.placement.silent_conflicts {
+                    tracing::info!(
+                        "Leaving {}, could not assess conflict due to missing mtime in db",
+                        tgt.display());
+                }
+                return Ok((false, true, false));
+            }
+            Some(t) => t
+        };
+        let (res_mtime, _, _) = files::get_file_times(&file_metadata);
+        let file_mtime = match res_mtime {
+            Err(e) => {
+                return if config.placement.silent_conflicts {
+                    tracing::info!(
+                        "Leaving {}, could not retrieve file mtime",
+                    tgt.display());
+                    Ok((false, true, false))
+                } else {
+                    Err(FileStatError::Io { path: tgt.to_path_buf(), source: e })
+                }
+            }
+            Ok(m) => m,
+        };
+        match config.placement.conflict_policy {
+            ConflictPolicy::Replace => (),
+            ConflictPolicy::PreferNewer => {
+                if db_mtime <= file_mtime {
+                    return if !config.placement.silent_conflicts {
+                        Err(FileStatError::General {
+                            path: Some(tgt.to_path_buf()), message: "File is too old.".to_string()
+                        })
+                    } else {
+                        tracing::info!("Could not extract to {}, file is too old.",  tgt.display());
+                        Ok((false, true, false))
+                    }
+                }
+            },
+            ConflictPolicy::PreferOlder => {
+                if db_mtime >= file_mtime {
+                    return if !config.placement.silent_conflicts {
+                        Err(FileStatError::General {
+                            path: Some(tgt.to_path_buf()), message: "File is new old.".to_string()
+                        })
+                    } else {
+                        tracing::info!("Could not extract to {}, file is too new.",  tgt.display());
+                        Ok((false, true, false))
+                    }
+                }
+            }
+        }
+    }
+
+    // Check if the file types are a match.
+    let ftype = match files::determine_file_type(&file_metadata, tgt) {
+        Ok(ft) => ft,
+        Err((ft, failed_path, e)) => {
+            // INFO: Error means ftype unknown. Can proceed, add error regardless
+            if config.placement.silent_conflicts {
+                tracing::info!("Error while determining file type of {}. Got {}",
+                tgt.display(), &e);
+            } else {
+                return Err(FileStatError::Io{ path: failed_path, source: e })
+            };
+            ft
+        }
+    };
+    let remove = if ftype != rec.ftype {
+        if config.placement.remove_and_replace {
+            tracing::info!("File type mismatch, expected {} got {}",
+                rec.ftype.as_str(), ftype.as_str());
+            true
+        } else {
+            return if !config.placement.silent_conflicts {
+                Err(FileStatError::General {
+                    path: Some(tgt.to_path_buf()),
+                    message: format!("File type mismatch, expected {} got {}",
+                                     rec.ftype.as_str(), ftype.as_str())
+                })
+            } else {
+                tracing::info!("File type mismatch, expected {} got {}",
+                    rec.ftype.as_str(), ftype.as_str());
+                Ok((false, true, false))
+            }
+        }
+    } else {
+        false
+    };
+    // Remove file, if indicated.
+    if remove || config.placement.unlink_first {
+        match fs::remove_file(&tgt) {
+            Ok(()) => Ok((true, true, true)),
+            Err(e) => {
+                if config.placement.silent_conflicts {
+                    tracing::info!("Failed to remove preexisting path {} with error {}",
+                        tgt.display(), e);
+                    Ok((false, true, false))
+                } else {
+                    Err(FileStatError::Io { path: tgt.to_path_buf(), source: e })
+                }
+            }
+        }
+    } else {
+        Ok((true, true, false))
     }
 }
