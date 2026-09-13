@@ -403,6 +403,14 @@ impl Database {
         meta::get_archive_owner_policy(&*self.conn())
     }
 
+    pub fn set_archive_mode_changes(&self, changes: &str) -> Result<()> {
+        meta::set_archive_mode_changes(&*self.conn(), changes)
+    }
+
+    pub fn get_archive_mode_changes(&self) -> Result<Option<String>> {
+        meta::get_archive_mode_changes(&*self.conn())
+    }
+
     pub fn sum_canonical_bytes_to_archive(&self, filter_sha: bool) -> Result<u64> {
         tar_writer::sum_canonical_bytes_to_archive(&*self.conn(), filter_sha)
     }
