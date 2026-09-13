@@ -1,11 +1,12 @@
-//! Unarchive (extract) pipeline: scan → rehash → place → permissions → cleanup.
+//! Unarchive (extract) pipeline: scan → rehash → placement_prologue → place → permissions → cleanup.
 
 mod permissions;
 mod place;
+mod place_prologue;
 mod rehash;
 mod scan;
 
-pub use place::populate_out_tree; // INFO: Export for testing
+pub use place_prologue::populate_out_tree; // INFO: Export for testing
 
 use std::path::Path;
 
@@ -64,6 +65,10 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
             ExtractPipelinePhase::Rehash => {
                 let db = Database::open(&db_path)?;
                 rehash::run(&config, &db, &shutdown)?;
+            }
+            ExtractPipelinePhase::PlacementPrologue => {
+                let db = Database::open(&db_path)?;
+                place_prologue::run(&config, &db, &shutdown)?;
             }
             ExtractPipelinePhase::Place => {
                 let db = Database::open(&db_path)?;
