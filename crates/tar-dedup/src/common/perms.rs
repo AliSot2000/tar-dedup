@@ -195,6 +195,65 @@ pub enum OwnerGroupSource {
     Cli(OwnerGroupPolicy),
 }
 
+/// Which mode-change policy applies during extraction.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ModeSource {
+    /// No mode changes.
+    #[default]
+    None,
+    /// Apply the changes stored in the archive.
+    Stored,
+    /// Apply explicitly provided chmod-style changes (validated on the CLI).
+    Cli(String),
+}
+
+/// Parse a GNU tar `--mode` changes string into a reusable [`file_mode::Mode`].
+/// `Mode::empty()` + `set_str` yields a mask-based change set; `apply_to(file_mode)`
+/// applies it per file.
+///
+/// Two forms are accepted, mirroring `tar` / `chmod`:
+/// - symbolic changes, e.g. `u+rwx,go-rx`;
+/// - a bare octal absolute mode, e.g. `0644` / `4755`, applied as a full set
+///   (including setuid/setgid/sticky when a 4th digit is present).
+///
+/// The string is pre-validated against the chmod alphabet: `file-mode` panics
+/// (abort in release builds) on an invalid permission char rather than returning
+/// `Err`, so only fully-symbolic or fully-octal strings reach it.
+pub fn parse_mode_changes(changes: &str) -> Result<file_mode::Mode> {
+    // TODO symbolic validation should soon be unnecessary.
+    let symbolic = changes
+        .chars()
+        .all(|c| matches!(c, 'u' | 'g' | 'o' | 'a' | 'r' | 'w' | 'x' | 'X' | 's' | 't' | '+' | '-' | '=' | ','));
+    let octal = !changes.is_empty() && changes.chars().all(|c| c.is_ascii_digit());
+    if !symbolic && !octal {
+        return Err(Error::Config(format!(
+            "invalid --mode `{changes}`: unexpected character (expected a chmod \
+             symbolic string like `u+rwx,go-rx` or a bare octal mode like `0644`)"
+        )));
+    }
+    let mut mode = file_mode::Mode::empty();
+    if octal {
+        let value = u32::from_str_radix(changes, 8).map_err(|_| {
+            Error::Config(format!(
+                "invalid --mode `{changes}`: not a valid octal mode"
+            ))
+        })?;
+        if value > 0o7777 {
+            return Err(Error::Config(format!(
+                "invalid --mode `{changes}`: mode out of range (maximum is `7777`)"
+            )));
+        }
+        // GNU bare octal is an absolute set; file-mode wants the `=` operator,
+        // which also round-trips setuid/setgid/sticky in the leading digit.
+        mode.set_str(&format!("={changes}"))
+            .map_err(|e| Error::Config(format!("invalid --mode `{changes}`: {e}")))?;
+    } else {
+        mode.set_str(changes)
+            .map_err(|e| Error::Config(format!("invalid --mode `{changes}`: {e}")))?;
+    }
+    Ok(mode)
+}
+
 /// Parse owner/group CLI args into a policy. Syntax-only: no `--map-target` /
 /// `--same-owner` gating happens here. Shared by archive and extract.
 pub fn parse_owner_group_args(
@@ -1251,5 +1310,75 @@ mod tests {
         let r = resolve_case(Some(uid), Some(&name), map2, Some(&ovr2),
                              MapResolutionTarget::IdName, true).expect("ok");
         assert_eq!(r, Some(uid));
+    }
+
+    // ================================================================================
+    // Suite 7 — symbolic mode changes (`--mode`)
+    // ================================================================================
+
+    fn apply(changes: &str, mode: u32) -> u32 {
+        parse_mode_changes(changes).expect("parse").apply_to(mode)
+    }
+
+    #[test]
+    fn mode_parse_errors_map_to_config() {
+        assert!(matches!(parse_mode_changes(""), Err(Error::Config(_))));
+        assert!(matches!(
+            parse_mode_changes("u+zz"),
+            Err(Error::Config(_))
+        ));
+        assert!(matches!(
+            parse_mode_changes("not-a-mode"),
+            Err(Error::Config(_))
+        ));
+        assert!(parse_mode_changes("u+rwx,go-rx").is_ok());
+    }
+
+    #[test]
+    fn mode_arithmetic_preserves_type_bits() {
+        // Regular file (S_IFREG 0o100000) keeps type bits through the transform.
+        assert_eq!(apply("u+x", 0o100644), 0o100744);
+        assert_eq!(apply("o=rw", 0o100755), 0o100756);
+        assert_eq!(apply("a-rwx", 0o100755), 0o100000);
+        // Directory (S_IFDIR 0o040000); `u+w` only touches the user class.
+        assert_eq!(apply("u+w", 0o040555), 0o040755);
+    }
+
+#[test]
+    fn mode_x_follows_directory_search_semantics() {
+        // Regular file already without execute: `a+X` adds nothing.
+        assert_eq!(apply("a+X", 0o100644), 0o100644);
+        // Regular file that already has some execute bit: file-mode treats X as
+        // dir-only (`dir_mask`), so unlike GNU chmod it does NOT spread x to other
+        // classes here. Documented as a known deviation from GNU tar semantics.
+        assert_eq!(apply("a+X", 0o100700), 0o100700);
+        // Directory: X sets search bits (execute) for all classes.
+        assert_eq!(apply("a+X", 0o040644), 0o040755);
+    }
+
+    #[test]
+    fn mode_mask_only_changes_bits() {
+        // Unrelated bits untouched; only the named classes change.
+        assert_eq!(apply("u+w", 0o100455), 0o100655);
+        assert_eq!(apply("go-r", 0o100777), 0o100733);
+    }
+
+    #[test]
+    fn mode_bare_octal_sets_absolute_mode() {
+        // GNU tar accepts a bare octal mode as an absolute set; type bits survive.
+        assert_eq!(apply("0644", 0o100755), 0o100644);
+        assert_eq!(apply("755", 0o100600), 0o100755);
+        // 4-digit octal includes special bits (setuid here).
+        assert_eq!(apply("4755", 0o100644), 0o104755);
+        assert_eq!(apply("0", 0o100777), 0o100000);
+    }
+
+    #[test]
+    fn mode_bare_octal_parse_errors() {
+        // 8/9 are not octal digits.
+        assert!(matches!(parse_mode_changes("09"), Err(Error::Config(_))));
+        // Beyond the 4-digit special+rwx range.
+        assert!(matches!(parse_mode_changes("77777"), Err(Error::Config(_))));
+        assert!(parse_mode_changes("7777").is_ok());
     }
 }
