@@ -14,7 +14,7 @@
 - [ ] query (query by file, out_tree or error table.)
 
 # NOW TODO
-- [ ] Placement Conflict Handling
+- [X] Placement Conflict Handling
 - [ ] Mode parsing
 - [ ] Filename rewriting
 - [ ] Progress
