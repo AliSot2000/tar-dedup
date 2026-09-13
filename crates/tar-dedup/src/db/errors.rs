@@ -11,7 +11,7 @@ use rusqlite::{Connection, named_params, OptionalExtension};
 use std::path::PathBuf;
 
 use crate::config::{ExtractPipelinePhase, PipelinePhase};
-use crate::db::flags::{ErrorFlag, ErrorFlags, ErrorScope};
+use crate::db::flags::{ErrorFlags, ErrorScope};
 use crate::db::types::{FileId, OutTreeId};
 use crate::error::{FileStatError, Result};
 
@@ -53,16 +53,6 @@ pub struct RecordDraft {
 }
 
 impl RecordDraft {
-    pub fn session(phase: ErrorPhase, error: FileStatError) -> Self {
-        Self {
-            file_id: None,
-            out_tree_id: None,
-            phase,
-            error,
-            flags: ErrorFlags::default().with(ErrorFlag::SessionError, true),
-        }
-    }
-
     /// The absolute path the error is about, if derivable from the error.
     pub fn abs_path(&self) -> Option<PathBuf> {
         error_path(&self.error)
