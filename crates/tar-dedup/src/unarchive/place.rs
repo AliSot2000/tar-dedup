@@ -815,6 +815,7 @@ fn relative_pardirs_to_dir(dir: &Path, file: &Path) -> PathBuf {
 /// Copy a single file from a to b. Function implements a shutdown check to avoid long blocking
 /// Error contains the Error as well as the file id to link against,
 /// Ok contains the id as well as bool which is false if reflink was used and true if copy was used.
+/// INFO: Function returns Variants Interrupted and FileStatError
 fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no_reflink: bool)
     -> std::result::Result<(ID, bool), (ID, Error)> {
     // Attempt to reflink
@@ -833,13 +834,25 @@ fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no
         |_, _, _| -> Result<()> { shutdown.check_in_flight() }
     );
 
-    // Handle result
+    // Handle result; sparse-cp converts io errors via `From<io::Error>` with an
+    // empty path, so re-attach the destination on the way out.
     match spc_res {
         Ok(_) => Ok((fid, true)),
         Err(e) => {
             let _ = fs::remove_file(dst);
-            Err((fid, e))
+            Err((fid, annotate_copy_error(e, dst)))
         }
+    }
+}
+
+/// Attach `dst` to a copy error. `Interrupted` is preserved verbatim (the phase
+/// loop branches on it); other `FileStat` error kinds pass through untouched.
+fn annotate_copy_error(e: Error, dst: &Path) -> Error {
+    match e {
+        Error::FileStat(FileStatError::Io { source, .. }) => {
+            Error::FileStat(FileStatError::Io { path: dst.to_path_buf(), source })
+        }
+        other => other,
     }
 }
 
@@ -1082,5 +1095,53 @@ fn validate_materialize_result<I>(m: &MaterializeResult<I>) -> () {
         // Conflict, place
         (true, true, _, _) => (),
         _ => panic!("INVARIANT FAILED: Impossible flag constellation returned from placement ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error as IoError, ErrorKind};
+
+    #[test]
+    fn annotate_copy_error_attaches_dst_to_io() {
+        let dst = PathBuf::from("/out/dst.txt");
+        let err = Error::FileStat(FileStatError::Io {
+            path: PathBuf::new(),
+            source: IoError::new(ErrorKind::NotFound, "boom"),
+        });
+        match annotate_copy_error(err, &dst) {
+            Error::FileStat(FileStatError::Io { path, source }) => {
+                assert_eq!(path, dst);
+                assert_eq!(source.kind(), ErrorKind::NotFound);
+            }
+            other => panic!("expected FileStat(Io), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn annotate_copy_error_preserves_interrupted() {
+        let dst = PathBuf::from("/out/dst.txt");
+        assert!(matches!(
+            annotate_copy_error(Error::Interrupted, &dst),
+            Error::Interrupted
+        ));
+    }
+
+    #[test]
+    fn annotate_copy_error_passes_unknown_errors_through() {
+        let dst = PathBuf::from("/out/dst.txt");
+        let general = Error::FileStat(FileStatError::General {
+            path: Some(PathBuf::from("/somewhere")),
+            message: "nope".into(),
+        });
+        assert!(matches!(
+            annotate_copy_error(general, &dst),
+            Error::FileStat(FileStatError::General { .. })
+        ));
+        assert!(matches!(
+            annotate_copy_error(Error::Other(anyhow::anyhow!("x")), &dst),
+            Error::Other(_)
+        ));
     }
 }
