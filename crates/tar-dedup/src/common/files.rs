@@ -1,9 +1,11 @@
+use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::Path;
-
+use std::path::{Path, PathBuf};
+use path_clean::PathClean;
+use crate::db::types::{FileType, LinkType};
 use crate::error::{Error, Result};
 
 use super::COPY_STEP_SIZE;
@@ -208,6 +210,150 @@ pub fn device_num<P: AsRef<Path>>(_: P) -> io::Result<u64> {
     ))
 }
 */
+
+/// Function attempts to figure out what a given soft link (chain) is pointing to.
+/// If a link is a part of a link cycle, a `Cycle` is emitted
+/// If a link returns a NotFound Error, `Dangling` is returned
+/// If a link target cannot be resolved (any other error e.g. permission error), `Unknown` is return
+fn resolve_link(e: &Path) -> std::result::Result<LinkType, (PathBuf, io::Error)> {
+    let mut visited = HashSet::new();
+    let mut current = e.to_path_buf();
+    debug_assert!(current.is_symlink(), "INVARIANT: Non-Link DirEntry supplied");
+    debug_assert!(current.is_absolute(), "INVARIANT: Non-Absolute Path supplied");
+
+    loop {
+        // Cycle prevention.
+        if !visited.insert(current.clone()) {
+            return Ok(LinkType::Cycle); // cycle detected
+        }
+
+        let ft = match fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                // Deal with next step resolution.
+                let target = fs::read_link(&current);
+                match target {
+                    Ok(pb) => {
+                        current = resolve_relative(&current, &pb.as_path());
+                        continue;
+                    }
+                    Err(e) => {
+                        let fmt_path = current.as_os_str().to_string_lossy();
+                        tracing::warn!("Resolving {fmt_path} resulted an error: {e}");
+                        return Ok(LinkType::Unknown);
+                    }
+                }
+            }
+            Ok(meta) => meta.file_type(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LinkType::Dangling),
+            Err(g) => return Err((current.to_path_buf(), g)),
+        };
+
+        // Match valid target
+        return Ok(classify_link_target(ft));
+    }
+}
+
+/// Classify the resolved, non-symlink target of a link chain.
+#[cfg(unix)]
+fn classify_link_target(ft: fs::FileType) -> LinkType {
+    use std::os::unix::fs::FileTypeExt;
+    if ft.is_file() {
+        LinkType::File
+    } else if ft.is_dir() {
+        LinkType::Directory
+    } else if ft.is_fifo() {
+        LinkType::FIFO
+    } else if ft.is_char_device() {
+        LinkType::CharacterDevice
+    } else if ft.is_block_device() {
+        LinkType::BlockDevice
+    } else if ft.is_socket() {
+        LinkType::Socket
+    } else {
+        LinkType::Unknown
+    }
+}
+
+/// Windows link targets can only be files or directories (the symlink dir/file
+/// distinction comes from `is_symlink_dir` in the caller's `file_type()`).
+#[cfg(windows)]
+fn classify_link_target(ft: std::fs::FileType) -> LinkType {
+    if ft.is_file() {
+        LinkType::File
+    } else if ft.is_dir() {
+        LinkType::Directory
+    } else {
+        LinkType::Unknown
+    }
+}
+
+/// Handle solving for new linking target.`link_path` refers to the current location of the source
+/// of the symlink and `target` to the resolved target given the current symlink
+fn resolve_relative(link_path: &Path, target: &Path) -> PathBuf {
+    debug_assert!(link_path.is_absolute(), "link_path must be absolute");
+
+    let joined = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        link_path
+            .parent()
+            .expect("absolute path must have a parent")
+            .join(target)
+    };
+
+    joined.clean()
+}
+
+#[cfg(unix)]
+pub fn determine_file_type(md: &fs::Metadata, path: &Path)
+                       -> std::result::Result<FileType, (FileType, PathBuf, io::Error)> {
+    use std::os::unix::fs::FileTypeExt;
+
+    // walkdir::DirEntry::file_type() is infallible.
+    let ft = md.file_type();
+    if ft.is_file() {
+        Ok(FileType::File)
+    } else if ft.is_dir() {
+        Ok(FileType::Directory)
+    } else if ft.is_fifo() {
+        Ok(FileType::FIFO)
+    } else if ft.is_block_device() {
+        Ok(FileType::BlockDevice)
+    } else if ft.is_char_device() {
+        Ok(FileType::CharacterDevice)
+    } else if ft.is_symlink() {
+        match resolve_link(path) {
+            Ok(lt) => Ok(FileType::Symlink(lt)),
+            Err((failed_path, e)) => Err((FileType::Symlink(LinkType::Unknown), failed_path, e)),
+        }
+    } else if ft.is_socket() {
+        Ok(FileType::Socket)
+    } else {
+        Ok(FileType::Unknown)
+    }
+}
+
+#[cfg(windows)]
+fn determine_file_type(md: &fs::Metadata, path: &Path)
+                       -> std::result::Result<FileType, (FileType, PathBuf, io::Error)> {
+    // walkdir::DirEntry::file_type() is infallible.
+    let ft = md.file_type();
+
+    if ft.is_file() {
+        Ok(FileType::File)
+    } else if ft.is_dir() {
+        Ok(FileType::Directory)
+    } else if ft.is_symlink() {
+        // Resolve the chain: yields the eventual target type plus Dangling /
+        // Cycle / Unknown for broken or unresolvable links.
+        match resolve_link(path) {
+            Ok(lt) => Ok(FileType::Symlink(lt)),
+            Err((failed_path, e)) => Err((FileType::Symlink(LinkType::Unknown), failed_path, e)),
+        }
+    } else {
+        Ok(FileType::Unknown)
+    }
+}
 
 #[cfg(test)]
 mod tests {
