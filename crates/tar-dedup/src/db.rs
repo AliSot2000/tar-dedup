@@ -629,7 +629,7 @@ impl Database {
         place::mark_source_canonical(&self.conn(), source_id)
     }
 
-    pub fn apply_flags_to_files(&self) -> Result<(u64, u64, u64, u64)> {
+    pub fn apply_flags_to_files(&self) -> Result<(u64, u64, u64, u64, u64, u64)> {
         place::apply_flags_to_files(&self.conn())
     }
 
