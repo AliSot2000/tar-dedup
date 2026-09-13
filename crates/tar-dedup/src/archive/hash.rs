@@ -130,24 +130,13 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
 }
 
 /// Record a per-file hash failure in the persistent error log (best-effort).
-/// The errors from `hash_file` are downcast to a [`FileStatError`]; the error's
-/// own `Io` path is used as the fallback when it cannot be derived.
+/// `hash_file` failures are `FileStat` (per-file) errors; the carried
+/// [`FileStatError`](crate::error::FileStatError) is recreated on the way in.
 fn record_hash_error(recorder: &mut crate::db::Recorder, e: &&IdError) {
-    let err_path = e.err.io_path();
-    let file_stat = match &e.err {
-        crate::error::Error::Io { path, source } => crate::error::FileStatError::Io {
-            path: path.clone(),
-            source: std::io::Error::new(source.kind(), source.to_string()),
-        },
-        other => crate::error::FileStatError::General {
-            path: err_path,
-            message: format!("{other}"),
-        },
-    };
     recorder.record_file(
         e.id,
         crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Hash),
-        file_stat,
+        e.err.to_file_stat(None), // TODO move this outside.
         crate::db::flags::ErrorFlags::default(),
     );
 }
