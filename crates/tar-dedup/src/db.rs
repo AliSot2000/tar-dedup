@@ -548,6 +548,18 @@ impl Database {
         place::set_out_tree_built(&self.conn())
     }
 
+    pub fn placement_prologue_done(&self) -> Result<bool> {
+        place::placement_prologue_done(&self.conn())
+    }
+
+    pub fn set_placement_prologue_done(&self) -> Result<()> {
+        place::set_placement_prologue_done(&self.conn())
+    }
+
+    pub fn set_file_new_name(&self, file_id: FileId, new_name: Option<&str>) -> Result<()> {
+        place::set_file_new_name(&self.conn(), file_id, new_name)
+    }
+
     pub fn set_dir_tree_built(&self) -> Result<()> {
         place::set_dir_tree_built(&self.conn())
     }
@@ -580,7 +592,7 @@ impl Database {
         source_id: Option<i64>,
         only_dir: Option<bool>,
     ) -> Result<Vec<OutTreeRecord>> {
-        place::list_out_tree(&self.conn(), last_id, batch_size, source_id, only_dir)
+        common::list_out_tree(&self.conn(), last_id, batch_size, source_id, only_dir)
     }
 
     pub fn list_out_tree_for_materialization<R: SqlFileRow>(
