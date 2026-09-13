@@ -738,7 +738,7 @@ impl Database {
 /// Auto-flush never propagates errors and retains the drafts for a later retry.
 pub struct Recorder<'a> {
     db: Option<&'a Database>,
-    buf: Vec<errors::RecordDraft>,
+    buf: Vec<RecordDraft>,
     enabled: bool,
     auto_flush: bool,
     flush_limit: u64,
