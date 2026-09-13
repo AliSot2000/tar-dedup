@@ -187,6 +187,7 @@ pub fn place_config(extraction_root: PathBuf, absolute_names: bool) -> ExtractCo
             apply_owner: false,
         },
         mode_policy: tar_dedup::common::perms::ModeSource::None,
+        strip_components: 0,
     }
 }
 
