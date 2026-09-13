@@ -32,6 +32,7 @@ pub enum MetaKey {
     OutTreeBuilt,
     DirTreeBuilt,
     ArchiveOwnerPolicy,
+    ArchiveModeChanges,
 }
 
 impl MetaKey {
@@ -52,6 +53,7 @@ impl MetaKey {
             Self::OutTreeBuilt => "out_tree_built",
             Self::DirTreeBuilt => "dir_tree_built",
             Self::ArchiveOwnerPolicy => "archive_owner_policy",
+            Self::ArchiveModeChanges => "archive_mode_changes",
         }
     }
 
@@ -72,6 +74,7 @@ impl MetaKey {
             "out_tree_built" => Self::OutTreeBuilt,
             "dir_tree_built" => Self::DirTreeBuilt,
             "archive_owner_policy" => Self::ArchiveOwnerPolicy,
+            "archive_mode_changes" => Self::ArchiveModeChanges,
             _ => return None,
         })
     }
@@ -93,6 +96,7 @@ impl MetaKey {
             Self::OutTreeBuilt,
             Self::DirTreeBuilt,
             Self::ArchiveOwnerPolicy,
+            Self::ArchiveModeChanges,
         ]
     }
 }
@@ -115,6 +119,7 @@ pub enum MetaEntry {
     OutTreeBuilt(bool),
     DirTreeBuilt(bool),
     ArchiveOwnerPolicy(OwnerGroupPolicy),
+    ArchiveModeChanges(String),
 }
 
 impl MetaEntry {
@@ -135,6 +140,7 @@ impl MetaEntry {
             Self::OutTreeBuilt(_) => MetaKey::OutTreeBuilt,
             Self::DirTreeBuilt(_) => MetaKey::DirTreeBuilt,
             Self::ArchiveOwnerPolicy(_) => MetaKey::ArchiveOwnerPolicy,
+            Self::ArchiveModeChanges(_) => MetaKey::ArchiveModeChanges,
         }
     }
 
@@ -158,6 +164,7 @@ impl MetaEntry {
             }
             Self::ArchiveOwnerPolicy(v) => serde_json::to_string(v)
                 .expect("owner/group policy serializable"),
+            Self::ArchiveModeChanges(v) => v.clone(),
         }
     }
 
@@ -201,6 +208,7 @@ impl MetaEntry {
                         "invalid archive_owner_policy meta: {raw}"
                     ))
                 }),
+            MetaKey::ArchiveModeChanges => Ok(Self::ArchiveModeChanges(raw.to_string())),
         }
     }
 }
@@ -426,6 +434,17 @@ pub fn set_archive_owner_policy(conn: &Connection, value: &OwnerGroupPolicy) -> 
     set_entry(conn, &MetaEntry::ArchiveOwnerPolicy(value.clone()))
 }
 
+pub fn get_archive_mode_changes(conn: &Connection) -> Result<Option<String>> {
+    get_typed(conn, MetaKey::ArchiveModeChanges, |e| match e {
+        MetaEntry::ArchiveModeChanges(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_archive_mode_changes(conn: &Connection, value: &str) -> Result<()> {
+    set_entry(conn, &MetaEntry::ArchiveModeChanges(value.to_string()))
+}
+
 // TODO Delete the entirety of the archive keys.
 /// Drop tar-writer byte counters. Archive/extract phase keys are left standing.
 pub fn clear_archive_meta(conn: &mut Connection) -> Result<()> {
@@ -532,6 +551,27 @@ mod tests {
             .known
             .iter()
             .any(|e| matches!(e, MetaEntry::TarWriterBytesIn(11))));
+    }
+
+    #[test]
+    fn archive_mode_changes_round_trip() {
+        let (_dir, conn) = open_conn();
+
+        assert_eq!(get_archive_mode_changes(&conn).unwrap(), None);
+
+        set_archive_mode_changes(&conn, "u+rwx,go-rx").unwrap();
+        assert_eq!(
+            get_archive_mode_changes(&conn).unwrap(),
+            Some("u+rwx,go-rx".to_string())
+        );
+
+        let dump = dump_meta(&conn).unwrap();
+        assert!(dump
+            .known
+            .iter()
+            .any(|e| matches!(e, MetaEntry::ArchiveModeChanges(v) if v == "u+rwx,go-rx")));
+        assert!(dump.unknown_keys.is_empty());
+        assert!(dump.invalid.is_empty());
     }
 
     #[test]
