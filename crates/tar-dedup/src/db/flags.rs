@@ -217,22 +217,20 @@ define_flags! {
         AtLinkSource = 17,
         /// File has been placed in the output tree
         Placed = 18,
-        /// File was skipped due to a conflict while placing.
-        Skipped = 19,
         /// At the target destination was a preexisting entry which was overwritten during the
         /// extraction or which prevented the extraction
-        Overwrite = 20,
+        Conflict = 19,
         /// Either unlink_first was given or there was a type conflict which necessitated the
         /// removal of the previous entry. The flag encodes that remove was called successfully.
-        RemovedPrevious = 21,
+        RemovedPrevious = 20,
         /// Used RefLink (if false -> used (sparse) copy)
-        UsedRefLink = 22,
+        UsedRefLink = 21,
         /// An Error prevented the file from being placed in its correct position
-        ErrorWhilePlacing = 23,
+        ErrorWhilePlacing = 22,        
         /// File materialized corectly with metadata applied.
-        AppliedMetadata = 24,
+        AppliedMetadata = 23,
         /// At least one error occurred while applying metadata
-        ErrorWhileApplyingMetadata = 25,
+        ErrorWhileApplyingMetadata = 24,
     }
     /// Bitset stored in `files.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,22 +261,20 @@ define_flags! {
         IsHardlink = 1,
         /// Capture if we used reflnks or copies into place.
         UsedRefLink = 2,
-        /// File was considered but not placed due to a conflict
-        Skipped = 3,
         /// At the target destination was a preexisting entry which was overwritten during the
         /// extraction or which prevented the extraction
-        Overwrite = 4,
+        Conflict = 3,
         /// Either unlink_first was given or there was a type conflict which necessitated the
         /// removal of the previous entry. The flag encodes that remove was called successfully.
-        RemovedPrevious = 5,
+        RemovedPrevious = 4,
         /// Copy/link into this output path failed.
-        ErrorWhilePlace = 6,
+        ErrorWhilePlace = 5,
         /// Metadata restore failed for this output path.
-        ErrorWhileApplyingMetadata = 7,
+        ErrorWhileApplyingMetadata = 6,
         /// Metadata (mode, owner, times, xattr/acl/selinux) has been applied.
-        AppliedMetadata = 8,
+        AppliedMetadata = 7,
         /// Highlight directories to be able to scan them for dir tree creation.
-        IsDirectory = 9,
+        IsDirectory = 8,
     }
     /// Bitset stored in `out_tree.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
