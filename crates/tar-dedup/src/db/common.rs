@@ -58,6 +58,22 @@ impl FileRecord {
     pub fn sparse_member_name(&self) -> Option<String> {
         self.content_id().as_ref().map(sparse_member_name)
     }
+
+    /// Downconvert the FileRecord to a stripped record.
+    pub fn to_stripped(&self) -> StrippedRecord {
+        StrippedRecord {
+            id: self.id,
+            abs_path: self.abs_path.clone(),
+            ext: self.ext.clone(),
+            size: self.size,
+            sha1: self.sha1,
+            mtime: self.mtime, atime: self.atime, ctime: self.ctime,
+            ftype: self.ftype,
+            device_id: self.device_id, inode_id: self.inode_id,
+            canonical_id: self.canonical_id,
+            flags: self.flags, phase: self.phase,
+        }
+    }
 }
 
 impl StrippedRecord {
