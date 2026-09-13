@@ -202,7 +202,7 @@ pub fn handle_dir(
             Err(e) => {
                 // Failed to access a single element while walking; the file row
                 // may or may not exist, so this is recorded without a file_id.
-                recorder.session(
+                recorder.record_session(
                     ERROR_PHASE,
                     FileStatError::General {
                         path: Some(start_dir.to_path_buf()),
@@ -258,7 +258,7 @@ pub fn handle_entry(
         Err(e) => {
             // File row cannot be created without metadata; record with the path
             // alone so the failure is not lost when the phase aborts.
-            recorder.session(
+            recorder.record_session(
                     ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
                     FileStatError::Io {
                         path: path.to_path_buf(),
