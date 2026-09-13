@@ -99,6 +99,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
 
         progress.set_file("archive", &record.abs_path);
 
+        // TODO Correct capture
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
             Ok(()) => { 
                 db.set_file_flag(record.id, FileFlag::AppendedPath, true)?; 
@@ -117,18 +118,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                 recorder.record_file(
                     record.id,
                     crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
-                    match e {
-                        crate::error::Error::Io { path, source } =>
-                            crate::error::FileStatError::Io {
-                                path: path.clone(),
-                                source: std::io::Error::new(
-                                    std::io::ErrorKind::Other, source.to_string()),
-                            },
-                        other => crate::error::FileStatError::General {
-                            path: None,
-                            message: other.to_string(),
-                        },
-                    },
+                    e.to_file_stat(None),
                     ErrorFlags::default(),
                 );
                 db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
