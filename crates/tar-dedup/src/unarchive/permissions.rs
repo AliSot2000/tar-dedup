@@ -35,7 +35,6 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     // Errors encountered while applying metadata are recorded per-file; the recorder
     // flushes them in a single txn at the end (unless `--no-errors`).
     let mut recorder = Recorder::new(db, !config.process.no_errors);
-    let phase = ErrorPhase::Extract(crate::config::ExtractPipelinePhase::Permissions);
     // Resolve the owner/group policy: stored in the archive or provided on the CLI.
     let policy: Option<OwnerGroupPolicy> = match &config.owner_policy {
         OwnerGroupSource::None => None,
@@ -77,7 +76,7 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     // Directories, only when `--overwrite-dir` is requested.
     if config.attributes.force_overwrite_dir {
         process_batches(
-            &mut recorder, phase, config, db, shutdown, policy.as_ref(), mode_changes.as_ref(), true)?;
+            &mut recorder, config, db, shutdown, policy.as_ref(), mode_changes.as_ref(), true)?;
     }
 
     recorder.flush()?;
@@ -97,7 +96,6 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
 
 fn process_batches(
     recorder: &mut Recorder,
-    phase: ErrorPhase,
     config: &ExtractConfig,
     db: &Database,
     shutdown: &Shutdown,
@@ -134,7 +132,7 @@ fn process_batches(
                     recorder.record(
                         out.file_id,
                         Some(out.id),
-                        phase.clone(),
+                        ERROR_PHASE,
                         error,
                         ErrorFlags::default(),
                     );
