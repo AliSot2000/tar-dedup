@@ -31,6 +31,7 @@ pub enum MetaKey {
     ScanTarLastMemberIndex,
     OutTreeBuilt,
     DirTreeBuilt,
+    PlacementPrologueDone,
     ArchiveOwnerPolicy,
     ArchiveModeChanges,
 }
@@ -52,6 +53,7 @@ impl MetaKey {
             Self::ScanTarLastMemberIndex => "scan_tar_last_member_index",
             Self::OutTreeBuilt => "out_tree_built",
             Self::DirTreeBuilt => "dir_tree_built",
+            Self::PlacementPrologueDone => "placement_prologue_done",
             Self::ArchiveOwnerPolicy => "archive_owner_policy",
             Self::ArchiveModeChanges => "archive_mode_changes",
         }
@@ -73,6 +75,7 @@ impl MetaKey {
             "scan_tar_last_member_index" => Self::ScanTarLastMemberIndex,
             "out_tree_built" => Self::OutTreeBuilt,
             "dir_tree_built" => Self::DirTreeBuilt,
+            "placement_prologue_done" => Self::PlacementPrologueDone,
             "archive_owner_policy" => Self::ArchiveOwnerPolicy,
             "archive_mode_changes" => Self::ArchiveModeChanges,
             _ => return None,
@@ -95,6 +98,7 @@ impl MetaKey {
             Self::ScanTarLastMemberIndex,
             Self::OutTreeBuilt,
             Self::DirTreeBuilt,
+            Self::PlacementPrologueDone,
             Self::ArchiveOwnerPolicy,
             Self::ArchiveModeChanges,
         ]
@@ -118,6 +122,7 @@ pub enum MetaEntry {
     ScanTarLastMemberIndex(u64),
     OutTreeBuilt(bool),
     DirTreeBuilt(bool),
+    PlacementPrologueDone(bool),
     ArchiveOwnerPolicy(OwnerGroupPolicy),
     ArchiveModeChanges(String),
 }
@@ -139,6 +144,7 @@ impl MetaEntry {
             Self::ScanTarLastMemberIndex(_) => MetaKey::ScanTarLastMemberIndex,
             Self::OutTreeBuilt(_) => MetaKey::OutTreeBuilt,
             Self::DirTreeBuilt(_) => MetaKey::DirTreeBuilt,
+            Self::PlacementPrologueDone(_) => MetaKey::PlacementPrologueDone,
             Self::ArchiveOwnerPolicy(_) => MetaKey::ArchiveOwnerPolicy,
             Self::ArchiveModeChanges(_) => MetaKey::ArchiveModeChanges,
         }
@@ -159,7 +165,8 @@ impl MetaEntry {
             | Self::ScanTarComplete(v)
             | Self::ScanTarFromFooter(v)
             | Self::OutTreeBuilt(v)
-            | Self::DirTreeBuilt(v) => {
+            | Self::DirTreeBuilt(v)
+            | Self::PlacementPrologueDone(v) => {
                 if *v { "1" } else { "0" }.to_string()
             }
             Self::ArchiveOwnerPolicy(v) => serde_json::to_string(v)
@@ -201,6 +208,7 @@ impl MetaEntry {
             }
             MetaKey::OutTreeBuilt => Ok(Self::OutTreeBuilt(parse_bool(key, raw)?)),
             MetaKey::DirTreeBuilt => Ok(Self::DirTreeBuilt(parse_bool(key, raw)?)),
+            MetaKey::PlacementPrologueDone => Ok(Self::PlacementPrologueDone(parse_bool(key, raw)?)),
             MetaKey::ArchiveOwnerPolicy => serde_json::from_str(raw)
                 .map(Self::ArchiveOwnerPolicy)
                 .map_err(|_| {
@@ -423,6 +431,17 @@ pub fn set_dir_tree_built(conn: &Connection, value: bool) -> Result<()> {
     set_entry(conn, &MetaEntry::DirTreeBuilt(value))
 }
 
+pub fn get_placement_prologue_done(conn: &Connection) -> Result<Option<bool>> {
+    get_typed(conn, MetaKey::PlacementPrologueDone, |e| match e {
+        MetaEntry::PlacementPrologueDone(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_placement_prologue_done(conn: &Connection, value: bool) -> Result<()> {
+    set_entry(conn, &MetaEntry::PlacementPrologueDone(value))
+}
+
 pub fn get_archive_owner_policy(conn: &Connection) -> Result<Option<OwnerGroupPolicy>> {
     get_typed(conn, MetaKey::ArchiveOwnerPolicy, |e| match e {
         MetaEntry::ArchiveOwnerPolicy(v) => Some(v),
@@ -570,6 +589,27 @@ mod tests {
             .known
             .iter()
             .any(|e| matches!(e, MetaEntry::ArchiveModeChanges(v) if v == "u+rwx,go-rx")));
+        assert!(dump.unknown_keys.is_empty());
+        assert!(dump.invalid.is_empty());
+    }
+
+    #[test]
+    fn placement_prologue_done_round_trip() {
+        let (_dir, conn) = open_conn();
+
+        assert_eq!(get_placement_prologue_done(&conn).unwrap(), None);
+
+        set_placement_prologue_done(&conn, true).unwrap();
+        assert_eq!(get_placement_prologue_done(&conn).unwrap(), Some(true));
+
+        set_placement_prologue_done(&conn, false).unwrap();
+        assert_eq!(get_placement_prologue_done(&conn).unwrap(), Some(false));
+
+        let dump = dump_meta(&conn).unwrap();
+        assert!(dump
+            .known
+            .iter()
+            .any(|e| matches!(e, MetaEntry::PlacementPrologueDone(false))));
         assert!(dump.unknown_keys.is_empty());
         assert!(dump.invalid.is_empty());
     }
