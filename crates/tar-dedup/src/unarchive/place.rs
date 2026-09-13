@@ -462,7 +462,7 @@ pub fn materialize_files(
                     let src = cache_dir.join(id.0);
 
                     let res =
-                        match captured_check_path(&config, &src, &canonical) {
+                        match check_path(&config, &src, &canonical) {
                         Err(e) => Err((target.id, Error::FileStat(e))),
                         Ok((false, conflict, removed)) => Ok(MaterializeResult {
                             id: target.id.clone(),
@@ -497,54 +497,10 @@ pub fn materialize_files(
             &mut *results.lock().expect("hash results lock"),
             new_res);
 
-        for result in copied {
-            match result {
-                Err((id, err)) => {
-                    match err {
-                        Error::Interrupted => return Err(Error::Interrupted),
-                        Error::FileStat(e) => {
-                            // Record the copy failure against the out_tree row and keep the flag.
-                            recorder.record_out_tree(
-                                id, ERROR_PHASE, e, ErrorFlags::default(),
-                            );
-                            db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
-                        },
-                        other => panic!("INVARIANT FAILED: Only Io and Interrupted errors \
-                        expected, got {}", other)
-
-                    }
-                }
-                Ok(suc) => {
-                    if cfg!(debug_assertions) {
-                        validate_materialize_result(&suc);
-                    }
-                    db.set_out_tree_flag(
-                        suc.id, OutTreeFlag::Placed, suc.placed)?;
-                    db.set_out_tree_flag(
-                        suc.id, OutTreeFlag::UsedRefLink, !suc.used_copy)?;
-                    db.set_out_tree_flag(
-                        suc.id, OutTreeFlag::RemovedPrevious, !suc.removed)?;
-                    db.set_out_tree_flag(
-                        suc.id, OutTreeFlag::Conflict, suc.conflict)?;
-                }
-            }
-        }
+        process_results(copied, recorder, &db, false, true)?;
         recorder.flush()?;
     }
     Ok(())
-}
-
-#[cfg(debug_assertions)]
-fn validate_materialize_result<I>(m: &MaterializeResult<I>) -> () {
-    match (m.placed, m.conflict, m.removed, m.used_copy) {
-        // No conflict
-        (true, false, false, _) => (),
-        // Conflict, skip
-        (false, true, false, false) => (),
-        // Conflict, place
-        (true, true, _, _) => (),
-        _ => panic!("INVARIANT FAILED: Impossible flag constellation returned from placement ")
-    }
 }
 
 /// Create all the hardlinks after the copy stage.
@@ -557,7 +513,7 @@ pub fn materialize_hardlinks(
 
     let shutdown = shutdown.clone();
 
-    let results: Mutex<Vec<std::result::Result<OutTreeId, (OutTreeId, Error)>>> =
+    let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(config.process.jobs)
@@ -566,7 +522,7 @@ pub fn materialize_hardlinks(
 
     loop {
         shutdown.check_between_files()?;
-        let entries: Vec<(OutTreeRecord, OutTreeRecord)> = db.list_out_tree_for_hardlinks(
+        let entries: Vec<(StrippedRecord, OutTreeRecord, OutTreeRecord)> = db.list_out_tree_for_hardlinks(
             &last_id, BATCH_SIZE)?;
         if entries.is_empty() { break }
         last_id = entries
@@ -574,16 +530,26 @@ pub fn materialize_hardlinks(
 
         let parallel = pool.install(|| {
             entries.par_iter().try_for_each(
-                |(canonical, target)| -> Result<()> {
-                    let src = &canonical.abs_path;
+                |(stripped, out_canonical, target)| -> Result<()> {
+                    shutdown.check_between_files()?;
+                    let src = &out_canonical.abs_path;
                     let dst = &target.abs_path;
 
-                    // TODO handle unlink_first,
-                    // Todo handle newer, older
-
-                    let res = match fs::hard_link(src, dst) {
-                        Ok(()) => Ok(target.id),
-                        Err(e) => Err((target.id, Error::io(dst, e))),
+                    let res = match check_path(&config, &dst, &stripped) {
+                        Err(e) => Err((target.id ,Error::FileStat(e))),
+                        Ok((false, conflict, removed)) => Ok(MaterializeResult {
+                            id: target.id.clone(),
+                            placed: false, conflict, removed, used_copy: false
+                        }),
+                        Ok((true, conflict, removed)) => {
+                            match fs::hard_link(src, dst) {
+                                Err(e) => Err((target.id, Error::io(dst, e))),
+                                Ok(()) => Ok(MaterializeResult {
+                                    id: target.id.clone(),
+                                    placed: true, conflict, removed, used_copy: false
+                                }),
+                            }
+                        }
                     };
                     results.lock().expect("materialize files lock poisoned").push(res);
                     Ok(())
@@ -602,23 +568,7 @@ pub fn materialize_hardlinks(
             &mut *results.lock().expect("hash results lock"),
             new_res);
 
-        for result in copied {
-            match result {
-                Err((id, err)) => {
-                    recorder.record_out_tree(
-                        id,
-                        ERROR_PHASE,
-                        err.to_file_stat(None),
-                        ErrorFlags::default(),
-                    );
-                    db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
-                }
-                Ok(id) => {
-                    db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
-                    db.set_out_tree_flag(id, OutTreeFlag::IsHardlink, true)?;
-                }
-            }
-        }
+        process_results(copied, recorder, &db, true, false)?;
         recorder.flush()?;
     }
     Ok(())
@@ -634,7 +584,7 @@ pub fn materialize_others(
 
     let shutdown = shutdown.clone();
 
-    let results: Mutex<Vec<std::result::Result<OutTreeId, (OutTreeId, Error)>>> =
+    let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(config.process.jobs)
@@ -652,17 +602,25 @@ pub fn materialize_others(
         let parallel = pool.install(|| {
             entries.par_iter().try_for_each(
                 |(canonical, target)| -> Result<()> {
+                    shutdown.check_between_files()?;
 
-                    // TODO handle unlink_first,
-                    // Todo handle newer, older
-                    let base_res = build_other(
-                        &canonical, &target, config.placement.recreate_none_file_entries);
-
-                    let res = match base_res {
-                        Ok(()) => Ok(target.id),
-                        Err(e) => Err((target.id, Error::FileStat(e)))
+                    let res = match check_path(
+                        &config, &target.abs_path, &canonical.to_stripped()) {
+                        Err(e) => Err((target.id, Error::FileStat(e))),
+                        Ok((false, conflict, removed)) => Ok(MaterializeResult {
+                            id: target.id,
+                            placed: false, conflict, removed, used_copy: false
+                        }),
+                        Ok((true, conflict, removed)) =>
+                            match build_other(
+                                &canonical, &target, config.placement.recreate_none_file_entries) {
+                                Err(e) => Err((target.id, Error::FileStat(e))),
+                                Ok(()) => Ok(MaterializeResult {
+                                    id: target.id.clone(),
+                                    placed: true, conflict, removed, used_copy: false
+                                })
+                        }
                     };
-
                     results.lock().expect("materialize files lock poisoned").push(res);
                     Ok(())
                 })
@@ -679,35 +637,8 @@ pub fn materialize_others(
         let copied = std::mem::replace(
             &mut *results.lock().expect("hash results lock"),
             new_res);
-        for result in copied {
-            match result {
-                Err((_, Error::Interrupted)) => {
-                    recorder.flush()?;
-                    return Err(Error::Interrupted);
-                }
-                Err((id, Error::FileStat(fse))) => {
-                    recorder.record_out_tree(
-                        id,
-                        ERROR_PHASE,
-                        fse,
-                        ErrorFlags::default(),
-                    );
-                    db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
-                }
-                Err((id, other)) => {
-                    recorder.record_out_tree(
-                        id,
-                        ERROR_PHASE,
-                        other.to_file_stat(None),
-                        ErrorFlags::default(),
-                    );
-                    db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
-                }
-                Ok(id) => {
-                    db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
-                }
-            }
-        }
+
+        process_results(copied, recorder, &db, false, false)?;
         recorder.flush()?;
     }
     Ok(())
@@ -991,14 +922,54 @@ pub fn status_message_rebuilding(config: &ExtractConfig, db: &Database)
     ))
 }
 
+fn process_results(
+    results: Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>,
+    recorder: &mut Recorder,
+    db: &Database,
+    is_hardlink: bool,
+    set_reflink: bool) -> Result<()> {
+    for result in results {
+        match result {
+            Err((id, err)) => {
+                match err {
+                    Error::Interrupted => return Err(Error::Interrupted),
+                    Error::FileStat(e) => {
+                        // Record the copy failure against the out_tree row and keep the flag.
+                        recorder.record_out_tree(
+                            id, ERROR_PHASE, e, ErrorFlags::default(),
+                        );
+                        db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
+                    },
+                    other => panic!("INVARIANT FAILED: Only Io and Interrupted errors \
+                        expected, got {}", other),
+                }
+            }
+            Ok(suc) => {
+                if cfg!(debug_assertions) {
+                    validate_materialize_result(&suc);
+                }
+                db.set_out_tree_flag(
+                    suc.id, OutTreeFlag::Placed, suc.placed)?;
+                db.set_out_tree_flag(
+                    suc.id, OutTreeFlag::RemovedPrevious, !suc.removed)?;
+                db.set_out_tree_flag(
+                    suc.id, OutTreeFlag::Conflict, suc.conflict)?;
+                if is_hardlink {
+                    db.set_out_tree_flag(suc.id, OutTreeFlag::IsHardlink, true)?;
+                }
+                if set_reflink {
+                    db.set_out_tree_flag(suc.id, OutTreeFlag::UsedRefLink, !suc.used_copy)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 // -------------------------------------------------------------------------------------------------
 // Util
 // -------------------------------------------------------------------------------------------------
 
-/// Result:
-/// - first bool is true iff the file can be written to the path
-/// - second bool is true iff there was a conflict which resolved in favor of extracting
-/// - third bool is true iff there was a file was removed during the prep process.
 struct MaterializeResult<I> {
     id: I,
     placed: bool,
@@ -1220,8 +1191,8 @@ fn catalog_to_target_abs(
 /// - first bool is true iff the file can be written to the path
 /// - second bool is true iff there was a conflict which resolved in favor of extracting
 /// - third bool is true iff there was a file was removed during the prep process.
-fn captured_check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
-                       -> std::result::Result<(bool, bool, bool), FileStatError> {
+fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
+    -> std::result::Result<(bool, bool, bool), FileStatError> {
     if !tgt.exists() {
         return Ok((true, false, false))
     };
@@ -1341,7 +1312,7 @@ fn captured_check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
                 if config.placement.silent_conflicts {
                     tracing::info!("Failed to remove preexisting path {} with error {}",
                         tgt.display(), e);
-                    Ok((false, true, false))
+                    Ok((false, true, true))
                 } else {
                     Err(FileStatError::Io { path: tgt.to_path_buf(), source: e })
                 }
@@ -1349,5 +1320,19 @@ fn captured_check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         }
     } else {
         Ok((true, true, false))
+    }
+}
+
+
+#[cfg(debug_assertions)]
+fn validate_materialize_result<I>(m: &MaterializeResult<I>) -> () {
+    match (m.placed, m.conflict, m.removed, m.used_copy) {
+        // No conflict
+        (true, false, false, _) => (),
+        // Conflict, skip
+        (false, true, false, false) => (),
+        // Conflict, place
+        (true, true, _, _) => (),
+        _ => panic!("INVARIANT FAILED: Impossible flag constellation returned from placement ")
     }
 }
