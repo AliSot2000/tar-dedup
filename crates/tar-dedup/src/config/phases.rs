@@ -62,6 +62,7 @@ impl PipelinePhase {
 pub enum ExtractPipelinePhase {
     ScanTar,
     Rehash,
+    PlacementPrologue,
     Place,
     Permissions,
     Cleanup,
@@ -73,6 +74,7 @@ impl ExtractPipelinePhase {
         match self {
             Self::ScanTar => "scan_tar",
             Self::Rehash => "rehash",
+            Self::PlacementPrologue => "placement_prologue",
             Self::Place => "place",
             Self::Permissions => "permissions",
             Self::Cleanup => "cleanup",
@@ -84,6 +86,7 @@ impl ExtractPipelinePhase {
         match raw {
             "scan_tar" => Ok(Self::ScanTar),
             "rehash" => Ok(Self::Rehash),
+            "placement_prologue" => Ok(Self::PlacementPrologue),
             "place" => Ok(Self::Place),
             "permissions" => Ok(Self::Permissions),
             "cleanup" => Ok(Self::Cleanup),
@@ -97,7 +100,8 @@ impl ExtractPipelinePhase {
     pub fn next(self) -> Option<Self> {
         match self {
             Self::ScanTar => Some(Self::Rehash),
-            Self::Rehash => Some(Self::Place),
+            Self::Rehash => Some(Self::PlacementPrologue),
+            Self::PlacementPrologue => Some(Self::Place),
             Self::Place => Some(Self::Permissions),
             Self::Permissions => Some(Self::Cleanup),
             Self::Cleanup => Some(Self::Done),
