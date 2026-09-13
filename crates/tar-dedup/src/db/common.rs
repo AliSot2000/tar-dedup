@@ -5,7 +5,7 @@ use path_clean::PathClean;
 use rusqlite::{Connection, named_params};
 
 use crate::db::content_id::{content_id_from_digest, sparse_member_name};
-use crate::db::flags::{FileFlag, FileFlags, OutTreeFlags};
+use crate::db::flags::{FileFlags, OutTreeFlag, OutTreeFlags};
 use crate::db::types::{ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::error::Result;
 
@@ -72,6 +72,7 @@ impl FileRecord {
             device_id: self.device_id, inode_id: self.inode_id,
             canonical_id: self.canonical_id,
             flags: self.flags, phase: self.phase,
+            new_name: self.new_name.clone(),
         }
     }
 }
@@ -201,7 +202,7 @@ impl SqlFileRow for StrippedRecord {
     fn sql_columns(prefix: Option<&str>) -> String {
         match prefix {
             None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, \
-                flags, phase, inode, dev".to_string(),
+                flags, phase, inode, dev, new_name".to_string(),
             Some(p) => format!("
                 {p}.id AS \"{p}.id\",
                 {p}.abs_path AS \"{p}.abs_path\",
@@ -216,7 +217,8 @@ impl SqlFileRow for StrippedRecord {
                 {p}.flags AS \"{p}.flags\",
                 {p}.phase AS \"{p}.phase\",
                 {p}.inode AS \"{p}.inode\",
-                {p}.dev AS \"{p}.dev\""),
+                {p}.dev AS \"{p}.dev\",
+                {p}.new_name AS \"{p}.new_name\""),
         }
     }
 
@@ -243,6 +245,9 @@ impl SqlFileRow for StrippedRecord {
                 .map(|v| v as u64),
             device_id: row.get::<_, Option<i64>>(format!("{upx}dev").as_str())?
                 .map(|v| v as u64),
+            new_name: row
+                .get::<_, Option<String>>(format!("{upx}new_name").as_str())?
+                .map(String::from),
         })
     }
 
@@ -282,6 +287,62 @@ impl OutTreeRecord {
             )
         }
     }
+}
+
+/// List all elements of the out_tree in batches.
+pub fn list_out_tree(
+    conn: &Connection,
+    last_id: OutTreeId,
+    batch_size: u64,
+    source_id: Option<i64>,
+    only_dir: Option<bool>,
+) -> Result<Vec<OutTreeRecord>> {
+    debug_assert!(last_id.0 >= 0, "ids > 0, last_id must be >= 0");
+    let dir_filter = if only_dir.is_some() {
+        " AND o.flags & :dir = :tgt"
+    } else { "" };
+    let source_filter = if source_id.is_some() {
+        " AND r.source_id = :source_id "
+    } else { "" };
+    let cols = OutTreeRecord::sql_columns(Some("o"));
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {cols}
+            FROM out_tree o
+            JOIN ref_out r ON r.out_id = o.id
+            WHERE o.id > :last_id
+                {dir_filter}
+                {source_filter}
+            ORDER BY o.id
+            LIMIT :batch_size"))?;
+    let params = match (only_dir.is_some(), source_id.is_some()) {
+        (false, false) => named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size,
+        },
+        (false, true) => named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size,
+            ":source_id": source_id.unwrap(),
+        },
+        (true, false) => named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size,
+            ":dir": OutTreeFlag::IsDirectory.mask_i64(),
+            ":tgt": if only_dir.unwrap() { 1 } else { 0 },
+        },
+        (true, true) => named_params! {
+            ":last_id": last_id.0,
+            ":batch_size": batch_size,
+            ":dir": OutTreeFlag::IsDirectory.mask_i64(),
+            ":tgt": if only_dir.unwrap() { 1 } else { 0 },
+            ":source_id": source_id.unwrap(),
+        },
+    };
+    let rows = stmt.query_map(
+        params,
+        |r | OutTreeRecord::from_sql(r, None)
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Result<Option<R>> {
