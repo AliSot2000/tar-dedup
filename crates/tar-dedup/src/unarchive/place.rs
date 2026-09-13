@@ -723,7 +723,7 @@ fn process_results(
         match result {
             Err((id, err)) => {
                 match err {
-                    Error::Interrupted => return Err(Error::Interrupted),
+                    Error::Interrupted => (), // Finish consuming and exit after.
                     Error::FileStat(e) => {
                         // Record the copy failure against the out_tree row and keep the flag.
                         recorder.record_out_tree(
