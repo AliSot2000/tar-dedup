@@ -18,6 +18,7 @@ use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::{fs, io};
+use std::fs::Metadata;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
 
@@ -314,13 +315,7 @@ pub fn handle_entry(
     let dev = meta.dev();
     let ino = meta.ino();
 
-    let ftype = match determine_file_type(&meta, &path) {
-        Ok(t) => t,
-        Err((t, e)) => {
-            enc_err.push(e);
-            t
-        }
-    };
+    let ftype = inner_file_type(&meta, &path, &mut enc_err);
 
     let (link_dst, major, minor) = match ftype {
         FileType::Symlink(_) => (strip_transpose(path, fs::read_link(path), &mut enc_err),
@@ -391,7 +386,7 @@ pub fn handle_entry(
         for error in enc_err {
             recorder.record_file(
                 file_id,
-                crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
+                ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
                 error,
                 crate::db::flags::ErrorFlags::default(),
             );
@@ -428,13 +423,7 @@ pub fn handle_entry(
     let ctime = strip_transpose(path, times.2, &mut enc_err);
     let uid = None;
     let gid = None;
-    let ftype: FileType = match determine_file_type(&meta, &path) {
-        Ok(t) => t,
-        Err((t, e)) => {
-            enc_err.push(e);
-            t
-        }
-    };
+    let ftype = inner_file_type(&meta, &path, &mut enc_err);
 
     // Volume serial number + file index fill the `(dev, inode)` tuple; this is
     // what feeds hardlink detection and the dedup pre-flight check.
@@ -610,4 +599,18 @@ fn get_file_rdev_parts(meta: &fs::Metadata) -> (Option<u64>, Option<u64>) {
         Some(nix::sys::stat::major(rdev)),
         Some(nix::sys::stat::minor(rdev)),
     )
+}
+
+pub fn inner_file_type(meta: &Metadata, path: &Path, enc_err: &mut  Vec<FileStatError>)
+    -> FileType {
+    match determine_file_type(&meta, &path) {
+        Ok(t) => t,
+        Err((t, _failed_path, e)) => {
+            enc_err.push(FileStatError::Io {
+                path: path.to_path_buf(),
+                source: e,
+            });
+            t
+        }
+    }
 }
