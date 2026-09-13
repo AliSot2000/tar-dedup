@@ -581,9 +581,9 @@ impl Database {
         place::list_out_tree_for_materialization(&self.conn(), last_id, batch_size)
     }
 
-    pub fn list_out_tree_for_hardlinks(
+    pub fn list_out_tree_for_hardlinks<R: SqlFileRow>(
         &self, last_id: &OutTreeId, batch_size: u64)
-        -> Result<Vec<(OutTreeRecord, OutTreeRecord)>> {
+        -> Result<Vec<(R, OutTreeRecord, OutTreeRecord)>> {
         place::list_out_tree_for_hardlinks(&self.conn(), last_id, batch_size)
     }
 
