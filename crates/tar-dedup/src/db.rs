@@ -795,14 +795,14 @@ impl<'a> Recorder<'a> {
         &mut self,
         file_id: Option<FileId>,
         out_tree_id: Option<OutTreeId>,
-        phase: errors::ErrorPhase,
+        phase: ErrorPhase,
         error: crate::error::FileStatError,
         flags: flags::ErrorFlags,
     ) {
         if !self.enabled {
             return;
         }
-        self.buf.push(errors::RecordDraft {
+        self.buf.push(RecordDraft {
             file_id,
             out_tree_id,
             phase,
@@ -826,7 +826,7 @@ impl<'a> Recorder<'a> {
     pub fn record_file(
         &mut self,
         file_id: FileId,
-        phase: errors::ErrorPhase,
+        phase: ErrorPhase,
         error: crate::error::FileStatError,
         flags: flags::ErrorFlags,
     ) {
@@ -837,14 +837,14 @@ impl<'a> Recorder<'a> {
     pub fn record_out_tree(
         &mut self,
         out_tree_id: OutTreeId,
-        phase: errors::ErrorPhase,
+        phase: ErrorPhase,
         error: crate::error::FileStatError,
         flags: flags::ErrorFlags,
     ) {
         self.record(None, Some(out_tree_id), phase, error, flags);
     }
 
-    pub fn push(&mut self, draft: errors::RecordDraft) {
+    pub fn push(&mut self, draft: RecordDraft) {
         if self.enabled {
             self.buf.push(draft);
             self.try_auto_flush();
