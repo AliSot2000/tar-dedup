@@ -198,7 +198,7 @@ fn handle_filter(
         let file_content = match fs::read_to_string(file) {
             Ok(fc) => fc,
             Err(e) => {
-                recorder.session(
+                recorder.record_session(
                     phase.clone(),
                     crate::error::FileStatError::Io {
                         path: file.clone(),
@@ -233,7 +233,7 @@ fn handle_query(source: &str, query: &str, operation: &str, line: u64,
         let res = insert_fn(source, Some(line), query)?;
         assert_eq!(res, 1, "DB Failed, expected 1 row to get added, got {res}");
     } else {
-        recorder.session(
+        recorder.record_session(
             phase.clone(),
             crate::error::FileStatError::General {
                 path: None,

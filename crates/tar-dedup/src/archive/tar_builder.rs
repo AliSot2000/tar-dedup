@@ -222,7 +222,7 @@ fn truncate_archive_at(path: &Path, offset: u64, recorder: &mut crate::db::Recor
         Ok(()) => (),
         Err(e) => {
             let err = Error::io(path, e);
-            recorder.session(phase, err.to_file_stat(Some(path)), ErrorFlags::default());
+            recorder.record_session(phase, err.to_file_stat(Some(path)), ErrorFlags::default());
             return Err(err);
         }
     }
@@ -230,7 +230,7 @@ fn truncate_archive_at(path: &Path, offset: u64, recorder: &mut crate::db::Recor
         Ok(()) => (),
         Err(e) => {
             let err = Error::io(path, e);
-            recorder.session(phase, err.to_file_stat(Some(path)), ErrorFlags::default());
+            recorder.record_session(phase, err.to_file_stat(Some(path)), ErrorFlags::default());
             return Err(err);
         }
     }
@@ -273,7 +273,7 @@ fn append_snapshot(
         Ok(_) => (),
         Err(e) => {
             let err = Error::io(&staging, e);
-            recorder.session(
+            recorder.record_session(
                 crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
                 err.to_file_stat(Some(&staging)),
                 ErrorFlags::default(),
@@ -340,7 +340,7 @@ fn end_session(
                 match archive_footer::write_footer(&config.paths.archive_path, &config.paths.db_path()) {
                     Ok(()) => (),
                     Err(e) => {
-                        recorder.session(
+                        recorder.record_session(
                             crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
                             e.to_file_stat(Some(&config.paths.db_path())),
                             ErrorFlags::default(),

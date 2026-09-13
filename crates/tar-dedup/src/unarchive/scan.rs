@@ -33,7 +33,7 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(crate::config::ExtractPipeli
 /// speculative [`Recorder`] and persisted at a phase boundary (once a database is
 /// available); if the scan aborts first, [`Recorder::flush`]/`Drop` reports the loss.
 fn record_session_error(recorder: &mut Recorder, error: FileStatError) {
-    recorder.session(ERROR_PHASE, error, ErrorFlags::default());
+    recorder.record_session(ERROR_PHASE, error, ErrorFlags::default());
 }
 
 /// Record a per-file scan error (e.g. a failed payload `unpack`). The target row

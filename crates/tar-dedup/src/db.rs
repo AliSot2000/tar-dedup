@@ -815,7 +815,7 @@ impl<'a> Recorder<'a> {
     /// Session-scoped error: neither a file nor an out_tree row.
     ///
     /// The `SessionError` flag is always set, regardless of `flags`.
-    pub fn session(
+    pub fn record_session(
         &mut self,
         phase: ErrorPhase,
         error: crate::error::FileStatError,
