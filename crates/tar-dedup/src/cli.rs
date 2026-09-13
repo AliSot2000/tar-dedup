@@ -244,6 +244,12 @@ pub struct ArchiveArgs {
     #[arg(long = "group-map", value_name = "FILE", help_heading = "File Attributes")]
     pub group_map: Option<PathBuf>,
 
+    /// Force symbolic mode CHANGES for added members (GNU tar `--mode`). Applies
+    /// chmod-style updates (e.g. `u+rwx,go-rx`) at extraction; stored as archive
+    /// policy (meta).
+    #[arg(long = "mode", value_name = "CHANGES", help_heading = "File Attributes")]
+    pub mode: Option<String>,
+
     // --- Sparse Files ---
 
     /// Run the sparsify phase (copy with seeks using `--page-size` / `--min-pages`).
@@ -561,6 +567,14 @@ pub struct ExtractArgs {
     /// Apply the group map recorded in the archive (ignored if any `--group`/`--group-map` given).
     #[arg(long = "apply-stored-group-map", default_value_t = false, help_heading = "File Attributes")]
     pub apply_stored_group_map: bool,
+
+    /// Force symbolic mode CHANGES for restored members; takes precedence over `--apply-mode`.
+    #[arg(long = "mode", value_name = "CHANGES", help_heading = "File Attributes")]
+    pub mode: Option<String>,
+
+    /// Apply the mode changes recorded in the archive (ignored if `--mode` given).
+    #[arg(long = "apply-mode", default_value_t = false, help_heading = "File Attributes")]
+    pub apply_mode: bool,
 
     /// Restore archived access times from the database (default: leave untouched).
     #[arg(long = "apply-atime", default_value_t = false, help_heading = "File Attributes")]
