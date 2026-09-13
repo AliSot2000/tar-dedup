@@ -15,12 +15,14 @@ use std::io;
 use std::path::Path;
 use std::time::SystemTime;
 
-use crate::common::perms::{OwnerGroupPolicy, OwnerGroupSource, resolve_owner_group};
+use crate::common::perms::{
+    ModeSource, OwnerGroupPolicy, OwnerGroupSource, parse_mode_changes, resolve_owner_group,
+};
 use crate::common::xattr::{set_file_acl, set_file_selinux_data, set_file_xattrs};
 use crate::config::ExtractConfig;
 use crate::db::Database;
 use crate::db::flags::{ErrorFlags, OutTreeFlag};
-use crate::db::types::{FileRecord, OutTreeRecord};
+use crate::db::types::{FileRecord, FileType, OutTreeRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
@@ -55,12 +57,25 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         }
     };
 
+    // Resolve the mode changes: explicit `--mode` (validated on the CLI), the
+    // changes recorded in the archive (`--apply-mode`), or none.
+    let mode_changes: Option<file_mode::Mode> = match &config.mode_policy {
+        ModeSource::None => None,
+        ModeSource::Cli(changes) => Some(parse_mode_changes(changes)?),
+        ModeSource::Stored => match db.get_archive_mode_changes()? {
+            Some(changes) => Some(parse_mode_changes(&changes)?),
+            None => None,
+        },
+    };
+
     // Files (and non-directory entries) first.
-    process_batches(&mut recorder, phase, config, db, shutdown, policy.as_ref(), false)?;
+    process_batches(
+        &mut recorder, phase, config, db, shutdown, policy.as_ref(), mode_changes.as_ref(), false)?;
 
     // Directories, only when `--overwrite-dir` is requested.
     if config.attributes.force_overwrite_dir {
-        process_batches(&mut recorder, phase, config, db, shutdown, policy.as_ref(), true)?;
+        process_batches(
+            &mut recorder, phase, config, db, shutdown, policy.as_ref(), mode_changes.as_ref(), true)?;
     }
 
     recorder.flush()?;
@@ -85,6 +100,7 @@ fn process_batches(
     db: &Database,
     shutdown: &Shutdown,
     policy: Option<&OwnerGroupPolicy>,
+    mode_changes: Option<&file_mode::Mode>,
     dirs: bool,
 ) -> Result<()> {
     loop {
@@ -106,7 +122,7 @@ fn process_batches(
             // there is no metadata to apply, and the directory itself already exists.
             let errors = match record {
                 None => Vec::<FileStatError>::new(),
-                Some(r) => apply_one(config, &r, &out, policy),
+                Some(r) => apply_one(config, &r, &out, policy, mode_changes),
             };
             if errors.is_empty() {
                 db.set_out_tree_flag(out.id, OutTreeFlag::AppliedMetadata, true)?;
@@ -142,6 +158,7 @@ fn apply_one(
     record: &FileRecord,
     out: &OutTreeRecord,
     policy: Option<&OwnerGroupPolicy>,
+    mode_changes: Option<&file_mode::Mode>,
 ) -> Vec<FileStatError> {
     let target_path = &out.abs_path;
     let mut errors: Vec<FileStatError> = Vec::new();
@@ -180,9 +197,14 @@ fn apply_one(
         }
     }
 
-    // mode.
-    if let Some(mode) = record.mode {
-        match apply_mode(target_path, mode) {
+    // mode. Symlinks are skipped: on unix their mode is kernel-fixed 0777 and
+    // chmod would dereference and clobber the link target.
+    if let (Some(mode), false) = (record.mode, matches!(record.ftype, FileType::Symlink(_))) {
+        let effective = match mode_changes {
+            Some(changes) => changes.apply_to(mode),
+            None => mode,
+        };
+        match apply_mode(target_path, effective) {
             Ok(()) => {}
             Err(e) => errors.push(FileStatError::io(target_path, e)),
         }
