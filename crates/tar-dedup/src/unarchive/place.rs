@@ -1,13 +1,14 @@
 //! Place: copy/link cached payloads to final output paths.
 
 use crate::cli::{ConflictPolicy, HardLinkGrouping};
-use crate::common::files::get_file_times;
-use crate::config::ExtractConfig;
+use crate::common::files;
+use crate::config::{ExtractConfig, ExtractPipelinePhase};
 use crate::db::Database;
-use crate::db::flags::{FileFlag, OutTreeFlag, OutTreeFlags};
+use crate::db::flags::{ErrorFlags, FileFlag, OutTreeFlag, OutTreeFlags};
 #[warn(unused_imports)] // LinkType needed for linking back on windows.
 use crate::db::types::{FileId, FileRecord, FileType, NewOutTreeRow, OutTreeId, OutTreeRecord, StrippedRecord};
-use crate::error::{Error, Result};
+use crate::db::{ErrorPhase, Recorder};
+use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
 use nix::NixPath;
 use nix::libc::makedev;
@@ -21,35 +22,51 @@ use std::sync::Mutex;
 use std::{fs, io};
 
 const BATCH_SIZE: u64 = 10_000;
+const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Place);
 
 // TODO
 //  Logging
 //  Progress
 //  Rethink when we are pub and when private
 pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    let mut recorder = Recorder::new(db, !config.process.no_errors);
     if !db.out_tree_is_built()? {
         populate_out_tree(db, config, shutdown)?;
     }
+    let capture_error = |rec: &mut Recorder, path: &PathBuf, iof: fn(&Path)
+        -> io::Result<()>| {
+        match iof(&path) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                rec.record_session(
+                    ERROR_PHASE,
+                    FileStatError::io(&path, io::Error::new(e.kind(), e.to_string())),
+                    ErrorFlags::default(),
+                );
+                return Err(Error::io(&path, e));
+            }
+        }
+    };
 
     // Step 1.1 empty out source root prior to starting extraction.
-    if config.placement.clean_target && config.placement.one_top_level.is_some(){
+    if config.placement.clean_target && config.placement.one_top_level.is_some() {
         assert!(!config.placement.no_create_dir,
                 "INVARIANT ERROR: clean_target => no_create_dir is false");
-        fs::remove_dir_all(config.paths.extraction_root())?;
-        fs::create_dir_all(config.paths.extraction_root())?;
+        let root = config.paths.extraction_root();
+        capture_error(&mut recorder, &root.to_path_buf(), |p| fs::remove_dir_all(p))?;
+        capture_error(&mut recorder, &root.to_path_buf(), |p| fs::create_dir_all(p))?;
     }
-
     // Step 1.2 Create directoris if required
     if !config.placement.no_create_dir && !db.dir_tree_is_built()? {
-        prepare_extraction_dir(&db, &config, shutdown)?;
+        prepare_extraction_dir(&db, &config, shutdown, &mut recorder)?;
     }
 
     // Step 2, move the canonical files into place for link_tree
     if config.placement.link_tree {
         tracing::info!("Moving canonical file in place for link tree...");
-        copy_canonicals_to_source(&config, &db, &shutdown)?;
+        copy_canonicals_to_source(&config, &db, &shutdown, &mut recorder)?;
         // INFO: For linking, we ignore the canonical_id
-        link_into_place(&config, &db, &shutdown)?;
+        link_into_place(&config, &db, &shutdown, &mut recorder)?;
     } else {
         // Step 2, compute hardlink canonicals in the extraction location, then
         // first copy files, then hardlink, then create other types
@@ -57,11 +74,13 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         prepare_hardlink_canonicals(&config, &db)?;
         let (ac, mc, ah, mh, ao, mo) = status_message_rebuilding(
             &config, &db)?;
-        materialize_files(&config, &db, &shutdown)?;
-        materialize_hardlinks(&config, &db, &shutdown)?;
-        materialize_others(&config, &db, &shutdown)?;
+        materialize_files(&config, &db, &shutdown, &mut recorder)?;
+        materialize_hardlinks(&config, &db, &shutdown, &mut recorder)?;
+        materialize_others(&config, &db, &shutdown, &mut recorder)?;
     }
-    let (placed, ref_linked, errored, skipped) = db.apply_flags_to_files()?;
+    recorder.flush()?;
+    let (placed, ref_linked, conflict, removed, errored, skipped) =
+        db.apply_flags_to_files()?;
     tracing::info!(
         "Updated File Table:
         {placed} of entries placed,
@@ -71,19 +90,20 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     );
     // TODO push the files records to the next phase
     if !config.process.cleanup.keep_stage {
-        match fs::remove_dir_all(config.paths.extract_cache_dir()) {
-            Ok(_) => (),
+        let cache_dir = config.paths.extract_cache_dir();
+        match capture_error(
+            &mut recorder, &cache_dir.to_path_buf(), |p| fs::remove_dir_all(p)) {
+            Ok(()) => (),
             Err(e) => {
                 tracing::warn!("Failed to clean up stage directors '{}' with error {}",
-                    config.paths.extract_cache_dir().display(),
-                    e
-                )
+                    cache_dir.display(), e);
+                // TODO fail fast.
             }
-            // TODO store error
-            // TODO fail fast
-        };
+        }
     }
-    Ok(())
+
+    recorder.flush()?;
+        Ok(())
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -128,8 +148,12 @@ pub fn populate_out_tree(db: &Database, config: &ExtractConfig, shutdown: &Shutd
 /// selected, and errors out or r&r any given path entry that was not dir. If path segment does not
 /// exist, path es created.
 /// PRECONDITION: no_create_dir is false.
-pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &Shutdown)
-                              -> Result<()> {
+pub fn prepare_extraction_dir(
+    db: &Database,
+    config: &ExtractConfig,
+    shutdown: &Shutdown,
+    recorder: &mut Recorder,
+) -> Result<()> {
     // TODO info that this process cannot be gracefully interrupted.
     debug_assert!(config.paths.extraction_root().is_absolute(),
                   "INVARIANT ERROR: extraction root is not absolute");
@@ -147,7 +171,8 @@ pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &
 
         for dir in dirs {
             shutdown.check_in_flight()?;
-            build_path(&config, &mut already_checked, &dir.abs_path)?;
+            build_path(&config, &mut already_checked, &dir.abs_path, dir.id,
+                       recorder)?;
         }
     }
     db.set_dir_tree_built()?;
@@ -155,14 +180,28 @@ pub fn prepare_extraction_dir(db: &Database, config: &ExtractConfig, shutdown: &
 }
 
 /// Function copies all extracted canonical files to the extraction destination and
-pub fn copy_canonicals_to_source(config: &ExtractConfig, db: &Database, shutdown: &Shutdown)
-                                 -> Result<()> {
+pub fn copy_canonicals_to_source(
+    config: &ExtractConfig,
+    db: &Database,
+    shutdown: &Shutdown,
+    recorder: &mut Recorder,
+) -> Result<()> {
     let dir_name = match &config.placement.link_source {
         None => PathBuf::from(".sources"),
         Some(v)  => v.to_path_buf(),
     };
     let base_dir = config.paths.extraction_root().join(dir_name);
-    fs::create_dir_all(&base_dir)?;
+    let mk_res = fs::create_dir_all(&base_dir);
+    match mk_res {
+        Ok(_) => (),
+        Err(e) => {
+            let err = Error::io(&base_dir, e);
+            recorder.record_session(
+                ERROR_PHASE, err.to_file_stat(Some(&base_dir)), ErrorFlags::default(),
+            );
+            return Err(err);
+        }
+    }
 
     let results: Mutex<Vec<std::result::Result<(FileId, bool), (FileId, Error)>>> =
         Mutex::new(Vec::new());
@@ -211,8 +250,14 @@ pub fn copy_canonicals_to_source(config: &ExtractConfig, db: &Database, shutdown
 
         for result in copied {
             match result {
-                Err((id, _err)) => {
+                Err((id, err)) => {
                     // TODO handle error
+                    recorder.record_file(
+                        id,
+                        ERROR_PHASE,
+                        err.to_file_stat(None),
+                        ErrorFlags::default(),
+                    );
                     db.set_file_flag(id, FileFlag::ErrorWhilePlacing, true)?;
                 }
                 Ok((id, is_copy)) => {
@@ -221,7 +266,7 @@ pub fn copy_canonicals_to_source(config: &ExtractConfig, db: &Database, shutdown
                 }
             }
         }
-
+        recorder.flush()?;
     }
     Ok(())
 }
@@ -230,7 +275,8 @@ pub fn copy_canonicals_to_source(config: &ExtractConfig, db: &Database, shutdown
 /// the tree.
 /// Files are linked to the link source and all others links, fifo, char dev, block dev are created,
 /// sockets noted but cannot be created
-pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdown,
+                       recorder: &mut Recorder) -> Result<()> {
     let dir_name = match &config.placement.link_source {
         None => PathBuf::from(".sources"),
         Some(v)  => v.to_path_buf(),
@@ -267,6 +313,12 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
                                 config.paths.extraction_root(), &out.abs_path);
                             up.join(&dir_name).join(content_id)
                         };
+                        if out.abs_path.exists() {
+                            return Err(Error::Config(format!(
+                                "Found existing path {}. Link Tree must be empty.",
+                                out.abs_path.display())))
+                        }
+
                         // Actually build the link
                         let base_res = if config.placement.use_hard_links {
                             fs::hard_link(link_target, &out.abs_path)
@@ -283,7 +335,8 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
                         };
                         match base_res {
                             Ok(_) => Ok(()),
-                            Err(e) => Err(SpecialErrors::IoError(e, out.abs_path.to_path_buf())),
+                            Err(e) => Err(
+                                FileStatError::Io {path: out.abs_path.to_path_buf(), source:e}),
                         }
                     } else {
                         build_other(&canonical, &out, config.placement.recreate_none_file_entries)
@@ -315,17 +368,34 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
                 None => {
                     let _ = db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
                 }
-                // TODO handle errors.
-                Some(SpecialErrors::IoError(e, p)) => {
+                Some(FileStatError::Io{path: p, source: e}) => {
                     let _ = db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
                     tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
+                    recorder.record_out_tree(
+                        id,
+                        ERROR_PHASE,
+                        FileStatError::Io {
+                            path: p.clone(),
+                            source: io::Error::new(e.kind(), e.to_string()),
+                        },
+                        ErrorFlags::default(),
+                    );
                 }
-                Some(SpecialErrors::NixErr(e, p)) => {
+                Some(FileStatError::Nix{path: p, source: e}) => {
                     let _ = db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
                     tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
+                    recorder.record_out_tree(
+                        id,
+                        ERROR_PHASE,
+                        FileStatError::Nix { path: p.clone(), source: e },
+                        ErrorFlags::default(),
+                    );
                 }
+                _ => panic!(
+                    "INVARIANT FAILED: link_into_place should only produce Io and Nix Errors.")
             }
         }
+        recorder.flush()?;
     }
     Ok(())
 }
@@ -359,14 +429,17 @@ pub fn prepare_hardlink_canonicals(config: &ExtractConfig, db: &Database) -> Res
 
 /// Iterate through the out_tree and reflink / copy all files into placed which are marked as
 /// (hardlink) canonicals. (out_tree.canonical_id = id)
-pub fn materialize_files(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn materialize_files(
+    config: &ExtractConfig, db: &Database, shutdown: &Shutdown,
+    recorder: &mut Recorder,
+) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
     let cache_dir = config.paths.extract_cache_dir();
     let shutdown = shutdown.clone();
     let no_reflink = config.placement.no_reflink;
 
-    let results: Mutex<Vec<std::result::Result<(OutTreeId, bool), (OutTreeId, Error)>>> =
+    let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(config.process.jobs)
@@ -412,23 +485,60 @@ pub fn materialize_files(config: &ExtractConfig, db: &Database, shutdown: &Shutd
 
         for result in copied {
             match result {
-                Err((id, _err)) => {
-                    // TODO handle error
-                    db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
+                Err((id, err)) => {
+                    match err {
+                        Error::Interrupted => return Err(Error::Interrupted),
+                        Error::FileStat(e) => {
+                            // Record the copy failure against the out_tree row and keep the flag.
+                            recorder.record_out_tree(
+                                id, ERROR_PHASE, e, ErrorFlags::default(),
+                            );
+                            db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
+                        },
+                        other => panic!("INVARIANT FAILED: Only Io and Interrupted errors \
+                        expected, got {}", other)
+
+                    }
                 }
-                Ok((id, is_copy)) => {
-                    db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
-                    db.set_out_tree_flag(id, OutTreeFlag::UsedRefLink, !is_copy)?;
+                Ok(suc) => {
+                    if cfg!(debug_assertions) {
+                        validate_materialize_result(&suc);
+                    }
+                    db.set_out_tree_flag(
+                        suc.id, OutTreeFlag::Placed, suc.placed)?;
+                    db.set_out_tree_flag(
+                        suc.id, OutTreeFlag::UsedRefLink, !suc.used_copy)?;
+                    db.set_out_tree_flag(
+                        suc.id, OutTreeFlag::RemovedPrevious, !suc.removed)?;
+                    db.set_out_tree_flag(
+                        suc.id, OutTreeFlag::Conflict, suc.conflict)?;
                 }
             }
         }
+        recorder.flush()?;
     }
     Ok(())
 }
 
+#[cfg(debug_assertions)]
+fn validate_materialize_result<I>(m: &MaterializeResult<I>) -> () {
+    match (m.placed, m.conflict, m.removed, m.used_copy) {
+        // No conflict
+        (true, false, false, _) => (),
+        // Conflict, skip
+        (false, true, false, false) => (),
+        // Conflict, place
+        (true, true, _, _) => (),
+        _ => panic!("INVARIANT FAILED: Impossible flag constellation returned from placement ")
+    }
+}
+
 /// Create all the hardlinks after the copy stage.
 /// PRECONDITION: Function must be called after the [`materialize_files`]
-pub fn materialize_hardlinks(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn materialize_hardlinks(
+    config: &ExtractConfig, db: &Database, shutdown: &Shutdown,
+    recorder: &mut Recorder)
+    -> Result<()> {
     let mut last_id = OutTreeId(0);
 
     let shutdown = shutdown.clone();
@@ -480,8 +590,13 @@ pub fn materialize_hardlinks(config: &ExtractConfig, db: &Database, shutdown: &S
 
         for result in copied {
             match result {
-                Err((id, _err)) => {
-                    // TODO handle error
+                Err((id, err)) => {
+                    recorder.record_out_tree(
+                        id,
+                        ERROR_PHASE,
+                        err.to_file_stat(None),
+                        ErrorFlags::default(),
+                    );
                     db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
                 }
                 Ok(id) => {
@@ -490,19 +605,22 @@ pub fn materialize_hardlinks(config: &ExtractConfig, db: &Database, shutdown: &S
                 }
             }
         }
+        recorder.flush()?;
     }
     Ok(())
 }
 
 /// Final step, pass through all the remaining entries which could be materialized:
 /// (symlink, fifo, character device, block device, socket)
-pub fn materialize_others(config: &ExtractConfig, db: &Database, shutdown: &Shutdown)
-    -> Result<()> {
+pub fn materialize_others(
+    config: &ExtractConfig, db: &Database, shutdown: &Shutdown,
+    recorder: &mut Recorder,
+) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
     let shutdown = shutdown.clone();
 
-    let results: Mutex<Vec<std::result::Result<OutTreeId, (OutTreeId, SpecialErrors)>>> =
+    let results: Mutex<Vec<std::result::Result<OutTreeId, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(config.process.jobs)
@@ -528,7 +646,7 @@ pub fn materialize_others(config: &ExtractConfig, db: &Database, shutdown: &Shut
 
                     let res = match base_res {
                         Ok(()) => Ok(target.id),
-                        Err(e) => Err((target.id, e))
+                        Err(e) => Err((target.id, Error::FileStat(e)))
                     };
 
                     results.lock().expect("materialize files lock poisoned").push(res);
@@ -547,11 +665,28 @@ pub fn materialize_others(config: &ExtractConfig, db: &Database, shutdown: &Shut
         let copied = std::mem::replace(
             &mut *results.lock().expect("hash results lock"),
             new_res);
-
         for result in copied {
             match result {
-                Err((id, _err)) => {
-                    // TODO handle error
+                Err((_, Error::Interrupted)) => {
+                    recorder.flush()?;
+                    return Err(Error::Interrupted);
+                }
+                Err((id, Error::FileStat(fse))) => {
+                    recorder.record_out_tree(
+                        id,
+                        ERROR_PHASE,
+                        fse,
+                        ErrorFlags::default(),
+                    );
+                    db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
+                }
+                Err((id, other)) => {
+                    recorder.record_out_tree(
+                        id,
+                        ERROR_PHASE,
+                        other.to_file_stat(None),
+                        ErrorFlags::default(),
+                    );
                     db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
                 }
                 Ok(id) => {
@@ -559,6 +694,7 @@ pub fn materialize_others(config: &ExtractConfig, db: &Database, shutdown: &Shut
                 }
             }
         }
+        recorder.flush()?;
     }
     Ok(())
 }
@@ -715,7 +851,7 @@ pub fn ensure_parent(db: &Database) -> Result<()> {
 /// Function recreates all special files it can. Importantly, files, directories and unknown
 /// types are not valid file types for the function and will cause a panic
 fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bool)
-    -> std::result::Result<(), SpecialErrors> {
+    -> std::result::Result<(), FileStatError> {
     match canonical.ftype {
         FileType::File => panic!(
             "PRECONDITION ERROR: build_other does not treat files"),
@@ -732,7 +868,8 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
             None => Ok(()),
             Some(dst) => match std::os::unix::fs::symlink(dst, &out_tree.abs_path) {
                 Ok(_) => Ok(()),
-                Err(e) => Err(SpecialErrors::IoError(e, out_tree.abs_path.to_path_buf()))
+                Err(e) => Err(
+                    FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e})
             }
         },
         #[cfg(windows)]
@@ -740,7 +877,7 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
             None => Ok(()),
             Some(dst) => match std::os::windows::fs::symlink_dir(dst, &out_tree.abs_path) {
                 Ok(_) => Ok(()),
-                Err(e) => Err(SpecialErrors::IoError(e, out_tree.abs_path.to_path_buf()))
+                Err(e) => Err(FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e})
             }
         },
         #[cfg(windows)]
@@ -748,7 +885,7 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
             None => Ok(()),
             Some(dst) => match std::os::windows::fs::symlink_file(dst, &out_tree.abs_path) {
                 Ok(_) => Ok(()),
-                Err(e) => Err(SpecialErrors::IoError(e, out_tree.abs_path.to_path_buf()))
+                Err(e) => Err(FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e})
             }
         },
         FileType::FIFO => {
@@ -757,7 +894,8 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
             }
             match nix::unistd::mkfifo(&out_tree.abs_path, Mode::from_bits_truncate(0o644)) {
                 Ok(_) => Ok(()),
-                Err(e) => Err(SpecialErrors::NixErr(e, out_tree.abs_path.to_path_buf()))
+                Err(e) => Err(
+                    FileStatError::Nix {path: out_tree.abs_path.to_path_buf(), source: e})
             }
         },
         FileType::BlockDevice => {
@@ -777,7 +915,8 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
                 &out_tree.abs_path, SFlag::S_IFBLK, Mode::from_bits_truncate(0o644), dev);
             match create_res {
                 Ok(_) => Ok(()),
-                Err(e) => Err(SpecialErrors::NixErr(e, out_tree.abs_path.to_path_buf())),
+                Err(e) => Err(
+                    FileStatError::Nix {path: out_tree.abs_path.to_path_buf(), source: e})
             }
         },
         FileType::CharacterDevice => {
@@ -797,7 +936,8 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
                 &out_tree.abs_path, SFlag::S_IFCHR, Mode::from_bits_truncate(0o644), dev);
             match create_res {
                 Ok(_) => Ok(()),
-                Err(e) => Err(SpecialErrors::NixErr(e, out_tree.abs_path.to_path_buf())),
+                Err(e) => Err(
+                    FileStatError::Nix {path: out_tree.abs_path.to_path_buf(), source: e})
             }
         }
     }
@@ -837,30 +977,20 @@ pub fn status_message_rebuilding(config: &ExtractConfig, db: &Database)
     ))
 }
 
-// fn pre_materialization_check(config: &ExtractConfig, target_path: &Path, ftype: FileType)
-//     -> Result<bool> {
-//     // File not present, continue
-//     if target_path.exists() {
-//        return Ok(true);
-//     }
-//
-//     // PRECONDITION: File exists
-//     let metadata = target_path.metadata()?;
-//     if !matches!(config.placement.conflict_policy, ConflictPolicy::Replace) {
-//         let times = get_file_times(&metadata);
-//         let (mtime, atime, ctime) = times;
-//     }
-//
-//     Ok(true)
-// }
-
 // -------------------------------------------------------------------------------------------------
 // Util
 // -------------------------------------------------------------------------------------------------
 
-enum SpecialErrors {
-    NixErr(nix::Error, PathBuf),
-    IoError(io::Error, PathBuf),
+/// Result:
+/// - first bool is true iff the file can be written to the path
+/// - second bool is true iff there was a conflict which resolved in favor of extracting
+/// - third bool is true iff there was a file was removed during the prep process.
+struct MaterializeResult<I> {
+    id: I,
+    placed: bool,
+    conflict: bool,
+    removed: bool,
+    used_copy: bool
 }
 
 /// Relative path of `..` components from `file`'s parent directory back to `dir`.
@@ -909,8 +1039,8 @@ fn relative_pardirs_to_dir(dir: &Path, file: &Path) -> PathBuf {
 /// Copy a single file from a to b. Function implements a shutdown check to avoid long blocking
 /// Error contains the Error as well as the file id to link against,
 /// Ok contains the id as well as bool which is false if reflink was used and true if copy was used.
-fn copy_single_file<I>(fid: I, src: &Path, dst: &Path, shutdown: &Shutdown, no_reflink: bool)
-    -> std::result::Result<(I, bool), (I, Error)> {
+fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no_reflink: bool)
+    -> std::result::Result<(ID, bool), (ID, Error)> {
     // Attempt to reflink
     if !no_reflink {
         let worked = reflink::reflink(src, dst);
@@ -958,11 +1088,27 @@ fn strip_leading_up(path: &Path) -> (PathBuf, u64) {
 
 /// Build a given directory path for later extraction.
 /// PRECONDITION: Calling function must ensure no_create_dir is false
-pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target: &Path) -> Result<()>  {
+pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target: &Path,
+                  out_tree_id: OutTreeId,
+                  recorder: &mut Recorder) -> Result<()>  {
     debug_assert!(!config.placement.no_create_dir,
                   "INVARIANT ERROR: build_path may not be called with no_create_dir");
     let mut prefix = PathBuf::new();
     let mut start = 0u64;
+    let mut capture_error = |path: &PathBuf, iof: fn(&Path) -> io::Result<()>| {
+        match iof(&path) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                recorder.record_out_tree(
+                    out_tree_id,
+                    ERROR_PHASE,
+                    FileStatError::io(&path, io::Error::new(e.kind(), e.to_string())),
+                    ErrorFlags::default(),
+                );
+                return Err(Error::io(&path, e));
+            }
+        }
+    };
     let iter = already_checked
         .components()
         .zip(target.components())
@@ -987,8 +1133,9 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
 
         // Symlink
         if prefix.exists() && prefix.is_symlink() && !config.placement.keep_dir_symlink {
-            fs::remove_file(&prefix)?;
-            fs::create_dir_all(&prefix)?;
+            // INFO: Raise; if fs fails here, almost guaranteed that extraction fails.
+            capture_error(&prefix, |p: &Path| fs::remove_file(p))?;
+            capture_error(&prefix, |p: &Path| fs::create_dir_all(p))?;
             tracing::info!("Replaced symlink with dir at path: {printable}");
             continue
         }
@@ -996,8 +1143,9 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
         // Some but no dir
         if prefix.exists() && !prefix.is_dir() {
             if config.placement.remove_and_replace {
-                fs::remove_file(&prefix)?;
-                fs::create_dir_all(&prefix)?;
+                // INFO: Raise; if fs fails here, almost guaranteed that extraction fails.
+                capture_error(&prefix, |p: &Path| fs::remove_file(p))?;
+                capture_error(&prefix, |p: &Path| fs::create_dir_all(p))?;
                 tracing::info!("Replaced non-dir with dir at path: {printable}");
                 continue
             } else {
@@ -1010,7 +1158,7 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
         // Does not exist
         if !prefix.exists() {
             // INFO: No further checks: no_create_dir is false
-            fs::create_dir_all(&prefix)?;
+            capture_error(&prefix, |p: &Path| fs::create_dir_all(p))?;
             tracing::info!("Replaced non-dir with dir at path: {printable}");
             continue;
         }
