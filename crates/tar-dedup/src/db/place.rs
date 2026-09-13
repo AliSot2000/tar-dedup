@@ -585,8 +585,8 @@ pub fn mark_source_canonical(conn: &Connection, source_id: i64) -> Result<u64> {
     Ok((updated + updated2) as u64)
 }
 
-/// (placed, reflinked, errored, skipped)
-pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64)> {
+/// (placed, reflinked, conflict, removed_previous, errored, skipped)
+pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u64, u64)> {
     // Placed if all are placed
     let placed = conn.execute(
         "UPDATE files SET flags = flags | :file_placed
@@ -607,23 +607,49 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64)> {
         ":out_reflink": OutTreeFlag::UsedRefLink.mask_i64()
         },
     )?;
+    // Conflicts if any conflict happened.
+    let conflict = conn.execute(
+        "UPDATE files SET flags = flags | :file_conflict
+            WHERE files.id IN (SELECT file_id FROM out_tree WHERE flags & :out_conflict = 0)",
+        named_params! {
+        ":file_conflict": FileFlag::Conflict.mask_i64(),
+        ":out_conflict": OutTreeFlag::Conflict.mask_i64()
+        },
+    )?;
+    // Removed previous
+    let removed_previous = conn.execute(
+        "UPDATE files SET flags = flags | :file_removed
+            WHERE files.id IN (SELECT file_id FROM out_tree WHERE flags & :out_removed = 0)",
+        named_params! {
+        ":file_removed": FileFlag::Conflict.mask_i64(),
+        ":out_removed": OutTreeFlag::Conflict.mask_i64()
+        },
+    )?;
     // Errored if any are errored
     let errored = conn.execute(
         "UPDATE files SET flags = flags | :file_error
             WHERE files.id IN (SELECT file_id FROM out_tree WHERE flags & :out_error = 0)",
         named_params! {
-        ":file_reflink": FileFlag::ErrorWhilePlacing.mask_i64(),
-        ":out_reflink": OutTreeFlag::ErrorWhilePlace.mask_i64()
+        ":file_error": FileFlag::ErrorWhilePlacing.mask_i64(),
+        ":out_error": OutTreeFlag::ErrorWhilePlace.mask_i64()
         },
     )?;
-    // Dkipped if any are skipped.
-    let skipped = conn.execute(
-        "UPDATE files SET flags = flags | :file_skipped
-            WHERE files.id IN (SELECT file_id FROM out_tree WHERE flags & :out_skipped = 0)",
+
+    // Skipped Element
+    let skipped_elements: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM out_tree \
+        WHERE flags & :placed = 0 AND flags & :conflict != 0",
         named_params! {
-        ":file_skipped": FileFlag::Skipped.mask_i64(),
-        ":out_skipped": OutTreeFlag::Skipped.mask_i64()
+        ":placed": OutTreeFlag::Placed.mask_i64(),
+        ":conflict": OutTreeFlag::Conflict.mask_i64()
         },
+        |row| row.get(0)
     )?;
-    Ok((placed as u64, reflinked as u64, errored as u64, skipped as u64))
+    Ok((
+        placed as u64,
+        reflinked as u64,
+        conflict as u64,
+        removed_previous as u64,
+        errored as u64,
+        skipped_elements as u64))
 }
