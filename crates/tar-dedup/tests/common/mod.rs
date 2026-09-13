@@ -164,6 +164,7 @@ pub fn place_config(extraction_root: PathBuf, absolute_names: bool) -> ExtractCo
             no_xattrs: false,
             no_acls: false,
             no_selinux: false,
+            no_same_permissions: false,
         },
         scan: ScanOptions {
             force_scan: false,

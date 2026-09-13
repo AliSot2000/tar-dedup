@@ -46,6 +46,7 @@ pub struct ExtractAttributeOptions {
     pub no_xattrs: bool,
     pub no_acls: bool,
     pub no_selinux: bool,
+    pub no_same_permissions: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +244,7 @@ impl ExtractConfig {
                 no_xattrs: args.no_xattrs,
                 no_acls: args.no_acls,
                 no_selinux: args.no_selinux,
+                no_same_permissions: args.no_same_permissions,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -320,6 +322,7 @@ impl ExtractConfig {
                 no_xattrs: false,
                 no_acls: false,
                 no_selinux: false,
+                no_same_permissions: false,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -384,6 +387,7 @@ impl ExtractConfig {
                 no_xattrs: false,
                 no_acls: false,
                 no_selinux: false,
+                no_same_permissions: false,
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -448,6 +452,7 @@ impl ExtractConfig {
                 no_xattrs: false,
                 no_acls: false,
                 no_selinux: false,
+                no_same_permissions: false,
             },
             scan: ScanOptions {
                 force_scan: false,
