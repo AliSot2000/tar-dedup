@@ -44,6 +44,8 @@ pub struct CaptureOptions {
     pub do_xattrs: bool,
     pub do_posix_acl: bool,
     pub do_selinux: bool,
+    /// Symbolic mode changes to apply at extraction (GNU tar `--mode`).
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +197,15 @@ impl ArchiveConfig {
             return Err(Error::Config("page_size must be greater than 0".into()));
         }
 
+        // Validate early so a bad `--mode` fails before any work dir is created.
+        let mode_changes: Option<String> = match &args.mode {
+            Some(changes) => {
+                crate::common::perms::parse_mode_changes(changes)?;
+                Some(changes.clone())
+            }
+            None => None,
+        };
+
         let start_policy = StartPolicy::create_or_fresh(args.fresh);
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
 
@@ -229,6 +240,7 @@ impl ArchiveConfig {
                 do_xattrs: args.xattrs,
                 do_posix_acl: args.acls,
                 do_selinux: args.selinux,
+                mode: mode_changes,
             },
             owner_policy: OwnerPolicy {
                 owner: args.owner.clone(),
@@ -293,6 +305,7 @@ impl ArchiveConfig {
                 do_xattrs: true,
                 do_posix_acl: true,
                 do_selinux: true,
+                mode: None,
             },
             owner_policy: OwnerPolicy {
                 owner: None,
