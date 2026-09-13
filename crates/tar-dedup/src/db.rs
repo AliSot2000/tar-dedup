@@ -813,13 +813,21 @@ impl<'a> Recorder<'a> {
     }
 
     /// Session-scoped error: neither a file nor an out_tree row.
-    pub fn record_session(
+    ///
+    /// The `SessionError` flag is always set, regardless of `flags`.
+    pub fn session(
         &mut self,
-        phase: errors::ErrorPhase,
+        phase: ErrorPhase,
         error: crate::error::FileStatError,
         flags: flags::ErrorFlags,
     ) {
-        self.record(None, None, phase, error, flags);
+        self.record(
+            None,
+            None,
+            phase,
+            error,
+            flags.with(flags::ErrorFlag::SessionError, true),
+        );
     }
 
     /// File-scoped error (canonical, duplicate, or any file row).
