@@ -30,6 +30,7 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
 filetime = { workspace = true }
+file-mode = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 path-clean = "1.0.1"
