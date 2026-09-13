@@ -55,7 +55,7 @@ pub struct RecordDraft {
 impl RecordDraft {
     /// The absolute path the error is about, if derivable from the error.
     pub fn abs_path(&self) -> Option<PathBuf> {
-        error_path(&self.error)
+        self.error.io_path()
     }
 }
 
@@ -63,21 +63,6 @@ impl RecordDraft {
 /// `(msg, type, path)`), or `None`.
 fn error_misc(_e: &FileStatError) -> Option<String> {
     None
-}
-
-/// The absolute path an error is about, if derivable from the error itself.
-fn error_path(e: &FileStatError) -> Option<PathBuf> {
-    match e {
-        FileStatError::General { path, .. } => path.clone(),
-        FileStatError::Io { path, .. }
-        | FileStatError::Json { path, .. }
-        | FileStatError::Xattrs { path, .. }
-        | FileStatError::PosixAcl { path, .. }
-        | FileStatError::SELinux { path, .. }
-        | FileStatError::Nix { path, .. }
-        | FileStatError::PosixQualifierParser { path, .. }
-        | FileStatError::Base64DecodingError { path, .. } => Some(path.clone()),
-    }
 }
 
 fn error_msg(e: &FileStatError) -> String {
