@@ -345,13 +345,14 @@ pub fn list_out_tree_for_materialization<R: SqlFileRow>(
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
-pub fn list_out_tree_for_hardlinks(
+pub fn list_out_tree_for_hardlinks<R: SqlFileRow>(
     conn: &Connection, last_id: &OutTreeId, batch_size: u64)
-    -> Result<Vec<(OutTreeRecord, OutTreeRecord)>> {
+    -> Result<Vec<(R, OutTreeRecord, OutTreeRecord)>> {
+    let can_cols = R::sql_columns(Some("f"));
     let tgt_cols = OutTreeRecord::sql_columns(Some("c"));
     let out_cols = OutTreeRecord::sql_columns(Some("o"));
     let mut stmt = conn.prepare(&format!("
-        SELECT {tgt_cols}, {out_cols}
+        SELECT {can_cols}, {tgt_cols}, {out_cols}
         FROM out_tree AS o
         JOIN out_tree AS c ON o.canonical_id = c.id
         JOIN files AS f ON o.file_id = f.id
@@ -367,9 +368,10 @@ pub fn list_out_tree_for_hardlinks(
             ":last_id": last_id.0,
             ":batch_size": batch_size},
         |row| {
+            let fr = R::from_row(row, Some("f"))?;
             let sr = OutTreeRecord::from_sql(row, Some("c"))?;
             let or = OutTreeRecord::from_sql(row, Some("o"))?;
-            Ok((sr, or))
+            Ok((fr, sr, or))
         }
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
