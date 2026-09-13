@@ -1,7 +1,6 @@
 use rusqlite::{Connection, named_params};
 
 use crate::db::common::SqlFileRow;
-use crate::db::flags::OutTreeFlags;
 use crate::db::flags::{FileFlag, OutTreeFlag};
 use crate::db::meta;
 use crate::db::types::{FileId, NewOutTreeRow, OutTreeId, OutTreeRecord,
@@ -108,62 +107,6 @@ pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Res
         })?;
     }
     Ok(())
-}
-
-/// Function lists all elements of the out_tree in batches
-pub fn list_out_tree(
-    conn: &Connection,
-    last_id: OutTreeId,
-    batch_size: u64,
-    source_id: Option<i64>,
-    only_dir: Option<bool>,
-) -> Result<Vec<OutTreeRecord>> {
-    debug_assert!(last_id.0 >= 0, "ids > 0, last_id must be >= 0");
-    let dir_filter = if only_dir.is_some() {
-        " AND o.flags & :dir = :tgt"
-    } else { "" };
-    let source_filter = if source_id.is_some() {
-        " AND r.source_id = :source_id "
-    } else { "" };
-    let cols = OutTreeRecord::sql_columns(Some("o"));
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {cols}
-            FROM out_tree o
-            JOIN ref_out r ON r.out_id = o.id
-            WHERE o.id > :last_id
-                {dir_filter}
-                {source_filter}
-            ORDER BY o.id
-            LIMIT :batch_size"))?;
-    let params = match (only_dir.is_some(), source_id.is_some()) {
-        (false, false) => named_params! {
-            ":last_id": last_id.0,
-            ":batch_size": batch_size,
-        },
-        (false, true) => named_params! {
-            ":last_id": last_id.0,
-            ":batch_size": batch_size,
-            ":source_id": source_id.unwrap(),
-        },
-        (true, false) => named_params! {
-            ":last_id": last_id.0,
-            ":batch_size": batch_size,
-            ":dir": OutTreeFlag::IsDirectory.mask_i64(),
-            ":tgt": if only_dir.unwrap() { 1 } else { 0 },
-        },
-        (true, true) => named_params! {
-            ":last_id": last_id.0,
-            ":batch_size": batch_size,
-            ":dir": OutTreeFlag::IsDirectory.mask_i64(),
-            ":tgt": if only_dir.unwrap() { 1 } else { 0 },
-            ":source_id": source_id.unwrap(),
-        },
-    };
-    let rows = stmt.query_map(
-        params,
-        |r | OutTreeRecord::from_sql(r, None)
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 pub fn count_out_tree_rows(conn: &Connection) -> Result<u64> {
@@ -284,6 +227,28 @@ pub fn set_out_tree_built(conn: &Connection) -> Result<()> {
 
 pub fn set_dir_tree_built(conn: &Connection) -> Result<()> {
     meta::set_dir_tree_built(conn, true)
+}
+
+pub fn placement_prologue_done(conn: &Connection) -> Result<bool> {
+    Ok(meta::get_placement_prologue_done(conn)?.unwrap_or(false))
+}
+
+pub fn set_placement_prologue_done(conn: &Connection) -> Result<()> {
+    meta::set_placement_prologue_done(conn, true)
+}
+
+/// Record the member-relative `--strip-components` result on a file row.
+/// `None` clears the column (no rename applies); `Some("")` marks the empty-name
+/// skip sentinel consumed by the out_tree build.
+pub fn set_file_new_name(conn: &Connection, file_id: FileId, new_name: Option<&str>) -> Result<()> {
+    conn.execute(
+        "UPDATE files SET new_name = :new_name WHERE id = :id",
+        named_params! {
+            ":new_name": new_name,
+            ":id" : file_id.0
+        }
+    )?;
+    Ok(())
 }
 
 pub fn list_canonical_files_for_move<R: SqlFileRow>(
