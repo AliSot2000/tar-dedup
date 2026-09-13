@@ -14,8 +14,6 @@ use crate::error::{Error, FileStatError, Result};
 use crate::progress::{io_buffer, CountProgress};
 use crate::shutdown::Shutdown;
 
-// TODO: Filter (dev, inode) == (dev, inode) early and mark as finished.
-
 /// One finished compare: both keys always present.
 /// `Ok(equal)` on a completed byte compare; `Err((file_id, error))` for the side
 /// that failed IO, carrying the downcast [`FileStatError`] for the error log.
