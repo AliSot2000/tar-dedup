@@ -9,11 +9,8 @@ pub enum Error {
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
 
-    #[error("io error at {path}: {source}")]
-    Io {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    #[error("{0}")]
+    FileStat(#[from] FileStatError),
 
     #[error("invalid configuration: {0}")]
     Config(String),
@@ -30,33 +27,31 @@ impl Error {
         if source.kind() == std::io::ErrorKind::Interrupted {
             return Self::Interrupted;
         }
-        Self::Io {
+        Self::FileStat(FileStatError::Io {
             path: path.into(),
             source,
-        }
+        })
     }
 
     pub fn is_interrupted(&self) -> bool {
         matches!(self, Self::Interrupted)
     }
 
-    /// The path an erring filesystem operation was about, when `Io`.
+    /// The path an erring filesystem operation was about, when `FileStat`.
     pub fn io_path(&self) -> Option<PathBuf> {
         match self {
-            Self::Io { path, .. } => Some(path.clone()),
+            Self::FileStat(fse) => fse.io_path(),
             _ => None,
         }
     }
 
     /// Convert an `Error` into a [`FileStatError`] for the persistent error log.
-    /// `fallback` is used as the path when the error has none (non-`Io` variants).
-    /// The `io::Error` is not `Clone`, so the message is carried over instead.
+    /// `fallback` is used as the path when the error has none (non-`FileStat`
+    /// variants). A carried [`FileStatError`] is recreated as faithfully as
+    /// possible (OS errors round-trip through the raw code).
     pub fn to_file_stat(&self, fallback: Option<&Path>) -> FileStatError {
         match self {
-            Self::Io { path, source } => FileStatError::Io {
-                path: path.clone(),
-                source: std::io::Error::new(source.kind(), source.to_string()),
-            },
+            Self::FileStat(fse) => fse.recreate(),
             Self::Database(e) => FileStatError::General {
                 path: fallback.map(|p| p.to_path_buf()),
                 message: format!("database error: {e}"),
@@ -77,15 +72,25 @@ impl Error {
     }
 }
 
+/// Rebuild an `io::Error` from a reference. Real OS errors round-trip through
+/// the raw code (kind and message are both recovered by
+/// `from_raw_os_error`); synthetic errors without a code keep kind + message.
+fn rebuilt(source: &std::io::Error) -> std::io::Error {
+    match source.raw_os_error() {
+        Some(code) => std::io::Error::from_raw_os_error(code),
+        None => std::io::Error::new(source.kind(), source.to_string()),
+    }
+}
+
 impl From<std::io::Error> for Error {
     fn from(source: std::io::Error) -> Self {
         if source.kind() == std::io::ErrorKind::Interrupted {
             Self::Interrupted
         } else {
-            Self::Io {
+            Self::FileStat(FileStatError::Io {
                 path: PathBuf::new(),
                 source,
-            }
+            })
         }
     }
 }
@@ -116,7 +121,7 @@ pub enum FileStatError {
 
     #[error("posix qualfier parse error at {path}: {source}")]
     PosixQualifierParser { path: PathBuf, source: PosixQualifierParserError},
-    
+
     #[error("bBase64 decoding error at {path}: {source}")]
     Base64DecodingError { path: PathBuf, source: base64::DecodeError},
 
@@ -125,30 +130,65 @@ pub enum FileStatError {
 }
 
 impl FileStatError {
-    pub fn io(path: &std::path::Path, source: std::io::Error) -> Self {
+    pub fn io(path: &Path, source: std::io::Error) -> Self {
         Self::Io { path: path.to_path_buf(), source }
     }
-    pub fn json(path: &std::path::Path, source: serde_json::Error) -> Self {
+    pub fn json(path: &Path, source: serde_json::Error) -> Self {
         Self::Json { path: path.to_path_buf(), source }
     }
-    pub fn xattrs(path: &std::path::Path, source: xattrs::Error) -> Self {
+    pub fn xattrs(path: &Path, source: xattrs::Error) -> Self {
         Self::Xattrs { path: path.to_path_buf(), source }
     }
-    pub fn posix_acl(path: &std::path::Path, source: posix_acl::ACLError) -> Self {
+    pub fn posix_acl(path: &Path, source: posix_acl::ACLError) -> Self {
         Self::PosixAcl { path: path.to_path_buf(), source }
     }
-    pub fn selinux(path: &std::path::Path, source: selinux::errors::Error) -> Self {
+    pub fn selinux(path: &Path, source: selinux::errors::Error) -> Self {
         Self::SELinux { path: path.to_path_buf(), source }
     }
-    pub fn posix_qualifier_parser(path: &std::path::Path, source: PosixQualifierParserError) 
+    pub fn posix_qualifier_parser(path: &Path, source: PosixQualifierParserError)
         -> Self {
         Self::PosixQualifierParser {path: path.to_path_buf(), source}
     }
-    pub fn nix(path: &std::path::Path, source: nix::Error) -> Self {
+    pub fn nix(path: &Path, source: nix::Error) -> Self {
         Self::Nix { path: path.to_path_buf(), source }
     }
-    pub fn general(path: Option<&std::path::Path>, message: String) -> Self {
+    pub fn general(path: Option<&Path>, message: String) -> Self {
         Self::General { path: path.map(|p| p.to_path_buf()), message }
+    }
+
+    /// The path this error is about, `None` when absent (`General` may carry none).
+    pub fn io_path(&self) -> Option<PathBuf> {
+        match self {
+            Self::General { path, .. } => path.clone(),
+            Self::Io { path, .. }
+            | Self::Json { path, .. }
+            | Self::Xattrs { path, .. }
+            | Self::PosixAcl { path, .. }
+            | Self::SELinux { path, .. }
+            | Self::Nix { path, .. }
+            | Self::PosixQualifierParser { path, .. }
+            | Self::Base64DecodingError { path, .. } => Some(path.clone()),
+        }
+    }
+
+    /// Recreate an owned [`FileStatError`] from a reference. `Io` errors
+    /// round-trip through the raw OS code (see [`rebuilt`]); nothing is lost
+    /// that the persistent error log stores (kind + message).
+    pub fn recreate(&self) -> FileStatError {
+        match self {
+            Self::Io { path, source } => Self::Io {
+                path: path.clone(),
+                source: rebuilt(source),
+            },
+            Self::General { path, message } => Self::General {
+                path: path.clone(),
+                message: message.clone(),
+            },
+            other => Self::General {
+                path: other.io_path(),
+                message: other.to_string(),
+            },
+        }
     }
 
     /// Human-readable discriminator (and, where available, underlying detail) of the
