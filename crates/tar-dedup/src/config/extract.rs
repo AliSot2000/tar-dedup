@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::{ConflictPolicy, ExtractArgs, HardLinkGrouping};
 use crate::common::perms::{
-    MapResolutionTarget, OwnerGroupSource, infer_same_owner, parse_owner_group_args,
-    validate_for_mode,
+    MapResolutionTarget, ModeSource, OwnerGroupSource, infer_same_owner, parse_mode_changes,
+    parse_owner_group_args, validate_for_mode,
 };
 use crate::common::start::StartPolicy;
 use crate::error::{Error, Result};
@@ -75,6 +75,7 @@ pub struct ExtractConfig {
     pub process: ProcessOptions,
     pub owner_policy: OwnerGroupSource,
     pub owner_group: OwnerGroupOptions,
+    pub mode_policy: ModeSource,
 }
 
 /// Resolve which owner/group policy applies on extract from the CLI args.
@@ -120,6 +121,23 @@ fn resolve_owner_policy_from_args(
         Ok(OwnerGroupSource::Stored)
     } else {
         Ok(OwnerGroupSource::None)
+    }
+}
+
+/// Resolve which mode-change policy applies on extract from the CLI args.
+/// Explicit `--mode` takes precedence over `--apply-mode` (which falls back to
+/// the archive's recorded changes).
+fn resolve_mode_policy_from_args(args: &ExtractArgs) -> Result<ModeSource> {
+    if let Some(changes) = &args.mode {
+        if args.apply_mode {
+            tracing::warn!("--apply-mode ignored; explicit --mode takes precedence");
+        }
+        parse_mode_changes(changes)?;
+        Ok(ModeSource::Cli(changes.clone()))
+    } else if args.apply_mode {
+        Ok(ModeSource::Stored)
+    } else {
+        Ok(ModeSource::None)
     }
 }
 
@@ -181,6 +199,8 @@ impl ExtractConfig {
         // Stored vs CLI owner/group policy. Explicit --owner/--group/--map take precedence;
         // --apply-stored-* fall back to the archive's recorded policy.
         let owner_policy = resolve_owner_policy_from_args(args, &directory)?;
+
+        let mode_policy = resolve_mode_policy_from_args(args)?;
 
         let (apply_owner, apply_group) = if matches!(owner_policy, OwnerGroupSource::Cli(_)) {
             (false, false)
@@ -257,6 +277,7 @@ impl ExtractConfig {
                 apply_owner,
                 apply_group,
             },
+            mode_policy,
         })
     }
 
@@ -319,6 +340,7 @@ impl ExtractConfig {
                 apply_owner: false,
                 apply_group: false,
             },
+            mode_policy: ModeSource::None,
         }
     }
 
@@ -381,6 +403,7 @@ impl ExtractConfig {
                 apply_owner: false,
                 apply_group: false,
             },
+            mode_policy: ModeSource::None,
         }
     }
 
@@ -443,6 +466,7 @@ impl ExtractConfig {
                 apply_owner: false,
                 apply_group: false,
             },
+            mode_policy: ModeSource::None,
         }
     }
 }
