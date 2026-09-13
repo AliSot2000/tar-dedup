@@ -222,14 +222,17 @@ define_flags! {
         /// At the target destination was a preexisting entry which was overwritten during the
         /// extraction or which prevented the extraction
         Overwrite = 20,
+        /// Either unlink_first was given or there was a type conflict which necessitated the
+        /// removal of the previous entry. The flag encodes that remove was called successfully.
+        RemovedPrevious = 21,
         /// Used RefLink (if false -> used (sparse) copy)
-        UsedRefLink = 21,
+        UsedRefLink = 22,
         /// An Error prevented the file from being placed in its correct position
-        ErrorWhilePlacing = 22,
+        ErrorWhilePlacing = 23,
         /// File materialized corectly with metadata applied.
-        AppliedMetadata = 23,
+        AppliedMetadata = 24,
         /// At least one error occurred while applying metadata
-        ErrorWhileApplyingMetadata = 24,
+        ErrorWhileApplyingMetadata = 25,
     }
     /// Bitset stored in `files.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,14 +268,17 @@ define_flags! {
         /// At the target destination was a preexisting entry which was overwritten during the
         /// extraction or which prevented the extraction
         Overwrite = 4,
+        /// Either unlink_first was given or there was a type conflict which necessitated the
+        /// removal of the previous entry. The flag encodes that remove was called successfully.
+        RemovedPrevious = 5,
         /// Copy/link into this output path failed.
-        ErrorWhilePlace = 5,
+        ErrorWhilePlace = 6,
         /// Metadata restore failed for this output path.
-        ErrorWhileApplyingMetadata = 6,
+        ErrorWhileApplyingMetadata = 7,
         /// Metadata (mode, owner, times, xattr/acl/selinux) has been applied.
-        AppliedMetadata = 7,
+        AppliedMetadata = 8,
         /// Highlight directories to be able to scan them for dir tree creation.
-        IsDirectory = 8,
+        IsDirectory = 9,
     }
     /// Bitset stored in `out_tree.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
