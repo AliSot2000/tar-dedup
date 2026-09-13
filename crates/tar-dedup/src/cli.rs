@@ -602,6 +602,10 @@ pub struct ExtractArgs {
     #[arg(long = "no-selinux", default_value_t = false, help_heading = "File Attributes")]
     pub no_selinux: bool,
 
+    /// Do not apply archived permissions (mode). Permissions are restored by default.
+    #[arg(long = "no-same-permissions", default_value_t = false, help_heading = "File Attributes")]
+    pub no_same_permissions: bool,
+
     // --- Process Options ---
 
     /// Wipe extract work (`.estage`) and start over.

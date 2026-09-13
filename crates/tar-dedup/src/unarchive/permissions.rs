@@ -8,26 +8,28 @@
 //! only the canonical row is touched. With `--overwrite-dir`, directory metadata is
 //! applied as well.
 
-use chrono::{DateTime, Utc};
-use filetime::{FileTime, set_file_atime, set_file_mtime, set_file_times};
-use std::fs;
-use std::io;
-use std::path::Path;
-use std::time::SystemTime;
-
 use crate::common::perms::{
     ModeSource, OwnerGroupPolicy, OwnerGroupSource, parse_mode_changes, resolve_owner_group,
 };
 use crate::common::xattr::{set_file_acl, set_file_selinux_data, set_file_xattrs};
 use crate::config::ExtractConfig;
+use crate::config::ExtractPipelinePhase;
 use crate::db::Database;
 use crate::db::flags::{ErrorFlags, OutTreeFlag};
 use crate::db::types::{FileRecord, FileType, OutTreeRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
+use chrono::{DateTime, Utc};
+use filetime::{FileTime, set_file_atime, set_file_mtime, set_file_times};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 const BATCH_SIZE: u64 = 10_000;
+const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Permissions);
+
 
 pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // Errors encountered while applying metadata are recorded per-file; the recorder
@@ -199,14 +201,17 @@ fn apply_one(
 
     // mode. Symlinks are skipped: on unix their mode is kernel-fixed 0777 and
     // chmod would dereference and clobber the link target.
-    if let (Some(mode), false) = (record.mode, matches!(record.ftype, FileType::Symlink(_))) {
-        let effective = match mode_changes {
-            Some(changes) => changes.apply_to(mode),
-            None => mode,
-        };
-        match apply_mode(target_path, effective) {
-            Ok(()) => {}
-            Err(e) => errors.push(FileStatError::io(target_path, e)),
+    if !config.attributes.no_same_permissions {
+        let type_match = matches!(record.ftype, FileType::Symlink(_));
+        if let (Some(mode), false) = (record.mode, type_match) {
+            let effective = match mode_changes {
+                Some(changes) => changes.apply_to(mode),
+                None => mode,
+            };
+            match apply_mode(target_path, effective) {
+                Ok(()) => {}
+                Err(e) => errors.push(FileStatError::io(target_path, e)),
+            }
         }
     }
 
