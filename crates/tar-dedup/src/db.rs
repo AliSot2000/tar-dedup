@@ -530,9 +530,9 @@ impl Database {
         scan::init_extract_runtime_state(&mut *self.conn_mut())
     }
 
-    pub fn list_canonical_files_for_move(
+    pub fn list_canonical_files_for_move<R: SqlFileRow>(
         &self, filter: bool, last_id: FileId, batch_size: u64
-    ) -> Result<Vec<StrippedRecord>> {
+    ) -> Result<Vec<R>> {
         place::list_canonical_files_for_move(&self.conn(), filter, last_id, batch_size)
     }
 
