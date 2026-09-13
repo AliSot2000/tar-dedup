@@ -73,6 +73,10 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             )? {
                 db.set_archive_owner_policy(&policy)?;
             }
+        // PRECONDITION: changes validated!
+            if let Some(changes) = config.capture.mode.as_ref() {
+                db.set_archive_mode_changes(changes)?;
+            }
             state
         }
     };
