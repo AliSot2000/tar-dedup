@@ -82,6 +82,7 @@ pub struct StrippedRecord {
     pub canonical_id: Option<FileId>,
     pub flags: FileFlags,
     pub phase: FilePhase,
+    pub new_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
