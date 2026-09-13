@@ -178,7 +178,7 @@ pub fn copy_canonicals_to_source(
 
     loop {
         shutdown.check_in_flight()?;
-        let to_copy = db.list_canonical_files_for_move(
+        let to_copy: Vec<StrippedRecord> = db.list_canonical_files_for_move(
             true, last_id, BATCH_SIZE)?;
         if to_copy.is_empty() { break }
         last_id = to_copy.last().expect("PRECONDITION FAILED: Not Empty").id;
@@ -215,16 +215,15 @@ pub fn copy_canonicals_to_source(
 
         for result in copied {
             match result {
-                Err((id, err)) => {
-                    // TODO handle error
+                Err((_, Error::Interrupted)) => (),
+                Err((id, Error::FileStat(e))) => {
                     recorder.record_file(
-                        id,
-                        ERROR_PHASE,
-                        err.to_file_stat(None),
-                        ErrorFlags::default(),
+                        id, ERROR_PHASE, e, ErrorFlags::default(),
                     );
                     db.set_file_flag(id, FileFlag::ErrorWhilePlacing, true)?;
                 }
+                Err((_id, other)) => panic!(
+                    "INVARIANT FAILED: Return type violates contract. Encountered error {other}"),
                 Ok((id, is_copy)) => {
                     db.set_file_flag(id, FileFlag::AtLinkSource, true)?;
                     db.set_file_flag(id, FileFlag::UsedRefLink, !is_copy)?;
