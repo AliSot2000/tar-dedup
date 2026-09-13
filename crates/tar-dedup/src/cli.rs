@@ -576,6 +576,12 @@ pub struct ExtractArgs {
     #[arg(long = "apply-mode", default_value_t = false, help_heading = "File Attributes")]
     pub apply_mode: bool,
 
+    /// Strip NUMBER leading path components from file names before extraction.
+    /// (GNU tar `--strip-components`; 0 = no-op.)
+    #[arg(long = "strip-components", value_name = "NUMBER", default_value_t = 0,
+          help_heading = "File Attributes")]
+    pub strip_components: u32,
+
     /// Restore archived access times from the database (default: leave untouched).
     #[arg(long = "apply-atime", default_value_t = false, help_heading = "File Attributes")]
     pub apply_atime: bool,
