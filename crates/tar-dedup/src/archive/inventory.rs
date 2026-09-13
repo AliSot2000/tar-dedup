@@ -3,20 +3,20 @@ use walkdir::WalkDir;
 use crate::common::files::original_extension;
 #[cfg(windows)]
 use crate::common::files::get_file_times;
+use crate::common::files::determine_file_type;
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::ArchiveConfig;
-use crate::db::{Database, ErrorPhase};
 use crate::db::flags::{SourceFlag, SourceFlags};
-use crate::db::types::{FileType, LinkType, NewFileRecord};
-use crate::error::{Error, FileStatError, FileStatResult, Result};
+use crate::db::types::{FileType, NewFileRecord};
+use crate::db::{Database, ErrorPhase};
+use crate::error::{Error, FileStatError, Result};
 use crate::progress::CountProgress;
 use crate::shutdown::Shutdown;
 use chrono::{DateTime, Utc};
 use path_clean::PathClean;
-use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::{fs, io};
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
