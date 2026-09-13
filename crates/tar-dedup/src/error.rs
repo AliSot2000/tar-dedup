@@ -70,6 +70,15 @@ impl Error {
             },
         }
     }
+
+    /// Convert an `Error` into a [`FileStatError`] for the persistent error log.
+    /// If the variant is not FileStatError, we drop to None
+    pub fn to_only_file_stat(&self) -> Option<FileStatError> {
+        match self {
+            Self::FileStat(fse) => Some(fse.recreate()),
+            _ => None
+        }
+    }
 }
 
 /// Rebuild an `io::Error` from a reference. Real OS errors round-trip through
