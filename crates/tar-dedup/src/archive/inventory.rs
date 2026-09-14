@@ -24,6 +24,11 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhas
 
 
 pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+    if db.count_entries()? > 0 {
+        tracing::warn!("Found interrupted scan of directories. Purging and starting again.");
+        db.purge_entries()?;
+    }
+
     // TODO on restart - delete the db and start from the beginning
     tracing::info!("Inventory pass cannot be gracefully interrupted. \
                     If force aborted, inventory needs to be run again to ensure consistent \
@@ -100,7 +105,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     }
 
     if !config.pipeline.numeric_ids_only {
-        db.resolve_numeric_ids()?;
+        db.resolve_numeric_ids(&mut recorder)?;
     }
     recorder.flush()?;
     progress.finish("inventory complete");
