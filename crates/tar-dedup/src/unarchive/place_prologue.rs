@@ -202,15 +202,15 @@ fn strip_relative_member(member: &str, strip: u32) -> String {
 ///
 /// If multiple files map to the same directory, the tool will not complain and simply the first
 /// entry to extract to it, will own the path.
-pub fn populate_out_tree(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+pub fn populate_out_tree(
+    db: &Database, config: &ExtractConfig, shutdown: &Shutdown, use_new_name: bool) -> Result<()> {
     debug_assert!(config.paths.extraction_root().is_absolute(),
                   "INVARIANT ERROR: extraction root is not absolute");
     debug_assert!(!db.out_tree_is_built()?, "PRECONDITION FAILED: out tree built");
-
     if config.placement.absolute_names {
-        populate_out_tree_abs(db, config, shutdown)?;
+        populate_out_tree_abs(db, config, shutdown, use_new_name)?;
     } else {
-        populate_out_tree_rel(db, config, shutdown)?;
+        populate_out_tree_rel(db, config, shutdown, use_new_name)?;
     }
 
     ensure_parent(db)?;
@@ -219,7 +219,8 @@ pub fn populate_out_tree(db: &Database, config: &ExtractConfig, shutdown: &Shutd
 }
 
 /// Build the out_tree table, if the user selected absolute names for the materialization method.
-fn populate_out_tree_abs(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+fn populate_out_tree_abs(
+    db: &Database, config: &ExtractConfig, shutdown: &Shutdown, use_new_name: bool) -> Result<()> {
     debug_assert!(config.placement.absolute_names,
                   "PRECONDITION FAILED: Function builds absolute names");
     let root = config.paths.extraction_root();
@@ -228,13 +229,13 @@ fn populate_out_tree_abs(db: &Database, config: &ExtractConfig, shutdown: &Shutd
     loop {
         shutdown.check_in_flight()?;
         let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-            Some(last_id), BATCH_SIZE, None, Some(false))?;
+            last_id, BATCH_SIZE, None, None, use_new_name)?;
         if entries.is_empty() { break }
         last_id = entries.last().expect("non-empty batch").id;
 
         // Process the entries
         let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-            &entries, &root, None, config.strip_components > 0);
+            &entries, &root, None, use_new_name);
 
         db.insert_out_tree_rows(&processed)?;
         // INFO ref table is left empty since we are working with abs_paths
@@ -247,7 +248,12 @@ fn populate_out_tree_abs(db: &Database, config: &ExtractConfig, shutdown: &Shutd
 /// --no-strict-separation, it is possible that parts of the tree were mapped twice and those names
 /// might collide. The sources are selected in ascending order (same order as adding and scanning
 /// initially) and their subtree is then materialized at its relative target.
-fn populate_out_tree_rel(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+fn populate_out_tree_rel(
+    db: &Database,
+    config: &ExtractConfig,
+    shutdown: &Shutdown,
+    use_new_name: bool,
+) -> Result<()> {
     let root = config.paths.extraction_root();
     let mut last_source_id = 0i64;
 
@@ -282,14 +288,13 @@ fn populate_out_tree_rel(db: &Database, config: &ExtractConfig, shutdown: &Shutd
             loop {
                 shutdown.check_in_flight()?;
                 let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-                    Some(last_id), BATCH_SIZE, Some(source.id), Some(false)
+                    last_id, BATCH_SIZE, Some(source.id), Some(false), use_new_name
                 )?;
                 if entries.is_empty() { break }
                 last_id = entries.last().expect("non-empty batch").id;
 
                 let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-                    &entries, &root, Some((&source.abs_path, &extraction_base)),
-                    config.strip_components > 0);
+                    &entries, &root, Some((&source.abs_path, &extraction_base)), use_new_name);
 
                 let out_ids = db.insert_out_tree_rows(&processed)?;
                 let ref_pairs: Vec<(OutTreeId, i64)> = out_ids
@@ -303,11 +308,11 @@ fn populate_out_tree_rel(db: &Database, config: &ExtractConfig, shutdown: &Shutd
     Ok(())
 }
 
-/// Given a vectors of StrippedRecords compute the new OutTreeRows
+/// Given a vectors of StrippedRecords compute the new OutTreeRows. In new-name
+/// mode the query is DB-filtered to rows with a valid (len > 0) `new_name`.
 fn build_new_out_tree_rows(
-    entries: &Vec<StrippedRecord>, root: &Path, sources: Option<(&Path, &Path)>,
-    use_new_name: bool,
-) -> Vec<NewOutTreeRow> {
+    entries: &Vec<StrippedRecord>, root: &Path, sources: Option<(&Path, &Path)>, use_new_name: bool)
+    -> Vec<NewOutTreeRow> {
     let base = match sources {
         Some((_, base)) => base.to_path_buf(),
         None => root.to_path_buf(),
@@ -315,12 +320,7 @@ fn build_new_out_tree_rows(
     let mut processed: Vec<NewOutTreeRow> = Vec::new();
     for r in entries {
         let path = if use_new_name {
-            match &r.new_name {
-                Some(nn) if !nn.is_empty() => base.join(nn),
-                // Empty name => skip (GNU transforms-to-empty semantics).
-                Some(_) => continue,
-                None => catalog_to_target_abs(root, &r.abs_path, sources),
-            }
+            base.join(r.new_name.as_deref().expect("filtered to valid new_name"))
         } else {
             catalog_to_target_abs(root, &r.abs_path, sources)
         };
@@ -337,10 +337,8 @@ fn build_new_out_tree_rows(
 }
 
 fn catalog_to_target_abs(
-    extraction_root: &Path,
-    catalog_path: &Path,
-    relative_component: Option<(&Path, &Path)>,
-) -> PathBuf {
+    extraction_root: &Path, catalog_path: &Path, relative_component: Option<(&Path, &Path)>)
+    -> PathBuf {
     match relative_component {
         None => {
             let rel = catalog_path
@@ -431,10 +429,12 @@ fn strip_leading_up(path: &Path) -> (PathBuf, u64) {
                      "INVARIANT ERROR: Function should only work on clean paths");
     let mut components = path.components().peekable();
     let mut ups = 0u64;
+    // Consume the components that are pardir.
     while matches!(components.peek(), Some(Component::ParentDir)) {
         components.next();
         ups += 1;
     }
+    // Build a path from the remainder
     let mut out = PathBuf::new();
     for comp in components {
         if let Component::Normal(name) = comp {
@@ -454,24 +454,25 @@ mod tests {
 
     #[test]
     fn strip_relative_member_counts_components() {
-        assert_eq!(strip_relative_member(Path::new("a/b/c.txt"), 1),
-                   Some("b/c.txt".to_string()));
-        assert_eq!(strip_relative_member(Path::new("a/b/c.txt"), 2),
-                   Some("c.txt".to_string()));
-        assert_eq!(strip_relative_member(Path::new("a/b/c.txt"), 3),
-                   Some("".to_string()));
-        assert_eq!(strip_relative_member(Path::new("a/b/c.txt"), 9),
-                   Some("".to_string()));
+        assert_eq!(strip_relative_member("a/b/c.txt", 1), "b/c.txt");
+        assert_eq!(strip_relative_member("a/b/c.txt", 2), "c.txt");
+        assert_eq!(strip_relative_member("a/b/c.txt", 3), "");
+        assert_eq!(strip_relative_member("a/b/c.txt", 9), "");
     }
 
     #[test]
     fn strip_relative_member_zero_is_noop() {
-        assert_eq!(strip_relative_member(Path::new("a/b"), 0), None);
+        assert_eq!(strip_relative_member("a/b", 0), "a/b");
     }
 
+    /// GNU order: transform is applied first, then the required number of
+    /// components is stripped from its result. Mirrors `apply_renames`.
     #[test]
-    fn strip_relative_member_ignores_root_dir() {
-        assert_eq!(strip_relative_member(Path::new("/a/b"), 1),
-                   Some("b".to_string()));
+    fn transform_then_strip_order() {
+        let t = parse_transform_expr("s,^a/,b/,").unwrap();
+        let member = "a/x/c.txt";
+        let transformed = t.apply(member);
+        assert_eq!(transformed, "b/x/c.txt");
+        assert_eq!(strip_relative_member(&transformed, 1), "x/c.txt");
     }
 }
