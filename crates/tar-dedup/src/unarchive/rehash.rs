@@ -34,7 +34,7 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     // TODO also filer for sha.
     let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?; // TODO that's wrong
     let total = pending.len() as u64;
-    let already_hashed= 0;
+    let already_hashed = 0;
 
     let do_skip = if config.scan.rehash { "" } else { "skip " };
     tracing::info!(
@@ -76,10 +76,7 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
             shutdown.check_between_files()?;
 
             let outcome = rehash_one(&stage_dir, record, &shutdown);
-            results
-                .lock()
-                .expect("rehash results lock")
-                .push(outcome);
+            results.lock().expect("rehash results lock").push(outcome);
             bar.inc(1);
             Ok(())
         })
@@ -102,7 +99,8 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
                 } else {
                     return Err(Error::Config(format!(
                         "Corruption detected: {mismatches} files with mismatching hash. \
-                        Ignore this error with --force")))
+                        Ignore this error with --force"
+                    )));
                 }
             }
             if errors > 0 {
