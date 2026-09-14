@@ -1,9 +1,8 @@
 use walkdir::WalkDir;
 
-use crate::common::files::original_extension;
+use crate::common::files::{determine_file_type, original_extension};
 #[cfg(windows)]
 use crate::common::files::get_file_times;
-use crate::common::files::determine_file_type;
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::config::ArchiveConfig;
 use crate::db::flags::{SourceFlag, SourceFlags};
@@ -28,7 +27,6 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         db.purge_entries()?;
     }
 
-    // TODO on restart - delete the db and start from the beginning
     tracing::info!("Inventory pass cannot be gracefully interrupted. \
                     If force aborted, inventory needs to be run again to ensure consistent \
                     snapshot of filesystem.");
@@ -81,16 +79,12 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
             continue;
         }
         // Sanity check
-        debug_assert!(files_file.is_file(),
-                      "Input Dir must contain valid directories");
-        debug_assert!(files_file.is_absolute(),
-                      "Input Dir must be absolute");
-        debug_assert!(&files_file.clean() == files_file,
-                      "Path should be minimal");
+        debug_assert!(files_file.is_file(),"Input Dir must contain valid directories");
+        debug_assert!(files_file.is_absolute(), "Input Dir must be absolute");
+        debug_assert!(&files_file.clean() == files_file, "Path should be minimal");
 
         // TODO capture error
-        let file = fs::read(files_file)
-            .map_err(|e| Error::io(files_file, e))?;
+        let file = fs::read(files_file).map_err(|e| Error::io(files_file, e))?;
 
         for element in files_from_records(&file, config.inputs.files_from_null) {
             handle_from_files_line(element, &files_file, &config, &db, &shutdown, &mut processed,
@@ -151,6 +145,7 @@ fn handle_from_files_line(
     if abs_path.is_dir() {
         if let Some((_, existing)) = db.find_overlapping_source(
             &abs_path, config.indexing.no_recursion)? {
+
             if !config.indexing.no_strict_separation {
                 return Err(Error::Config(format!(
                     "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
@@ -168,8 +163,9 @@ fn handle_from_files_line(
         Some(&fpath.clean()),
         SourceFlags::default().with(SourceFlag::IsDirectory, abs_path.is_dir()),
     )?;
-    handle_dir(&config, &db, &shutdown, source_id, &abs_path,
-               processed, &progress, recorder)?;
+    handle_dir(
+        &config, &db, &shutdown, source_id, &abs_path, processed, &progress, recorder,
+    )?;
 
     Ok(())
 }
@@ -193,7 +189,7 @@ pub fn handle_dir(
 
     let mut iter = WalkDir::new(&start_dir)
         .follow_links(config.indexing.dereference)
-        .follow_root_links(true)// INFO: Custom handling by us
+        .follow_root_links(true) // INFO: Custom handling by us
         .same_file_system(config.indexing.one_file_system)
         .min_depth(0)
         .max_depth(if config.indexing.no_recursion { 1 } else { usize::MAX })
@@ -219,20 +215,21 @@ pub fn handle_dir(
             }
             Ok(entry) => entry,
         };
-        handle_entry_base(&entry.path(), source_id, &config, &db, &progress, processed,
-                          recorder)?;
+        handle_entry_base(
+            &entry.path(), source_id, &config, &db, &progress, processed, recorder)?;
     }
     Ok(())
 }
 
-pub fn handle_entry_base(path: &Path,
-                         source_id: i64,
-                         config: &ArchiveConfig,
-                         db: &Database,
-                         progress: &CountProgress,
-                         processed: &mut u64,
-                         recorder: &mut crate::db::Recorder)
-                         -> Result<()> {
+pub fn handle_entry_base(
+    path: &Path,
+    source_id: i64,
+    config: &ArchiveConfig,
+    db: &Database,
+    progress: &CountProgress,
+    processed: &mut u64,
+    recorder: &mut crate::db::Recorder)
+    -> Result<()> {
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
 
     // Preflight: already inventoried — attach this source without restatting.
@@ -265,17 +262,17 @@ pub fn handle_entry(
             // File row cannot be created without metadata; record with the path
             // alone so the failure is not lost when the phase aborts.
             recorder.record_session(
-                    ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
-                    FileStatError::Io {
-                        path: path.to_path_buf(),
-                        source: io::Error::new(e.kind(), e.to_string()),
-                    },
-                    crate::db::flags::ErrorFlags::default(),
-                );
+                ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
+                FileStatError::Io {
+                    path: path.to_path_buf(),
+                    source: io::Error::new(e.kind(), e.to_string()),
+                },
+                crate::db::flags::ErrorFlags::default(),
+            );
             // The recorder is shared per-pass; flush everything before returning
             // the error so this record is not lost to the abort.
             recorder.flush()?;
-            return Err(Error::io(path, e))
+            return Err(Error::io(path, e));
         }
     };
 
@@ -283,9 +280,9 @@ pub fn handle_entry(
     let mtime_nsec = meta.mtime_nsec();
     debug_assert!((0..1_000_000_000).contains(&mtime_nsec));
     let mtime: Option<DateTime<Utc>> = DateTime::from_timestamp(mtime_s, mtime_nsec as u32);
-    if mtime.is_none(){
-        tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
-            path.display(), mtime_s, mtime_nsec);
+    if mtime.is_none() {
+        tracing::warn!(
+            "File {} has Implausible Timestamp.  {mtime_s}s, {mtime_nsec}nsec", path.display());
         enc_err.push(FileStatError::general(
             Some(path),
             format!("Implausible mtime: {mtime_s}s, {mtime_nsec}nsec")));
@@ -295,10 +292,10 @@ pub fn handle_entry(
     let atime_nsec = meta.atime_nsec();
     debug_assert!((0..1_000_000_000).contains(&atime_nsec));
     let atime: Option<DateTime<Utc>> = DateTime::from_timestamp(atime_s, atime_nsec as u32);
-    if atime.is_none(){
-        tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
-            path.display(), atime_s, atime_nsec);
-    enc_err.push(FileStatError::general(
+    if atime.is_none() {
+        tracing::warn!(
+            "File {} has Implausible Timestamp.  {atime_s}s, {atime_nsec}nsec", path.display());
+        enc_err.push(FileStatError::general(
             Some(path),
             format!("Implausible atime: {atime_s}s, {atime_nsec}nsec")));
     }
@@ -307,10 +304,10 @@ pub fn handle_entry(
     let ctime_nsec = meta.mtime_nsec();
     debug_assert!((0..1_000_000_000).contains(&ctime_nsec));
     let ctime: Option<DateTime<Utc>> = DateTime::from_timestamp(ctime_s, ctime_nsec as u32);
-    if ctime.is_none(){
-        tracing::warn!("File {} has Implausible Timestamp.  {}s, {}nsec",
-            path.display(), ctime_s, ctime_nsec);
-    enc_err.push(FileStatError::general(
+    if ctime.is_none() {
+        tracing::warn!(
+            "File {} has Implausible Timestamp.  {ctime_s}s, {ctime_nsec}nsec", path.display());
+        enc_err.push(FileStatError::general(
             Some(path),
             format!("Implausible ctime: {ctime_s}s, {ctime_nsec}nsec")));
     }
@@ -324,9 +321,11 @@ pub fn handle_entry(
     let ftype = inner_file_type(&meta, &path, &mut enc_err);
 
     let (link_dst, major, minor) = match ftype {
-        FileType::Symlink(_) => (strip_transpose(path, fs::read_link(path), &mut enc_err),
-                                 None,
-                                 None),
+        FileType::Symlink(_) => (
+            strip_transpose(path, fs::read_link(path), &mut enc_err),
+            None,
+            None,
+        ),
         FileType::CharacterDevice | FileType::BlockDevice => {
             let (maj, min) = get_file_rdev_parts(&meta);
             (None, maj, min)
@@ -335,14 +334,14 @@ pub fn handle_entry(
             // INFO: Error not stored, since it is obvious from unknown.
             tracing::error!("{} could not be classified into a valid file type.", path.display());
             (None, None, None)
-        },
-        _ => (None, None, None)
+        }
+        _ => (None, None, None),
     };
 
     // Optional data
     let xattrs = if config.capture.do_xattrs {
         match get_file_xattr(path) {
-            Err(e) => { enc_err.push(e); None},
+            Err(e) => { enc_err.push(e); None }
             Ok(md) => Some(md),
         }
     } else { None };
@@ -359,27 +358,30 @@ pub fn handle_entry(
         }
     } else { None };
 
-    if db.insert_file_and_ref(source_id, &NewFileRecord {
-        abs_path: path.clean().to_path_buf(),
-        ext: original_extension(&path),
-        size: meta.len(),
-        mtime,
-        atime,
-        ctime,
-        uid: Some(uid),
-        gid: Some(gid),
-        ftype: Some(ftype),
-        mode: Some(mode),
-        xattrs,
-        posix_acl,
-        selinux_ctx,
-        win_perm: None,
-        link_dst: link_dst.clone(),
-        device_id: Some(dev),
-        inode_id: Some(ino),
-        major,
-        minor,
-    })? {
+    if db.insert_file_and_ref(
+        source_id,
+        &NewFileRecord {
+            abs_path: path.clean().to_path_buf(),
+            ext: original_extension(&path),
+            size: meta.len(),
+            mtime,
+            atime,
+            ctime,
+            uid: Some(uid),
+            gid: Some(gid),
+            ftype: Some(ftype),
+            mode: Some(mode),
+            xattrs,
+            posix_acl,
+            selinux_ctx,
+            win_perm: None,
+            link_dst: link_dst.clone(),
+            device_id: Some(dev),
+            inode_id: Some(ino),
+            major,
+            minor,
+        },
+    )? {
         *processed += 1;
         progress.inc(1);
     }
@@ -420,7 +422,7 @@ pub fn handle_entry(
         Ok(m) => m,
         Err(e) => {
             // TODO store error in db,
-            return Err(Error::io(path, e))
+            return Err(Error::io(path, e));
         }
     };
 
@@ -455,27 +457,30 @@ pub fn handle_entry(
     let selinux_ctx = None;
     let win_perm = Some(get_file_win_perms(&meta));
 
-    if db.insert_file_and_ref(source_id, &NewFileRecord {
-        abs_path: path.clean().to_path_buf(),
-        ext: original_extension(&path),
-        size: meta.len(),
-        mtime,
-        atime,
-        ctime,
-        uid,
-        gid,
-        ftype: Some(ftype),
-        mode: Some(file_mode(&meta, &ftype)),
-        xattrs,
-        posix_acl,
-        selinux_ctx,
-        win_perm,
-        link_dst: link_dst.clone(),
-        device_id: dev,
-        inode_id: ino,
-        major,
-        minor,
-    })? {
+    if db.insert_file_and_ref(
+        source_id,
+        &NewFileRecord {
+            abs_path: path.clean().to_path_buf(),
+            ext: original_extension(&path),
+            size: meta.len(),
+            mtime,
+            atime,
+            ctime,
+            uid,
+            gid,
+            ftype: Some(ftype),
+            mode: Some(file_mode(&meta, &ftype)),
+            xattrs,
+            posix_acl,
+            selinux_ctx,
+            win_perm,
+            link_dst: link_dst.clone(),
+            device_id: dev,
+            inode_id: ino,
+            major,
+            minor,
+        },
+    )? {
         *processed += 1;
         progress.inc(1);
         // TODO deal with the error vec!
@@ -501,10 +506,13 @@ fn os_str_from_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, OsStr> {
 fn strip_transpose<T>(path: &Path, source: io::Result<T>, errors: &mut Vec<FileStatError>)
     -> Option<T> {
     match source {
-        Err(e) => { errors.push(FileStatError::Io {
-            path: path.to_path_buf(),
-            source: e});
-            None},
+        Err(e) => {
+            errors.push(FileStatError::Io {
+                path: path.to_path_buf(),
+                source: e,
+            });
+            None
+        }
         Ok(dt_utc) => Some(dt_utc),
     }
 }
@@ -541,11 +549,12 @@ fn files_from_reader(mut reader: impl BufRead, null: bool)
             }
             Err(e) => Some(Err(e)),
         }
-    }).enumerate()
-        .filter(|(_line, res)| match res {
-            Ok(rec) => !rec.is_empty(),
-            Err(_) => true, // keep errors so the loop can handle them
-        })
+    })
+    .enumerate()
+    .filter(|(_line, res)| match res {
+        Ok(rec) => !rec.is_empty(),
+        Err(_) => true, // keep errors so the loop can handle them
+    })
 }
 
 /// Synthesize a POSIX-style mode from the NTFS attributes. Directories read as
@@ -586,9 +595,8 @@ fn get_file_dev(meta: &fs::Metadata) -> io::Result<u64> {
 #[cfg(windows)]
 fn get_file_ino(meta: &fs::Metadata) -> io::Result<u64> {
     use std::os::windows::fs::MetadataExt;
-    meta.file_index().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::Other, "file index is not available")
-    })
+    meta.file_index()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "file index is not available"))
 }
 
 /// Serialize the NTFS `FILE_ATTRIBUTE_*` bitmask as a small JSON document so it
@@ -609,8 +617,7 @@ fn get_file_rdev_parts(meta: &fs::Metadata) -> (Option<u64>, Option<u64>) {
     )
 }
 
-pub fn inner_file_type(meta: &Metadata, path: &Path, enc_err: &mut  Vec<FileStatError>)
-    -> FileType {
+pub fn inner_file_type(meta: &Metadata, path: &Path, enc_err: &mut Vec<FileStatError>) -> FileType {
     match determine_file_type(&meta, &path) {
         Ok(t) => t,
         Err((t, _failed_path, e)) => {
