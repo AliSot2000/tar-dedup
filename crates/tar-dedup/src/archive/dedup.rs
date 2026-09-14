@@ -13,6 +13,7 @@ use crate::db::Database;
 use crate::error::{Error, FileStatError, Result};
 use crate::progress::{io_buffer, CountProgress};
 use crate::shutdown::Shutdown;
+use crate::db::ErrorPhase;
 
 /// One finished compare: both keys always present.
 /// `Ok(equal)` on a completed byte compare; `Err((file_id, error))` for the side
@@ -465,7 +466,7 @@ fn apply_outcome(db: &Database, recorder: &mut crate::db::Recorder, outcome: Com
             db.set_file_flag(failed, FileFlag::ErrorWhileDedup, true)?;
             recorder.record_file(
                 failed,
-                crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Dedup),
+                ErrorPhase::Pipeline(crate::config::PipelinePhase::Dedup),
                 error,
                 crate::db::flags::ErrorFlags::default(),
             );
