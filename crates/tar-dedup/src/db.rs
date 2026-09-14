@@ -667,6 +667,11 @@ impl Database {
         permissions::list_out_tree_for_permissions_dirs::<R>(&self.conn(), batch_size)
     }
 
+    pub fn list_canonical_files_for_permissions<R: SqlFileRow>(&self, batch_size: u64)
+        -> Result<Vec<R>> {
+        permissions::list_canonical_files_for_permissions(&self.conn(), batch_size)
+    }
+
     pub fn count_out_tree_for_permissions(&self) -> Result<u64> {
         permissions::count_out_tree_for_permissions_non_dir(&self.conn())
     }
