@@ -21,7 +21,7 @@ pub fn content_id_from_digest(
 ) -> ContentId {
     let hash_part = match digest {
         Some(dg) => URL_SAFE_NO_PAD.encode(dg),
-        None => ";".repeat(HASH_B64_LEN)
+        None => ";".repeat(HASH_B64_LEN),
     };
     let size_part = URL_SAFE_NO_PAD.encode(size.to_le_bytes());
     let fid_part = URL_SAFE_NO_PAD.encode(file_id.0.to_le_bytes());
@@ -58,10 +58,10 @@ pub fn parse_content_id(content_id: &str) -> Result<(Option<[u8; 20]>, u64, File
         None
     } else {
         let res: [u8; 20] = URL_SAFE_NO_PAD
-        .decode(hash_part)
-        .ok()
-        .and_then(|b| b.try_into().ok())
-        .ok_or_else(|| Error::Config(format!("invalid content id: {content_id}")))?;
+            .decode(hash_part)
+            .ok()
+            .and_then(|b| b.try_into().ok())
+            .ok_or_else(|| Error::Config(format!("invalid content id: {content_id}")))?;
         Some(res)
     };
     let size = u64::from_le_bytes(
