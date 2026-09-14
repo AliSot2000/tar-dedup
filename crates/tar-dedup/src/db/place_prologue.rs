@@ -1,6 +1,6 @@
 use crate::db::common::SqlFileRow;
-use crate::db::types::{FileId, NewOutTreeRow, OutTreeId};
 use crate::db::meta;
+use crate::db::types::{FileId, NewOutTreeRow, OutTreeId};
 use rusqlite::{Connection, named_params};
 
 pub fn placement_prologue_done(conn: &Connection) -> crate::error::Result<bool> {
