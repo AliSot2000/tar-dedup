@@ -4,7 +4,7 @@
 mod common;
 
 use tar_dedup::db::flags::{ErrorFlag, ErrorFlags, ErrorScope, ErrorScopePart};
-use tar_dedup::db::{Database, ErrorPhase, Recorder, RecordDraft};
+use tar_dedup::db::{ErrorPhase, RecordDraft, Recorder};
 use tar_dedup::error::FileStatError;
 
 /// A session-scoped draft with a distinct message.
