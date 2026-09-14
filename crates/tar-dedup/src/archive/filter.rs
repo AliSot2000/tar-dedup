@@ -1,14 +1,11 @@
+use crate::common::filter::{
+    FilterSink, ingest_filters as ingest_filter_rules, parse_filter, test_match,
+};
 use crate::config::ArchiveConfig;
 use crate::db::Database;
-use crate::db::ErrorPhase;
-use crate::db::types::{FileId, FilePhase, FilterExpression, StrippedRecord};
+use crate::db::types::{FilePhase, StrippedRecord};
 use crate::error::Result;
 use crate::shutdown::Shutdown;
-use regex::{Regex, RegexBuilder};
-use std::fs;
-use std::path::PathBuf;
-
-const ERROR_PHASE:  ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Filter);
 
 /// Stub filter stage: advance hashed → filtered before dedup.
 pub fn run(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result<()> {
