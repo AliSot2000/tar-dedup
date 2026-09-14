@@ -49,7 +49,7 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
 
     let ps = OwnerGroupMode {
         ogp: policy,
-        mp: mode_changes
+        mp: mode_changes,
     };
 
     if config.placement.link_tree {
@@ -102,11 +102,10 @@ fn resolve_owner_group_policy(config: &ExtractConfig, db: &Database)
                     Some(out_policy)
                 }
             }
-        }
+        },
     };
     Ok(policy)
 }
-
 
 /// Resolve the symbolic mode changes based on the cli flags and the presence of an mode change
 /// string in the database.
@@ -164,8 +163,7 @@ fn process_batches(
                         ErrorFlags::default(),
                     );
                 }
-                db.set_out_tree_flag(
-                    out.id, OutTreeFlag::ErrorWhileApplyingMetadata, true)?;
+                db.set_out_tree_flag(out.id, OutTreeFlag::ErrorWhileApplyingMetadata, true)?;
                 if config.process.fail_fast {
                     return Err(Error::Other(anyhow::anyhow!(
                         "metadata restore failed for {}",
@@ -181,7 +179,10 @@ fn process_batches(
 /// Apply the metadata to the files which were copied to the link source which are used as targets
 /// for the links in link_tree
 pub fn apply_permissions_link_sources(
-    config: &ExtractConfig, db: &Database, rec: &mut Recorder, shutdown: &Shutdown,
+    config: &ExtractConfig,
+    db: &Database,
+    rec: &mut Recorder,
+    shutdown: &Shutdown,
     ps: &OwnerGroupMode)
     -> Result<()> {
     let dir_name = match &config.placement.link_source {
@@ -192,7 +193,7 @@ pub fn apply_permissions_link_sources(
     loop {
         shutdown.check_between_files()?;
 
-        let files: Vec<FileRecord> =  db.list_canonical_files_for_permissions(BATCH_SIZE)?;
+        let files: Vec<FileRecord> = db.list_canonical_files_for_permissions(BATCH_SIZE)?;
         for file in files {
             let id = file.content_id().expect("Copied requires content_id to exist");
             let tgt_path = base_dir.join(id.0);
@@ -237,7 +238,7 @@ fn apply_one(
                     path: tgt_path.to_path_buf(),
                     source: io::Error::new(
                         io::ErrorKind::Other,
-                        format!("owner/group resolution failed: {e}")
+                        format!("owner/group resolution failed: {e}"),
                     ),
                 });
                 (None, None)
@@ -343,11 +344,7 @@ fn apply_mode(target: &Path, mode: u32) -> io::Result<()> {
     fs::set_permissions(target, fs::Permissions::from_mode(mode))
 }
 
-fn apply_times(
-    target: &Path,
-    atime: Option<FileTime>,
-    mtime: Option<FileTime>,
-) -> io::Result<()> {
+fn apply_times(target: &Path, atime: Option<FileTime>, mtime: Option<FileTime>) -> io::Result<()> {
     match (atime, mtime) {
         (Some(a), Some(m)) => set_file_times(target, a, m),
         (Some(a), None) => set_file_atime(target, a),
