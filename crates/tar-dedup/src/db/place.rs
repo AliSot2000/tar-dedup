@@ -3,7 +3,7 @@ use rusqlite::{Connection, named_params};
 use crate::db::common::SqlFileRow;
 use crate::db::flags::{FileFlag, OutTreeFlag};
 use crate::db::meta;
-use crate::db::types::{FileId, NewOutTreeRow, OutTreeId, OutTreeRecord};
+use crate::db::types::{FileId, OutTreeId, OutTreeRecord};
 use crate::error::Result;
 
 /// Function inserts the out_tref rows into the out_ref table
@@ -25,10 +25,7 @@ pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Res
 }
 
 pub fn count_out_tree_rows(conn: &Connection) -> Result<u64> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM out_tree",
-        [],
-        |row| row.get(0))?;
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM out_tree", [], |row| row.get(0))?;
     Ok(n as u64)
 }
 
@@ -65,12 +62,11 @@ pub fn count_out_tree_hardlinks(conn: &Connection, materialized: Option<bool>) -
     let n: i64 = match mat_masks {
         None => conn.query_row(
             &sql,
-            named_params! { ":dir": OutTreeFlag::IsDirectory.mask_i64() },
+            [],
             |row| row.get(0))?,
         Some((placed, err)) => conn.query_row(
             &sql,
             named_params! {
-                ":dir": OutTreeFlag::IsDirectory.mask_i64(),
                 ":placed": placed,
                 ":err": err,
             },
@@ -85,20 +81,22 @@ pub fn count_out_tree_others(conn: &Connection, materialized: Option<bool>) -> R
     let (mat_filter, mat_masks) = out_tree_materialized_filter(materialized);
     let sql = format!(
         "SELECT COUNT(*) FROM out_tree \
-         WHERE canonical_id IS NULL {mat_filter}");
+         WHERE canonical_id IS NULL {mat_filter}"
+    );
     let n: i64 = match mat_masks {
         None => conn.query_row(
             &sql,
-            named_params! { ":dir": OutTreeFlag::IsDirectory.mask_i64() },
-            |row| row.get(0))?,
+            [],
+            |row| row.get(0),
+        )?,
         Some((placed, err)) => conn.query_row(
             &sql,
             named_params! {
-                ":dir": OutTreeFlag::IsDirectory.mask_i64(),
                 ":placed": placed,
                 ":err": err,
             },
-            |row| row.get(0))?,
+            |row| row.get(0),
+        )?,
     };
     Ok(n as u64)
 }
@@ -121,10 +119,7 @@ fn out_tree_materialized_filter(materialized: Option<bool>) -> (String, Option<(
 }
 
 pub fn count_ref_out_rows(conn: &Connection) -> Result<u64> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM ref_out",
-        [],
-        |row| row.get(0))?;
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM ref_out", [], |row| row.get(0))?;
     Ok(n as u64)
 }
 
@@ -137,14 +132,18 @@ pub fn set_dir_tree_built(conn: &Connection) -> Result<()> {
 }
 
 pub fn list_canonical_files_for_move<R: SqlFileRow>(
-    conn: &Connection, filter: bool, last_id: FileId, batch_size: u64
-) -> Result<Vec<R>> {
+    conn: &Connection, filter: bool, last_id: FileId, batch_size: u64)
+    -> Result<Vec<R>> {
     debug_assert!(last_id.0 >= 0,
                   "INVARIANT ERROR: Only > 0 FileIds handed out, 0 minimum lower bound");
 
     let cols = R::sql_columns(None);
-    let sql_filt = if filter { " AND include_reason < 0 AND exclude_reason = 0" } else { "" };
-    let mut stmt = conn.prepare(&format!("\
+    let sql_filt = if filter {
+        format!(" AND {}", crate::db::common::generate_archive_and_extract_filter(None))
+    } else {
+        String::new()
+    };
+    let mut stmt = conn.prepare(&format!("
         SELECT {cols} FROM files \
             WHERE flags & :extracted != 0
                 AND flags & :moved = 0
@@ -161,7 +160,7 @@ pub fn list_canonical_files_for_move<R: SqlFileRow>(
             ":batch_size": batch_size,
             ":moved": FileFlag::AtLinkSource.mask_i64()
         },
-        |r| R::from_row(r, None)
+        |r| R::from_row(r, None),
     )?;
     results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
@@ -190,7 +189,7 @@ pub fn list_out_tree_for_materialization<R: SqlFileRow>(
             let sr = R::from_row(row, Some("c"))?;
             let or = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((sr, or))
-        }
+        },
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
@@ -222,7 +221,7 @@ pub fn list_out_tree_for_hardlinks<R: SqlFileRow>(
             let sr = OutTreeRecord::from_sql(row, Some("c"))?;
             let or = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((fr, sr, or))
-        }
+        },
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
@@ -249,7 +248,7 @@ pub fn list_out_tree_others<R: SqlFileRow>(conn: &Connection, last_id: &OutTreeI
             let sr = R::from_row(row, Some("e"))?;
             let or = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((sr, or))
-        }
+        },
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
@@ -261,20 +260,20 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
     let file_cols = R::sql_columns(Some("can"));
     let out_cols = OutTreeRecord::sql_columns(Some("o"));
     let filter_placed = if pending {
-        " AND o.flags & :placement = 0 \
+        " AND o.flags & :placement = 0
           AND o.flags & :place_error = 0"
     } else {
-        " AND (o.flags & :placement != 0 \
+        " AND (o.flags & :placement != 0
                OR o.flags & :place_error != 0)"
     };
-    let mut stmt = conn.prepare(&format!("\
-        SELECT {file_cols}, {out_cols} \
-        FROM files AS can \
-        JOIN files AS ent ON can.id = ent.canonical_id \
-        JOIN out_tree AS o ON f.id = o.file_id \
-        WHERE f.ftype NOT IN ('dir', 'unknown') \
-            {filter_placed} \
-            AND f.flags & :moved != 0 \
+    let mut stmt = conn.prepare(&format!("
+        SELECT {file_cols}, {out_cols}
+        FROM files AS can
+        JOIN files AS ent ON can.id = ent.canonical_id
+        JOIN out_tree AS o ON f.id = o.file_id
+        WHERE f.ftype NOT IN ('dir', 'unknown')
+            {filter_placed}
+            AND f.flags & :moved != 0
         ORDER BY o.id LIMIT :batch_size
         "))?;
     let results = stmt.query_map(
@@ -288,7 +287,7 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
             let sr = R::from_row(row, Some("can"))?;
             let or = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((sr, or))
-        }
+        },
     )?;
     results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
@@ -304,8 +303,9 @@ pub fn mark_all_canonical(conn: &Connection) -> Result<u64> {
             // ":canonical": OutTreeFlag::IsCanonical.mask_i64(),
             // ":walked" : OutTreeFlag::EntryWalked.mask_i64(),
             ":dir": OutTreeFlag::IsDirectory.mask_i64(),
-        })?;
-   Ok(update as u64)
+        },
+    )?;
+    Ok(update as u64)
 }
 
 /// Set one file as the canonical in the out_tree given hardlink groups (dev, inode)
@@ -495,7 +495,7 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u6
         ":placed": OutTreeFlag::Placed.mask_i64(),
         ":conflict": OutTreeFlag::Conflict.mask_i64()
         },
-        |row| row.get(0)
+        |row| row.get(0),
     )?;
     Ok((
         placed as u64,
