@@ -213,20 +213,19 @@ fn dump_meta_and_clear_archive_meta() {
     db.set_archive_bytes_out(100).expect("bytes out");
 
     let dump = db.dump_meta().expect("dump");
-    assert!(dump
-        .known
-        .iter()
-        .any(|e| matches!(e, tar_dedup::db::MetaEntry::ExtractPhase(_))));
-    assert!(dump
-        .known
-        .iter()
-        .any(|e| matches!(e, tar_dedup::db::MetaEntry::TarWriterBytesIn(99))));
+    assert!(
+        dump.known
+            .iter()
+            .any(|e| matches!(e, tar_dedup::db::MetaEntry::ExtractPhase(_)))
+    );
+    assert!(
+        dump.known
+            .iter()
+            .any(|e| matches!(e, tar_dedup::db::MetaEntry::TarWriterBytesIn(99)))
+    );
 
     db.clear_archive_meta().expect("clear");
     assert_eq!(db.get_archive_bytes_in().expect("in"), 0);
     assert_eq!(db.get_archive_bytes_out().expect("out"), None);
-    assert!(db
-        .load_extract_runtime_state()
-        .expect("load")
-        .is_some());
+    assert!(db.load_extract_runtime_state().expect("load").is_some());
 }
