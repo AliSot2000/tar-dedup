@@ -2,6 +2,7 @@
 
 pub mod cleanup;
 pub mod files;
+pub mod filter;
 pub mod perms;
 pub mod start;
 pub mod transform;
