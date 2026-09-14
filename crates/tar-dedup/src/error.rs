@@ -1,6 +1,6 @@
+use crate::common::xattr::PosixQualifierParserError;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-use crate::common::xattr::PosixQualifierParserError;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
