@@ -1,11 +1,14 @@
 use crate::config::ArchiveConfig;
 use crate::db::Database;
+use crate::db::ErrorPhase;
 use crate::db::types::{FileId, FilePhase, FilterExpression, StrippedRecord};
 use crate::error::Result;
 use crate::shutdown::Shutdown;
 use regex::{Regex, RegexBuilder};
 use std::fs;
 use std::path::PathBuf;
+
+const ERROR_PHASE:  ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Filter);
 
 /// Stub filter stage: advance hashed → filtered before dedup.
 pub fn run(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result<()> {
@@ -156,12 +159,11 @@ struct FilterResult {
 /// Parse the arguments and add them into the database.
 pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
     let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
-    let phase = crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Filter);
     // Handle the include files
     handle_filter(
         &config.filter.include_patterns, &config.filter.include_from, "include",
         &|from, line, query| db.add_include_pattern(from, line, query),
-        &mut recorder, phase)?;
+        &mut recorder)?;
 
     if db.count_filters(Some(false))? == 0 {
         let res = db.add_include_pattern("internal", None, ".*")?;
@@ -171,7 +173,7 @@ pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
     handle_filter(
         &config.filter.exclude_patterns, &config.filter.exclude_from, "exclude",
         &|from, line, query| db.add_exclude_pattern(from, line, query),
-        &mut recorder, phase)?;
+        &mut recorder)?;
     recorder.flush()?;
     Ok(())
 }
@@ -183,13 +185,12 @@ fn handle_filter(
     operation: &str,
     insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
     recorder: &mut crate::db::Recorder,
-    phase: crate::db::ErrorPhase,
 ) -> Result<()>{
 
     // Scan single argument expression
     for (idx, query) in pattern.iter().enumerate() {
         handle_query(&format!("--{operation}"), query, operation, idx as u64, insert_fn,
-                     recorder, phase)?;
+                     recorder)?;
     }
 
     // Scan files with content.
@@ -199,7 +200,7 @@ fn handle_filter(
             Ok(fc) => fc,
             Err(e) => {
                 recorder.record_session(
-                    phase.clone(),
+                    ERROR_PHASE,
                     crate::error::FileStatError::Io {
                         path: file.clone(),
                         source: std::io::Error::new(e.kind(), e.to_string()),
@@ -217,7 +218,7 @@ fn handle_filter(
             }
             let san_path = file.to_string_lossy();
             handle_query(&format!("--{operation}-from={san_path}"), expression, operation,
-                         idx as u64, insert_fn, recorder, phase)?;
+                         idx as u64, insert_fn, recorder)?;
 
         }
     }
@@ -227,14 +228,13 @@ fn handle_filter(
 /// Take care of inserting a single query into the database.
 fn handle_query(source: &str, query: &str, operation: &str, line: u64,
                 insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
-                recorder: &mut crate::db::Recorder,
-                phase: crate::db::ErrorPhase) -> Result<()> {
+                recorder: &mut crate::db::Recorder) -> Result<()> {
     if Regex::new(query).is_ok() {
         let res = insert_fn(source, Some(line), query)?;
         assert_eq!(res, 1, "DB Failed, expected 1 row to get added, got {res}");
     } else {
         recorder.record_session(
-            phase.clone(),
+            ERROR_PHASE,
             crate::error::FileStatError::General {
                 path: None,
                 message: format!("Failed to parse {operation} pattern from {source}, \
