@@ -46,6 +46,8 @@ pub struct CaptureOptions {
     pub do_selinux: bool,
     /// Symbolic mode changes to apply at extraction (GNU tar `--mode`).
     pub mode: Option<String>,
+    /// sed-style name transform to apply at extraction (GNU tar `--transform`).
+    pub transform: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +208,16 @@ impl ArchiveConfig {
             None => None,
         };
 
+        // Validate early so a bad `--transform` fails before any work dir is
+        // created. Only validated and stored; never applied at archive time.
+        let transform: Option<String> = match &args.transform {
+            Some(expr) => {
+                crate::common::transform::parse_transform_expr(expr)?;
+                Some(expr.clone())
+            }
+            None => None,
+        };
+
         let start_policy = StartPolicy::create_or_fresh(args.fresh);
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
 
@@ -241,6 +253,7 @@ impl ArchiveConfig {
                 do_posix_acl: args.acls,
                 do_selinux: args.selinux,
                 mode: mode_changes,
+                transform,
             },
             owner_policy: OwnerPolicy {
                 owner: args.owner.clone(),
@@ -306,6 +319,7 @@ impl ArchiveConfig {
                 do_posix_acl: true,
                 do_selinux: true,
                 mode: None,
+                transform: None,
             },
             owner_policy: OwnerPolicy {
                 owner: None,
