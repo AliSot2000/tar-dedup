@@ -45,10 +45,10 @@ pub fn run(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result
 /// Perform the filtering of files as fast as possible. Currently, with lazy map iterators to avoid
 /// creating two memcopies.
 fn fast_filter(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result<()> {
-    let include_filters =
-        parse_filter(&db.get_filters(false)?, "include", &config);
-    let exclude_filters =
-        parse_filter(&db.get_filters(true)?, "exclude", &config);
+    let include_filters = parse_filter(
+        &db.get_filters(false)?, "include", config.filter.anchored, config.filter.ignore_case);
+    let exclude_filters = parse_filter(
+        &db.get_filters(true)?, "exclude", config.filter.anchored, config.filter.ignore_case);
 
     const BATCH_SIZE: u64 = 100_000;
     let mut last_id = None;
