@@ -11,18 +11,14 @@ pub use archive::{
     InputOptions, OwnerPolicy, SparseOptions,
 };
 pub use compression::{
-    infer_compression_from_suffix, resolve_compression, CompressionFormat, CompressionSettings,
+    CompressionFormat, CompressionSettings, infer_compression_from_suffix, resolve_compression,
 };
 pub use extract::{
-    ExtractAttributeOptions, ExtractConfig, OwnerGroupOptions, PlacementOptions, ScanOptions
+    ExtractAttributeOptions, ExtractConfig, OwnerGroupOptions, PlacementOptions, ScanOptions,
 };
 pub use paths::{PathLayout, PathSource};
-pub use phases::{
-    ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, RuntimeState,
-};
-pub use process::{
-    CleanupSettings, ExitAfterStage, ProcessOptions, ResumeOverrides,
-};
+pub use phases::{ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, RuntimeState};
+pub use process::{CleanupSettings, ExitAfterStage, ProcessOptions, ResumeOverrides};
 pub use resume::ResumeConfig;
 
 use std::path::{Path, PathBuf};
