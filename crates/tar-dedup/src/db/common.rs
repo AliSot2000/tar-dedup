@@ -6,8 +6,28 @@ use rusqlite::{Connection, named_params};
 
 use crate::db::content_id::{content_id_from_digest, sparse_member_name};
 use crate::db::flags::{FileFlags, OutTreeFlag, OutTreeFlags};
-use crate::db::types::{ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord, StrippedRecord};
+use crate::db::types::{
+    ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord,
+    StrippedRecord,
+};
 use crate::error::Result;
+
+/// SQL gate fragment selecting rows that passed the archive include/exclude filters.
+/// `prefix` is an optional table alias (e.g. `"f"` → `f.include_reason_archive …`).
+pub fn generate_archive_filter(prefix: Option<&str>) -> String {
+    let p = prefix.map(|p| format!("{p}.")).unwrap_or_default();
+    format!("{p}include_reason_archive < 0 AND {p}exclude_reason_archive = 0")
+}
+
+/// SQL gate fragment selecting rows that passed both the archive filters and the
+/// extract filters. `prefix` is an optional table alias.
+pub fn generate_archive_and_extract_filter(prefix: Option<&str>) -> String {
+    let p = prefix.map(|p| format!("{p}.")).unwrap_or_default();
+    format!(
+        "{p}include_reason_archive < 0 AND {p}exclude_reason_archive = 0 \
+         AND {p}include_reason_extract < 0 AND {p}exclude_reason_extract = 0"
+    )
+}
 
 /// Row type that can be SELECTed from `files` and mapped from a rusqlite row.
 pub trait SqlFileRow: Sized {
@@ -106,7 +126,9 @@ impl SqlFileRow for FileRecord {
         match prefix {
             None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, \
                 uid, gid, username, groupname, mode, ftype, xattr, acl, selinux, win_perm, link_dst, \
-                include_reason, exclude_reason, canonical_id, flags, phase, \
+                include_reason_archive, exclude_reason_archive, \
+                include_reason_extract, exclude_reason_extract, \
+                canonical_id, flags, phase, \
                 new_name, inode, dev, major, minor".to_string(),
             Some(p) => format!("\
                 {p}.id AS \"{p}.id\",
@@ -116,7 +138,7 @@ impl SqlFileRow for FileRecord {
                 {p}.sha1 AS \"{p}.sha1\",
                 {p}.mtime AS \"{p}.mtime\",
                 {p}.atime AS \"{p}.atime\",
-                {p}.ctim AS \"{p}.ctime\",
+                {p}.ctime AS \"{p}.ctime\",
                 {p}.uid AS \"{p}.uid\",
                 {p}.gid AS \"{p}.gid\",
                 {p}.username AS \"{p}.username\",
@@ -128,10 +150,12 @@ impl SqlFileRow for FileRecord {
                 {p}.selinux AS \"{p}.selinux\",
                 {p}.win_perm AS \"{p}.win_perm\",
                 {p}.link_dst AS \"{p}.link_dst\",
-                {p}.include_reason AS \"{p}.include_reason\",
-                {p}.exclude_reason AS \"{p}.exclude_reason\",
+                {p}.include_reason_archive AS \"{p}.include_reason_archive\",
+                {p}.exclude_reason_archive AS \"{p}.exclude_reason_archive\",
+                {p}.include_reason_extract AS \"{p}.include_reason_extract\",
+                {p}.exclude_reason_extract AS \"{p}.exclude_reason_extract\",
                 {p}.canonical_id AS \"{p}.canonical_id\",
-                {p}.flag AS \"{p}.flags\",
+                {p}.flags AS \"{p}.flags\",
                 {p}.phase AS \"{p}.phase\",
                 {p}.new_name AS \"{p}.new_name\",
                 {p}.inode AS \"{p}.inode\",
@@ -139,13 +163,12 @@ impl SqlFileRow for FileRecord {
                 {p}.major AS \"{p}.major\",
                 {p}.minor AS \"{p}.minor\"")
         }
-
     }
 
     fn from_row(row: &rusqlite::Row<'_>, prefix: Option<&str>) -> rusqlite::Result<Self> {
         let upx = match prefix {
             None => "",
-            Some(p) => &format!("{p}.")
+            Some(p) => &format!("{p}."),
         };
         Ok(FileRecord {
             id: FileId(row.get(format!("{upx}id").as_str())?),
@@ -160,19 +183,28 @@ impl SqlFileRow for FileRecord {
             gid: row.get::<_, Option<i64>>(format!("{upx}gid").as_str())?.map(|v| v as u32),
             username: row.get(format!("{upx}username").as_str())?,
             groupname: row.get(format!("{upx}groupname").as_str())?,
-            mode: row.get::<_, Option<i64>>(format!("{upx}mode").as_str())?.map(|v| v as u32),
+            mode: row
+                .get::<_, Option<i64>>(format!("{upx}mode").as_str())?
+                .map(|v| v as u32),
             ftype: parse_ftype(row, format!("{upx}ftype").as_str())?,
             xattrs: row.get(format!("{upx}xattr").as_str())?,
             posix_acl: row.get(format!("{upx}acl").as_str())?,
             selinux_ctx: row.get(format!("{upx}selinux").as_str())?,
             win_perm: row.get(format!("{upx}win_perm").as_str())?,
-            exclude_reason: row
-                .get::<_, Option<i64>>(format!("{upx}exclude_reason").as_str())?
+            exclude_reason_archive: row
+                .get::<_, Option<i64>>(format!("{upx}exclude_reason_archive").as_str())?
                 .map(ExclusionId),
-            include_reason: row
-                .get::<_, Option<i64>>(format!("{upx}include_reason").as_str())?
+            include_reason_archive: row
+                .get::<_, Option<i64>>(format!("{upx}include_reason_archive").as_str())?
                 .map(ExclusionId),
-            canonical_id: row.get::<_, Option<i64>>(format!("{upx}canonical_id").as_str())?
+            exclude_reason_extract: row
+                .get::<_, Option<i64>>(format!("{upx}exclude_reason_extract").as_str())?
+                .map(ExclusionId),
+            include_reason_extract: row
+                .get::<_, Option<i64>>(format!("{upx}include_reason_extract").as_str())?
+                .map(ExclusionId),
+            canonical_id: row
+                .get::<_, Option<i64>>(format!("{upx}canonical_id").as_str())?
                 .map(FileId),
             flags: FileFlags::from_i64(row.get::<_, i64>(format!("{upx}flags").as_str())?),
             phase: parse_phase(row, upx)?,
@@ -202,8 +234,10 @@ impl SqlFileRow for StrippedRecord {
     fn sql_columns(prefix: Option<&str>) -> String {
         match prefix {
             None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, \
-                flags, phase, inode, dev, new_name".to_string(),
-            Some(p) => format!("
+                flags, phase, inode, dev, new_name"
+                .to_string(),
+            Some(p) => format!(
+                "
                 {p}.id AS \"{p}.id\",
                 {p}.abs_path AS \"{p}.abs_path\",
                 {p}.ext AS \"{p}.ext\",
@@ -218,14 +252,15 @@ impl SqlFileRow for StrippedRecord {
                 {p}.phase AS \"{p}.phase\",
                 {p}.inode AS \"{p}.inode\",
                 {p}.dev AS \"{p}.dev\",
-                {p}.new_name AS \"{p}.new_name\""),
+                {p}.new_name AS \"{p}.new_name\""
+            ),
         }
     }
 
     fn from_row(row: &rusqlite::Row<'_>, prefix: Option<&str>) -> rusqlite::Result<Self> {
         let upx = match prefix {
             None => "",
-            Some(p) => &format!("{p}.")
+            Some(p) => &format!("{p}."),
         };
         Ok(StrippedRecord {
             id: FileId(row.get(format!("{upx}id").as_str())?),
@@ -259,32 +294,35 @@ impl SqlFileRow for StrippedRecord {
 /// Convenience implementations for the OutTreeRecord, function to parse sql rows to records and
 /// generate the columns to select
 impl OutTreeRecord {
-    pub fn from_sql(row: &rusqlite::Row<'_>, prefix: Option<&str>) -> rusqlite::Result<OutTreeRecord> {
+    pub fn from_sql(row: &rusqlite::Row<'_>, prefix: Option<&str>)
+        -> rusqlite::Result<OutTreeRecord> {
         let upx = match prefix {
             None => "",
             Some(p) => &format!("{p}."),
         };
         let file_id: Option<i64> = row.get(format!("{upx}file_id").as_str())?;
+        let canonical_id: Option<i64> = row.get(format!("{upx}canonical_id").as_str())?;
         Ok(OutTreeRecord {
             id: OutTreeId(row.get(format!("{upx}id").as_str())?),
             abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
             file_id: file_id.map(FileId),
             flags: OutTreeFlags::from_i64(row.get(format!("{upx}flags").as_str())?),
-            canonical_id: OutTreeId(row.get(format!("{upx}canonical_id").as_str())?)
+            canonical_id: canonical_id.map(OutTreeId),
         })
     }
 
     pub fn sql_columns(prefix: Option<&str>) -> String {
         match prefix {
             None => "id, abs_path, file_id, flags, canonical_id".to_string(),
-            Some(p) => format!("\
+            Some(p) => format!(
+            "
             {p}.id AS \"{p}.id\",
             {p}.abs_path AS \"{p}.abs_path\",
             {p}.file_id AS \"{p}.file_id\",
             {p}.flags AS \"{p}.flags\",
             {p}.canonical_id AS \"{p}.canonical_id\"
             "
-            )
+            ),
         }
     }
 }
@@ -338,11 +376,9 @@ pub fn list_out_tree(
             ":source_id": source_id.unwrap(),
         },
     };
-    let rows = stmt.query_map(
-        params,
-        |r | OutTreeRecord::from_sql(r, None)
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    let rows = stmt.query_map(params, |r| OutTreeRecord::from_sql(r, Some("o")))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Result<Option<R>> {
@@ -359,12 +395,10 @@ pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Resu
 pub fn get_file_by_path<R: SqlFileRow>(conn: &Connection, abs_path: &Path) -> Result<Option<R>> {
     debug_assert_eq!(abs_path, abs_path.to_path_buf().clean(), "Got non-normalized path");
     let cols = R::sql_columns(None);
-    let mut stmt = conn.prepare(
-        &format!("SELECT {cols} FROM files WHERE abs_path = :abs_path")
-    )?;
-    let mut rows = stmt.query(
-        named_params! { ":abs_path": abs_path.to_string_lossy() }
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {cols} FROM files WHERE abs_path = :abs_path"
+    ))?;
+    let mut rows = stmt.query(named_params! { ":abs_path": abs_path.to_string_lossy() })?;
     if let Some(row) = rows.next()? {
         return Ok(Some(R::from_row(row, None)?));
     }
@@ -373,9 +407,7 @@ pub fn get_file_by_path<R: SqlFileRow>(conn: &Connection, abs_path: &Path) -> Re
 
 pub fn count_entries(conn: &Connection) -> Result<u64> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(*) AS count FROM files",
-        [],
-        |row| row.get("count"),
+        "SELECT COUNT(*) AS count FROM files", [], |row| row.get("count")
     )?;
     Ok(count as u64)
 }
@@ -391,20 +423,17 @@ pub fn count_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<u64> 
 }
 
 // TODO: select files explicitly
-pub fn list_files_in_phase<R: SqlFileRow>(
-    conn: &Connection,
-    phase: FilePhase,
-) -> Result<Vec<R>> {
+pub fn list_files_in_phase<R: SqlFileRow>(conn: &Connection, phase: FilePhase) -> Result<Vec<R>> {
     let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!(
         "SELECT {cols} FROM files WHERE phase = :phase ORDER BY id"
     ))?;
 
-    let rows = stmt.query_map(
-        named_params! { ":phase": phase.as_str() },
-        |r| { R::from_row(r, None) },
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    let rows = stmt.query_map(named_params! { ":phase": phase.as_str() }, |r| {
+        R::from_row(r, None)
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
@@ -497,10 +526,7 @@ fn optional_rfc3339(
     }
 }
 
-fn parse_ftype(
-    row: &rusqlite::Row<'_>,
-    column: &str,
-) -> rusqlite::Result<FileType> {
+fn parse_ftype(row: &rusqlite::Row<'_>, column: &str) -> rusqlite::Result<FileType> {
     let raw: String = row.get(column)?;
     FileType::parse(&raw).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
@@ -509,9 +535,7 @@ fn parse_ftype(
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 e.to_string(),
-                )
-            ),
+            )),
         )
     })
 }
-
