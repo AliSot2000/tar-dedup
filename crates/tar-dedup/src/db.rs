@@ -494,11 +494,11 @@ impl Database {
         scan::count_non_appended_by_ftype(&*self.conn())
     }
 
-    pub fn load_extract_scan_state(&self) -> Result<extract::ExtractScanState> {
+    pub fn load_extract_scan_state(&self) -> Result<ExtractScanState> {
         scan::load_extract_scan_state(&*self.conn())
     }
 
-    pub fn save_extract_scan_state(&self, state: &extract::ExtractScanState) -> Result<()> {
+    pub fn save_extract_scan_state(&self, state: &ExtractScanState) -> Result<()> {
         scan::save_extract_scan_state(&mut *self.conn_mut(), state)
     }
 
@@ -672,7 +672,7 @@ impl Database {
         permissions::list_canonical_files_for_permissions(&self.conn(), batch_size)
     }
 
-    pub fn count_out_tree_for_permissions(&self) -> Result<u64> {
+        pub fn count_out_tree_for_permissions(&self) -> Result<u64> {
         permissions::count_out_tree_for_permissions_non_dir(&self.conn())
     }
 
@@ -686,21 +686,21 @@ impl Database {
 
     // --- errors (persistent error log) ---
 
-    pub fn insert_errors(&self, drafts: &[errors::RecordDraft]) -> Result<u64> {
+    pub fn insert_errors(&self, drafts: &[RecordDraft]) -> Result<u64> {
         errors::insert_errors(&mut *self.conn_mut(), drafts)
     }
 
-    pub fn get_record_by_id(&self, id: i64) -> Result<Option<errors::ErrorRecord>> {
+    pub fn get_record_by_id(&self, id: i64) -> Result<Option<ErrorRecord>> {
         errors::get_record_by_id(&self.conn(), id)
     }
 
     pub fn get_records_by_file_id(&self, file_id: FileId)
-        -> Result<Vec<errors::ErrorRecord>> {
+        -> Result<Vec<ErrorRecord>> {
         errors::get_records_by_file_id(&self.conn(), file_id)
     }
 
     pub fn get_records_by_out_tree_id(&self, out_tree_id: OutTreeId)
-        -> Result<Vec<errors::ErrorRecord>> {
+        -> Result<Vec<ErrorRecord>> {
         errors::get_records_by_out_tree_id(&self.conn(), out_tree_id)
     }
 
@@ -710,7 +710,7 @@ impl Database {
         reemit: Option<(bool, i64)>,
         last_id: i64,
         batch_size: u64,
-    ) -> Result<Vec<errors::ErrorRecord>> {
+    ) -> Result<Vec<ErrorRecord>> {
         errors::list_records(&self.conn(), scope, reemit, last_id, batch_size)
     }
 
