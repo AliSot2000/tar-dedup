@@ -1,12 +1,16 @@
 use rusqlite::{Connection, named_params, OptionalExtension};
 use std::iter::zip;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use crate::config::RuntimeState;
-use crate::db::meta;
+use crate::db::flags::ErrorFlags;
+use crate::db::{meta, Recorder, ErrorPhase};
 use crate::db::types::{FileId, NewFileRecord};
 use crate::db::flags::FileFlag;
-use crate::error::Result;
+use crate::error::{FileStatError, Result};
 use path_clean::PathClean;
+use tracing;
+
+const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
 
 pub fn file_id_by_abs_path(conn: &Connection, path: &Path) -> Result<Option<FileId>> {
     conn.query_row(
