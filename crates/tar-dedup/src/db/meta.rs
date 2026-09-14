@@ -34,6 +34,7 @@ pub enum MetaKey {
     PlacementPrologueDone,
     ArchiveOwnerPolicy,
     ArchiveModeChanges,
+    ArchiveTransform,
 }
 
 impl MetaKey {
@@ -56,6 +57,7 @@ impl MetaKey {
             Self::PlacementPrologueDone => "placement_prologue_done",
             Self::ArchiveOwnerPolicy => "archive_owner_policy",
             Self::ArchiveModeChanges => "archive_mode_changes",
+            Self::ArchiveTransform => "archive_transform",
         }
     }
 
@@ -78,6 +80,7 @@ impl MetaKey {
             "placement_prologue_done" => Self::PlacementPrologueDone,
             "archive_owner_policy" => Self::ArchiveOwnerPolicy,
             "archive_mode_changes" => Self::ArchiveModeChanges,
+            "archive_transform" => Self::ArchiveTransform,
             _ => return None,
         })
     }
@@ -101,6 +104,7 @@ impl MetaKey {
             Self::PlacementPrologueDone,
             Self::ArchiveOwnerPolicy,
             Self::ArchiveModeChanges,
+            Self::ArchiveTransform,
         ]
     }
 }
@@ -125,6 +129,7 @@ pub enum MetaEntry {
     PlacementPrologueDone(bool),
     ArchiveOwnerPolicy(OwnerGroupPolicy),
     ArchiveModeChanges(String),
+    ArchiveTransform(String),
 }
 
 impl MetaEntry {
@@ -147,6 +152,7 @@ impl MetaEntry {
             Self::PlacementPrologueDone(_) => MetaKey::PlacementPrologueDone,
             Self::ArchiveOwnerPolicy(_) => MetaKey::ArchiveOwnerPolicy,
             Self::ArchiveModeChanges(_) => MetaKey::ArchiveModeChanges,
+            Self::ArchiveTransform(_) => MetaKey::ArchiveTransform,
         }
     }
 
@@ -172,6 +178,7 @@ impl MetaEntry {
             Self::ArchiveOwnerPolicy(v) => serde_json::to_string(v)
                 .expect("owner/group policy serializable"),
             Self::ArchiveModeChanges(v) => v.clone(),
+            Self::ArchiveTransform(v) => v.clone(),
         }
     }
 
@@ -217,6 +224,7 @@ impl MetaEntry {
                     ))
                 }),
             MetaKey::ArchiveModeChanges => Ok(Self::ArchiveModeChanges(raw.to_string())),
+            MetaKey::ArchiveTransform => Ok(Self::ArchiveTransform(raw.to_string())),
         }
     }
 }
@@ -464,6 +472,17 @@ pub fn set_archive_mode_changes(conn: &Connection, value: &str) -> Result<()> {
     set_entry(conn, &MetaEntry::ArchiveModeChanges(value.to_string()))
 }
 
+pub fn get_archive_transform(conn: &Connection) -> Result<Option<String>> {
+    get_typed(conn, MetaKey::ArchiveTransform, |e| match e {
+        MetaEntry::ArchiveTransform(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_archive_transform(conn: &Connection, value: &str) -> Result<()> {
+    set_entry(conn, &MetaEntry::ArchiveTransform(value.to_string()))
+}
+
 // TODO Delete the entirety of the archive keys.
 /// Drop tar-writer byte counters. Archive/extract phase keys are left standing.
 pub fn clear_archive_meta(conn: &mut Connection) -> Result<()> {
@@ -610,6 +629,28 @@ mod tests {
             .known
             .iter()
             .any(|e| matches!(e, MetaEntry::PlacementPrologueDone(false))));
+        assert!(dump.unknown_keys.is_empty());
+        assert!(dump.invalid.is_empty());
+    }
+
+    #[test]
+    fn archive_transform_round_trip() {
+        let (_dir, conn) = open_conn();
+
+        assert_eq!(get_archive_transform(&conn).unwrap(), None);
+
+        set_archive_transform(&conn, "s,^usr/,var/,").unwrap();
+        assert_eq!(
+            get_archive_transform(&conn).unwrap(),
+            Some("s,^usr/,var/,".to_string())
+        );
+
+        let dump = dump_meta(&conn).unwrap();
+        assert!(dump
+            .known
+            .iter()
+            .any(|e| matches!(e, MetaEntry::ArchiveTransform(v)
+                if v == "s,^usr/,var/,")));
         assert!(dump.unknown_keys.is_empty());
         assert!(dump.invalid.is_empty());
     }
