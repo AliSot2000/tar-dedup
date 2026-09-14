@@ -2,18 +2,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
-use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 
-use crate::common::files::{warn_if_times_changed, PreYield};
+use crate::common::files::{PreYield, warn_if_times_changed};
 use crate::config::ArchiveConfig;
+use crate::db::Database;
+use crate::db::ErrorPhase;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, GroupKey, StrippedRecord};
-use crate::db::Database;
 use crate::error::{Error, FileStatError, Result};
-use crate::progress::{io_buffer, CountProgress};
+use crate::progress::{CountProgress, io_buffer};
 use crate::shutdown::Shutdown;
-use crate::db::ErrorPhase;
 
 /// One finished compare: both keys always present.
 /// `Ok(equal)` on a completed byte compare; `Err((file_id, error))` for the side
