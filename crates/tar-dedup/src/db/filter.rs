@@ -7,57 +7,69 @@ use rusqlite::{Connection, named_params};
 const FILTER_ROWS: &str = "id, source, line, expression";
 
 // INFO: During setup a dummy row is added with id 0, so MIN and MAX will return a valid result.
-pub fn add_include_pattern(
-    conn: &Connection, from: &str, line: Option<u64>, query: &str)
+fn add_pattern(
+    conn: &Connection, table: &str, from: &str, line: Option<u64>, query: &str, include: bool)
     -> Result<u64> {
-
-let n = conn.execute("INSERT INTO filter_reason (id, source, line, expression) \
-    VALUES (\
-        (SELECT MIN(id) - 1 FROM filter_reason), \
-        :from, \
-        :line, \
-        :expression" ,
-    named_params!{
-        ":from": from,
-        ":line": line,
-        ":expression": query,
-    })?;
+    let agg = if include { "MIN(id) - 1" } else { "MAX(id) + 1" };
+    let sql = format!(
+        "INSERT INTO {table} (id, source, line, expression) VALUES \
+         ((SELECT {agg} FROM {table}), :from, :line, :expression)"
+    );
+    let n = conn.execute(
+        &sql,
+        named_params! {
+            ":from": from,
+            ":line": line,
+            ":expression": query,
+        })?;
     Ok(n as u64)
 }
 
-pub fn add_exclude_pattern(
-    conn: &Connection, from: &str, line: Option<u64>, query: &str)
+// TODO rename
+pub fn add_include_pattern(conn: &Connection, from: &str, line: Option<u64>, query: &str)
     -> Result<u64> {
-    let n = conn.execute("INSERT INTO filter_reason (id, source, line, expression) \
-    VALUES (\
-        (SELECT MAX(id) + 1 FROM filter_reason), \
-        :from, \
-        :line, \
-        :expression" ,
-    named_params!{
-        ":from": from,
-        ":line": line,
-        ":expression": query,
-    })?;
-    Ok(n as u64)
+    add_pattern(conn, "filter_reason_archive", from, line, query, true)
+}
+
+pub fn add_exclude_pattern(conn: &Connection, from: &str, line: Option<u64>, query: &str)
+    -> Result<u64> {
+    add_pattern(conn, "filter_reason_archive", from, line, query, false)
+}
+
+pub fn add_include_pattern_extract(conn: &Connection, from: &str, line: Option<u64>, query: &str)
+    -> Result<u64> {
+    add_pattern(conn, "filter_reason_extract", from, line, query, true)
+}
+
+pub fn add_exclude_pattern_extract(conn: &Connection, from: &str, line: Option<u64>, query: &str)
+    -> Result<u64> {
+    add_pattern(conn, "filter_reason_extract", from, line, query, false)
 }
 
 /// Count the different partitions of the filters. The id = 0 dummy row is excluded!
-pub fn count_filters(conn: &Connection, exclude: Option<bool>) -> Result<u64> {
+fn count_filters_in(conn: &Connection, table: &str, exclude: Option<bool>) -> Result<u64> {
     let query = match exclude {
-        None => "SELECT COUNT(*) AS count FROM filter_reason WHERE id != 0",
-        Some(exclude ) => match exclude {
-            true => "SELECT COUNT(*) AS count FROM filter_reason WHERE id > 0",
-            false => "SELECT COUNT(*) AS count FROM filter_reason WHERE id < 0",
-        }
+        None => format!("SELECT COUNT(*) AS count FROM {table} WHERE id != 0"),
+        Some(exclude) => match exclude {
+            true => format!("SELECT COUNT(*) AS count FROM {table} WHERE id > 0"),
+            false => format!("SELECT COUNT(*) AS count FROM {table} WHERE id < 0"),
+        },
     };
-    let result: i64 = conn.query_row(query, [], |row| row.get("count"))?;
+    let result: i64 = conn.query_row(&query, [], |row| row.get("count"))?;
     Ok(result as u64)
 }
 
-pub fn get_filters(conn: &Connection, exclude: bool) -> Result<Vec<FilterExpression>> {
+pub fn count_filters(conn: &Connection, exclude: Option<bool>) -> Result<u64> {
+    count_filters_in(conn, "filter_reason_archive", exclude)
+}
+
+pub fn count_filters_extract(conn: &Connection, exclude: Option<bool>) -> Result<u64> {
+    count_filters_in(conn, "filter_reason_extract", exclude)
+}
+
+fn get_filters_in(conn: &Connection, table: &str, exclude: bool) -> Result<Vec<FilterExpression>> {
     let filter = if exclude { "id > 0" } else { "id < 0" };
-    let query = format!("SELECT {FILTER_ROWS} FROM filter_reason WHERE {filter}");
+    let query = format!("SELECT {FILTER_ROWS} FROM {table} WHERE {filter}");
     let mut stmt = conn.prepare(&query)?;
     let rows = stmt.query_map([], |row| {
         Ok(FilterExpression {
@@ -67,66 +79,171 @@ pub fn get_filters(conn: &Connection, exclude: bool) -> Result<Vec<FilterExpress
             expression: row.get("expression")?,
         })
     })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)}
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn get_filters(conn: &Connection, exclude: bool) -> Result<Vec<FilterExpression>> {
+    get_filters_in(conn, "filter_reason_archive", exclude)
+}
+
+pub fn get_filters_extract(conn: &Connection, exclude: bool) -> Result<Vec<FilterExpression>> {
+    get_filters_in(conn, "filter_reason_extract", exclude)
+}
 
 /// In case no filters were given, we promote all files to filters and set the blanket rows
 pub fn apply_no_filter(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
-        "UPDATE files SET phase = 'filtered', include_reason = -1, exclude_reason = 0",
+        "UPDATE files SET phase = 'filtered', include_reason_archive = -1, \
+         exclude_reason_archive = 0",
         [],
     )?;
     Ok(n as u64)
 }
 
+/// Promote-all catch-all for the extract filter: the id 0 dummy row is not a usable
+/// include, so we hand out a constant negative `-1`. Extract rows keep their phase.
+pub fn apply_no_filter_extract(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files SET include_reason_extract = -1, exclude_reason_extract = 0",
+        [],
+    )?;
+    Ok(n as u64)
+}
+
+// TODO Rename
 pub fn get_rows_to_filter<R: SqlFileRow>(
     conn: &Connection, last_id: Option<FileId>, eager_filter: bool, batch_size: u64)
     -> Result<Vec<R>> {
-    let last_phase = if eager_filter { "'inventoried'" } else { "'hashed'" };
-    let last_id_filter = if let Some(_) = last_id { " AND id > :last_id " } else { "" };
-    let mut stmt = conn.prepare(
-        &format!("SELECT {} FROM files \
+    let last_phase = if eager_filter {
+        "'inventoried'"
+    } else {
+        "'hashed'"
+    };
+    let last_id_filter = if let Some(_) = last_id {
+        " AND id > :last_id "
+    } else {
+        ""
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM files \
                       WHERE phase = {last_phase} {last_id_filter} \
                       ORDER BY id \
-                      LIMIT :batch_size", R::sql_columns(None)))?;
+                      LIMIT :batch_size",
+        R::sql_columns(None)
+    ))?;
 
-    let row_mapper = |r:  &rusqlite::Row<'_>| -> rusqlite::Result<R> { R::from_row(r, None) };
+    let row_mapper = |r: &rusqlite::Row<'_>| -> rusqlite::Result<R> { R::from_row(r, None) };
     let rows = match last_id {
-        None => stmt.query_map(
-                named_params! {":batch_size": batch_size},
-                row_mapper)?,
+        None => stmt.query_map(named_params! {":batch_size": batch_size}, row_mapper)?,
         Some(lid) => stmt.query_map(
-                named_params! {":batch_size": batch_size, ":last_id": lid.0},
-                row_mapper)?
-
+            named_params! {":batch_size": batch_size, ":last_id": lid.0},
+            row_mapper,
+        )?,
     };
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
-/// Function applies the results of the filtering of the files to the database.
+/// Batch over every candidate `files` row (no phase constraint) for the extract filter
+/// pass. Extract rows are already archived, so there is no eager/lazy distinction.
+pub fn get_rows_to_filter_extract<R: SqlFileRow>(
+    conn: &Connection,
+    last_id: Option<FileId>,
+    batch_size: u64,
+) -> Result<Vec<R>> {
+    let last_id_filter = if let Some(_) = last_id {
+        " AND id > :last_id "
+    } else {
+        ""
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM files \
+                      WHERE 1 = 1 {last_id_filter} \
+                      ORDER BY id \
+                      LIMIT :batch_size",
+        R::sql_columns(None)
+    ))?;
+
+    let row_mapper = |r: &rusqlite::Row<'_>| -> rusqlite::Result<R> { R::from_row(r, None) };
+    let rows = match last_id {
+        None => stmt.query_map(named_params! {":batch_size": batch_size}, row_mapper)?,
+        Some(lid) => stmt.query_map(
+            named_params! {":batch_size": batch_size, ":last_id": lid.0},
+            row_mapper,
+        )?,
+    };
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+// TODO Rename
+/// Apply the archive filtering results to the database.
 /// The results must have the structure (FileId, include_reason, exclude_reason)!
 pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(
     conn: &mut Connection, results: I)
     -> Result<u64> {
-
     let mut rows_updated = 0u64;
     let transaction = conn.transaction()?;
     let mut stmt = transaction.prepare_cached(
         "UPDATE files \
-        SET include_reason = :include_reason, exclude_reason: exclude_reason, phase = 'filtered' \
-        WHERE id = :id")?;
+        SET include_reason_archive = :include_reason, \
+            exclude_reason_archive = :exclude_reason, phase = 'filtered' \
+        WHERE id = :id",
+    )?;
 
     for (fid, icr, exr) in results {
-        rows_updated = rows_updated + stmt.execute(named_params! {
-            ":file_id": fid.0,
-            ":include_reason": icr,
-            ":exclude_reason": exr,
-        })? as u64;
+        rows_updated = rows_updated
+            + stmt.execute(named_params! {
+                ":id": fid.0,
+                ":include_reason": icr,
+                ":exclude_reason": exr,
+            })? as u64;
     }
     drop(stmt);
     transaction.commit()?;
     Ok(rows_updated)
 }
 
+/// Apply the extract filtering results to the database. Phase is left untouched.
+/// The results must have the structure (FileId, include_reason, exclude_reason)!
+pub fn apply_filter_result_extract<I: Iterator<Item = (FileId, i64, i64)>>(
+    conn: &mut Connection,
+    results: I,
+) -> Result<u64> {
+    let mut rows_updated = 0u64;
+    let transaction = conn.transaction()?;
+    let mut stmt = transaction.prepare_cached(
+        "UPDATE files \
+        SET include_reason_extract = :include_reason, \
+            exclude_reason_extract = :exclude_reason \
+        WHERE id = :id",
+    )?;
+
+    for (fid, icr, exr) in results {
+        rows_updated = rows_updated
+            + stmt.execute(named_params! {
+                ":id": fid.0,
+                ":include_reason": icr,
+                ":exclude_reason": exr,
+            })? as u64;
+    }
+    drop(stmt);
+    transaction.commit()?;
+    Ok(rows_updated)
+}
+
+/// Drop every non-dummy extract rule and reset the per-file extract reasons, making the
+/// extract filter phase idempotent on resume.
+pub fn clear_extract_filters(conn: &mut Connection) -> Result<()> {
+    let transaction = conn.transaction()?;
+    transaction.execute("DELETE FROM filter_reason_extract WHERE id != 0", [])?;
+    transaction.execute(
+        "UPDATE files SET include_reason_extract = 0, exclude_reason_extract = 0",
+        [],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
 
 /// Function takes care of updating the FileHardlinkCanonical flag if for a given cluster of
 /// (dev, inode) the current canonical file is not selected.
@@ -149,11 +266,11 @@ pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<(u64, u64)> {
          GROUP BY dev, inode
          HAVING COUNT(*) > 1
             AND SUM(CASE WHEN flags & :hardlinks != 0
-                          AND NOT (include_reason < 0 AND exclude_reason = 0)
+                          AND NOT (include_reason_archive < 0 AND exclude_reason_archive = 0)
                      THEN 1 ELSE 0 END) = 1
-            AND SUM(CASE WHEN include_reason < 0 AND exclude_reason = 0
+            AND SUM(CASE WHEN include_reason_archive < 0 AND exclude_reason_archive = 0
                      THEN 1 ELSE 0 END) > 0",
-        named_params! {":hardlinks": hardlink_mask}
+        named_params! {":hardlinks": hardlink_mask},
     )?;
 
     // NOTE: replace `flags & 1` with `flags & :hardlinks` — see below for
@@ -172,7 +289,7 @@ pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<(u64, u64)> {
              SET flags = flags | :hardlinks
              WHERE id IN (
                  SELECT MIN(id) FROM files
-                 WHERE include_reason < 0 AND exclude_reason = 0
+                 WHERE include_reason_archive < 0 AND exclude_reason_archive = 0
                    AND (dev, inode) IN (SELECT dev, inode FROM stale_clusters)
                  GROUP BY dev, inode
              )",
