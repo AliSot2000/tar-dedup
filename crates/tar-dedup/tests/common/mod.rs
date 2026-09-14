@@ -3,16 +3,16 @@
 use std::path::{Path, PathBuf};
 
 use tar_dedup::cli::ConflictPolicy;
+use tar_dedup::cli::HardLinkGrouping;
 use tar_dedup::common::perms::MapResolutionTarget;
 use tar_dedup::common::start::StartPolicy;
 use tar_dedup::config::{
     CleanupSettings, CompressionFormat, ExtractAttributeOptions, ExtractConfig, OwnerGroupOptions,
     PathLayout, PlacementOptions, ProcessOptions, ScanOptions,
 };
-use tar_dedup::cli::HardLinkGrouping;
+use tar_dedup::db::Database;
 use tar_dedup::db::flags::{SourceFlag, SourceFlags};
 use tar_dedup::db::types::{FileId, FilePhase, FileType, NewFileRecord, StrippedRecord};
-use tar_dedup::db::Database;
 use tar_dedup::shutdown::Shutdown;
 use tar_dedup::unarchive::populate_out_tree as populate_out_tree_impl;
 
@@ -65,24 +65,22 @@ pub fn seed_canonical_and_duplicate(
     phase: FilePhase,
 ) -> (FileId, FileId) {
     let canonical_id = insert_file(db, canonical_rel, 10);
-    db.mark_self_canonical(canonical_id).expect("self canonical");
+    db.mark_self_canonical(canonical_id)
+        .expect("self canonical");
 
     let duplicate_id = insert_file(db, duplicate_rel, 10);
     db.set_canonical(duplicate_id, canonical_id)
         .expect("set canonical");
 
-    db.mark_file_phase(canonical_id, phase).expect("canonical phase");
-    db.mark_file_phase(duplicate_id, phase).expect("duplicate phase");
+    db.mark_file_phase(canonical_id, phase)
+        .expect("canonical phase");
+    db.mark_file_phase(duplicate_id, phase)
+        .expect("duplicate phase");
 
     (canonical_id, duplicate_id)
 }
 
-pub fn insert_materialized(
-    db: &Database,
-    abs_path: &str,
-    ftype: FileType,
-    size: u64,
-) -> FileId {
+pub fn insert_materialized(db: &Database, abs_path: &str, ftype: FileType, size: u64) -> FileId {
     use tar_dedup::common::files::original_extension;
     let path = PathBuf::from(abs_path);
     db.insert_file(&NewFileRecord {
@@ -113,11 +111,7 @@ pub fn insert_materialized(
         .expect("inserted file")
 }
 
-pub fn seed_source_dir(
-    db: &Database,
-    abs_path: &str,
-    original_path: &str,
-) -> i64 {
+pub fn seed_source_dir(db: &Database, abs_path: &str, original_path: &str) -> i64 {
     db.add_get_source(
         Path::new(abs_path),
         "--input-dir",

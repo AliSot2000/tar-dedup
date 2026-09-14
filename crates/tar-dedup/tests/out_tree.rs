@@ -11,18 +11,8 @@ fn populate_out_tree_absolute_dirs_files_and_ancestor_null_file_id() {
     let extract_root = dir.path().join("out");
     std::fs::create_dir_all(&extract_root).expect("extract root");
 
-    let dir_id = common::insert_materialized(
-        &db,
-        "/project/src",
-        FileType::Directory,
-        0,
-    );
-    let file_id = common::insert_materialized(
-        &db,
-        "/project/src/main.rs",
-        FileType::File,
-        42,
-    );
+    let dir_id = common::insert_materialized(&db, "/project/src", FileType::Directory, 0);
+    let file_id = common::insert_materialized(&db, "/project/src/main.rs", FileType::File, 42);
 
     let config = common::place_config(extract_root.clone(), true);
     common::populate_out_tree(&db, &config);
@@ -37,14 +27,9 @@ fn populate_out_tree_absolute_dirs_files_and_ancestor_null_file_id() {
         .into_iter()
         .find(|r| r.file_id == Some(file_id))
         .expect("file row");
-    assert_eq!(
-        file_row.abs_path,
-        extract_root.join("project/src/main.rs")
-    );
+    assert_eq!(file_row.abs_path, extract_root.join("project/src/main.rs"));
 
-    let dir_rows = db
-        .list_out_tree_dirs(None, 100, None)
-        .expect("dirs");
+    let dir_rows = db.list_out_tree_dirs(None, 100, None).expect("dirs");
     assert_eq!(dir_rows.len(), 1);
     assert_eq!(dir_rows[0].file_id, Some(dir_id));
     assert_eq!(dir_rows[0].abs_path, extract_root.join("project/src"));
@@ -52,12 +37,12 @@ fn populate_out_tree_absolute_dirs_files_and_ancestor_null_file_id() {
     let all = db.list_out_tree_batch(None, 100, None).expect("all");
     let ancestor_only: Vec<_> = all.iter().filter(|r| r.file_id.is_none()).collect();
     assert_eq!(ancestor_only.len(), 2);
-    assert!(ancestor_only
-        .iter()
-        .any(|r| r.abs_path == extract_root.join("project")));
-    assert!(ancestor_only
-        .iter()
-        .any(|r| r.abs_path == extract_root));
+    assert!(
+        ancestor_only
+            .iter()
+            .any(|r| r.abs_path == extract_root.join("project"))
+    );
+    assert!(ancestor_only.iter().any(|r| r.abs_path == extract_root));
 }
 
 /// What: relative mode links each out_tree row to its source via ref_out.
@@ -69,22 +54,26 @@ fn populate_out_tree_relative_ref_out_and_multi_file_id() {
     let extract_root = dir.path().join("out");
     std::fs::create_dir_all(&extract_root).expect("extract root");
 
-    let source_a = db.add_get_source(
-        std::path::Path::new("/data/a"),
-        "--input-dir",
-        Some(0),
-        Some(std::path::Path::new("a")),
-        tar_dedup::db::flags::SourceFlags::default()
-            .with(tar_dedup::db::flags::SourceFlag::IsDirectory, true),
-    ).expect("source a");
-    let source_b = db.add_get_source(
-        std::path::Path::new("/data/a"),
-        "--input-dir",
-        Some(1),
-        Some(std::path::Path::new("b")),
-        tar_dedup::db::flags::SourceFlags::default()
-            .with(tar_dedup::db::flags::SourceFlag::IsDirectory, true),
-    ).expect("source b");
+    let source_a = db
+        .add_get_source(
+            std::path::Path::new("/data/a"),
+            "--input-dir",
+            Some(0),
+            Some(std::path::Path::new("a")),
+            tar_dedup::db::flags::SourceFlags::default()
+                .with(tar_dedup::db::flags::SourceFlag::IsDirectory, true),
+        )
+        .expect("source a");
+    let source_b = db
+        .add_get_source(
+            std::path::Path::new("/data/a"),
+            "--input-dir",
+            Some(1),
+            Some(std::path::Path::new("b")),
+            tar_dedup::db::flags::SourceFlags::default()
+                .with(tar_dedup::db::flags::SourceFlag::IsDirectory, true),
+        )
+        .expect("source b");
 
     let shared = common::insert_materialized(&db, "/data/a/shared.txt", FileType::File, 1);
     db.add_ref(source_a, shared).expect("ref a");
@@ -123,9 +112,7 @@ fn list_out_tree_dirs_joins_files_ftype() {
     common::populate_out_tree(&db, &config);
 
     assert_eq!(
-        db.list_out_tree_dirs(None, 100, None)
-            .expect("dirs")
-            .len(),
+        db.list_out_tree_dirs(None, 100, None).expect("dirs").len(),
         1
     );
     assert_eq!(
