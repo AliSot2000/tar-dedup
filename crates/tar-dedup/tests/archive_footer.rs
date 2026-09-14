@@ -71,8 +71,8 @@ fn has_valid_footer_and_extract_footer_db() {
 
     let dest_dir = work.path().join("out");
     fs::create_dir_all(&dest_dir).expect("mkdir");
-    let extracted = archive_footer::extract_footer_db(&archive, &dest_dir)
-        .expect("extract footer db");
+    let extracted =
+        archive_footer::extract_footer_db(&archive, &dest_dir).expect("extract footer db");
     assert_eq!(extracted, dest_dir.join("footer-snapshot.sqlite"));
     assert_eq!(fs::read(&sqlite).unwrap(), fs::read(&extracted).unwrap());
 }
