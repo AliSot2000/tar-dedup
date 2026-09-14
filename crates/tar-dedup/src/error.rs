@@ -76,7 +76,7 @@ impl Error {
     pub fn to_only_file_stat(&self) -> Option<FileStatError> {
         match self {
             Self::FileStat(fse) => Some(fse.recreate()),
-            _ => None
+            _ => None,
         }
     }
 }
