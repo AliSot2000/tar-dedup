@@ -147,6 +147,12 @@ pub fn set_hardlink_canonicals(conn: &Connection) -> Result<u64> {
     Ok(changes as u64)
 }
 
+/// Clear the entire files table.
+pub fn purge_entries(conn: &Connection) -> Result<u64> {
+    let rows = conn.execute("DELETE * FROM files", [])?;
+    Ok(rows as u64)
+}
+
 #[cfg(unix)]
 pub fn resolve_numeric_ids(conn: &Connection, recorder: &mut Recorder) -> Result<()> {
     use nix::libc::{gid_t, uid_t};
