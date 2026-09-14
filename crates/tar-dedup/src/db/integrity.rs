@@ -32,9 +32,9 @@ pub fn list_missing_dev_inode<R: SqlFileRow>(conn: &Connection, last_id: &FileId
          ORDER BY id
          LIMIT :batch_size"))?;
     let rows = stmt.query_map(named_params! {
-        ":last_id": last_id.0,
-        ":batch_size": batch_size
-    }, |row| R::from_row(row, None)
+            ":last_id": last_id.0,
+            ":batch_size": batch_size
+        }, |row| R::from_row(row, None)
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
