@@ -21,10 +21,12 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
 
     let total_entries = db.count_entries()?;
     let hash_needed = db.count_all_hashable_files(
-        config.filter.eager_filter, !config.indexing.no_hardlink_detection
+        config.filter.eager_filter,
+        !config.indexing.no_hardlink_detection,
     )?;
-    let pending= db.get_entries_to_hash(
-        config.filter.eager_filter, !config.indexing.no_hardlink_detection
+    let pending = db.get_entries_to_hash(
+        config.filter.eager_filter,
+        !config.indexing.no_hardlink_detection,
     )?;
     let already_hashed = hash_needed.saturating_sub(pending.len() as u64);
     tracing::info!(
@@ -46,8 +48,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
     let shutdown = shutdown.clone();
-    let results = Mutex::new(
-        Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new());
+    let results = Mutex::new(Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new());
 
     let bar = ProgressBar::new(hash_needed);
     bar.set_position(already_hashed);
@@ -66,10 +67,9 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     let parallel = pool.install(|| {
         checked.par_bridge().try_for_each(|record| {
             shutdown.check_between_files()?;
-            let res = match hash_file(
-                &record.abs_path, page_size, &shutdown){
+            let res = match hash_file(&record.abs_path, page_size, &shutdown) {
                 Ok((digest, zero_blocks)) => Ok((record.id, digest, zero_blocks)),
-                Err(e) => Err(IdError{err: e, id: record.id}),
+                Err(e) => Err(IdError { err: e, id: record.id }),
             };
             results.lock().expect("hash results lock").push(res);
             bar.inc(1);
@@ -87,7 +87,12 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     for res in &hashed {
         match res {
             Ok((id, digest, zero_blocks)) => {
-                db.update_file_inspection_per_id(*id, *digest, *zero_blocks, !config.indexing.no_hardlink_detection)?;
+                db.update_file_inspection_per_id(
+                    *id,
+                    *digest,
+                    *zero_blocks,
+                    !config.indexing.no_hardlink_detection,
+                )?;
             }
             Err(e) => {
                 let ra = db.set_file_flag(e.id, FileFlag::ErrorWhileHash, true)?;
@@ -106,7 +111,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     let double_canonical = db.count_double_canonical_dev_inode_group()?;
     if double_canonical > 0 {
         panic!("Encountered {double_canonical} Hard Link files. \
-            which have two different hashes. Assuming files modified while hashing. ");
+            which have two different hashes. Assuming files modified while hashing.");
     }
 
     match parallel {
