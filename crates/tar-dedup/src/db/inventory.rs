@@ -1,13 +1,13 @@
-use rusqlite::{Connection, named_params, OptionalExtension};
-use std::iter::zip;
-use std::path::{Path, PathBuf};
 use crate::config::RuntimeState;
 use crate::db::flags::ErrorFlags;
-use crate::db::{meta, Recorder, ErrorPhase};
-use crate::db::types::{FileId, NewFileRecord};
 use crate::db::flags::FileFlag;
+use crate::db::types::{FileId, NewFileRecord};
+use crate::db::{ErrorPhase, Recorder, meta};
 use crate::error::{FileStatError, Result};
 use path_clean::PathClean;
+use rusqlite::{Connection, OptionalExtension, named_params};
+use std::iter::zip;
+use std::path::{Path, PathBuf};
 use tracing;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
