@@ -47,6 +47,10 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     Ok(())
 }
 
+// -------------------------------------------------------------------------------------------------
+// Stages
+// -------------------------------------------------------------------------------------------------
+
 /// Resolve the effective transform from the CLI policy / archived meta.
 fn resolve_transform(config: &ExtractConfig, db: &Database) -> Result<Option<TransformExpr>> {
     match &config.transform_policy {
@@ -56,16 +60,6 @@ fn resolve_transform(config: &ExtractConfig, db: &Database) -> Result<Option<Tra
             Some(expr) => parse_transform_expr(&expr).map(Some),
             None => Ok(None),
         },
-    }
-}
-/// Serialization for Component for better errors.
-fn component_to_str<'a>(c: &Component) -> &'a str {
-    match c {
-        Component::RootDir => "root-dir",
-        Component::ParentDir => "parent-dir",
-        Component::CurDir => "current-dir",
-        Component::Prefix(_) => "prefix",
-        Component::Normal(_) => "normal"
     }
 }
 
@@ -124,66 +118,6 @@ fn populate_new_names(
     Ok(())
 }
 
-// INFO: Not tested or reasoned through. Trusted the output of an LLM here.
-fn apply_renames(
-    db: &Database,
-    entries: &[StrippedRecord],
-    strip: u32,
-    transform: Option<&TransformExpr>,
-    member_of: impl Fn(&Path) -> PathBuf)
-    -> Result<()> {
-    for entry in entries {
-        let member = member_of(&entry.abs_path);
-        let mut name = member.to_string_lossy().into_owned();
-        if let Some(t) = transform {
-            name = t.apply(&name);
-        }
-        // Strip after transform (GNU order); `strip == 0` leaves the name as-is.
-        let name = strip_relative_member(&name, strip);
-        // In new-name mode every row gets a (possibly identity) member; `""`
-        // marks the empty-name skip sentinel consumed by the out_tree filter.
-        db.set_file_new_name(entry.id, Some(&name))?;
-    }
-    Ok(())
-}
-
-/// Strip up to `strip` leading components of a relative member path.
-/// `0` is a no-op (`None`). A member with `<= strip` components collapses to
-/// `Some("")`, matching GNU tar's "transforms to empty name" skip.
-fn strip_relative_member(member: &str, strip: u32) -> String {
-    if strip == 0 {
-        return member.to_string();
-    }
-    let path = Path::new(member);
-    let comps: Vec<&OsStr> = path
-        .components()
-        .filter_map(|comp| match comp {
-            Component::Normal(name) => Some(name),
-            other => {
-                debug_assert!(false, "Unexpected path component {}. Only `Normal` expected",
-                    component_to_str(&other));
-                None
-            },
-        })
-        .collect();
-    if comps.len() as u32 <= strip {
-        return String::new();
-    }
-    let kept = &comps[strip as usize..];
-    if kept.is_empty() {
-        return String::new();
-    }
-    let res = kept.iter()
-            .map(|name| name.to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/");
-    res
-}
-
-// -------------------------------------------------------------------------------------------------
-// Out-tree build (moved from `place`; still pure DB)
-// -------------------------------------------------------------------------------------------------
-
 /// Placement contract:
 /// We denote the root extraction dir with `<ed>` e.g. `/home/user/Desktop/archive`
 ///
@@ -215,6 +149,59 @@ pub fn populate_out_tree(
 
     ensure_parent(db)?;
     db.set_out_tree_built()?;
+    Ok(())
+}
+
+/// Elect hard-link canonicals in the out_tree (mark_canonical family of updates).
+fn prepare_hardlink_canonicals(config: &ExtractConfig, db: &Database) -> Result<()> {
+    let updates: u64 = match config.placement.hard_link_grouping {
+        HardLinkGrouping::None => db.mark_all_canonical()?,
+        HardLinkGrouping::Global => db.mark_global_canonical()?,
+        HardLinkGrouping::Source => {
+            let mut last_id = 0i64;
+            let mut sum = 0u64;
+            loop {
+                let sources = db.list_sources(None, last_id, BATCH_SIZE)?;
+                if sources.is_empty() { break }
+                last_id = sources
+                    .last()
+                    .expect("PRECONDITION FAILED: At least one element expected").id;
+
+                for source in sources {
+                    sum += db.mark_source_canonical(source.id)?;
+                }
+            }
+            sum
+        }
+    };
+    tracing::info!("Number of materialized target {updates}");
+    Ok(())
+}
+
+// -------------------------------------------------------------------------------------------------
+// Substage
+// -------------------------------------------------------------------------------------------------
+
+// INFO: Not tested or reasoned through. Trusted the output of an LLM here.
+fn apply_renames(
+    db: &Database,
+    entries: &[StrippedRecord],
+    strip: u32,
+    transform: Option<&TransformExpr>,
+    member_of: impl Fn(&Path) -> PathBuf)
+    -> Result<()> {
+    for entry in entries {
+        let member = member_of(&entry.abs_path);
+        let mut name = member.to_string_lossy().into_owned();
+        if let Some(t) = transform {
+            name = t.apply(&name);
+        }
+        // Strip after transform (GNU order); `strip == 0` leaves the name as-is.
+        let name = strip_relative_member(&name, strip);
+        // In new-name mode every row gets a (possibly identity) member; `""`
+        // marks the empty-name skip sentinel consumed by the out_tree filter.
+        db.set_file_new_name(entry.id, Some(&name))?;
+    }
     Ok(())
 }
 
@@ -308,56 +295,6 @@ fn populate_out_tree_rel(
     Ok(())
 }
 
-/// Given a vectors of StrippedRecords compute the new OutTreeRows. In new-name
-/// mode the query is DB-filtered to rows with a valid (len > 0) `new_name`.
-fn build_new_out_tree_rows(
-    entries: &Vec<StrippedRecord>, root: &Path, sources: Option<(&Path, &Path)>, use_new_name: bool)
-    -> Vec<NewOutTreeRow> {
-    let base = match sources {
-        Some((_, base)) => base.to_path_buf(),
-        None => root.to_path_buf(),
-    };
-    let mut processed: Vec<NewOutTreeRow> = Vec::new();
-    for r in entries {
-        let path = if use_new_name {
-            base.join(r.new_name.as_deref().expect("filtered to valid new_name"))
-        } else {
-            catalog_to_target_abs(root, &r.abs_path, sources)
-        };
-        let is_dir = r.ftype == FileType::Directory;
-        let mut of = OutTreeFlags::default();
-        of.set(OutTreeFlag::IsDirectory, is_dir);
-        processed.push(NewOutTreeRow {
-            abs_path: path,
-            file_id: Some(r.id),
-            flags: of,
-        });
-    }
-    processed
-}
-
-fn catalog_to_target_abs(
-    extraction_root: &Path, catalog_path: &Path, relative_component: Option<(&Path, &Path)>)
-    -> PathBuf {
-    match relative_component {
-        None => {
-            let rel = catalog_path
-                .strip_prefix("/")
-                .expect(&format!(
-                    "INVARIANT ERROR: Catalogue Path MUST be absolute and start with /, got {}",
-                    catalog_path.display()
-                ));
-            extraction_root.join(rel)
-        }
-        Some((source_abs, source_base)) => {
-            let rel_stem = catalog_path
-                .strip_prefix(source_abs)
-                .expect("Source rows must start within source root");
-            source_base.join(rel_stem)
-        }
-    }
-}
-
 /// Ensures parent exists for all non-directory rows inside the out_tree. This is needed in case
 /// a `--files-fromm` file had a file with `/path/to/not/covered/directory/file.txt`
 /// where `/path/to/other/*` is covered by recursive index. Creating file.txt would fail because
@@ -397,30 +334,103 @@ fn ensure_parent(db: &Database) -> Result<()> {
     Ok(())
 }
 
-/// Elect hard-link canonicals in the out_tree (mark_canonical family of updates).
-fn prepare_hardlink_canonicals(config: &ExtractConfig, db: &Database) -> Result<()> {
-    let updates: u64 = match config.placement.hard_link_grouping {
-        HardLinkGrouping::None => db.mark_all_canonical()?,
-        HardLinkGrouping::Global => db.mark_global_canonical()?,
-        HardLinkGrouping::Source => {
-            let mut last_id = 0i64;
-            let mut sum = 0u64;
-            loop {
-                let sources = db.list_sources(None, last_id, BATCH_SIZE)?;
-                if sources.is_empty() { break }
-                last_id = sources
-                    .last()
-                    .expect("PRECONDITION FAILED: At least one element expected").id;
 
-                for source in sources {
-                    sum += db.mark_source_canonical(source.id)?;
-                }
-            }
-            sum
-        }
+/// Given a vectors of StrippedRecords compute the new OutTreeRows. In new-name
+/// mode the query is DB-filtered to rows with a valid (len > 0) `new_name`.
+fn build_new_out_tree_rows(
+    entries: &Vec<StrippedRecord>, root: &Path, sources: Option<(&Path, &Path)>, use_new_name: bool)
+    -> Vec<NewOutTreeRow> {
+    let base = match sources {
+        Some((_, base)) => base.to_path_buf(),
+        None => root.to_path_buf(),
     };
-    tracing::info!("Number of materialized target {updates}");
-    Ok(())
+    let mut processed: Vec<NewOutTreeRow> = Vec::new();
+    for r in entries {
+        let path = if use_new_name {
+            base.join(r.new_name.as_deref().expect("filtered to valid new_name"))
+        } else {
+            catalog_to_target_abs(root, &r.abs_path, sources)
+        };
+        let is_dir = r.ftype == FileType::Directory;
+        let mut of = OutTreeFlags::default();
+        of.set(OutTreeFlag::IsDirectory, is_dir);
+        processed.push(NewOutTreeRow {
+            abs_path: path,
+            file_id: Some(r.id),
+            flags: of,
+        });
+    }
+    processed
+}
+
+// -------------------------------------------------------------------------------------------------
+// Util
+// -------------------------------------------------------------------------------------------------
+
+/// Serialization for Component for better errors.
+fn component_to_str<'a>(c: &Component) -> &'a str {
+    match c {
+        Component::RootDir => "root-dir",
+        Component::ParentDir => "parent-dir",
+        Component::CurDir => "current-dir",
+        Component::Prefix(_) => "prefix",
+        Component::Normal(_) => "normal"
+    }
+}
+
+/// Strip up to `strip` leading components of a relative member path.
+/// `0` is a no-op (`None`). A member with `<= strip` components collapses to
+/// `Some("")`, matching GNU tar's "transforms to empty name" skip.
+fn strip_relative_member(member: &str, strip: u32) -> String {
+    if strip == 0 {
+        return member.to_string();
+    }
+    let path = Path::new(member);
+    let comps: Vec<&OsStr> = path
+        .components()
+        .filter_map(|comp| match comp {
+            Component::Normal(name) => Some(name),
+            other => {
+                debug_assert!(false, "Unexpected path component {}. Only `Normal` expected",
+                    component_to_str(&other));
+                None
+            },
+        })
+        .collect();
+    if comps.len() as u32 <= strip {
+        return String::new();
+    }
+    let kept = &comps[strip as usize..];
+    if kept.is_empty() {
+        return String::new();
+    }
+    let res = kept.iter()
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+    res
+}
+
+fn catalog_to_target_abs(
+    extraction_root: &Path, catalog_path: &Path, relative_component: Option<(&Path, &Path)>)
+    -> PathBuf {
+    match relative_component {
+        None => {
+            let rel = catalog_path
+                .strip_prefix("/")
+                .expect(&format!(
+                    "INVARIANT ERROR: Catalogue Path MUST be absolute and start with /, got {}",
+                    catalog_path.display()
+                ));
+            extraction_root.join(rel)
+        }
+        Some((source_abs, source_base)) => {
+            let rel_stem = catalog_path
+                .strip_prefix(source_abs)
+                .expect("Source rows must start within source root");
+            source_base.join(rel_stem)
+        }
+    }
 }
 
 /// Strip leading ../ in relative paths s.t. they do not escape from the extraction target.
