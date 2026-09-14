@@ -11,9 +11,9 @@ pub fn add_include_pattern(
     conn: &Connection, from: &str, line: Option<u64>, query: &str)
     -> Result<u64> {
 
-    let n = conn.execute("INSERT INTO filter_reason (id, source, line, expression) \
+let n = conn.execute("INSERT INTO filter_reason (id, source, line, expression) \
     VALUES (\
-        (SELECT MIN(id) FROM filter_reason), \
+        (SELECT MIN(id) - 1 FROM filter_reason), \
         :from, \
         :line, \
         :expression" ,
@@ -30,7 +30,7 @@ pub fn add_exclude_pattern(
     -> Result<u64> {
     let n = conn.execute("INSERT INTO filter_reason (id, source, line, expression) \
     VALUES (\
-        (SELECT MAX(id) FROM filter_reason), \
+        (SELECT MAX(id) + 1 FROM filter_reason), \
         :from, \
         :line, \
         :expression" ,
@@ -72,7 +72,7 @@ pub fn get_filters(conn: &Connection, exclude: bool) -> Result<Vec<FilterExpress
 /// In case no filters were given, we promote all files to filters and set the blanket rows
 pub fn apply_no_filter(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
-        "UPDATE files SET phase = 'filtered', include_reason = 1, exclude_reason = 0",
+        "UPDATE files SET phase = 'filtered', include_reason = -1, exclude_reason = 0",
         [],
     )?;
     Ok(n as u64)
