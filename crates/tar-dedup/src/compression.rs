@@ -3,7 +3,7 @@ mod xz;
 use crate::config::CompressionFormat;
 
 pub use xz::{
-    compress_footer_bytes, decompress_footer_bytes, InterruptibleXzEncoder, FOOTER_XZ_PRESET,
+    FOOTER_XZ_PRESET, InterruptibleXzEncoder, compress_footer_bytes, decompress_footer_bytes,
 };
 
 pub fn warn_on_start(format: CompressionFormat) {
