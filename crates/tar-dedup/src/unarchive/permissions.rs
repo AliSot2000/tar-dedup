@@ -41,38 +41,11 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     // flushes them in a single txn at the end (unless `--no-errors`).
     let mut recorder = Recorder::new(db, !config.process.no_errors);
     // Resolve the owner/group policy: stored in the archive or provided on the CLI.
-    let policy: Option<OwnerGroupPolicy> = match &config.owner_policy {
-        OwnerGroupSource::None => None,
-        OwnerGroupSource::Cli(p) => Some(p.clone()),
-        OwnerGroupSource::Stored => {
-            match db.get_archive_owner_policy()? {
-                None => None,
-                Some(p) => {
-                    let mut out_policy = OwnerGroupPolicy::default();
-                    if config.owner_group.apply_owner {
-                        out_policy.owner_map = p.owner_map;
-                        out_policy.owner_override = p.owner_override;
-                    }
-                    if config.owner_group.apply_group {
-                        out_policy.group_map = p.group_map;
-                        out_policy.group_override = p.group_override;
-                    }
-                    Some(out_policy)
-                }
-            }
-        }
-    };
+    let policy: Option<OwnerGroupPolicy> = resolve_owner_group_policy(&config, &db)?;
 
     // Resolve the mode changes: explicit `--mode` (validated on the CLI), the
     // changes recorded in the archive (`--apply-mode`), or none.
-    let mode_changes: Option<file_mode::Mode> = match &config.mode_policy {
-        ModeSource::None => None,
-        ModeSource::Cli(changes) => Some(parse_mode_changes(changes)?),
-        ModeSource::Stored => match db.get_archive_mode_changes()? {
-            Some(changes) => Some(parse_mode_changes(&changes)?),
-            None => None,
-        },
-    };
+    let mode_changes = resolve_mode(&config, &db)?;
 
     let ps = OwnerGroupMode {
         ogp: policy,
@@ -104,6 +77,49 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     // TODO finish up the db promote to permissions
 
     Ok(())
+}
+
+/// Resolve the owner group policy based on the cli flags and the presence of an owner group policy
+/// from the database.
+fn resolve_owner_group_policy(config: &ExtractConfig, db: &Database)
+    -> Result<Option<OwnerGroupPolicy>> {
+    let policy = match &config.owner_policy {
+        OwnerGroupSource::None => None,
+        OwnerGroupSource::Cli(p) => Some(p.clone()),
+        OwnerGroupSource::Stored => {
+            match db.get_archive_owner_policy()? {
+                None => None,
+                Some(p) => {
+                    let mut out_policy = OwnerGroupPolicy::default();
+                    if config.owner_group.apply_owner {
+                        out_policy.owner_map = p.owner_map;
+                        out_policy.owner_override = p.owner_override;
+                    }
+                    if config.owner_group.apply_group {
+                        out_policy.group_map = p.group_map;
+                        out_policy.group_override = p.group_override;
+                    }
+                    Some(out_policy)
+                }
+            }
+        }
+    };
+    Ok(policy)
+}
+
+
+/// Resolve the symbolic mode changes based on the cli flags and the presence of an mode change
+/// string in the database.
+fn resolve_mode(config: &ExtractConfig, db: &Database) -> Result<Option<file_mode::Mode>> {
+    let res = match &config.mode_policy {
+        ModeSource::None => None,
+        ModeSource::Cli(changes) => Some(parse_mode_changes(changes)?),
+        ModeSource::Stored => match db.get_archive_mode_changes()? {
+            Some(changes) => Some(parse_mode_changes(&changes)?),
+            None => None,
+        },
+    };
+    Ok(res)
 }
 
 fn process_batches(
