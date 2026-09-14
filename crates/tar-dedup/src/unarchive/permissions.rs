@@ -30,6 +30,11 @@ use std::time::SystemTime;
 const BATCH_SIZE: u64 = 10_000;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Permissions);
 
+struct OwnerGroupMode {
+    /// Capture the OwnerGroupPolicy that might need to be routet through the functions to make it a slimmer fujnction call
+    ogp: Option<OwnerGroupPolicy>,
+    mp: Option<file_mode::Mode>,
+}
 
 pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     // Errors encountered while applying metadata are recorded per-file; the recorder
@@ -75,8 +80,7 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
 
     // Directories, only when `--overwrite-dir` is requested.
     if config.attributes.force_overwrite_dir {
-        process_batches(
-            &mut recorder, config, db, shutdown, policy.as_ref(), mode_changes.as_ref(), true)?;
+        process_batches(&mut recorder, config, db, shutdown, &ps, true)?;
     }
 
     recorder.flush()?;
@@ -99,8 +103,7 @@ fn process_batches(
     config: &ExtractConfig,
     db: &Database,
     shutdown: &Shutdown,
-    policy: Option<&OwnerGroupPolicy>,
-    mode_changes: Option<&file_mode::Mode>,
+    ps: &OwnerGroupMode,
     dirs: bool,
 ) -> Result<()> {
     loop {
@@ -122,7 +125,7 @@ fn process_batches(
             // there is no metadata to apply, and the directory itself already exists.
             let errors = match record {
                 None => Vec::<FileStatError>::new(),
-                Some(r) => apply_one(config, &r, &out, policy, mode_changes),
+                Some(r) => apply_one(config, &r, &out.abs_path, &ps),
             };
             if errors.is_empty() {
                 db.set_out_tree_flag(out.id, OutTreeFlag::AppliedMetadata, true)?;
@@ -156,28 +159,26 @@ fn process_batches(
 fn apply_one(
     config: &ExtractConfig,
     record: &FileRecord,
-    out: &OutTreeRecord,
-    policy: Option<&OwnerGroupPolicy>,
-    mode_changes: Option<&file_mode::Mode>,
+    tgt_path: &Path,
+    ps: &OwnerGroupMode,
 ) -> Vec<FileStatError> {
-    let target_path = &out.abs_path;
     let mut errors: Vec<FileStatError> = Vec::new();
 
     // Owner/group via policy resolution.
-    let (uid, gid) = match policy {
+    let (uid, gid) = match ps.ogp.as_ref() {
         Some(pol) => match resolve_owner_group(
             record.uid,
             record.gid,
             record.username.as_ref().map(|s| s.as_ref()),
             record.groupname.as_ref().map(|s| s.as_ref()),
-            pol,
+            &pol,
             config.owner_group.target,
             config.owner_group.same_owner) {
 
             Ok((u, g)) => (u, g),
             Err(e) => {
                 errors.push(FileStatError::Io {
-                    path: target_path.to_path_buf(),
+                    path: tgt_path.to_path_buf(),
                     source: io::Error::new(
                         io::ErrorKind::Other,
                         format!("owner/group resolution failed: {e}")
@@ -191,9 +192,9 @@ fn apply_one(
 
     // chown (best-effort; may require root).
     if uid.is_some() || gid.is_some() {
-        match chown_for_path(target_path, uid, gid) {
+        match chown_for_path(tgt_path, uid, gid) {
             Ok(()) => {}
-            Err(e) => errors.push(FileStatError::io(target_path, e)),
+            Err(e) => errors.push(FileStatError::io(tgt_path, e)),
         }
     }
 
@@ -202,13 +203,13 @@ fn apply_one(
     if !config.attributes.no_same_permissions {
         let type_match = matches!(record.ftype, FileType::Symlink(_));
         if let (Some(mode), false) = (record.mode, type_match) {
-            let effective = match mode_changes {
+            let effective = match ps.mp.as_ref() {
                 Some(changes) => changes.apply_to(mode),
                 None => mode,
             };
-            match apply_mode(target_path, effective) {
+            match apply_mode(tgt_path, effective) {
                 Ok(()) => {}
-                Err(e) => errors.push(FileStatError::io(target_path, e)),
+                Err(e) => errors.push(FileStatError::io(tgt_path, e)),
             }
         }
     }
@@ -216,7 +217,7 @@ fn apply_one(
     // xattrs / ACLs / SELinux (inode-scoped: same for all hardlinks; apply once).
     if !config.attributes.no_xattrs {
         if let Some(raw) = &record.xattrs {
-            match set_file_xattrs(target_path, raw) {
+            match set_file_xattrs(tgt_path, raw) {
                 Ok(()) => {}
                 Err(e) => errors.push(e),
             }
@@ -224,7 +225,7 @@ fn apply_one(
     }
     if !config.attributes.no_acls {
         if let Some(raw) = &record.posix_acl {
-            match set_file_acl(target_path, raw) {
+            match set_file_acl(tgt_path, raw) {
                 Ok(()) => {}
                 Err(e) => errors.push(e),
             }
@@ -232,7 +233,7 @@ fn apply_one(
     }
     if !config.attributes.no_selinux {
         if let Some(ctx) = &record.selinux_ctx {
-            match set_file_selinux_data(target_path, ctx) {
+            match set_file_selinux_data(tgt_path, ctx) {
                 Ok(()) => {}
                 Err(e) => errors.push(e),
             }
@@ -252,16 +253,16 @@ fn apply_one(
         } else {
             None
         };
-        match apply_times(target_path, atime, mtime) {
+        match apply_times(tgt_path, atime, mtime) {
             Ok(()) => {}
-            Err(e) => errors.push(FileStatError::io(target_path, e)),
+            Err(e) => errors.push(FileStatError::io(tgt_path, e)),
         }
     }
 
     // This function already handles the errors.
     for error in &errors {
         tracing::error!(
-            path = %out.abs_path.display(),
+            path = %tgt_path.display(),
             error = %error,
             "metadata restore failure; marking ErrorWhileApplyingMetadata"
         );
