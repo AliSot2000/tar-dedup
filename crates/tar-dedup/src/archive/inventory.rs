@@ -240,6 +240,7 @@ pub fn handle_entry_base(path: &Path,
     handle_entry(&path, source_id, &config, &db, &progress, processed, recorder)
 }
 
+/// PRECONDITION: path is abs.
 #[cfg(unix)]
 pub fn handle_entry(
     path: &Path,
@@ -250,6 +251,7 @@ pub fn handle_entry(
     processed: &mut u64,
     recorder: &mut crate::db::Recorder)
     -> Result<()> {
+    debug_assert!(path.is_absolute(), "PRECONDITION FAILED: path should always be abs");
     use std::os::unix::fs::MetadataExt;
 
     let mut enc_err = Vec::new();
@@ -396,6 +398,7 @@ pub fn handle_entry(
 }
 
 /// Handle a single dir entry.
+/// PRECONDITION: path is abs.
 #[cfg(windows)]
 pub fn handle_entry(
     path: &Path,
@@ -407,6 +410,7 @@ pub fn handle_entry(
     recorder: &mut crate::db::Recorder)
     -> Result<()> {
     let mut enc_err = Vec::new();
+    debug_assert!(path.is_absolute(), "PRECONDITION FAILED: path should always be abs");
 
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
