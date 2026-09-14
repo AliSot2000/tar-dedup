@@ -409,8 +409,6 @@ pub struct ExtractArgs {
 
     // --- Overwrite Control ---
 
-    // TODO clean (rm and create extract dir)
-
     /// Preserve existing directory symlinks instead of replacing them (GNU tar
     /// `--keep-directory-symlink`).
     #[arg(
@@ -438,6 +436,7 @@ pub struct ExtractArgs {
     )]
     pub no_create_dir: bool,
 
+    // TODO check that this is working.
     /// Do not apply archived metadata to existing directories (GNU tar
     /// `--no-overwrite-dir`). Default: apply directory metadata for placed
     /// members, matching GNU tar at the end of the pipeline.
@@ -488,7 +487,7 @@ pub struct ExtractArgs {
         long = "hard-link-grouping",
         value_enum,
         help_heading = "Overwrite Control",
-        value_name = "GROUPING-POLICY",
+        value_name = "GROUPING-POLICY"
     )]
     pub hard_link_grouping: HardLinkGrouping,
 
@@ -585,8 +584,12 @@ pub struct ExtractArgs {
 
     /// Force a sed-style name transform (GNU tar `--transform`/`--xform`) at
     /// extraction; takes precedence over `--apply-transform`.
-    #[arg(long = "transform", alias = "xform", value_name = "EXPRESSION",
-          help_heading = "File Attributes")]
+    #[arg(
+        long = "transform",
+        alias = "xform",
+        value_name = "EXPRESSION",
+        help_heading = "File Attributes"
+    )]
     pub transform: Option<String>,
 
     /// Apply the name transform recorded in the archive (ignored if `--transform` given).
@@ -595,8 +598,12 @@ pub struct ExtractArgs {
 
     /// Strip NUMBER leading path components from file names before extraction.
     /// (GNU tar `--strip-components`; 0 = no-op.)
-    #[arg(long = "strip-components", value_name = "NUMBER", default_value_t = 0,
-          help_heading = "File Attributes")]
+    #[arg(
+        long = "strip-components",
+        value_name = "NUMBER",
+        default_value_t = 0,
+        help_heading = "File Attributes"
+    )]
     pub strip_components: u32,
 
     /// Restore archived access times from the database (default: leave untouched).
@@ -628,6 +635,52 @@ pub struct ExtractArgs {
     /// Wipe extract work (`.estage`) and start over.
     #[arg(long = "fresh", help_heading = "Process Options")]
     pub fresh: bool,
+
+    // --- Filtering ---
+    /// Exclude paths matching regex PATTERN from extraction (repeatable).
+    #[arg(
+        long = "exclude",
+        value_name = "PATTERN",
+        action = ArgAction::Append,
+        help_heading = "Filtering"
+    )]
+    pub exclude: Vec<String>,
+
+    /// Read exclude regex patterns from FILE (repeatable).
+    #[arg(
+        short = 'X',
+        long = "exclude-from",
+        value_name = "FILE",
+        action = ArgAction::Append,
+        help_heading = "Filtering"
+    )]
+    pub exclude_from: Vec<PathBuf>,
+
+    /// Include only paths matching regex PATTERN for extraction (repeatable).
+    #[arg(
+        long = "include",
+        value_name = "PATTERN",
+        action = ArgAction::Append,
+        help_heading = "Filtering"
+    )]
+    pub include: Vec<String>,
+
+    /// Read include regex patterns from FILE (repeatable).
+    #[arg(
+        long = "include-from",
+        value_name = "FILE",
+        action = ArgAction::Append,
+        help_heading = "Filtering"
+    )]
+    pub include_from: Vec<PathBuf>,
+
+    /// Patterns match from the start of the path (default: unanchored).
+    #[arg(long = "anchored", help_heading = "Filtering")]
+    pub anchored: bool,
+
+    /// Match patterns case-insensitively (default: case-sensitive).
+    #[arg(long = "ignore-case", help_heading = "Filtering")]
+    pub ignore_case: bool,
 
     /// Abort on the first warning or error instead of continuing where possible.
     #[arg(
