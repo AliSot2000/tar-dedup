@@ -15,9 +15,9 @@ use path_clean::PathClean;
 use crate::cli::HardLinkGrouping;
 use crate::common::transform::{TransformExpr, TransformSource, parse_transform_expr};
 use crate::config::ExtractConfig;
+use crate::db::Database;
 use crate::db::flags::{OutTreeFlag, OutTreeFlags};
 use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, StrippedRecord};
-use crate::db::Database;
 use crate::error::Result;
 use crate::shutdown::Shutdown;
 
