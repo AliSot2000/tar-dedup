@@ -1,4 +1,4 @@
-use rusqlite::{Connection, named_params, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, named_params};
 use std::path::{Path, PathBuf};
 
 use crate::db::flags::{SourceFlag, SourceFlags};
@@ -8,7 +8,7 @@ use crate::error::Result;
 const SOURCE_RECORD_COLUMNS: &str = " id, source, abs_path, original_path, line, flags";
 
 impl SourceRecord {
-    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRecord>  {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRecord> {
         Ok(SourceRecord {
             id: row.get::<_, i64>("id")?.into(),
             source: row.get::<_, String>("source")?,
@@ -24,13 +24,14 @@ impl SourceRecord {
 ///
 /// Relies on `UNIQUE (source, path)` — no deletes from this table, so a plain
 /// insert-or-ignore followed by select is enough.
-pub fn add_get_source(conn: &Connection,
-                      abs_path: &Path,
-                      source: &str,
-                      line: Option<u64>,
-                      original_path: Option<&Path>,
-                      flags: SourceFlags)
-                      -> Result<i64> {
+pub fn add_get_source(
+    conn: &Connection,
+    abs_path: &Path,
+    source: &str,
+    line: Option<u64>,
+    original_path: Option<&Path>,
+    flags: SourceFlags)
+    -> Result<i64> {
     let path_str = abs_path.to_string_lossy();
     conn.execute(
         "INSERT OR IGNORE INTO source (source, abs_path, line, original_path, flags) \
