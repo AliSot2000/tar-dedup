@@ -15,13 +15,12 @@ use crate::shutdown::Shutdown;
 use chrono::{DateTime, Utc};
 use path_clean::PathClean;
 use std::ffi::OsStr;
+use std::fs::Metadata;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::{fs, io};
-use std::fs::Metadata;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
-
 
 pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
     if db.count_entries()? > 0 {
