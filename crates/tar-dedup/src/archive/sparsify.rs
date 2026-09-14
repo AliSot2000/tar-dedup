@@ -1,15 +1,17 @@
 use path_clean::PathClean;
-use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 use sparse_cp::sparse_copy_with_progress;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::common::files::{warn_if_times_changed, PreYield};
+use crate::common::files::{PreYield, warn_if_times_changed};
 use crate::config::ArchiveConfig;
-use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::db::Database;
+use crate::db::ErrorPhase;
+use crate::db::flags::ErrorFlags;
+use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::error::{Error, FileStatError, Result};
 use crate::progress::CountProgress;
 use crate::shutdown::Shutdown;
@@ -106,9 +108,9 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
                 db.mark_sparsified_error(id)?;
                 recorder.record_file(
                     id,
-                    crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Sparsify),
+                    ErrorPhase::Pipeline(crate::config::PipelinePhase::Sparsify),
                     error,
-                    crate::db::flags::ErrorFlags::default(),
+                    ErrorFlags::default(),
                 );
                 err += 1;
             }
