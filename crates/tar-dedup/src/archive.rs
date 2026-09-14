@@ -77,6 +77,10 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             if let Some(changes) = config.capture.mode.as_ref() {
                 db.set_archive_mode_changes(changes)?;
             }
+            // PRECONDITION: transform validated!
+            if let Some(transform) = config.capture.transform.as_ref() {
+                db.set_archive_transform(transform)?;
+            }
             state
         }
     };
