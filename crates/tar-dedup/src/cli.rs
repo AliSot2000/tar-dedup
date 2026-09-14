@@ -250,6 +250,13 @@ pub struct ArchiveArgs {
     #[arg(long = "mode", value_name = "CHANGES", help_heading = "File Attributes")]
     pub mode: Option<String>,
 
+    /// Record a sed-style name transform (GNU tar `--transform`/`--xform`,
+    /// e.g. `s,^usr/,var/,`) to apply at extraction; stored as archive policy
+    /// (meta). Only validated here; not applied at archive time.
+    #[arg(long = "transform", alias = "xform", value_name = "EXPRESSION",
+          help_heading = "File Attributes")]
+    pub transform: Option<String>,
+
     // --- Sparse Files ---
 
     /// Run the sparsify phase (copy with seeks using `--page-size` / `--min-pages`).
@@ -575,6 +582,16 @@ pub struct ExtractArgs {
     /// Apply the mode changes recorded in the archive (ignored if `--mode` given).
     #[arg(long = "apply-mode", default_value_t = false, help_heading = "File Attributes")]
     pub apply_mode: bool,
+
+    /// Force a sed-style name transform (GNU tar `--transform`/`--xform`) at
+    /// extraction; takes precedence over `--apply-transform`.
+    #[arg(long = "transform", alias = "xform", value_name = "EXPRESSION",
+          help_heading = "File Attributes")]
+    pub transform: Option<String>,
+
+    /// Apply the name transform recorded in the archive (ignored if `--transform` given).
+    #[arg(long = "apply-transform", default_value_t = false, help_heading = "File Attributes")]
+    pub apply_transform: bool,
 
     /// Strip NUMBER leading path components from file names before extraction.
     /// (GNU tar `--strip-components`; 0 = no-op.)
