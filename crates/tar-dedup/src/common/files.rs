@@ -1,12 +1,12 @@
-use std::collections::HashSet;
 use chrono::{DateTime, Utc};
+use std::collections::HashSet;
 
+use crate::db::types::{FileType, LinkType};
+use crate::error::{Error, Result};
+use path_clean::PathClean;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use path_clean::PathClean;
-use crate::db::types::{FileType, LinkType};
-use crate::error::{Error, Result};
 
 use super::COPY_STEP_SIZE;
 
