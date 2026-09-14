@@ -1,6 +1,7 @@
-use rusqlite::{named_params, Connection};
-use crate::db::flags::FileFlag;
 use crate::db::SqlFileRow;
+use crate::db::common::generate_archive_and_extract_filter;
+use crate::db::flags::FileFlag;
+use rusqlite::{Connection, named_params};
 
 /// Promote every `unarchived` row to `rehashed` without verifying payloads.
 pub fn skip_rehash(conn: &Connection) -> crate::error::Result<u64> {
@@ -19,11 +20,13 @@ pub fn list_files_to_rehash<R: SqlFileRow>(conn: &Connection, batch_size: u64)
         "SELECT {cols} FROM files
             WHERE canonical_id = id
                 AND flags & :extracted != 0
-                AND include_reason < 0
-                AND exclude_reason = 0
+                AND {}
                 AND ftype = 'file'
                 AND phase = 'unarchived'
-                LIMIT :batch_size"))?;
+                LIMIT :batch_size",
+        generate_archive_and_extract_filter(None)
+    ))?;
+
     let rows = stmt.query_map(
         named_params! {
             ":extracted": FileFlag::FileExtracted.mask_i64(),
