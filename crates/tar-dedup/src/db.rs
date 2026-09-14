@@ -134,8 +134,12 @@ impl Database {
         common::mark_phase(&*self.conn(), file_id, phase)
     }
 
-    pub fn resolve_numeric_ids(&self) -> Result<()> {
-        inventory::resolve_numeric_ids(&*self.conn())
+    pub fn resolve_numeric_ids(&self, recorder: &mut Recorder) -> Result<()> {
+        inventory::resolve_numeric_ids(&*self.conn(), recorder)
+    }
+
+    pub fn purge_entries(&self) -> Result<u64> {
+        inventory::purge_entries(&self.conn())
     }
 
     pub fn set_hardlink_canonicals(&self) -> Result<u64> {
