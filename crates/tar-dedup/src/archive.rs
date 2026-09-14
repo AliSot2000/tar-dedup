@@ -15,7 +15,7 @@ use fs4::fs_std::FileExt;
 use crate::archive_footer;
 use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
-    resolve_start, ProductPresence, StartAction, StartPolicy, WorkPresence,
+    ProductPresence, StartAction, StartPolicy, WorkPresence, resolve_start,
 };
 use crate::config::{ArchiveConfig, ExitAfterStage, PipelinePhase, RuntimeState};
 use crate::db::Database;
@@ -73,7 +73,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             )? {
                 db.set_archive_owner_policy(&policy)?;
             }
-        // PRECONDITION: changes validated!
+            // PRECONDITION: changes validated!
             if let Some(changes) = config.capture.mode.as_ref() {
                 db.set_archive_mode_changes(changes)?;
             }
