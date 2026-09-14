@@ -125,8 +125,7 @@ pub struct ErrorRecord {
     pub flags: ErrorFlags,
 }
 
-const ERROR_COLUMNS: &str =
-    "id, file_id, out_tree_id, abs_path, error_msg, error_type, phase, \
+const ERROR_COLUMNS: &str = "id, file_id, out_tree_id, abs_path, error_msg, error_type, phase, \
      error_misc, error_datetime, flags";
 
 /// Fetch a single error row.
@@ -154,8 +153,8 @@ pub fn get_records_by_file_id(conn: &Connection, file_id: FileId) -> Result<Vec<
 }
 
 /// All error rows bound to an out_tree row.
-pub fn get_records_by_out_tree_id(
-    conn: &Connection, out_tree_id: OutTreeId) -> Result<Vec<ErrorRecord>> {
+pub fn get_records_by_out_tree_id(conn: &Connection, out_tree_id: OutTreeId)
+    -> Result<Vec<ErrorRecord>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {ERROR_COLUMNS} FROM errors WHERE out_tree_id = :out_tree_id ORDER BY id"
     ))?;
