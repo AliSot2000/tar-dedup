@@ -6,14 +6,18 @@ use rusqlite::{Connection, named_params};
 
 /// Get all files that still need to be inspected
 pub fn get_entries_to_hash<R: SqlFileRow>(
-    conn: &Connection, eager_filter: bool, detect_hardlinks: bool) -> Result<Vec<R>> {
+    conn: &Connection, eager_filter: bool, detect_hardlinks: bool)
+    -> Result<Vec<R>> {
     let cols = R::sql_columns(None);
-    let phase = if eager_filter { "'filtered'" } else { "'inventoried'" };
-    let filtered_selection = if eager_filter {
-        "AND include_reason < 0 \
-         AND exclude_reason = 0"
+    let phase = if eager_filter {
+        "'filtered'"
     } else {
-        ""
+        "'inventoried'"
+    };
+    let filtered_selection = if eager_filter {
+        format!("AND {}", crate::db::common::generate_archive_filter(None))
+    } else {
+        String::new()
     };
     let filter_hardlink_canonical = if detect_hardlinks {
         "AND (flags & :flag) != 0"
@@ -29,7 +33,7 @@ pub fn get_entries_to_hash<R: SqlFileRow>(
              {filtered_selection}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let row_mapper = |r: &rusqlite::Row<'_>| { R::from_row(r, None) };
+    let row_mapper = |r: &rusqlite::Row<'_>| R::from_row(r, None);
     let rows = if detect_hardlinks {
         stmt.query_map(named_params! {
             ":sha_error": FileFlag::ErrorWhileHash.mask_i64(),
@@ -41,21 +45,24 @@ pub fn get_entries_to_hash<R: SqlFileRow>(
             named_params! {
                 ":sha_error": FileFlag::ErrorWhileHash.mask_i64()
             },
-            row_mapper
+            row_mapper,
         )?
     };
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 /// Count all rows that need to be hashed in this phase. Not only the remaining files.
-pub fn count_all_hashable_files(
-    conn: &Connection, eager_filter: bool, detect_hardlinks: bool) -> Result<u64> {
-    let phase = if eager_filter { "'filtered'" } else { "'inventoried'" };
-    let filtered_selection = if eager_filter {
-        "AND include_reason < 0 \
-         AND exclude_reason = 0"
+pub fn count_all_hashable_files(conn: &Connection, eager_filter: bool, detect_hardlinks: bool)
+    -> Result<u64> {
+    let phase = if eager_filter {
+        "'filtered'"
     } else {
-        ""
+        "'inventoried'"
+    };
+    let filtered_selection = if eager_filter {
+        format!("AND {}", crate::db::common::generate_archive_filter(None))
+    } else {
+        String::new()
     };
     let filter_hardlink_canonical = if detect_hardlinks {
         "AND (flags & :flag) != 0"
@@ -80,12 +87,8 @@ pub fn count_all_hashable_files(
 }
 
 pub fn update_file_inspection_per_id(
-    conn: &Connection,
-    file_id: FileId,
-    digest: [u8; 20],
-    sparse_count: u64,
-    update_hardlinks: bool
-) -> Result<()> {
+    conn: &Connection, file_id: FileId, digest: [u8; 20], sparse_count: u64, update_hardlinks: bool)
+    -> Result<()> {
     let sql = if update_hardlinks {
         "UPDATE files SET sha1 = :sha1, sparse_count = :sparse_count, phase = 'hashed' \
             WHERE (dev, inode) IN (SELECT dev, inode FROM files WHERE id = :id)"
