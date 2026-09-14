@@ -15,12 +15,13 @@
 
 # NOW TODO
 - [X] Placement Conflict Handling
-- [ ] Mode parsing
-- [ ] Filename rewriting
+- [X] Mode parsing
+- [X] Filename rewriting
 - [ ] Progress
 - [ ] Batching
 - [ ] Resume
 - [ ] Filter on extract
+- [ ] All Metadata flag.
 
 ## General:
 - [ ] Testing
