@@ -257,6 +257,9 @@ mod tests {
         assert_eq!(path_parent(Path::new("/foo.tar.gz")), Path::new("/"));
         assert_eq!(path_parent(Path::new("/")), Path::new("/"));
         assert_eq!(path_parent(Path::new("foo.tar.gz")), Path::new("."));
-        assert_eq!(path_parent(Path::new("/data/foo.tar.gz")), Path::new("/data"));
+        assert_eq!(
+            path_parent(Path::new("/data/foo.tar.gz")),
+            Path::new("/data")
+        );
     }
 }
