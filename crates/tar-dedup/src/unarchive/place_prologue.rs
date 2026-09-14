@@ -47,7 +47,6 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     Ok(())
 }
 
-/// Populate `files.new_name` with the member-relative stripped name. Recomputed
 /// Resolve the effective transform from the CLI policy / archived meta.
 fn resolve_transform(config: &ExtractConfig, db: &Database) -> Result<Option<TransformExpr>> {
     match &config.transform_policy {
@@ -59,67 +58,91 @@ fn resolve_transform(config: &ExtractConfig, db: &Database) -> Result<Option<Tra
         },
     }
 }
+/// Serialization for Component for better errors.
+fn component_to_str<'a>(c: &Component) -> &'a str {
+    match c {
+        Component::RootDir => "root-dir",
+        Component::ParentDir => "parent-dir",
+        Component::CurDir => "current-dir",
+        Component::Prefix(_) => "prefix",
+        Component::Normal(_) => "normal"
+    }
+}
+
 /// Populate `files.new_name` with the member-relative record name. Recomputed
 /// from `abs_path` on every prologue run (never chains onto an already-mapped
-/// `new_name`), so re-running with the same or changed `--strip-components` is
-/// deterministic. The strip happens strictly on the relative member, i.e. AFTER
-/// the absolute path is converted to relative.
-fn populate_new_names(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+/// `new_name`), so re-running with the same or changed options is deterministic.
+/// GNU order is transform first, then strip. Both run strictly on the relative
+/// member, i.e. AFTER the absolute path is converted to relative.
+fn populate_new_names(
+    db: &Database, config: &ExtractConfig, shutdown: &Shutdown, transform: Option<&TransformExpr>)
+    -> Result<()> {
+
     let strip = config.strip_components;
     if config.placement.absolute_names {
         let mut last_id = FileId(0);
         loop {
             shutdown.check_in_flight()?;
             let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-                Some(last_id), BATCH_SIZE, None, None)?;
+                last_id, BATCH_SIZE, None, None, false)?;
             if entries.is_empty() { break }
             last_id = entries.last().expect("non-empty batch").id;
-            apply_renames(db, &entries, strip, |abs: &Path| {
+
+            apply_renames(db, &entries, strip, transform, |abs: &Path| {
+                debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
+                debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
                 abs.strip_prefix("/").expect("abs path starts with /").to_path_buf()
             })?;
         }
-        return Ok(());
-    }
+    } else {
+        let mut last_source_id = 0i64;
+        loop {
+            let sources = db.list_sources(None, last_source_id, BATCH_SIZE)?;
+            if sources.is_empty() { break }
+            last_source_id = sources.last().expect("non-empty batch").id;
 
-    let mut last_source_id = 0i64;
-    loop {
-        let sources = db.list_sources(None, last_source_id, BATCH_SIZE)?;
-        if sources.is_empty() { break }
-        last_source_id = sources.last().expect("non-empty batch").id;
+            for source in sources {
+                let source_abs = source.abs_path;
+                let mut last_id = FileId(0);
 
-        for source in sources {
-            let source_abs = source.abs_path;
-            let mut last_id = FileId(0);
-            loop {
-                shutdown.check_in_flight()?;
-                let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-                    Some(last_id), BATCH_SIZE, Some(source.id), None)?;
-                if entries.is_empty() { break }
-                last_id = entries.last().expect("non-empty batch").id;
-                apply_renames(db, &entries, strip, |abs: &Path| {
-                    abs.strip_prefix(&source_abs)
-                        .expect("entry must start within source root")
-                        .to_path_buf()
-                })?;
+                loop {
+                    shutdown.check_in_flight()?;
+                    let entries: Vec<StrippedRecord> = db.list_materialized_entries(
+                        last_id, BATCH_SIZE, Some(source.id), None, false)?;
+                    if entries.is_empty() { break }
+                    last_id = entries.last().expect("non-empty batch").id;
+
+                    apply_renames(db, &entries, strip, transform, |abs: &Path| {
+                        abs.strip_prefix(&source_abs)
+                            .expect("entry must start within source root")
+                            .to_path_buf()
+                    })?;
+                }
             }
         }
     }
     Ok(())
 }
 
+// INFO: Not tested or reasoned through. Trusted the output of an LLM here.
 fn apply_renames(
     db: &Database,
     entries: &[StrippedRecord],
     strip: u32,
-    member_of: impl Fn(&Path) -> PathBuf,
-) -> Result<()> {
+    transform: Option<&TransformExpr>,
+    member_of: impl Fn(&Path) -> PathBuf)
+    -> Result<()> {
     for entry in entries {
         let member = member_of(&entry.abs_path);
-        // None: no rename applies.
-        // Some(""): member collapses (<= strip components) -> skip sentinel.
-        // Some(rel): the member-relative stripped name.
-        let new_name = strip_relative_member(&member, strip);
-        db.set_file_new_name(entry.id, new_name.as_deref())?;
+        let mut name = member.to_string_lossy().into_owned();
+        if let Some(t) = transform {
+            name = t.apply(&name);
+        }
+        // Strip after transform (GNU order); `strip == 0` leaves the name as-is.
+        let name = strip_relative_member(&name, strip);
+        // In new-name mode every row gets a (possibly identity) member; `""`
+        // marks the empty-name skip sentinel consumed by the out_tree filter.
+        db.set_file_new_name(entry.id, Some(&name))?;
     }
     Ok(())
 }
@@ -127,30 +150,34 @@ fn apply_renames(
 /// Strip up to `strip` leading components of a relative member path.
 /// `0` is a no-op (`None`). A member with `<= strip` components collapses to
 /// `Some("")`, matching GNU tar's "transforms to empty name" skip.
-fn strip_relative_member(member: &Path, strip: u32) -> Option<String> {
+fn strip_relative_member(member: &str, strip: u32) -> String {
     if strip == 0 {
-        return None;
+        return member.to_string();
     }
-    let comps: Vec<&OsStr> = member
+    let path = Path::new(member);
+    let comps: Vec<&OsStr> = path
         .components()
         .filter_map(|comp| match comp {
             Component::Normal(name) => Some(name),
-            _ => None,
+            other => {
+                debug_assert!(false, "Unexpected path component {}. Only `Normal` expected",
+                    component_to_str(&other));
+                None
+            },
         })
         .collect();
     if comps.len() as u32 <= strip {
-        return Some(String::new());
+        return String::new();
     }
     let kept = &comps[strip as usize..];
     if kept.is_empty() {
-        return Some(String::new());
+        return String::new();
     }
-    Some(
-        kept.iter()
+    let res = kept.iter()
             .map(|name| name.to_string_lossy().into_owned())
             .collect::<Vec<_>>()
-            .join("/"),
-    )
+            .join("/");
+    res
 }
 
 // -------------------------------------------------------------------------------------------------
