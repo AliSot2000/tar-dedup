@@ -87,166 +87,22 @@ fn fast_filter(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Re
     Ok(())
 }
 
-/// Convert the FilterExpression structs to ParsedFilter struct.
-/// Applying --ignore-case and --anchored
-/// Strong invariants assumed, violation will lead to panics
-fn parse_filter(filters: &Vec<FilterExpression>, operation: &str, config: &ArchiveConfig)
-    -> Vec<ParsedFilter> {
-    let mut parsed_filters: Vec<ParsedFilter> = Vec::with_capacity(filters.len());
-    for filter in filters.iter() {
-        let aexp = if config.filter.anchored && !filter.expression.starts_with('^') {
-            &format!("^{}", filter.expression)
-        } else {
-            &filter.expression
-        };
-        let regex = match RegexBuilder::new(&aexp)
-            .case_insensitive(config.filter.ignore_case)
-            .unicode(false)  // TODO needs to be done with --force-utf8
-            .build(){
-            Ok(regex) => regex,
-            Err(e) => {
-                panic!("INVARIANT ERROR: Previously valid Regex could not be parsed. Error: {e}, \
-                Assembled Regex: {aexp}, Source: {}, Line: {}", filter.from, filter.line.expect(
-                    &format!("Line may only be empty for user defined {operation} filters.")
-                ))
-            }
-        };
-        parsed_filters.push(ParsedFilter{
-            id: filter.id,
-            expression: regex,
-        });
-    }
-    parsed_filters
-}
-
-/// Do the match checking for the include and the exclude filters and produce a FilterResult
-fn test_match(include: &Vec<ParsedFilter>, exclude: &Vec<ParsedFilter>, record: &StrippedRecord)
-    -> FilterResult {
-    let mut include_reason = 0i64;
-    let mut exclude_reason = 0i64;
-
-    for filter in include.iter() {
-        if filter.expression.is_match(&record.abs_path.to_string_lossy()) {
-            include_reason = filter.id;
-            break
-        }
-    }
-
-    for filter in exclude.iter() {
-        if filter.expression.is_match(&record.abs_path.to_string_lossy()) {
-            exclude_reason = filter.id;
-            break
-        }
-    }
-
-    FilterResult {
-        id: record.id,
-        include_reason,
-        exclude_reason,
-    }
-}
-
-struct ParsedFilter {
-    id: i64,
-    expression: Regex,
-}
-
-struct FilterResult {
-    id: FileId,
-    // INFO: Include is negative!!! we need i64
-    include_reason: i64,
-    exclude_reason: i64,
-}
-
 /// Parse the arguments and add them into the database.
 pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
     let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
-    // Handle the include files
-    handle_filter(
-        &config.filter.include_patterns, &config.filter.include_from, "include",
-        &|from, line, query| db.add_include_pattern(from, line, query),
-        &mut recorder)?;
-
-    if db.count_filters(Some(false))? == 0 {
-        let res = db.add_include_pattern("internal", None, ".*")?;
-        assert_eq!(res, 1, "DB Failed, expected 1 row to get added, got {res}")
-    }
-
-    handle_filter(
-        &config.filter.exclude_patterns, &config.filter.exclude_from, "exclude",
-        &|from, line, query| db.add_exclude_pattern(from, line, query),
-        &mut recorder)?;
-    recorder.flush()?;
-    Ok(())
-}
-
-/// deal with one arm of inclusion / exclusion
-fn handle_filter(
-    pattern: &Vec<String>,
-    files: &Vec<PathBuf>,
-    operation: &str,
-    insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
-    recorder: &mut crate::db::Recorder,
-) -> Result<()>{
-
-    // Scan single argument expression
-    for (idx, query) in pattern.iter().enumerate() {
-        handle_query(&format!("--{operation}"), query, operation, idx as u64, insert_fn,
-                     recorder)?;
-    }
-
-    // Scan files with content.
-    for file in files.iter() {
-        let pp = file.display();
-        let file_content = match fs::read_to_string(file) {
-            Ok(fc) => fc,
-            Err(e) => {
-                recorder.record_session(
-                    ERROR_PHASE,
-                    crate::error::FileStatError::Io {
-                        path: file.clone(),
-                        source: std::io::Error::new(e.kind(), e.to_string()),
-                    },
-                    crate::db::flags::ErrorFlags::default(),
-                );
-                tracing::error!("Could not read {operation} file: {pp} with error {e}");
-                continue;
-                // TODO: Raise error without fail-fast
-            }
-        };
-        for (idx, expression) in file_content.split("\n").enumerate() {
-            if expression.is_empty(){
-                continue
-            }
-            let san_path = file.to_string_lossy();
-            handle_query(&format!("--{operation}-from={san_path}"), expression, operation,
-                         idx as u64, insert_fn, recorder)?;
-
-        }
-    }
-    Ok(())
-}
-
-/// Take care of inserting a single query into the database.
-fn handle_query(source: &str, query: &str, operation: &str, line: u64,
-                insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
-                recorder: &mut crate::db::Recorder) -> Result<()> {
-    if Regex::new(query).is_ok() {
-        let res = insert_fn(source, Some(line), query)?;
-        assert_eq!(res, 1, "DB Failed, expected 1 row to get added, got {res}");
-    } else {
-        recorder.record_session(
-            ERROR_PHASE,
-            crate::error::FileStatError::General {
-                path: None,
-                message: format!("Failed to parse {operation} pattern from {source}, \
-                                 line: {line}, expression: {query}"),
-            },
-            crate::db::flags::ErrorFlags::default(),
-        );
-        tracing::error!(
-            "Failed to parse {operation} pattern from {source}, line: {line}, expression: {query}"
-        );
-    }
+    let phase = crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Filter);
+    ingest_filter_rules(
+        &config.filter.include_patterns,
+        &config.filter.include_from,
+        &config.filter.exclude_patterns,
+        &config.filter.exclude_from,
+        phase,
+        &mut recorder,
+        FilterSink {
+            add_include: Box::new(|from, line, query| db.add_include_pattern(from, line, query)),
+            add_exclude: Box::new(|from, line, query| db.add_exclude_pattern(from, line, query)),
+            count_includes: Box::new(|| db.count_filters(Some(false))),
+        },
+    )?;
     Ok(())
 }
