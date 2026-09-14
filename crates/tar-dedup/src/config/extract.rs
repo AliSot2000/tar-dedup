@@ -5,6 +5,7 @@ use crate::common::perms::{
     MapResolutionTarget, ModeSource, OwnerGroupSource, infer_same_owner, parse_mode_changes,
     parse_owner_group_args, validate_for_mode,
 };
+use crate::common::transform::{TransformSource, parse_transform_expr};
 use crate::common::start::StartPolicy;
 use crate::error::{Error, Result};
 
@@ -78,6 +79,7 @@ pub struct ExtractConfig {
     pub owner_group: OwnerGroupOptions,
     pub mode_policy: ModeSource,
     pub strip_components: u32,
+    pub transform_policy: TransformSource,
 }
 
 /// Resolve which owner/group policy applies on extract from the CLI args.
@@ -140,6 +142,23 @@ fn resolve_mode_policy_from_args(args: &ExtractArgs) -> Result<ModeSource> {
         Ok(ModeSource::Stored)
     } else {
         Ok(ModeSource::None)
+    }
+}
+
+/// Resolve which name-transform policy applies on extract from the CLI args.
+/// Explicit `--transform` takes precedence over `--apply-transform` (which
+/// falls back to the archive's recorded expression).
+fn resolve_transform_policy_from_args(args: &ExtractArgs) -> Result<TransformSource> {
+    if let Some(expr) = &args.transform {
+        if args.apply_transform {
+            tracing::warn!("--apply-transform ignored; explicit --transform takes precedence");
+        }
+        parse_transform_expr(expr)?;
+        Ok(TransformSource::Cli(expr.clone()))
+    } else if args.apply_transform {
+        Ok(TransformSource::Stored)
+    } else {
+        Ok(TransformSource::None)
     }
 }
 
@@ -282,6 +301,7 @@ impl ExtractConfig {
             },
             mode_policy,
             strip_components: args.strip_components,
+            transform_policy: resolve_transform_policy_from_args(args)?,
         })
     }
 
@@ -347,6 +367,7 @@ impl ExtractConfig {
             },
             mode_policy: ModeSource::None,
             strip_components: 0,
+            transform_policy: TransformSource::None,
         }
     }
 
@@ -412,6 +433,7 @@ impl ExtractConfig {
             },
             mode_policy: ModeSource::None,
             strip_components: 0,
+            transform_policy: TransformSource::None,
         }
     }
 
@@ -477,6 +499,7 @@ impl ExtractConfig {
             },
             mode_policy: ModeSource::None,
             strip_components: 0,
+            transform_policy: TransformSource::None,
         }
     }
 }
