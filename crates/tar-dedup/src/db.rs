@@ -32,6 +32,7 @@ pub mod place;
 mod permissions;
 mod integrity;
 mod errors;
+mod place_prologue;
 
 pub use common::SqlFileRow;
 pub use extract::ExtractScanState;
@@ -545,7 +546,7 @@ impl Database {
     }
 
     pub fn out_tree_is_built(&self) -> Result<bool> {
-        place::out_tree_is_built(&self.conn())
+        place_prologue::out_tree_is_built(&self.conn())
     }
 
     pub fn dir_tree_is_built(&self) -> Result<bool> {
@@ -553,19 +554,19 @@ impl Database {
     }
 
     pub fn set_out_tree_built(&self) -> Result<()> {
-        place::set_out_tree_built(&self.conn())
+        place_prologue::set_out_tree_built(&self.conn())
     }
 
     pub fn placement_prologue_done(&self) -> Result<bool> {
-        place::placement_prologue_done(&self.conn())
+        place_prologue::placement_prologue_done(&self.conn())
     }
 
     pub fn set_placement_prologue_done(&self) -> Result<()> {
-        place::set_placement_prologue_done(&self.conn())
+        place_prologue::set_placement_prologue_done(&self.conn())
     }
 
     pub fn set_file_new_name(&self, file_id: FileId, new_name: Option<&str>) -> Result<()> {
-        place::set_file_new_name(&self.conn(), file_id, new_name)
+        place_prologue::set_file_new_name(&self.conn(), file_id, new_name)
     }
 
     pub fn set_dir_tree_built(&self) -> Result<()> {
@@ -574,13 +575,13 @@ impl Database {
 
     pub fn list_materialized_entries<R: SqlFileRow>(
         &self,
-        last_id: Option<FileId>,
+        last_id: FileId,
         batch_size: u64,
         source_id: Option<i64>,
         only_dirs: Option<bool>,
         only_valid_new_name: bool,
     ) -> Result<Vec<R>> {
-        place::list_materialized_entries(
+        place_prologue::list_materialized_entries(
             &self.conn(), last_id, batch_size, source_id, only_dirs, only_valid_new_name)
     }
 
@@ -588,7 +589,7 @@ impl Database {
         &self,
         rows: &[NewOutTreeRow],
     ) -> Result<Vec<OutTreeId>> {
-        place::insert_out_tree_rows(&self.conn(), rows)
+        place_prologue::insert_out_tree_rows(&self.conn(), rows)
     }
 
     pub fn insert_ref_out_rows(&self, pairs: &[(OutTreeId, i64)]) -> Result<()> {
