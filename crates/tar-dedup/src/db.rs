@@ -411,6 +411,14 @@ impl Database {
         meta::get_archive_mode_changes(&*self.conn())
     }
 
+    pub fn set_archive_transform(&self, transform: &str) -> Result<()> {
+        meta::set_archive_transform(&*self.conn(), transform)
+    }
+
+    pub fn get_archive_transform(&self) -> Result<Option<String>> {
+        meta::get_archive_transform(&*self.conn())
+    }
+
     pub fn sum_canonical_bytes_to_archive(&self, filter_sha: bool) -> Result<u64> {
         tar_writer::sum_canonical_bytes_to_archive(&*self.conn(), filter_sha)
     }
@@ -570,8 +578,10 @@ impl Database {
         batch_size: u64,
         source_id: Option<i64>,
         only_dirs: Option<bool>,
+        only_valid_new_name: bool,
     ) -> Result<Vec<R>> {
-        place::list_materialized_entries(&self.conn(), last_id, batch_size, source_id, only_dirs)
+        place::list_materialized_entries(
+            &self.conn(), last_id, batch_size, source_id, only_dirs, only_valid_new_name)
     }
 
     pub fn insert_out_tree_rows(
