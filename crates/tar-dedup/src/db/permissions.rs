@@ -121,7 +121,7 @@ fn count_out_tree_for_permissions(conn: &Connection, dirs: bool) -> Result<u64> 
             named_params! {
                 ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
                 ":is_dir": OutTreeFlag::IsDirectory.mask_i64(),
-            }
+            },
         )
     } else {
         (
@@ -132,7 +132,7 @@ fn count_out_tree_for_permissions(conn: &Connection, dirs: bool) -> Result<u64> 
                 ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
                 ":error": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
                 ":is_dir": OutTreeFlag::IsDirectory.mask_i64(),
-            }
+            },
         )
     };
     let sql = format!(
