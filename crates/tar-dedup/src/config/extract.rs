@@ -81,6 +81,7 @@ pub struct ExtractConfig {
     pub mode_policy: ModeSource,
     pub strip_components: u32,
     pub transform_policy: TransformSource,
+    pub filter: FilterOptions,
 }
 
 /// Resolve which owner/group policy applies on extract from the CLI args.
@@ -301,6 +302,15 @@ impl ExtractConfig {
             mode_policy,
             strip_components: args.strip_components,
             transform_policy: resolve_transform_policy_from_args(args)?,
+            filter: FilterOptions {
+                exclude_patterns: args.exclude.clone(),
+                include_patterns: args.include.clone(),
+                exclude_from: args.exclude_from.clone(),
+                include_from: args.include_from.clone(),
+                anchored: args.anchored,
+                ignore_case: args.ignore_case,
+                eager_filter: true,
+            },
         })
     }
 
@@ -367,6 +377,15 @@ impl ExtractConfig {
             mode_policy: ModeSource::None,
             strip_components: 0,
             transform_policy: TransformSource::None,
+            filter: FilterOptions {
+                exclude_patterns: Vec::new(),
+                include_patterns: Vec::new(),
+                exclude_from: Vec::new(),
+                include_from: Vec::new(),
+                anchored: false,
+                ignore_case: false,
+                eager_filter: true,
+            },
         }
     }
 
@@ -433,6 +452,15 @@ impl ExtractConfig {
             mode_policy: ModeSource::None,
             strip_components: 0,
             transform_policy: TransformSource::None,
+            filter: FilterOptions {
+                exclude_patterns: Vec::new(),
+                include_patterns: Vec::new(),
+                exclude_from: Vec::new(),
+                include_from: Vec::new(),
+                anchored: false,
+                ignore_case: false,
+                eager_filter: true,
+            },
         }
     }
 
@@ -499,6 +527,15 @@ impl ExtractConfig {
             mode_policy: ModeSource::None,
             strip_components: 0,
             transform_policy: TransformSource::None,
+            filter: FilterOptions {
+                exclude_patterns: Vec::new(),
+                include_patterns: Vec::new(),
+                exclude_from: Vec::new(),
+                include_from: Vec::new(),
+                anchored: false,
+                ignore_case: false,
+                eager_filter: true,
+            },
         }
     }
 }
