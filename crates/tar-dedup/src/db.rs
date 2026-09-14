@@ -96,8 +96,22 @@ impl Database {
         Ok(inserted)
     }
 
-    pub fn add_get_source(&self, abs_path: &Path, source_kind: &str, line: Option<u64>, original_path: Option<&Path>, flags: SourceFlags) -> Result<i64> {
-        source::add_get_source(&*self.conn(), abs_path, source_kind, line, original_path, flags)
+    pub fn add_get_source(
+        &self,
+        abs_path: &Path,
+        source_kind: &str,
+        line: Option<u64>,
+        original_path: Option<&Path>,
+        flags: SourceFlags,
+    ) -> Result<i64> {
+        source::add_get_source(
+            &*self.conn(),
+            abs_path,
+            source_kind,
+            line,
+            original_path,
+            flags,
+        )
     }
 
     pub fn find_overlapping_source(
@@ -181,16 +195,36 @@ impl Database {
         flags::set_out_tree_flag(&*self.conn(), out_id, flag, on)
     }
 
-    pub fn get_entries_to_hash<R: SqlFileRow>(&self, eager_filter: bool, detect_hardlinks: bool) -> Result<Vec<R>> {
+    pub fn get_entries_to_hash<R: SqlFileRow>(
+        &self,
+        eager_filter: bool,
+        detect_hardlinks: bool,
+    ) -> Result<Vec<R>> {
         hash::get_entries_to_hash(&*self.conn(), eager_filter, detect_hardlinks)
     }
 
-    pub fn count_all_hashable_files(&self, eager_filter: bool, detect_hardlinks: bool) -> Result<u64> {
+    pub fn count_all_hashable_files(
+        &self,
+        eager_filter: bool,
+        detect_hardlinks: bool,
+    ) -> Result<u64> {
         hash::count_all_hashable_files(&*self.conn(), eager_filter, detect_hardlinks)
     }
 
-    pub fn update_file_inspection_per_id(&self, file_id: FileId, digest: [u8; 20], sparse_count: u64, update_hardlinks: bool) -> Result<()> {
-        hash::update_file_inspection_per_id(&*self.conn(), file_id, digest, sparse_count, update_hardlinks)
+    pub fn update_file_inspection_per_id(
+        &self,
+        file_id: FileId,
+        digest: [u8; 20],
+        sparse_count: u64,
+        update_hardlinks: bool,
+    ) -> Result<()> {
+        hash::update_file_inspection_per_id(
+            &*self.conn(),
+            file_id,
+            digest,
+            sparse_count,
+            update_hardlinks,
+        )
     }
 
     pub fn pending_duplicate_groups(&self) -> Result<Vec<GroupKey>> {
@@ -228,6 +262,43 @@ impl Database {
         results: I,
     ) -> Result<u64> {
         filter::apply_filter_result(&mut *self.conn_mut(), results)
+    }
+
+    pub fn clear_extract_filters(&self) -> Result<()> {
+        filter::clear_extract_filters(&mut *self.conn_mut())
+    }
+
+    pub fn add_include_pattern_extract(&self, from: &str, line: Option<u64>, query: &str)
+        -> Result<u64> {
+        filter::add_include_pattern_extract(&*self.conn(), from, line, query)
+    }
+
+    pub fn add_exclude_pattern_extract(&self, from: &str, line: Option<u64>, query: &str)
+        -> Result<u64> {
+        filter::add_exclude_pattern_extract(&*self.conn(), from, line, query)
+    }
+
+    pub fn count_filters_extract(&self, exclude: Option<bool>) -> Result<u64> {
+        filter::count_filters_extract(&*self.conn(), exclude)
+    }
+
+    pub fn get_filters_extract(&self, exclude: bool) -> Result<Vec<FilterExpression>> {
+        filter::get_filters_extract(&*self.conn(), exclude)
+    }
+
+    pub fn apply_no_filter_extract(&self) -> Result<u64> {
+        filter::apply_no_filter_extract(&*self.conn())
+    }
+
+    pub fn get_rows_to_filter_extract<R: SqlFileRow>(
+        &self, last_id: Option<FileId>, batch_size: u64)
+        -> Result<Vec<R>> {
+        filter::get_rows_to_filter_extract(&*self.conn(), last_id, batch_size)
+    }
+
+    pub fn apply_filter_result_extract<I: Iterator<Item = (FileId, i64, i64)>>(
+        &self, results: I) -> Result<u64> {
+        filter::apply_filter_result_extract(&mut *self.conn_mut(), results)
     }
 
     pub fn fix_up_canonical_flag(&self) -> Result<(u64, u64)> {
@@ -286,19 +357,11 @@ impl Database {
         dedup::promote_excluded_entries_to_deduped(&self.conn())
     }
 
-        pub fn clear_check_with_canonical_completed(
-        &self,
-        sha1: &[u8; 20],
-        size: u64,
-    ) -> Result<()> {
+    pub fn clear_check_with_canonical_completed(&self, sha1: &[u8; 20], size: u64) -> Result<()> {
         dedup::clear_check_with_canonical_completed(&*self.conn(), sha1, size)
     }
 
-    pub fn promote_errored_pending_to_deduped(
-        &self,
-        sha1: &[u8; 20],
-        size: u64,
-    ) -> Result<u64> {
+    pub fn promote_errored_pending_to_deduped(&self, sha1: &[u8; 20], size: u64) -> Result<u64> {
         dedup::promote_errored_pending_to_deduped(&*self.conn(), sha1, size)
     }
 
@@ -359,10 +422,7 @@ impl Database {
         tar_writer::mark_session_aborted(&*self.conn(), session_id)
     }
 
-    pub fn abort_incomplete_archive_session(
-        &self,
-        session: &ArchiveSession,
-    ) -> Result<()> {
+    pub fn abort_incomplete_archive_session(&self, session: &ArchiveSession) -> Result<()> {
         tar_writer::abort_incomplete_session(&*self.conn(), session)
     }
 
@@ -547,7 +607,10 @@ impl Database {
     }
 
     pub fn list_canonical_files_for_move<R: SqlFileRow>(
-        &self, filter: bool, last_id: FileId, batch_size: u64
+        &self,
+        filter: bool,
+        last_id: FileId,
+        batch_size: u64,
     ) -> Result<Vec<R>> {
         place::list_canonical_files_for_move(&self.conn(), filter, last_id, batch_size)
     }
@@ -592,10 +655,7 @@ impl Database {
             &self.conn(), last_id, batch_size, source_id, only_dirs, only_valid_new_name)
     }
 
-    pub fn insert_out_tree_rows(
-        &self,
-        rows: &[NewOutTreeRow],
-    ) -> Result<Vec<OutTreeId>> {
+    pub fn insert_out_tree_rows(&self, rows: &[NewOutTreeRow]) -> Result<Vec<OutTreeId>> {
         place_prologue::insert_out_tree_rows(&self.conn(), rows)
     }
 
@@ -649,8 +709,7 @@ impl Database {
         place::count_ref_out_rows(&self.conn())
     }
 
-    pub fn list_out_tree_for_linking<R: SqlFileRow>(
-        &self, batch_size: u64, pending: bool)
+    pub fn list_out_tree_for_linking<R: SqlFileRow>(&self, batch_size: u64, pending: bool)
         -> Result<Vec<(R, OutTreeRecord)>> {
         place::list_out_tree_for_linking(&self.conn(), batch_size, pending)
     }
@@ -673,14 +732,12 @@ impl Database {
 
     // --- permissions (metadata restore) ---
 
-    pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(
-        &self, batch_size: u64)
+    pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(&self, batch_size: u64)
         -> Result<Vec<(R, OutTreeRecord)>> {
         permissions::list_out_tree_for_permissions_non_dir::<R>(&self.conn(), batch_size)
     }
 
-    pub fn list_out_tree_for_permissions_dirs<R: SqlFileRow>(
-        &self, batch_size: u64)
+    pub fn list_out_tree_for_permissions_dirs<R: SqlFileRow>(&self, batch_size: u64)
         -> Result<Vec<(Option<R>, OutTreeRecord)>> {
         permissions::list_out_tree_for_permissions_dirs::<R>(&self.conn(), batch_size)
     }
@@ -690,7 +747,7 @@ impl Database {
         permissions::list_canonical_files_for_permissions(&self.conn(), batch_size)
     }
 
-        pub fn count_out_tree_for_permissions(&self) -> Result<u64> {
+    pub fn count_out_tree_for_permissions(&self) -> Result<u64> {
         permissions::count_out_tree_for_permissions_non_dir(&self.conn())
     }
 
@@ -712,13 +769,11 @@ impl Database {
         errors::get_record_by_id(&self.conn(), id)
     }
 
-    pub fn get_records_by_file_id(&self, file_id: FileId)
-        -> Result<Vec<ErrorRecord>> {
+    pub fn get_records_by_file_id(&self, file_id: FileId) -> Result<Vec<ErrorRecord>> {
         errors::get_records_by_file_id(&self.conn(), file_id)
     }
 
-    pub fn get_records_by_out_tree_id(&self, out_tree_id: OutTreeId)
-        -> Result<Vec<ErrorRecord>> {
+    pub fn get_records_by_out_tree_id(&self, out_tree_id: OutTreeId) -> Result<Vec<ErrorRecord>> {
         errors::get_records_by_out_tree_id(&self.conn(), out_tree_id)
     }
 
@@ -741,12 +796,12 @@ impl Database {
     }
 
     // --- integrity checks across the database
-    
+
     pub fn count_missing_dev_inode(&self) -> Result<u64> {
         integrity::count_missing_dev_inode(&self.conn())
     }
-    pub fn list_missing_dev_inode<R: SqlFileRow>(
-        &self, last_id: &FileId, batch_size: u64) -> Result<Vec<R>> {
+    pub fn list_missing_dev_inode<R: SqlFileRow>(&self, last_id: &FileId, batch_size: u64)
+        -> Result<Vec<R>> {
         integrity::list_missing_dev_inode(&self.conn(), last_id, batch_size)
     }
     pub fn count_double_canonical_dev_inode_group(&self) -> Result<u64> {
