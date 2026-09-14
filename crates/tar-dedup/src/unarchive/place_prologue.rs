@@ -13,6 +13,7 @@ use std::path::{Component, Path, PathBuf};
 use path_clean::PathClean;
 
 use crate::cli::HardLinkGrouping;
+use crate::common::transform::{TransformExpr, TransformSource, parse_transform_expr};
 use crate::config::ExtractConfig;
 use crate::db::flags::{OutTreeFlag, OutTreeFlags};
 use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, StrippedRecord};
@@ -27,11 +28,15 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     if db.placement_prologue_done()? {
         return Ok(());
     }
-    if config.strip_components > 0 {
-        populate_new_names(db, config, shutdown)?;
+    let transform = resolve_transform(config, db)?;
+    // Use the renamed member when a transform or strip is active; otherwise build
+    // the out_tree from `abs_path` as before.
+    let use_new_name = transform.is_some() || config.strip_components > 0;
+    if use_new_name {
+        populate_new_names(db, config, shutdown, transform.as_ref())?;
     }
     if !db.out_tree_is_built()? {
-        populate_out_tree(db, config, shutdown)?;
+        populate_out_tree(db, config, shutdown, use_new_name)?;
     }
     // Canonical election is DB-only however meaningless in `--link-tree` mode
     // (same branch as the pre-refactor `place::run`).
@@ -43,6 +48,18 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
 }
 
 /// Populate `files.new_name` with the member-relative stripped name. Recomputed
+/// Resolve the effective transform from the CLI policy / archived meta.
+fn resolve_transform(config: &ExtractConfig, db: &Database) -> Result<Option<TransformExpr>> {
+    match &config.transform_policy {
+        TransformSource::None => Ok(None),
+        TransformSource::Cli(expr) => parse_transform_expr(expr).map(Some),
+        TransformSource::Stored => match db.get_archive_transform()? {
+            Some(expr) => parse_transform_expr(&expr).map(Some),
+            None => Ok(None),
+        },
+    }
+}
+/// Populate `files.new_name` with the member-relative record name. Recomputed
 /// from `abs_path` on every prologue run (never chains onto an already-mapped
 /// `new_name`), so re-running with the same or changed `--strip-components` is
 /// deterministic. The strip happens strictly on the relative member, i.e. AFTER
