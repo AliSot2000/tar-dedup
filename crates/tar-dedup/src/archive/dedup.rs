@@ -52,10 +52,7 @@ enum GroupPrep {
 }
 
 /// Build ComparePair struct from two
-fn compare_pair(
-    canonical: &StrippedRecord,
-    candidate: &StrippedRecord,
-) -> ComparePair {
+fn compare_pair(canonical: &StrippedRecord, candidate: &StrippedRecord) -> ComparePair {
     ComparePair {
         canonical_id: canonical.id,
         canonical_path: canonical.abs_path.to_path_buf(),
@@ -176,7 +173,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     //  - NOT (ftype IS NULL OR ftype != 'file')
     //  - sha1 IS NOT NULL
     //  - phase = 'filtered'
-    //  - include_reason < 0 AND exclude_reason = 0
+    //  - include_reason_archive < 0 AND exclude_reason_archive = 0
 
     // Get actual number of our candidates.
     let candidates = db.count_files_in_phase(FilePhase::Filtered)?;
@@ -239,23 +236,20 @@ fn run_pool(
         let mut pairs: Vec<ComparePair> = Vec::new();
         let mut groups_needing_end: Vec<GroupKey> = Vec::new();
 
-        let next_state = prepare_round(
-            &mut pairs, &mut groups_needing_end,
-            bar, db, config,
-        )?;
-        match next_state{
+        let next_state = prepare_round(&mut pairs, &mut groups_needing_end, bar, db, config)?;
+        match next_state {
             (true, false) => break,
             (false, true) => continue,
-            (false, false) => {},
-            (true, true) => panic!("prepare_round returned (true, true). \
-            All other possible values allowed. Invariant violated.")
+            (false, false) => (),
+            (true, true) => panic!(
+                "prepare_round returned (true, true). \
+            All other possible values allowed. Invariant violated."),
         }
 
         let shutdown_workers = shutdown.clone();
         let results = Mutex::new(Vec::<CompareOutcome>::with_capacity(pairs.len()));
         // time checked = tc
-        let tc_pair_iter = PreYield::new(pairs.iter(),
-                                         warn_compare_pair_times);
+        let tc_pair_iter = PreYield::new(pairs.iter(), warn_compare_pair_times);
 
         let parallel = pool.install(|| {
             tc_pair_iter
@@ -313,8 +307,8 @@ fn prepare_round(
     groups_needing_end: &mut Vec<GroupKey>,
     bar: &CountProgress,
     db: &Database,
-    config: &ArchiveConfig
-) -> Result<(bool, bool)> {
+    config: &ArchiveConfig)
+    -> Result<(bool, bool)> {
 
     let mut errored_only_groups: Vec<GroupKey> = Vec::new();
     let mut did_work = false;
@@ -331,9 +325,7 @@ fn prepare_round(
             GroupPrep::ErroredOnly { key } => {
                 errored_only_groups.push(key);
             }
-            GroupPrep::Ready {
-                canonical, candidates, key,
-            } => {
+            GroupPrep::Ready { canonical, candidates, key } => {
                 // Generate Candidates
                 for cand in &candidates {
                     pairs.push(compare_pair(&canonical, cand));
@@ -366,7 +358,7 @@ fn prepare_round(
         }
         if !did_work {
             // break
-            return Ok((true, false))
+            return Ok((true, false));
         }
         // continue
         return Ok((false, true));
@@ -378,8 +370,7 @@ fn prepare_round(
 fn load_pending_groups(db: &Database) -> Result<Vec<(GroupKey, Vec<StrippedRecord>)>> {
     let mut groups = Vec::new();
     for key in db.pending_duplicate_groups()? {
-        let members: Vec<StrippedRecord> =
-            db.list_filtered_in_group(&key.sha1, key.size)?;
+        let members: Vec<StrippedRecord> = db.list_filtered_in_group(&key.sha1, key.size)?;
         if members.is_empty() {
             continue;
         }
@@ -404,18 +395,13 @@ fn establish_group_state(
     }
 
     // Active canonical already in this round, or elect the lowest-id electable member.
-    let canonical = if let Some(i) = members
-        .iter()
-        .position(|m| m.canonical_id == Some(m.id))
-    {
+    let canonical = if let Some(i) = members.iter().position(|m| m.canonical_id == Some(m.id)) {
         members.swap_remove(i)
     } else {
         let elect = members
             .iter()
             .enumerate()
-            .filter(|(_, m)| {
-                m.canonical_id.is_none() && !m.flags.get(FileFlag::ErrorWhileDedup)
-            })
+            .filter(|(_, m)| m.canonical_id.is_none() && !m.flags.get(FileFlag::ErrorWhileDedup))
             .min_by_key(|(_, m)| m.id.0)
             .map(|(i, _)| i);
 
