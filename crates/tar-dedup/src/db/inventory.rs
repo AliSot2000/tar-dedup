@@ -28,7 +28,8 @@ pub fn abs_path_exists(conn: &Connection, path: &Path) -> Result<bool> {
 
 pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
     debug_assert!(record.abs_path.is_absolute(), "Only abs_paths allowed in db");
-    debug_assert_eq!(record.abs_path, record.abs_path.to_path_buf().clean(),
+    debug_assert_eq!(record.abs_path,
+                     record.abs_path.to_path_buf().clean(),
                      "Paths must be normalized to enter the db");
 
     let changed = conn.execute(
@@ -73,9 +74,8 @@ pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
     let Some(phase) = meta::get_archive_phase(conn)? else {
         return Ok(None);
     };
-    let max_workers = meta::get_archive_max_workers(conn)?.ok_or_else(|| {
-        crate::error::Error::Config("missing archive_max_workers in meta".into())
-    })?;
+    let max_workers = meta::get_archive_max_workers(conn)?
+        .ok_or_else(|| crate::error::Error::Config("missing archive_max_workers in meta".into()))?;
     let snapshot_taken_at = meta::get_archive_snapshot_taken_at(conn)?.ok_or_else(|| {
         crate::error::Error::Config("missing archive_snapshot_taken_at in meta".into())
     })?;
@@ -116,21 +116,25 @@ fn get_all_gids(conn: &Connection) -> Result<Vec<u32>> {
 
 /// Update all rows where uid matches given `uid` and set username column to `uname`
 fn set_uname_from_uid(conn: &Connection, uid: &u32, uname: &str) -> Result<()> {
-    conn.execute("UPDATE files SET username = :username WHERE uid = :uid",
-                 named_params! {
-        ":uid": uid,
-        ":username": uname,
-    })?;
+    conn.execute(
+        "UPDATE files SET username = :username WHERE uid = :uid",
+        named_params! {
+            ":uid": uid,
+            ":username": uname,
+        },
+    )?;
     Ok(())
 }
 
 /// Update all rows where gid matches given `gid` and set groupname column to `gname`
 fn set_gname_from_gid(conn: &Connection, gid: &u32, gname: &str) -> Result<()> {
-    conn.execute("UPDATE files SET groupname = :groupname WHERE gid = :gid",
-                 named_params! {
-        ":gid": gid,
-        ":groupname": gname,
-    })?;
+    conn.execute(
+        "UPDATE files SET groupname = :groupname WHERE gid = :gid",
+        named_params! {
+            ":gid": gid,
+            ":groupname": gname,
+        },
+    )?;
     Ok(())
 }
 
@@ -165,14 +169,14 @@ pub fn resolve_numeric_ids(conn: &Connection, recorder: &mut Recorder) -> Result
     // Get all present uids and gids
     let uids = get_all_uids(&conn)?;
     let gids = get_all_gids(&conn)?;
-    
+
     let mut capture_error = |error| {
         recorder.record_session(
             ERROR_PHASE,
             FileStatError::Nix {path: PathBuf::new(), source: error},
             ErrorFlags::default());
     };
-    
+
     // Resolve uids and gids.
     let resolves_names: Vec<Option<String>> = uids
         .iter()
@@ -183,7 +187,7 @@ pub fn resolve_numeric_ids(conn: &Connection, recorder: &mut Recorder) -> Result
                     tracing::error!("Error while resolving uid {uid}: {e}");
                     capture_error(e);
                     None
-                },
+                }
             };
             resolved_user
         }).collect();
@@ -202,14 +206,14 @@ pub fn resolve_numeric_ids(conn: &Connection, recorder: &mut Recorder) -> Result
         }).collect();
 
     // Set the names now from lookup array.
-    for (uid, o_uname) in zip(uids.iter(), resolves_names.iter()){
+    for (uid, o_uname) in zip(uids.iter(), resolves_names.iter()) {
         if o_uname.is_none() {
             tracing::warn!("Could not resolve {uid} to username");
             continue;
         }
         set_uname_from_uid(&conn, uid, o_uname.as_ref().unwrap())?;
     }
-    for (gid, o_gname) in zip(gids.iter(), resolved_groups.iter()){
+    for (gid, o_gname) in zip(gids.iter(), resolved_groups.iter()) {
         if o_gname.is_none() {
             tracing::warn!("Could not resolve {gid} to groupname");
             continue;
@@ -229,9 +233,9 @@ pub fn resolve_numeric_ids(_conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Database;
     use crate::db::flags::{SourceFlag, SourceFlags};
     use crate::db::types::{FileRecord, FileType};
-    use crate::db::Database;
     use std::path::{Path, PathBuf};
 
     fn record(path: &str) -> NewFileRecord {
