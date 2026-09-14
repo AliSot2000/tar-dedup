@@ -4,6 +4,7 @@ pub mod cleanup;
 pub mod files;
 pub mod perms;
 pub mod start;
+pub mod transform;
 pub mod xattr;
 
 use crate::error::Result;
