@@ -6,8 +6,8 @@
 //! [`RecordDraft`]s and flushes them in a single transaction at a batch/phase boundary.
 //! `--no-errors` gates recording via `Recorder::enabled`.
 
-use chrono::{DateTime, Utc, ParseError};
-use rusqlite::{Connection, named_params, OptionalExtension};
+use chrono::{DateTime, ParseError, Utc};
+use rusqlite::{Connection, OptionalExtension, named_params};
 use std::path::PathBuf;
 
 use crate::config::{ExtractPipelinePhase, PipelinePhase};
