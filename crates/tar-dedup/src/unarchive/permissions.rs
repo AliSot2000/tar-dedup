@@ -15,7 +15,7 @@ use crate::common::xattr::{set_file_acl, set_file_selinux_data, set_file_xattrs}
 use crate::config::ExtractConfig;
 use crate::config::ExtractPipelinePhase;
 use crate::db::Database;
-use crate::db::flags::{ErrorFlags, OutTreeFlag};
+use crate::db::flags::{ErrorFlags, FileFlag, OutTreeFlag};
 use crate::db::types::{FileRecord, FileType, OutTreeRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
@@ -74,9 +74,17 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         },
     };
 
-    // Files (and non-directory entries) first.
-    process_batches(
-        &mut recorder, phase, config, db, shutdown, policy.as_ref(), mode_changes.as_ref(), false)?;
+    let ps = OwnerGroupMode {
+        ogp: policy,
+        mp: mode_changes
+    };
+
+    if config.placement.link_tree {
+        apply_permissions_link_sources(&config, &db, &mut recorder, &shutdown, &ps)?;
+    } else {
+        // Files (and non-directory entries) first.
+        process_batches(&mut recorder, config, db, shutdown, &ps, false)?;
+    }
 
     // Directories, only when `--overwrite-dir` is requested.
     if config.attributes.force_overwrite_dir {
