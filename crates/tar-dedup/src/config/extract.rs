@@ -5,17 +5,18 @@ use crate::common::perms::{
     MapResolutionTarget, ModeSource, OwnerGroupSource, infer_same_owner, parse_mode_changes,
     parse_owner_group_args, validate_for_mode,
 };
-use crate::common::transform::{TransformSource, parse_transform_expr};
 use crate::common::start::StartPolicy;
+use crate::common::transform::{TransformSource, parse_transform_expr};
 use crate::error::{Error, Result};
 
 use super::compression::infer_compression_from_suffix;
 use super::paths::PathLayout;
 use super::process::{CleanupSettings, ProcessOptions};
 use super::{
-    ExtractStageLocation,
-    default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_file,
+    ExtractStageLocation, default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path,
+    validate_file,
 };
+use crate::config::FilterOptions;
 
 #[derive(Debug, Clone)]
 pub struct PlacementOptions {
