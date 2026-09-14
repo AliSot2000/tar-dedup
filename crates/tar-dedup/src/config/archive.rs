@@ -5,7 +5,7 @@ use crate::common::files::directory_roots_overlap;
 use crate::common::start::StartPolicy;
 use crate::error::{Error, Result};
 
-use super::compression::{resolve_compression, CompressionSettings};
+use super::compression::{CompressionSettings, resolve_compression};
 use super::paths::{PathLayout, PathSource};
 use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
 use super::{
@@ -108,7 +108,7 @@ impl ArchiveConfig {
                 "at least one of `-i`/`--input-dir` or `-T`/`--files-from` is required".into(),
             ));
         }
-        
+
         // TODO rethink accepted roots.
         let mut input_dirs = Vec::with_capacity(args.input_dirs.len());
         let mut accepted_roots: Vec<PathBuf> = Vec::with_capacity(args.input_dirs.len());
