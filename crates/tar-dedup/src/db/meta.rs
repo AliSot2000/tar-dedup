@@ -161,9 +161,9 @@ impl MetaEntry {
             Self::ArchivePhase(v) => v.as_str().to_string(),
             Self::ArchiveSnapshotTakenAt(v) => v.to_rfc3339(),
             Self::ArchiveMaxWorkers(v) => v.to_string(),
-            Self::TarWriterBytesIn(v) | Self::TarWriterBytesOut(v) | Self::ScanTarLastMemberIndex(v) => {
-                v.to_string()
-            }
+            Self::TarWriterBytesIn(v)
+            | Self::TarWriterBytesOut(v)
+            | Self::ScanTarLastMemberIndex(v) => v.to_string(),
             Self::ExtractPhase(v) => v.as_str().to_string(),
             Self::ExtractSnapshotsIngested(v) => v.to_string(),
             Self::ScanTarSawManifestDb(v)
@@ -172,11 +172,10 @@ impl MetaEntry {
             | Self::ScanTarFromFooter(v)
             | Self::OutTreeBuilt(v)
             | Self::DirTreeBuilt(v)
-            | Self::PlacementPrologueDone(v) => {
-                if *v { "1" } else { "0" }.to_string()
+            | Self::PlacementPrologueDone(v) => if *v { "1" } else { "0" }.to_string(),
+            Self::ArchiveOwnerPolicy(v) => {
+                serde_json::to_string(v).expect("owner/group policy serializable")
             }
-            Self::ArchiveOwnerPolicy(v) => serde_json::to_string(v)
-                .expect("owner/group policy serializable"),
             Self::ArchiveModeChanges(v) => v.clone(),
             Self::ArchiveTransform(v) => v.clone(),
         }
@@ -215,14 +214,12 @@ impl MetaEntry {
             }
             MetaKey::OutTreeBuilt => Ok(Self::OutTreeBuilt(parse_bool(key, raw)?)),
             MetaKey::DirTreeBuilt => Ok(Self::DirTreeBuilt(parse_bool(key, raw)?)),
-            MetaKey::PlacementPrologueDone => Ok(Self::PlacementPrologueDone(parse_bool(key, raw)?)),
+            MetaKey::PlacementPrologueDone => {
+                Ok(Self::PlacementPrologueDone(parse_bool(key, raw)?))
+            }
             MetaKey::ArchiveOwnerPolicy => serde_json::from_str(raw)
                 .map(Self::ArchiveOwnerPolicy)
-                .map_err(|_| {
-                    Error::Config(format!(
-                        "invalid archive_owner_policy meta: {raw}"
-                    ))
-                }),
+                .map_err(|_| Error::Config(format!("invalid archive_owner_policy meta: {raw}"))),
             MetaKey::ArchiveModeChanges => Ok(Self::ArchiveModeChanges(raw.to_string())),
             MetaKey::ArchiveTransform => Ok(Self::ArchiveTransform(raw.to_string())),
         }
@@ -241,9 +238,8 @@ fn parse_bool(key: MetaKey, raw: &str) -> Result<bool> {
 }
 
 fn parse_u64(key: MetaKey, raw: &str) -> Result<u64> {
-    raw.parse().map_err(|_| {
-        Error::Config(format!("invalid u64 meta `{}`: {raw}", key.as_str()))
-    })
+    raw.parse()
+        .map_err(|_| Error::Config(format!("invalid u64 meta `{}`: {raw}", key.as_str())))
 }
 
 /// Run `f` inside a transaction. `f` receives `&Connection` (the transaction
@@ -267,12 +263,14 @@ fn get_typed<T>(
         None => Ok(None),
         Some(raw) => {
             let entry = MetaEntry::decode(key, &raw)?;
-            extract(entry).ok_or_else(|| {
-                Error::Config(format!(
-                    "internal meta type mismatch for `{}`",
-                    key.as_str()
-                ))
-            }).map(Some)
+            extract(entry)
+                .ok_or_else(|| {
+                    Error::Config(format!(
+                        "internal meta type mismatch for `{}`",
+                        key.as_str()
+                    ))
+                })
+                .map(Some)
         }
     }
 }
@@ -604,10 +602,11 @@ mod tests {
         );
 
         let dump = dump_meta(&conn).unwrap();
-        assert!(dump
-            .known
-            .iter()
-            .any(|e| matches!(e, MetaEntry::ArchiveModeChanges(v) if v == "u+rwx,go-rx")));
+        assert!(
+            dump.known
+                .iter()
+                .any(|e| matches!(e, MetaEntry::ArchiveModeChanges(v) if v == "u+rwx,go-rx"))
+        );
         assert!(dump.unknown_keys.is_empty());
         assert!(dump.invalid.is_empty());
     }
@@ -625,10 +624,11 @@ mod tests {
         assert_eq!(get_placement_prologue_done(&conn).unwrap(), Some(false));
 
         let dump = dump_meta(&conn).unwrap();
-        assert!(dump
-            .known
-            .iter()
-            .any(|e| matches!(e, MetaEntry::PlacementPrologueDone(false))));
+        assert!(
+            dump.known
+                .iter()
+                .any(|e| matches!(e, MetaEntry::PlacementPrologueDone(false)))
+        );
         assert!(dump.unknown_keys.is_empty());
         assert!(dump.invalid.is_empty());
     }
@@ -646,11 +646,12 @@ mod tests {
         );
 
         let dump = dump_meta(&conn).unwrap();
-        assert!(dump
-            .known
-            .iter()
-            .any(|e| matches!(e, MetaEntry::ArchiveTransform(v)
-                if v == "s,^usr/,var/,")));
+        assert!(
+            dump.known
+                .iter()
+                .any(|e| matches!(e, MetaEntry::ArchiveTransform(v)
+                if v == "s,^usr/,var/,"))
+        );
         assert!(dump.unknown_keys.is_empty());
         assert!(dump.invalid.is_empty());
     }
