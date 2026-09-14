@@ -30,7 +30,7 @@ use std::time::SystemTime;
 const BATCH_SIZE: u64 = 10_000;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Permissions);
 
-struct OwnerGroupMode {
+pub struct OwnerGroupMode {
     /// Capture the OwnerGroupPolicy that might need to be routet through the functions to make it a slimmer fujnction call
     ogp: Option<OwnerGroupPolicy>,
     mp: Option<file_mode::Mode>,
