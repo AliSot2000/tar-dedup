@@ -148,14 +148,21 @@ pub fn set_hardlink_canonicals(conn: &Connection) -> Result<u64> {
 }
 
 #[cfg(unix)]
-pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
+pub fn resolve_numeric_ids(conn: &Connection, recorder: &mut Recorder) -> Result<()> {
     use nix::libc::{gid_t, uid_t};
     use nix::unistd::{Gid, Group, Uid, User};
 
     // Get all present uids and gids
     let uids = get_all_uids(&conn)?;
     let gids = get_all_gids(&conn)?;
-
+    
+    let mut capture_error = |error| {
+        recorder.record_session(
+            ERROR_PHASE,
+            FileStatError::Nix {path: PathBuf::new(), source: error},
+            ErrorFlags::default());
+    };
+    
     // Resolve uids and gids.
     let resolves_names: Vec<Option<String>> = uids
         .iter()
@@ -163,7 +170,8 @@ pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
             let resolved_user = match User::from_uid(Uid::from_raw(uid.clone() as uid_t)) {
                 Ok(u) => u.map(|u| u.name),
                 Err(e) => {
-                    println!("Error while resolving uid {uid}: {e}");
+                    tracing::error!("Error while resolving uid {uid}: {e}");
+                    capture_error(e);
                     None
                 },
             };
@@ -175,7 +183,8 @@ pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
             let resolved_group = match Group::from_gid(Gid::from_raw(gid.clone() as gid_t)) {
                 Ok(g) => g.map(|g| g.name),
                 Err(e) => {
-                    println!("Error while resolving gid {gid}: {e}");
+                    tracing::error!("Error while resolving gid {gid}: {e}");
+                    capture_error(e);
                     None
                 }
             };
@@ -183,17 +192,16 @@ pub fn resolve_numeric_ids(conn: &Connection) -> Result<()> {
         }).collect();
 
     // Set the names now from lookup array.
-    // TODO no more println
     for (uid, o_uname) in zip(uids.iter(), resolves_names.iter()){
         if o_uname.is_none() {
-            println!("Could not resolve {uid} to username");
+            tracing::warn!("Could not resolve {uid} to username");
             continue;
         }
         set_uname_from_uid(&conn, uid, o_uname.as_ref().unwrap())?;
     }
     for (gid, o_gname) in zip(gids.iter(), resolved_groups.iter()){
         if o_gname.is_none() {
-            println!("Could not resolve {gid} to groupname");
+            tracing::warn!("Could not resolve {gid} to groupname");
             continue;
         }
         set_gname_from_gid(&conn, gid, o_gname.as_ref().unwrap())?;
