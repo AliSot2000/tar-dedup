@@ -172,3 +172,25 @@ pub fn apply_permissions_flags_to_files(conn: &Connection) -> Result<(u64, u64)>
     )?;
     Ok((applied as u64, errored as u64))
 }
+
+/// List the canonical files in the link destination which were moved there successfully and set the PermissionsApplied flag (since t
+pub fn list_canonical_files_for_permissions<R: SqlFileRow>(conn: &Connection, batch_size: u64) 
+    -> Result<Vec<R>> {
+    let cols = R::sql_columns(None);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {cols} FROM files
+         WHERE flags & :at_dst != 0
+            AND flags & :perm_applied = 0
+            AND flags & :perm_err = 0
+            LIMIT :batch_size"
+    ))?;
+    let rows = stmt.query_map(
+        named_params! {
+            ":at_dst": FileFlag::AtLinkSource.mask_i64(),
+            ":perm_applied": FileFlag::AppliedMetadata.mask_i64(),
+            ":perm_err": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
+            ":batch_size": batch_size},
+        |row| R::from_row(row, None)
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
