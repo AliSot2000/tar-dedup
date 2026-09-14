@@ -16,7 +16,14 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS filter_reason (
+CREATE TABLE IF NOT EXISTS filter_reason_archive (
+    id     INTEGER PRIMARY KEY CHECK (id > -9223372036854775807), -- rule >= 0 exclude, < 0 include rule
+    source TEXT NOT NULL, -- e.g. --exclude=some-\regex-pattern or --exclude-from=path-to-file, line
+    line   INTEGER, -- for include/exclude arguments this is the index --exclude=<ptrn>:0 --exclude=<other-ptrn>:1
+    expression TEXT NOT NULL -- actual regex expression to match against
+);
+
+CREATE TABLE IF NOT EXISTS filter_reason_extract (
     id     INTEGER PRIMARY KEY CHECK (id > -9223372036854775807), -- rule >= 0 exclude, < 0 include rule
     source TEXT NOT NULL, -- e.g. --exclude=some-\regex-pattern or --exclude-from=path-to-file, line
     line   INTEGER, -- for include/exclude arguments this is the index --exclude=<ptrn>:0 --exclude=<other-ptrn>:1
@@ -66,8 +73,10 @@ CREATE TABLE IF NOT EXISTS files (
 
     -- Internal Stuff
     sparse_count   INTEGER DEFAULT 0,
-    include_reason INTEGER REFERENCES filter_reason(id) DEFAULT 0,
-    exclude_reason INTEGER REFERENCES filter_reason(id) DEFAULT 0,
+    include_reason_archive   INTEGER REFERENCES filter_reason_archive(id) DEFAULT 0,
+    exclude_reason_archive   INTEGER REFERENCES filter_reason_archive(id) DEFAULT 0,
+    include_reason_extract   INTEGER REFERENCES filter_reason_extract(id) DEFAULT 0,
+    exclude_reason_extract   INTEGER REFERENCES filter_reason_extract(id) DEFAULT 0,
     canonical_id   INTEGER REFERENCES files(id),
     phase          TEXT NOT NULL DEFAULT 'inventoried',
     flags          INTEGER NOT NULL DEFAULT 0
@@ -133,6 +142,7 @@ CREATE TABLE IF NOT EXISTS archive_sessions (
     finished_at    TEXT
 );
 
--- Add dummy row
-INSERT OR IGNORE INTO filter_reason (id, source, line, expression) VALUES (0, 'internal', NULL, '*');
+-- Add dummy rows
+INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) VALUES (0, 'internal', NULL, '.*');
+INSERT OR IGNORE INTO filter_reason_extract (id, source, line, expression) VALUES (0, 'internal', NULL, '.*');
 ";
