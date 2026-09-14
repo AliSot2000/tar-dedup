@@ -162,6 +162,38 @@ fn process_batches(
     Ok(())
 }
 
+/// Apply the metadata to the files which were copied to the link source which are used as targets
+/// for the links in link_tree
+pub fn apply_permissions_link_sources(
+    config: &ExtractConfig, db: &Database, rec: &mut Recorder, shutdown: &Shutdown,
+    ps: &OwnerGroupMode)
+    -> Result<()> {
+    let dir_name = match &config.placement.link_source {
+        None => PathBuf::from(".sources"),
+        Some(v) => v.to_path_buf(),
+    };
+    let base_dir = config.paths.extraction_root().join(dir_name);
+    loop {
+        shutdown.check_between_files()?;
+
+        let files: Vec<FileRecord> =  db.list_canonical_files_for_permissions(BATCH_SIZE)?;
+        for file in files {
+            let id = file.content_id().expect("Copied requires content_id to exist");
+            let tgt_path = base_dir.join(id.0);
+            let errs = apply_one(&config, &file, &tgt_path, &ps);
+
+            if errs.is_empty() {
+                db.set_file_flag(file.id, FileFlag::AppliedMetadata, true)?;
+            } else {
+                for err in errs {
+                    rec.record_file(file.id, ERROR_PHASE, err, ErrorFlags::default());
+                    db.set_file_flag(file.id, FileFlag::ErrorWhileApplyingMetadata, true)?;
+                }
+            }
+        }
+    }
+}
+
 /// Apply metadata for a single canonical `Placed` row. Errors are collected and
 /// returned (never early-aborted) so a single row reports all application failures.
 fn apply_one(
