@@ -1,8 +1,8 @@
-use rusqlite::{Connection, named_params};
-use crate::db::flags::FileFlag;
 use crate::db::SqlFileRow;
+use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilterExpression};
 use crate::error::Result;
+use rusqlite::{Connection, named_params};
 
 const FILTER_ROWS: &str = "id, source, line, expression";
 
