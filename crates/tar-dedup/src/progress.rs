@@ -118,6 +118,13 @@ fn truncate_middle(s: &str, max_chars: usize) -> String {
     }
     let keep = max_chars.saturating_sub(1) / 2;
     let prefix: String = s.chars().take(keep).collect();
-    let suffix: String = s.chars().rev().take(keep).collect::<Vec<_>>().into_iter().rev().collect();
+    let suffix: String = s
+        .chars()
+        .rev()
+        .take(keep)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{prefix}…{suffix}")
 }
