@@ -38,7 +38,7 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
     let mut threads = requested;
     let mut memusage = mt_memusage(threads, preset);
 
-    eprintln!(
+    tracing::error!(
         "xz: {} of memory is required for preset -{}{} with {} thread(s).",
         format_mib(memusage),
         level,
@@ -47,7 +47,7 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
     );
 
     if let Some(limit) = memlimit {
-        eprintln!("xz: the memory limit is {}.", format_mib(limit));
+        tracing::error!("xz: the memory limit is {}.", format_mib(limit));
         while memusage > limit && threads > 1 {
             threads -= 1;
             memusage = mt_memusage(threads, preset);
@@ -62,16 +62,16 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
             )));
         }
         if threads < requested {
-            eprintln!(
+            tracing::error!(
                 "xz: reduced threads from {requested} to {threads} to stay within the {} limit",
                 format_mib(limit)
             );
         }
     } else {
-        eprintln!("xz: memory limiter disabled (use --memlimit-compress to cap usage).");
+        tracing::error!("xz: memory limiter disabled (use --memlimit-compress to cap usage).");
         if let Some(ram) = physical_ram_bytes() {
             if memusage > ram {
-                eprintln!(
+                tracing::error!(
                     "xz: warning: estimated need ({}) exceeds physical RAM ({})",
                     format_mib(memusage),
                     format_mib(ram)
@@ -118,9 +118,8 @@ fn physical_ram_bytes() -> Option<u64> {
 
 /// Compress bytes for the archive footer (single-threaded `xz -10 -e`, CRC64).
 pub fn compress_footer_bytes(input: &[u8]) -> Result<Vec<u8>> {
-    let stream = Stream::new_easy_encoder(FOOTER_XZ_PRESET, Check::Crc64).map_err(|e| {
-        Error::Other(anyhow::anyhow!("xz footer encoder: {e}"))
-    })?;
+    let stream = Stream::new_easy_encoder(FOOTER_XZ_PRESET, Check::Crc64)
+        .map_err(|e| Error::Other(anyhow::anyhow!("xz footer encoder: {e}")))?;
     let mut out = Vec::new();
     let mut enc = XzEncoder::new_stream(&mut out, stream);
     enc.write_all(input)
@@ -165,7 +164,9 @@ impl<W: Write> InterruptibleXzEncoder<W> {
             .check(Check::Crc64);
 
         let stream = builder.encoder().map_err(|e| {
-            Error::Other(anyhow::anyhow!("xz multithreaded encoder ({threads} threads): {e}"))
+            Error::Other(anyhow::anyhow!(
+                "xz multithreaded encoder ({threads} threads): {e}"
+            ))
         })?;
 
         Ok((
@@ -187,7 +188,10 @@ impl<W: Write> InterruptibleXzEncoder<W> {
         while !self.buf.is_empty() {
             let n = self.obj.as_mut().unwrap().write(&self.buf)?;
             if n == 0 {
-                return Err(io::Error::new(io::ErrorKind::WriteZero, "xz output stalled"));
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "xz output stalled",
+                ));
             }
             self.buf.drain(..n);
         }
