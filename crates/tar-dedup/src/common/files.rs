@@ -306,7 +306,7 @@ fn resolve_relative(link_path: &Path, target: &Path) -> PathBuf {
 
 #[cfg(unix)]
 pub fn determine_file_type(md: &fs::Metadata, path: &Path)
-                       -> std::result::Result<FileType, (FileType, PathBuf, io::Error)> {
+    -> std::result::Result<FileType, (FileType, PathBuf, io::Error)> {
     use std::os::unix::fs::FileTypeExt;
 
     // walkdir::DirEntry::file_type() is infallible.
@@ -335,7 +335,7 @@ pub fn determine_file_type(md: &fs::Metadata, path: &Path)
 
 #[cfg(windows)]
 fn determine_file_type(md: &fs::Metadata, path: &Path)
-                       -> std::result::Result<FileType, (FileType, PathBuf, io::Error)> {
+    -> std::result::Result<FileType, (FileType, PathBuf, io::Error)> {
     // walkdir::DirEntry::file_type() is infallible.
     let ft = md.file_type();
 
@@ -400,7 +400,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("src.bin");
         let dst = dir.path().join("dst.bin");
-        let payload: Vec<u8> = (0..COPY_STEP_SIZE as usize + 123).map(|i| (i % 251) as u8).collect();
+        let payload: Vec<u8> = (0..COPY_STEP_SIZE as usize + 123)
+            .map(|i| (i % 251) as u8)
+            .collect();
         fs::write(&src, &payload).expect("write src");
 
         copy_file_batched(&src, &dst, || false).expect("copy");
