@@ -78,7 +78,8 @@ fn populate_new_names(
         loop {
             shutdown.check_in_flight()?;
             let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-                last_id, BATCH_SIZE, None, None, false)?;
+                last_id, BATCH_SIZE, None, None, false
+            )?;
             if entries.is_empty() { break }
             last_id = entries.last().expect("non-empty batch").id;
 
@@ -92,7 +93,7 @@ fn populate_new_names(
         let mut last_source_id = 0i64;
         loop {
             let sources = db.list_sources(None, last_source_id, BATCH_SIZE)?;
-            if sources.is_empty() { break }
+            if sources.is_empty() { break; }
             last_source_id = sources.last().expect("non-empty batch").id;
 
             for source in sources {
@@ -102,8 +103,9 @@ fn populate_new_names(
                 loop {
                     shutdown.check_in_flight()?;
                     let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-                        last_id, BATCH_SIZE, Some(source.id), None, false)?;
-                    if entries.is_empty() { break }
+                        last_id, BATCH_SIZE, Some(source.id), None, false,
+                    )?;
+                    if entries.is_empty() { break; }
                     last_id = entries.last().expect("non-empty batch").id;
 
                     apply_renames(db, &entries, strip, transform, |abs: &Path| {
@@ -162,10 +164,11 @@ fn prepare_hardlink_canonicals(config: &ExtractConfig, db: &Database) -> Result<
             let mut sum = 0u64;
             loop {
                 let sources = db.list_sources(None, last_id, BATCH_SIZE)?;
-                if sources.is_empty() { break }
+                if sources.is_empty() { break; }
                 last_id = sources
                     .last()
-                    .expect("PRECONDITION FAILED: At least one element expected").id;
+                    .expect("PRECONDITION FAILED: At least one element expected")
+                    .id;
 
                 for source in sources {
                     sum += db.mark_source_canonical(source.id)?;
@@ -216,13 +219,15 @@ fn populate_out_tree_abs(
     loop {
         shutdown.check_in_flight()?;
         let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-            last_id, BATCH_SIZE, None, None, use_new_name)?;
-        if entries.is_empty() { break }
+            last_id, BATCH_SIZE, None, None, use_new_name
+        )?;
+        if entries.is_empty() { break; }
         last_id = entries.last().expect("non-empty batch").id;
 
         // Process the entries
         let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-            &entries, &root, None, use_new_name);
+            &entries, &root, None, use_new_name
+        );
 
         db.insert_out_tree_rows(&processed)?;
         // INFO ref table is left empty since we are working with abs_paths
@@ -275,13 +280,14 @@ fn populate_out_tree_rel(
             loop {
                 shutdown.check_in_flight()?;
                 let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-                    last_id, BATCH_SIZE, Some(source.id), Some(false), use_new_name
+                    last_id, BATCH_SIZE, Some(source.id), Some(false), use_new_name,
                 )?;
-                if entries.is_empty() { break }
+                if entries.is_empty() { break; }
                 last_id = entries.last().expect("non-empty batch").id;
 
                 let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-                    &entries, &root, Some((&source.abs_path, &extraction_base)), use_new_name);
+                    &entries, &root, Some((&source.abs_path, &extraction_base)), use_new_name
+                );
 
                 let out_ids = db.insert_out_tree_rows(&processed)?;
                 let ref_pairs: Vec<(OutTreeId, i64)> = out_ids
@@ -334,7 +340,6 @@ fn ensure_parent(db: &Database) -> Result<()> {
     Ok(())
 }
 
-
 /// Given a vectors of StrippedRecords compute the new OutTreeRows. In new-name
 /// mode the query is DB-filtered to rows with a valid (len > 0) `new_name`.
 fn build_new_out_tree_rows(
@@ -374,7 +379,7 @@ fn component_to_str<'a>(c: &Component) -> &'a str {
         Component::ParentDir => "parent-dir",
         Component::CurDir => "current-dir",
         Component::Prefix(_) => "prefix",
-        Component::Normal(_) => "normal"
+        Component::Normal(_) => "normal",
     }
 }
 
@@ -391,10 +396,11 @@ fn strip_relative_member(member: &str, strip: u32) -> String {
         .filter_map(|comp| match comp {
             Component::Normal(name) => Some(name),
             other => {
-                debug_assert!(false, "Unexpected path component {}. Only `Normal` expected",
-                    component_to_str(&other));
+                panic!("Unexpected path component {}. Only `Normal` expected",
+                       component_to_str(&other)
+                );
                 None
-            },
+            }
         })
         .collect();
     if comps.len() as u32 <= strip {
@@ -404,10 +410,11 @@ fn strip_relative_member(member: &str, strip: u32) -> String {
     if kept.is_empty() {
         return String::new();
     }
-    let res = kept.iter()
-            .map(|name| name.to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/");
+    let res = kept
+        .iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
     res
 }
 
@@ -416,12 +423,10 @@ fn catalog_to_target_abs(
     -> PathBuf {
     match relative_component {
         None => {
-            let rel = catalog_path
-                .strip_prefix("/")
-                .expect(&format!(
-                    "INVARIANT ERROR: Catalogue Path MUST be absolute and start with /, got {}",
-                    catalog_path.display()
-                ));
+            let rel = catalog_path.strip_prefix("/").expect(&format!(
+                "INVARIANT ERROR: Catalogue Path MUST be absolute and start with /, got {}",
+                catalog_path.display()
+            ));
             extraction_root.join(rel)
         }
         Some((source_abs, source_base)) => {
