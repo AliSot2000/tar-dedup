@@ -104,6 +104,13 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 
 ## Conventions (also in `.cursor/rules/rust-style.mdc`)
 
+- **DO NOT reformat existing code.** This repo deliberately deviates from rustfmt/the usual
+  style. The author optimizes for density + readability balance. In particular:
+  - Function arguments may be grouped semantically: two lines of args ≠ one arg per line.
+    A two-line split groups related params; respect the existing grouping, never explode a
+    signature to one-arg-per-line.
+  - Do not run `cargo fmt` on existing files; when editing, mimic the surrounding style
+    (tabs/spaces, wrapping, blank-line rhythm) — do not reformat the rest of the file.
 - **One function when asked for one** — do not split into helpers/wrappers unless asked.
 - **`expect` for contract violations, `Result` for user/input faults.** Schema init, prior-stage invariants, FK rows inserted by the caller → `expect("…")`. Do not sprinkle `ok_or_else(|| Error::Config(...))` in leaf functions.
 - **Read the call site before editing pipeline code.** Leaf pipeline functions assume preconditions established upstream; don't "fix" them by re-inserting rows or weakening invariants.
