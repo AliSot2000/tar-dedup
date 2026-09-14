@@ -1,4 +1,4 @@
-use rusqlite::{named_params, Connection};
+use rusqlite::{Connection, named_params};
 
 use crate::db::types::FileId;
 use crate::error::Result;
@@ -226,7 +226,7 @@ define_flags! {
         /// Used RefLink (if false -> used (sparse) copy)
         UsedRefLink = 21,
         /// An Error prevented the file from being placed in its correct position
-        ErrorWhilePlacing = 22,        
+        ErrorWhilePlacing = 22,
         /// File materialized corectly with metadata applied.
         AppliedMetadata = 23,
         /// At least one error occurred while applying metadata
@@ -281,11 +281,7 @@ define_flags! {
     pub struct OutTreeFlags;
 }
 
-pub fn insert_ref(
-    conn: &Connection,
-    source_id: i64,
-    file_id: FileId,
-) -> Result<bool> {
+pub fn insert_ref(conn: &Connection, source_id: i64, file_id: FileId) -> Result<bool> {
     let n = conn.execute(
         "INSERT OR IGNORE INTO ref (source_id, file_id)
          VALUES (:source_id, :file_id)",
@@ -345,7 +341,8 @@ pub fn set_file_flag(conn: &Connection, file_id: FileId, flag: FileFlag, on: boo
     Ok(rows_affected as u64)
 }
 
-pub fn get_out_tree_flags(conn: &Connection, out_id: crate::db::types::OutTreeId) -> Result<OutTreeFlags> {
+pub fn get_out_tree_flags(conn: &Connection, out_id: crate::db::types::OutTreeId)
+    -> Result<OutTreeFlags> {
     let raw: i64 = conn.query_row(
         "SELECT flags FROM out_tree WHERE id = :id",
         named_params! { ":id": out_id.0 },
