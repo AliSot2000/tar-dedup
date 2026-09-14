@@ -61,6 +61,7 @@ impl PipelinePhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExtractPipelinePhase {
     ScanTar,
+    Filter,
     Rehash,
     PlacementPrologue,
     Place,
@@ -73,6 +74,7 @@ impl ExtractPipelinePhase {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ScanTar => "scan_tar",
+            Self::Filter => "filter",
             Self::Rehash => "rehash",
             Self::PlacementPrologue => "placement_prologue",
             Self::Place => "place",
@@ -85,6 +87,7 @@ impl ExtractPipelinePhase {
     pub fn parse(raw: &str) -> crate::error::Result<Self> {
         match raw {
             "scan_tar" => Ok(Self::ScanTar),
+            "filter" => Ok(Self::Filter),
             "rehash" => Ok(Self::Rehash),
             "placement_prologue" => Ok(Self::PlacementPrologue),
             "place" => Ok(Self::Place),
@@ -99,7 +102,8 @@ impl ExtractPipelinePhase {
 
     pub fn next(self) -> Option<Self> {
         match self {
-            Self::ScanTar => Some(Self::Rehash),
+            Self::ScanTar => Some(Self::Filter),
+            Self::Filter => Some(Self::Rehash),
             Self::Rehash => Some(Self::PlacementPrologue),
             Self::PlacementPrologue => Some(Self::Place),
             Self::Place => Some(Self::Permissions),
