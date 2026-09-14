@@ -189,12 +189,13 @@ pub fn place_config(extraction_root: PathBuf, absolute_names: bool) -> ExtractCo
         },
         mode_policy: tar_dedup::common::perms::ModeSource::None,
         strip_components: 0,
+        transform_policy: tar_dedup::common::transform::TransformSource::None,
     }
 }
 
 #[cfg(test)]
 pub fn populate_out_tree(db: &Database, config: &ExtractConfig) {
-    populate_out_tree_impl(db, config, &Shutdown::detached()).expect("populate out_tree");
+    populate_out_tree_impl(db, config, &Shutdown::detached(), false).expect("populate out_tree");
 }
 
 /// Write a standalone snapshot DB listing the given rel_paths as `archived`.
