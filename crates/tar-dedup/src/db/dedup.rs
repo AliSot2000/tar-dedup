@@ -47,8 +47,11 @@ pub fn promote_to_deduped(conn: &Connection, file_id: FileId) -> Result<()> {
 // TODO handle eager_filter
 /// Promote excluded entries to deduped
 pub fn promote_excluded_entries_to_deduped(conn: &Connection) -> Result<u64> {
-    let n = conn.execute("UPDATE files SET phase = 'deduped' \
-        WHERE include_reason = 0 OR exclude_reason > 0 AND phase 'filtered'", [])?;
+    let n = conn.execute(
+        "UPDATE files SET phase = 'deduped' \
+        WHERE include_reason_archive = 0 OR exclude_reason_archive > 0 AND phase = 'filtered'",
+        [],
+    )?;
     Ok(n as u64)
 }
 
