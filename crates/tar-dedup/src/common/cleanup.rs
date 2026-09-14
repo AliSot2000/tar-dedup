@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 
-use crate::config::{archive_stem, WorkLayout};
+use crate::config::{WorkLayout, archive_stem};
 use crate::error::{Error, Result};
 
 pub use crate::config::CleanupMode;
