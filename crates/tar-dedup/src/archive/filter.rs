@@ -61,23 +61,28 @@ fn fast_filter(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Re
         if batch.is_empty() { break; }
 
         // PRECONDITION: batch not empty
-        last_id = Some(batch
-            .last()
-            .expect("INVARIANT ERROR: Batch empty, should contain something")
-            .id);
+        last_id = Some(
+            batch
+                .last()
+                .expect("INVARIANT ERROR: Batch empty, should contain something")
+                .id);
         let processed = batch
             .iter()
-            .map(|rec| test_match(&include_filters, &exclude_filters, &rec));
+            .map(|rec| test_match(&include_filters, &exclude_filters, rec));
         let updated = db.apply_filter_result(
-            processed.map(|fr| (fr.id, fr.include_reason,  fr.exclude_reason))
+            processed.map(|fr| (fr.id, fr.include_reason, fr.exclude_reason)),
         )?;
-        assert_eq!(updated, batch.len() as u64,
-                   "INVARIANT ERROR: Number of rows updated does not match rows queried. \
-                   Rows vanished?");
+        assert_eq!(
+            updated, batch.len() as u64,
+            "INVARIANT ERROR: Number of rows updated does not match rows queried. \
+                   Rows vanished?"
+        );
     }
-    let rem = db.count_files_in_phase(
-        if config.filter.eager_filter {FilePhase::Inventoried} else {FilePhase::Hashed}
-    )?;
+    let rem = db.count_files_in_phase(if config.filter.eager_filter {
+        FilePhase::Inventoried
+    } else {
+        FilePhase::Hashed
+    })?;
     assert_eq!(0, rem, "INVARIANT ERROR: {rem} files in previous phase. Zero expected.");
     Ok(())
 }
