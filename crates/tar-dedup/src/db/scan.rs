@@ -1,18 +1,20 @@
+use crate::config::ExtractRuntimeState;
 use crate::db::content_id::parse_content_id;
-use crate::db::{flags, ExtractScanState, meta};
+use crate::db::extract::{load_extract_runtime_state, save_extract_runtime_state};
 use crate::db::flags::FileFlag;
+use crate::db::{ExtractScanState, flags, meta};
 use crate::error::Error;
-use rusqlite::{named_params, Connection};
+use crate::error::Result;
+use rusqlite::{Connection, named_params};
 use std::fs;
 use std::path::Path;
-use crate::config::ExtractRuntimeState;
-use crate::db::extract::{load_extract_runtime_state, save_extract_runtime_state};
+
 
 // TODO probably should not live here but in the scan.rs file of unarchive/
 /// Mark every content-id named payload sitting in the extract cache as extracted.
 /// Catches members that were unpacked but not flagged (interrupt between the two).
 /// Promotion stays with snapshot confirmation / [`promote_extracted_to_unarchived`].
-pub fn flush_cached_payloads(conn: &Connection, cache_dir: &Path) -> crate::error::Result<u64> {
+pub fn flush_cached_payloads(conn: &Connection, cache_dir: &Path) -> Result<u64> {
     let mut marked = 0u64;
     if cache_dir.is_dir() {
         for entry in fs::read_dir(cache_dir).map_err(|e| Error::io(cache_dir, e))? {
@@ -28,7 +30,7 @@ pub fn flush_cached_payloads(conn: &Connection, cache_dir: &Path) -> crate::erro
             let Ok((_, _, file_id, _)) = parse_content_id(name) else {
                 continue;
             };
-            flags::set_file_flag(conn, file_id, FileFlag::FileExtracted,true)?;
+            flags::set_file_flag(conn, file_id, FileFlag::FileExtracted, true)?;
             marked += 1;
         }
     }
@@ -37,7 +39,7 @@ pub fn flush_cached_payloads(conn: &Connection, cache_dir: &Path) -> crate::erro
 
 /// End-of-scan salvage: promote every `FileExtracted` canonical (and dependents)
 /// that is still `archived` → `unarchived`. Used when `from_footer || force_scan`.
-pub fn promote_extracted_to_unarchived(conn: &Connection) -> crate::error::Result<u64> {
+pub fn promote_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
     let n = conn.execute(
         "UPDATE files
@@ -54,7 +56,7 @@ pub fn promote_extracted_to_unarchived(conn: &Connection) -> crate::error::Resul
     Ok(n as u64)
 }
 
-pub fn record_snapshot_ingested(conn: &mut Connection) -> crate::error::Result<u32> {
+pub fn record_snapshot_ingested(conn: &mut Connection) -> Result<u32> {
     let mut scan = load_extract_scan_state(conn)?;
     scan.snapshots_ingested = scan.snapshots_ingested.saturating_add(1);
     save_extract_scan_state(conn, &scan)?;
@@ -72,8 +74,8 @@ pub fn record_snapshot_ingested(conn: &mut Connection) -> crate::error::Result<u
 /// [`FileFlag::FileExtracted`]), fanning phase out over `canonical_id`.
 pub fn apply_snapshot_promote_unarchived(
     conn: &Connection,
-    snapshot_path: &Path,
-) -> crate::error::Result<u64> {
+    snapshot_path: &Path)
+    -> Result<u64> {
     let path = snapshot_path.to_string_lossy();
     let bit = FileFlag::FileExtracted.mask_i64();
     conn.execute(
@@ -106,9 +108,8 @@ pub fn apply_snapshot_promote_unarchived(
     Ok(promoted as u64)
 }
 
-
 /// Canonical rows with `AppendedPath` but without `FileExtracted`.
-pub fn count_missing_payloads(conn: &Connection) -> crate::error::Result<u64> {
+pub fn count_missing_payloads(conn: &Connection) -> Result<u64> {
     let appended = FileFlag::AppendedPath.mask_i64();
     let extracted = FileFlag::FileExtracted.mask_i64();
     let count: i64 = conn.query_row(
@@ -126,7 +127,7 @@ pub fn count_missing_payloads(conn: &Connection) -> crate::error::Result<u64> {
 }
 
 /// Rows still `archived` whose canonical has `FileExtracted` (awaiting confirmation).
-pub fn count_unconfirmed_extracted(conn: &Connection) -> crate::error::Result<u64> {
+pub fn count_unconfirmed_extracted(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
@@ -143,9 +144,8 @@ pub fn count_unconfirmed_extracted(conn: &Connection) -> crate::error::Result<u6
     Ok(count as u64)
 }
 
-
 /// Canonical rows carrying `FileExtracted`.
-pub fn count_extracted_canonical(conn: &Connection) -> crate::error::Result<u64> {
+pub fn count_extracted_canonical(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
@@ -157,7 +157,7 @@ pub fn count_extracted_canonical(conn: &Connection) -> crate::error::Result<u64>
 }
 
 /// All rows in canonical groups that have `FileExtracted` on the canonical.
-pub fn count_extracted_paths(conn: &Connection) -> crate::error::Result<u64> {
+pub fn count_extracted_paths(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
@@ -173,26 +173,29 @@ pub fn count_extracted_paths(conn: &Connection) -> crate::error::Result<u64> {
 
 /// `(ftype_label, count)` for rows that lack `AppendedPath` which aren't file. Also excludes the
 /// number of filter_excluded files
-pub fn count_non_appended_by_ftype(conn: &Connection) -> crate::error::Result<Vec<(String, u64)>> {
+pub fn count_non_appended_by_ftype(conn: &Connection) -> Result<Vec<(String, u64)>> {
     let bit = FileFlag::AppendedPath.mask_i64();
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT ftype AS ft, COUNT(*) AS count
          FROM files
          WHERE (flags & :bit) = 0
-            AND include_reason < 0
-            AND exclude_reason = 0
+            AND {}
          GROUP BY ftype
          ORDER BY ft",
-    )?;
-    let rows = stmt.query_map(
-        named_params! { ":bit": bit },
-        |row| {
-            Ok((row.get::<_, String>("ft")?, row.get::<_, i64>("count")? as u64))
-        })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        crate::db::common::generate_archive_filter(None),
+    ))?;
+    let rows = stmt.query_map(named_params! { ":bit": bit }, |row| {
+        Ok((
+            row.get::<_, String>("ft")?,
+            row.get::<_, i64>("count")? as u64,
+        ))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
-pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState) -> crate::error::Result<()> {
+pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState)
+    -> Result<()> {
     meta::with_meta_txn(conn, |conn| {
         meta::set_scan_tar_saw_manifest_db(conn, state.saw_manifest_db)?;
         meta::set_scan_tar_saw_any_members(conn, state.saw_any_members)?;
@@ -207,9 +210,8 @@ pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState) 
     })
 }
 
-
 /// Copy an embedded catalog into the extract work DB.
-pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> crate::error::Result<()> {
+pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<()> {
     if db_path.is_file() {
         fs::remove_file(db_path).map_err(|e| Error::io(db_path, e))?;
     }
@@ -217,7 +219,7 @@ pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> crate::
     Ok(())
 }
 
-pub fn init_extract_runtime_state(conn: &mut Connection) -> crate::error::Result<()> {
+pub fn init_extract_runtime_state(conn: &mut Connection) -> Result<()> {
     if load_extract_runtime_state(conn)?.is_none() {
         save_extract_runtime_state(conn, &ExtractRuntimeState::new())?;
     }
@@ -229,7 +231,7 @@ pub fn init_extract_runtime_state(conn: &mut Connection) -> crate::error::Result
 /// Normalize a freshly installed catalog so stream handling is provenance-agnostic.
 /// Clears [`FileFlag::FileExtracted`] and forces candidate rows to `archived`.
 /// Must not run on a resumed work DB.
-pub fn normalize_installed_catalog(conn: &mut Connection) -> crate::error::Result<()> {
+pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
     let bit = FileFlag::FileExtracted.mask_i64();
     conn.execute(
         "UPDATE files SET flags = flags & ~:bit",
@@ -249,7 +251,7 @@ pub fn normalize_installed_catalog(conn: &mut Connection) -> crate::error::Resul
     Ok(())
 }
 
-pub fn load_extract_scan_state(conn: &Connection) -> crate::error::Result<ExtractScanState> {
+pub fn load_extract_scan_state(conn: &Connection) -> Result<ExtractScanState> {
     Ok(ExtractScanState {
         saw_manifest_db: meta::get_scan_tar_saw_manifest_db(conn)?.unwrap_or(false),
         saw_any_members: meta::get_scan_tar_saw_any_members(conn)?.unwrap_or(false),
