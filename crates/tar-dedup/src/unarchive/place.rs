@@ -69,15 +69,13 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         // Step 2, first copy files, then hardlink, then create other types
         // (symlinks, char-dev, block-dev, FIFO). Canonical election ran in
         // the PlacementPrologue phase.
-        let (ac, mc, ah, mh, ao, mo) = status_message_rebuilding(
-            &config, &db)?;
+        let (ac, mc, ah, mh, ao, mo) = status_message_rebuilding(&config, &db)?;
         materialize_files(&config, &db, &shutdown, &mut recorder)?;
         materialize_hardlinks(&config, &db, &shutdown, &mut recorder)?;
         materialize_others(&config, &db, &shutdown, &mut recorder)?;
     }
     recorder.flush()?;
-    let (placed, ref_linked, conflict, removed, errored, skipped) =
-        db.apply_flags_to_files()?;
+    let (placed, ref_linked, conflict, removed, errored, skipped) = db.apply_flags_to_files()?;
     tracing::info!(
         "Updated File Table:
         {placed} of entries placed,
@@ -91,7 +89,8 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     if !config.process.cleanup.keep_stage {
         let cache_dir = config.paths.extract_cache_dir();
         match capture_error(
-            &mut recorder, &cache_dir.to_path_buf(), |p| fs::remove_dir_all(p)) {
+            &mut recorder,
+            &cache_dir.to_path_buf(), |p| fs::remove_dir_all(p)) {
             Ok(()) => (),
             Err(e) => {
                 tracing::warn!("Failed to clean up stage directors '{}' with error {}",
@@ -102,7 +101,7 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
     }
 
     recorder.flush()?;
-        Ok(())
+    Ok(())
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -136,8 +135,7 @@ pub fn prepare_extraction_dir(
 
         for dir in dirs {
             shutdown.check_in_flight()?;
-            build_path(&config, &mut already_checked, &dir.abs_path, dir.id,
-                       recorder)?;
+            build_path(&config, &mut already_checked, &dir.abs_path, dir.id, recorder)?;
         }
     }
     db.set_dir_tree_built()?;
@@ -153,7 +151,7 @@ pub fn copy_canonicals_to_source(
 ) -> Result<()> {
     let dir_name = match &config.placement.link_source {
         None => PathBuf::from(".sources"),
-        Some(v)  => v.to_path_buf(),
+        Some(v) => v.to_path_buf(),
     };
     let base_dir = config.paths.extraction_root().join(dir_name);
     let mk_res = fs::create_dir_all(&base_dir);
@@ -162,7 +160,9 @@ pub fn copy_canonicals_to_source(
         Err(e) => {
             let err = Error::io(&base_dir, e);
             recorder.record_session(
-                ERROR_PHASE, err.to_file_stat(Some(&base_dir)), ErrorFlags::default(),
+                ERROR_PHASE,
+                err.to_file_stat(Some(&base_dir)),
+                ErrorFlags::default(),
             );
             return Err(err);
         }
@@ -204,26 +204,23 @@ pub fn copy_canonicals_to_source(
         match parallel {
             Ok(()) => (),
             Err(Error::Interrupted) => (), // Exit
-            Err(e) => return Err(e)
+            Err(e) => return Err(e),
         }
 
         // Get the results
         let new_res = Vec::new();
-        let copied = std::mem::replace(
-            &mut *results.lock().expect("hash results lock"),
-            new_res);
+        let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
 
         for result in copied {
             match result {
                 Err((_, Error::Interrupted)) => (),
                 Err((id, Error::FileStat(e))) => {
-                    recorder.record_file(
-                        id, ERROR_PHASE, e, ErrorFlags::default(),
-                    );
+                    recorder.record_file(id, ERROR_PHASE, e, ErrorFlags::default());
                     db.set_file_flag(id, FileFlag::ErrorWhilePlacing, true)?;
                 }
                 Err((_id, other)) => panic!(
-                    "INVARIANT FAILED: Return type violates contract. Encountered error {other}"),
+                    "INVARIANT FAILED: Return type violates contract. Encountered error {other}"
+                ),
                 Ok((id, is_copy)) => {
                     db.set_file_flag(id, FileFlag::AtLinkSource, true)?;
                     db.set_file_flag(id, FileFlag::UsedRefLink, !is_copy)?;
@@ -239,11 +236,12 @@ pub fn copy_canonicals_to_source(
 /// the tree.
 /// Files are linked to the link source and all others links, fifo, char dev, block dev are created,
 /// sockets noted but cannot be created
-pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdown,
-                       recorder: &mut Recorder) -> Result<()> {
+pub fn link_into_place(
+    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder)
+    -> Result<()> {
     let dir_name = match &config.placement.link_source {
         None => PathBuf::from(".sources"),
-        Some(v)  => v.to_path_buf(),
+        Some(v) => v.to_path_buf(),
     };
     let base_dir = config.paths.extraction_root().join(&dir_name);
     let results = Mutex::new(Vec::new());
@@ -255,9 +253,9 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
     loop {
         shutdown.check_between_files()?;
         let entries: Vec<(FileRecord, OutTreeRecord)> = db.list_out_tree_for_linking(
-            BATCH_SIZE, true)?;
+            BATCH_SIZE, true
+        )?;
         if entries.is_empty() { break }
-
 
         let parallel = pool.install(|| {
             entries.par_iter().try_for_each(
@@ -269,18 +267,20 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
                             .expect("PRECONDITION: Moved successfully, content_id must exist")
                             .0;
                         // Compute the target for link
-                        let link_target = if config.placement.absolute_links
-                            || config.placement.use_hard_links {
-                            base_dir.join(content_id)
-                        } else {
-                            let up = relative_pardirs_to_dir(
-                                config.paths.extraction_root(), &out.abs_path);
-                            up.join(&dir_name).join(content_id)
-                        };
+                        let link_target =
+                            if config.placement.absolute_links || config.placement.use_hard_links {
+                                base_dir.join(content_id)
+                            } else {
+                                let up = relative_pardirs_to_dir(
+                                    config.paths.extraction_root(),
+                                    &out.abs_path,
+                                );
+                                up.join(&dir_name).join(content_id)
+                            };
                         if out.abs_path.exists() {
                             return Err(Error::Config(format!(
                                 "Found existing path {}. Link Tree must be empty.",
-                                out.abs_path.display())))
+                                out.abs_path.display())));
                         }
 
                         // Actually build the link
@@ -299,8 +299,9 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
                         };
                         match base_res {
                             Ok(_) => Ok(()),
-                            Err(e) => Err(
-                                FileStatError::Io {path: out.abs_path.to_path_buf(), source:e}),
+                            Err(e) => Err(FileStatError::Io {
+                                path: out.abs_path.to_path_buf(), source: e,
+                            }),
                         }
                     } else {
                         build_other(&canonical, &out, config.placement.recreate_none_file_entries)
@@ -317,14 +318,12 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
         match parallel {
             Ok(()) => (),
             Err(Error::Interrupted) => (), // Exit
-            Err(e) => return Err(e)
+            Err(e) => return Err(e),
         }
 
         // Get the results
         let new_res = Vec::new();
-        let linked = std::mem::replace(
-            &mut *results.lock().expect("hash results lock"),
-            new_res);
+        let linked = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
 
         // Apply results to db
         for (id, err) in linked {
@@ -332,7 +331,7 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
                 None => {
                     let _ = db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
                 }
-                Some(FileStatError::Io{path: p, source: e}) => {
+                Some(FileStatError::Io { path: p, source: e }) => {
                     let _ = db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
                     tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
                     recorder.record_out_tree(
@@ -345,7 +344,7 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
                         ErrorFlags::default(),
                     );
                 }
-                Some(FileStatError::Nix{path: p, source: e}) => {
+                Some(FileStatError::Nix { path: p, source: e }) => {
                     let _ = db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
                     tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
                     recorder.record_out_tree(
@@ -369,9 +368,8 @@ pub fn link_into_place(config: &ExtractConfig, db: &Database, shutdown: &Shutdow
 /// Iterate through the out_tree and reflink / copy all files into placed which are marked as
 /// (hardlink) canonicals. (out_tree.canonical_id = id)
 pub fn materialize_files(
-    config: &ExtractConfig, db: &Database, shutdown: &Shutdown,
-    recorder: &mut Recorder,
-) -> Result<()> {
+    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder)
+    -> Result<()> {
     let mut last_id = OutTreeId(0);
 
     let cache_dir = config.paths.extract_cache_dir();
@@ -388,25 +386,28 @@ pub fn materialize_files(
     loop {
         shutdown.check_between_files()?;
         let entries: Vec<(StrippedRecord, OutTreeRecord)> = db.list_out_tree_for_materialization(
-            &last_id, BATCH_SIZE)?;
+            &last_id, BATCH_SIZE
+        )?;
         if entries.is_empty() { break }
         last_id = entries
-            .last().expect("PRECONDITION FAILED: at least one element should exist").1.id;
+            .last()
+            .expect("PRECONDITION FAILED: at least one element should exist")
+            .1
+            .id;
 
         let parallel = pool.install(|| {
-            entries.par_iter().try_for_each(
-                |(canonical, target)| -> Result<()> {
-                    let id = canonical.content_id().expect(
-                        "PRECONDITION FAILED: Enqueued files must have a content_id");
+            entries.par_iter().try_for_each(|(canonical, target)| -> Result<()> {
+                    let id = canonical
+                        .content_id()
+                        .expect("PRECONDITION FAILED: Enqueued files must have a content_id");
                     let src = cache_dir.join(id.0);
 
-                    let res =
-                        match check_path(&config, &src, &canonical) {
+                    let res = match check_path(&config, &src, &canonical) {
                         Err(e) => Err((target.id, Error::FileStat(e))),
                         Ok((false, conflict, removed)) => Ok(MaterializeResult {
                             id: target.id.clone(),
-                            placed: false, conflict, removed, used_copy: false
-                        }) ,
+                            placed: false, conflict, removed, used_copy: false,
+                        }),
                         Ok((true, conflict, removed)) => {
                             tracing::info!("Materializing to {}", target.abs_path.display());
                             match copy_single_file(
@@ -432,9 +433,7 @@ pub fn materialize_files(
 
         // Get the results
         let new_res = Vec::new();
-        let copied = std::mem::replace(
-            &mut *results.lock().expect("hash results lock"),
-            new_res);
+        let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
 
         process_results(copied, recorder, &db, false, true)?;
         recorder.flush()?;
@@ -445,8 +444,7 @@ pub fn materialize_files(
 /// Create all the hardlinks after the copy stage.
 /// PRECONDITION: Function must be called after the [`materialize_files`]
 pub fn materialize_hardlinks(
-    config: &ExtractConfig, db: &Database, shutdown: &Shutdown,
-    recorder: &mut Recorder)
+    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder)
     -> Result<()> {
     let mut last_id = OutTreeId(0);
 
@@ -462,10 +460,14 @@ pub fn materialize_hardlinks(
     loop {
         shutdown.check_between_files()?;
         let entries: Vec<(StrippedRecord, OutTreeRecord, OutTreeRecord)> = db.list_out_tree_for_hardlinks(
-            &last_id, BATCH_SIZE)?;
+            &last_id, BATCH_SIZE
+        )?;
         if entries.is_empty() { break }
         last_id = entries
-            .last().expect("PRECONDITION FAILED: at least one element should exist").1.id;
+            .last()
+            .expect("PRECONDITION FAILED: at least one element should exist")
+            .1
+            .id;
 
         let parallel = pool.install(|| {
             entries.par_iter().try_for_each(
@@ -475,20 +477,18 @@ pub fn materialize_hardlinks(
                     let dst = &target.abs_path;
 
                     let res = match check_path(&config, &dst, &stripped) {
-                        Err(e) => Err((target.id ,Error::FileStat(e))),
+                        Err(e) => Err((target.id, Error::FileStat(e))),
                         Ok((false, conflict, removed)) => Ok(MaterializeResult {
                             id: target.id.clone(),
                             placed: false, conflict, removed, used_copy: false
                         }),
-                        Ok((true, conflict, removed)) => {
-                            match fs::hard_link(src, dst) {
-                                Err(e) => Err((target.id, Error::io(dst, e))),
-                                Ok(()) => Ok(MaterializeResult {
-                                    id: target.id.clone(),
-                                    placed: true, conflict, removed, used_copy: false
-                                }),
-                            }
-                        }
+                        Ok((true, conflict, removed)) => match fs::hard_link(src, dst) {
+                            Err(e) => Err((target.id, Error::io(dst, e))),
+                            Ok(()) => Ok(MaterializeResult {
+                                id: target.id.clone(),
+                                placed: true, conflict, removed, used_copy: false,
+                            }),
+                        },
                     };
                     results.lock().expect("materialize files lock poisoned").push(res);
                     Ok(())
@@ -503,9 +503,7 @@ pub fn materialize_hardlinks(
 
         // Get the results
         let new_res = Vec::new();
-        let copied = std::mem::replace(
-            &mut *results.lock().expect("hash results lock"),
-            new_res);
+        let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
 
         process_results(copied, recorder, &db, true, false)?;
         recorder.flush()?;
@@ -533,7 +531,8 @@ pub fn materialize_others(
     loop {
         shutdown.check_between_files()?;
         let entries: Vec<(FileRecord, OutTreeRecord)> = db.list_out_tree_others(
-            &last_id, BATCH_SIZE)?;
+            &last_id, BATCH_SIZE
+        )?;
         if entries.is_empty() { break }
         last_id = entries
             .last().expect("PRECONDITION FAILED: at least one element should exist").1.id;
@@ -550,15 +549,17 @@ pub fn materialize_others(
                             id: target.id,
                             placed: false, conflict, removed, used_copy: false
                         }),
-                        Ok((true, conflict, removed)) =>
-                            match build_other(
-                                &canonical, &target, config.placement.recreate_none_file_entries) {
-                                Err(e) => Err((target.id, Error::FileStat(e))),
-                                Ok(()) => Ok(MaterializeResult {
-                                    id: target.id.clone(),
-                                    placed: true, conflict, removed, used_copy: false
-                                })
-                        }
+                        Ok((true, conflict, removed)) => match build_other(
+                            &canonical,
+                            &target,
+                            config.placement.recreate_none_file_entries) {
+
+                            Err(e) => Err((target.id, Error::FileStat(e))),
+                            Ok(()) => Ok(MaterializeResult {
+                                id: target.id.clone(),
+                                placed: true, conflict, removed, used_copy: false,
+                            }),
+                        },
                     };
                     results.lock().expect("materialize files lock poisoned").push(res);
                     Ok(())
@@ -573,9 +574,7 @@ pub fn materialize_others(
 
         // Get the results
         let new_res = Vec::new();
-        let copied = std::mem::replace(
-            &mut *results.lock().expect("hash results lock"),
-            new_res);
+        let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
 
         process_results(copied, recorder, &db, false, false)?;
         recorder.flush()?;
@@ -583,97 +582,113 @@ pub fn materialize_others(
     Ok(())
 }
 
-
 /// Function recreates all special files it can. Importantly, files, directories and unknown
 /// types are not valid file types for the function and will cause a panic
 fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bool)
     -> std::result::Result<(), FileStatError> {
     match canonical.ftype {
-        FileType::File => panic!(
-            "PRECONDITION ERROR: build_other does not treat files"),
-        FileType::Directory => panic!(
-            "PRECONDITION ERROR: build_other does not treat directories"),
-        FileType::Unknown => panic!(
-            "PRECONDITION ERROR: build_other does not treat unknown"),
+        FileType::File => panic!("PRECONDITION ERROR: build_other does not treat files"),
+        FileType::Directory => panic!("PRECONDITION ERROR: build_other does not treat directories"),
+        FileType::Unknown => panic!("PRECONDITION ERROR: build_other does not treat unknown"),
         FileType::Socket => {
             tracing::info!("Received Socket at {}, skipping", &out_tree.abs_path.display());
             Ok(())
-        },
+        }
         #[cfg(unix)]
         FileType::Symlink(_) => match &canonical.link_dst {
             None => Ok(()),
             Some(dst) => match std::os::unix::fs::symlink(dst, &out_tree.abs_path) {
                 Ok(_) => Ok(()),
-                Err(e) => Err(
-                    FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e})
-            }
+                Err(e) => Err(FileStatError::Io {
+                    path: out_tree.abs_path.to_path_buf(),
+                    source: e,
+                }),
+            },
         },
         #[cfg(windows)]
         FileType::Symlink(LinkType::Directory) => match &canonical.link_dst {
             None => Ok(()),
             Some(dst) => match std::os::windows::fs::symlink_dir(dst, &out_tree.abs_path) {
                 Ok(_) => Ok(()),
-                Err(e) => Err(FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e})
-            }
+                Err(e) => Err(FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e}),
+            },
         },
         #[cfg(windows)]
         FileType::Symlink(_) => match &canonical.link_dst {
             None => Ok(()),
             Some(dst) => match std::os::windows::fs::symlink_file(dst, &out_tree.abs_path) {
                 Ok(_) => Ok(()),
-                Err(e) => Err(FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e})
-            }
+                Err(e) => Err(FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e}),
+            },
         },
         FileType::FIFO => {
             if !try_special {
-                return Ok(())
+                return Ok(());
             }
             match nix::unistd::mkfifo(&out_tree.abs_path, Mode::from_bits_truncate(0o644)) {
                 Ok(_) => Ok(()),
-                Err(e) => Err(
-                    FileStatError::Nix {path: out_tree.abs_path.to_path_buf(), source: e})
+                Err(e) => Err(FileStatError::Nix {
+                    path: out_tree.abs_path.to_path_buf(),
+                    source: e,
+                }),
             }
-        },
+        }
         FileType::BlockDevice => {
+            if !try_special {
+                return Ok(());
+            }
             if canonical.major.is_none() || canonical.minor.is_none() {
                 tracing::error!(
                     "Could not create block device at {}, major and/or minor is missing",
                     out_tree.abs_path.display()
                 );
-                return Ok(())
-            }
-            if !try_special {
-                return Ok(())
+                return Ok(());
             }
             let dev = makedev(
-                canonical.major.unwrap() as u32, canonical.minor.unwrap()  as u32);
-            let create_res =  mknod(
-                &out_tree.abs_path, SFlag::S_IFBLK, Mode::from_bits_truncate(0o644), dev);
+                canonical.major.unwrap() as u32,
+                canonical.minor.unwrap() as u32,
+            );
+            let create_res = mknod(
+                &out_tree.abs_path,
+                SFlag::S_IFBLK,
+                Mode::from_bits_truncate(0o644),
+                dev,
+            );
             match create_res {
                 Ok(_) => Ok(()),
-                Err(e) => Err(
-                    FileStatError::Nix {path: out_tree.abs_path.to_path_buf(), source: e})
+                Err(e) => Err(FileStatError::Nix {
+                    path: out_tree.abs_path.to_path_buf(),
+                    source: e,
+                }),
             }
-        },
+        }
         FileType::CharacterDevice => {
             if canonical.major.is_none() || canonical.minor.is_none() {
                 tracing::error!(
                     "Could not create block device at {}, major and/or minor is missing",
                     out_tree.abs_path.display()
                 );
-                return Ok(())
+                return Ok(());
             }
             if !try_special {
-                return Ok(())
+                return Ok(());
             }
             let dev = makedev(
-                canonical.major.unwrap() as u32, canonical.minor.unwrap()  as u32);
-            let create_res =  mknod(
-                &out_tree.abs_path, SFlag::S_IFCHR, Mode::from_bits_truncate(0o644), dev);
+                canonical.major.unwrap() as u32,
+                canonical.minor.unwrap() as u32,
+            );
+            let create_res = mknod(
+                &out_tree.abs_path,
+                SFlag::S_IFCHR,
+                Mode::from_bits_truncate(0o644),
+                dev,
+            );
             match create_res {
                 Ok(_) => Ok(()),
-                Err(e) => Err(
-                    FileStatError::Nix {path: out_tree.abs_path.to_path_buf(), source: e})
+                Err(e) => Err(FileStatError::Nix {
+                    path: out_tree.abs_path.to_path_buf(),
+                    source: e,
+                }),
             }
         }
     }
@@ -709,8 +724,7 @@ pub fn status_message_rebuilding(config: &ExtractConfig, db: &Database)
         all_hardlinks,
         materialized_hardlinks,
         all_other,
-        materialized_other
-    ))
+        materialized_other))
 }
 
 fn process_results(
@@ -718,7 +732,9 @@ fn process_results(
     recorder: &mut Recorder,
     db: &Database,
     is_hardlink: bool,
-    set_reflink: bool) -> Result<()> {
+    set_reflink: bool)
+    -> Result<()> {
+
     for result in results {
         match result {
             Err((id, err)) => {
@@ -726,25 +742,21 @@ fn process_results(
                     Error::Interrupted => (), // Finish consuming and exit after.
                     Error::FileStat(e) => {
                         // Record the copy failure against the out_tree row and keep the flag.
-                        recorder.record_out_tree(
-                            id, ERROR_PHASE, e, ErrorFlags::default(),
-                        );
+                        recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default());
                         db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
-                    },
+                    }
                     other => panic!("INVARIANT FAILED: Only Io and Interrupted errors \
-                        expected, got {}", other),
+                                    expected, got {}",
+                                    other),
                 }
             }
             Ok(suc) => {
                 if cfg!(debug_assertions) {
                     validate_materialize_result(&suc);
                 }
-                db.set_out_tree_flag(
-                    suc.id, OutTreeFlag::Placed, suc.placed)?;
-                db.set_out_tree_flag(
-                    suc.id, OutTreeFlag::RemovedPrevious, !suc.removed)?;
-                db.set_out_tree_flag(
-                    suc.id, OutTreeFlag::Conflict, suc.conflict)?;
+                db.set_out_tree_flag(suc.id, OutTreeFlag::Placed, suc.placed)?;
+                db.set_out_tree_flag(suc.id, OutTreeFlag::RemovedPrevious, !suc.removed)?;
+                db.set_out_tree_flag(suc.id, OutTreeFlag::Conflict, suc.conflict)?;
                 if is_hardlink {
                     db.set_out_tree_flag(suc.id, OutTreeFlag::IsHardlink, true)?;
                 }
@@ -766,7 +778,7 @@ struct MaterializeResult<I> {
     placed: bool,
     conflict: bool,
     removed: bool,
-    used_copy: bool
+    used_copy: bool,
 }
 
 /// Relative path of `..` components from `file`'s parent directory back to `dir`.
@@ -798,9 +810,7 @@ fn relative_pardirs_to_dir(dir: &Path, file: &Path) -> PathBuf {
     //         assert!(false, "Absolute Path contained non-Normal intermediate entry.");
     //     }
     // }
-    let depth = below
-        .components()
-        .count();
+    let depth = below.components().count();
     if depth == 0 {
         PathBuf::from(".")
     } else {
@@ -822,17 +832,14 @@ fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no
     if !no_reflink {
         let worked = reflink::reflink(src, dst);
         if worked.is_ok() {
-            return Ok((fid, false))
+            return Ok((fid, false));
         }
     }
 
     // Failed, perform sparse copy
-    let spc_res = sparse_cp::sparse_copy_with_progress(
-        src,
-        dst,
-        4096,
-        |_, _, _| -> Result<()> { shutdown.check_in_flight() }
-    );
+    let spc_res = sparse_cp::sparse_copy_with_progress(src, dst, 4096, |_, _, _| -> Result<()> {
+        shutdown.check_in_flight()
+    });
 
     // Handle result; sparse-cp converts io errors via `From<io::Error>` with an
     // empty path, so re-attach the destination on the way out.
@@ -849,35 +856,37 @@ fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no
 /// loop branches on it); other `FileStat` error kinds pass through untouched.
 fn annotate_copy_error(e: Error, dst: &Path) -> Error {
     match e {
-        Error::FileStat(FileStatError::Io { source, .. }) => {
-            Error::FileStat(FileStatError::Io { path: dst.to_path_buf(), source })
-        }
+        Error::FileStat(FileStatError::Io { source, .. }) => Error::FileStat(FileStatError::Io {
+            path: dst.to_path_buf(),
+            source,
+        }),
         other => other,
     }
 }
 
-
 /// Build a given directory path for later extraction.
 /// PRECONDITION: Calling function must ensure no_create_dir is false
-pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target: &Path,
-                  out_tree_id: OutTreeId,
-                  recorder: &mut Recorder) -> Result<()>  {
+pub fn build_path(
+    config: &ExtractConfig,
+    already_checked: &mut PathBuf,
+    target: &Path,
+    out_tree_id: OutTreeId,
+    recorder: &mut Recorder)
+    -> Result<()> {
     debug_assert!(!config.placement.no_create_dir,
                   "INVARIANT ERROR: build_path may not be called with no_create_dir");
     let mut prefix = PathBuf::new();
     let mut start = 0u64;
-    let mut capture_error = |path: &PathBuf, iof: fn(&Path) -> io::Result<()>| {
-        match iof(&path) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                recorder.record_out_tree(
-                    out_tree_id,
-                    ERROR_PHASE,
-                    FileStatError::io(&path, io::Error::new(e.kind(), e.to_string())),
-                    ErrorFlags::default(),
-                );
-                return Err(Error::io(&path, e));
-            }
+    let mut capture_error = |path: &PathBuf, iof: fn(&Path) -> io::Result<()>| match iof(&path) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            recorder.record_out_tree(
+                out_tree_id,
+                ERROR_PHASE,
+                FileStatError::io(&path, io::Error::new(e.kind(), e.to_string())),
+                ErrorFlags::default(),
+            );
+            return Err(Error::io(&path, e));
         }
     };
     let iter = already_checked
@@ -891,7 +900,7 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
             prefix.push(t_comp)
         } else {
             start = num as u64;
-            break
+            break;
         }
     }
     assert!(prefix.len() >= config.paths.extraction_root().len(), "target not within extract dir");
@@ -908,7 +917,7 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
             capture_error(&prefix, |p: &Path| fs::remove_file(p))?;
             capture_error(&prefix, |p: &Path| fs::create_dir_all(p))?;
             tracing::info!("Replaced symlink with dir at path: {printable}");
-            continue
+            continue;
         }
 
         // Some but no dir
@@ -918,11 +927,12 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
                 capture_error(&prefix, |p: &Path| fs::remove_file(p))?;
                 capture_error(&prefix, |p: &Path| fs::create_dir_all(p))?;
                 tracing::info!("Replaced non-dir with dir at path: {printable}");
-                continue
+                continue;
             } else {
-                return Err(Error::Config(
-                    format!("Encountered existing non-directory path at extraction \
-                             location where directory was needed: {printable}")));
+                return Err(Error::Config(format!(
+                    "Encountered existing non-directory path at extraction \
+                             location where directory was needed: {printable}"
+                )));
             }
         }
 
@@ -955,7 +965,7 @@ pub fn build_path(config: &ExtractConfig, already_checked: &mut PathBuf, target:
 fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
     -> std::result::Result<(bool, bool, bool), FileStatError> {
     if !tgt.exists() {
-        return Ok((true, false, false))
+        return Ok((true, false, false));
     };
 
     // PRECONDITION: Path exists
@@ -963,12 +973,16 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         Err(e) => {
             return if config.placement.silent_conflicts {
                 tracing::info!(
-                        "Leaving {}, could not assess conflict due to inaccessible file metadata",
-                        tgt.display());
+                    "Leaving {}, could not assess conflict due to inaccessible file metadata",
+                    tgt.display()
+                );
                 Ok((false, true, false))
             } else {
-                Err(FileStatError::Io { path: tgt.to_path_buf(), source: e })
-            }
+                Err(FileStatError::Io {
+                    path: tgt.to_path_buf(),
+                    source: e,
+                })
+            };
         }
         Ok(m) => m,
     };
@@ -981,19 +995,18 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
                 if !config.placement.silent_conflicts {
                     tracing::info!(
                         "Leaving {}, could not assess conflict due to missing mtime in db",
-                        tgt.display());
+                        tgt.display()
+                    );
                 }
                 return Ok((false, true, false));
             }
-            Some(t) => t
+            Some(t) => t,
         };
         let (res_mtime, _, _) = files::get_file_times(&file_metadata);
         let file_mtime = match res_mtime {
             Err(e) => {
                 return if config.placement.silent_conflicts {
-                    tracing::info!(
-                        "Leaving {}, could not retrieve file mtime",
-                    tgt.display());
+                    tracing::info!("Leaving {}, could not retrieve file mtime", tgt.display());
                     Ok((false, true, false))
                 } else {
                     Err(FileStatError::Io { path: tgt.to_path_buf(), source: e })
@@ -1007,24 +1020,26 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
                 if db_mtime <= file_mtime {
                     return if !config.placement.silent_conflicts {
                         Err(FileStatError::General {
-                            path: Some(tgt.to_path_buf()), message: "File is too old.".to_string()
+                            path: Some(tgt.to_path_buf()),
+                            message: "File is too old.".to_string(),
                         })
                     } else {
-                        tracing::info!("Could not extract to {}, file is too old.",  tgt.display());
+                        tracing::info!("Could not extract to {}, file is too old.", tgt.display());
                         Ok((false, true, false))
-                    }
+                    };
                 }
-            },
+            }
             ConflictPolicy::PreferOlder => {
                 if db_mtime >= file_mtime {
                     return if !config.placement.silent_conflicts {
                         Err(FileStatError::General {
-                            path: Some(tgt.to_path_buf()), message: "File is new old.".to_string()
+                            path: Some(tgt.to_path_buf()),
+                            message: "File is new old.".to_string(),
                         })
                     } else {
-                        tracing::info!("Could not extract to {}, file is too new.",  tgt.display());
+                        tracing::info!("Could not extract to {}, file is too new.", tgt.display());
                         Ok((false, true, false))
-                    }
+                    };
                 }
             }
         }
@@ -1053,14 +1068,17 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
             return if !config.placement.silent_conflicts {
                 Err(FileStatError::General {
                     path: Some(tgt.to_path_buf()),
-                    message: format!("File type mismatch, expected {} got {}",
-                                     rec.ftype.as_str(), ftype.as_str())
+                    message: format!(
+                        "File type mismatch, expected {} got {}",
+                        rec.ftype.as_str(),
+                        ftype.as_str()
+                    ),
                 })
             } else {
                 tracing::info!("File type mismatch, expected {} got {}",
                     rec.ftype.as_str(), ftype.as_str());
                 Ok((false, true, false))
-            }
+            };
         }
     } else {
         false
@@ -1084,7 +1102,6 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
     }
 }
 
-
 #[cfg(debug_assertions)]
 fn validate_materialize_result<I>(m: &MaterializeResult<I>) -> () {
     match (m.placed, m.conflict, m.removed, m.used_copy) {
@@ -1094,7 +1111,7 @@ fn validate_materialize_result<I>(m: &MaterializeResult<I>) -> () {
         (false, true, false, false) => (),
         // Conflict, place
         (true, true, _, _) => (),
-        _ => panic!("INVARIANT FAILED: Impossible flag constellation returned from placement ")
+        _ => panic!("INVARIANT FAILED: Impossible flag constellation returned from placement "),
     }
 }
 
