@@ -60,8 +60,8 @@ pub fn batched_stepped_loop<ID, ENTRY>(
 
 pub fn batched_loop<ENTRY>(
     get_entries: fn(u64) -> Result<Vec<ENTRY>>,
-    process_entries: fn(Vec<ENTRY>) -> Result<()>,
-    batch_size: u64)
+    batch_size: u64,
+    process_entries: fn(Vec<ENTRY>) -> Result<()>)
     -> Result<()> {
 
     loop {
