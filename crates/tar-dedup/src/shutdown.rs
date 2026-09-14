@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 
 use signal_hook::consts::{SIGINT, SIGTERM};
@@ -72,7 +72,7 @@ impl Shutdown {
         match self.mode.load(Ordering::SeqCst) {
             MODE_RUNNING => Ok(()),
             MODE_GRACEFUL | MODE_FORCE => Err(Error::Interrupted),
-            v => panic!("Got unexpected Shutdown Value of {v}")
+            v => panic!("Got unexpected Shutdown Value of {v}"),
         }
     }
 
