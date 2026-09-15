@@ -1,6 +1,5 @@
+use crate::archive::ArchiveRTArgs;
 use crate::common::files::{PreYield, warn_if_times_changed};
-use crate::config::ArchiveConfig;
-use crate::db::Database;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, StrippedRecord};
 use crate::error::{Error, Result};
@@ -15,7 +14,10 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
 
-pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     let page_size = config.sparse.page_size;
     debug_assert!(page_size > 0, "page_size == 0");
 

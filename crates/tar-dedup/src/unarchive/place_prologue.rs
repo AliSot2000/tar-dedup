@@ -20,28 +20,31 @@ use crate::db::flags::{OutTreeFlag, OutTreeFlags};
 use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, StrippedRecord};
 use crate::error::Result;
 use crate::shutdown::Shutdown;
+use crate::unarchive::ExtractRTArgs;
 
 const BATCH_SIZE: u64 = 10_000;
 
 /// Run the pure-DB placement preparation once (idempotent via meta flag).
-pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ExtractRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
     if db.placement_prologue_done()? {
         return Ok(());
     }
-    let transform = resolve_transform(config, db)?;
+    let transform = resolve_transform(rt)?;
     // Use the renamed member when a transform or strip is active; otherwise build
     // the out_tree from `abs_path` as before.
     let use_new_name = transform.is_some() || config.strip_components > 0;
     if use_new_name {
-        populate_new_names(db, config, shutdown, transform.as_ref())?;
+        populate_new_names(rt, transform.as_ref())?;
     }
     if !db.out_tree_is_built()? {
-        populate_out_tree(db, config, shutdown, use_new_name)?;
+        populate_out_tree(rt, use_new_name)?;
     }
     // Canonical election is DB-only however meaningless in `--link-tree` mode
     // (same branch as the pre-refactor `place::run`).
-    if !config.placement.link_tree {
-        prepare_hardlink_canonicals(config, db)?;
+    if !rt.config.placement.link_tree {
+        prepare_hardlink_canonicals(rt)?;
     }
     db.set_placement_prologue_done()?;
     Ok(())
@@ -52,7 +55,9 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
 // -------------------------------------------------------------------------------------------------
 
 /// Resolve the effective transform from the CLI policy / archived meta.
-fn resolve_transform(config: &ExtractConfig, db: &Database) -> Result<Option<TransformExpr>> {
+fn resolve_transform(rt: &ExtractRTArgs) -> Result<Option<TransformExpr>> {
+    let config = rt.config;
+    let db = rt.db;
     match &config.transform_policy {
         TransformSource::None => Ok(None),
         TransformSource::Cli(expr) => parse_transform_expr(expr).map(Some),
@@ -68,10 +73,12 @@ fn resolve_transform(config: &ExtractConfig, db: &Database) -> Result<Option<Tra
 /// `new_name`), so re-running with the same or changed options is deterministic.
 /// GNU order is transform first, then strip. Both run strictly on the relative
 /// member, i.e. AFTER the absolute path is converted to relative.
-fn populate_new_names(
-    db: &Database, config: &ExtractConfig, shutdown: &Shutdown, transform: Option<&TransformExpr>)
+fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
     -> Result<()> {
 
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     let strip = config.strip_components;
     if config.placement.absolute_names {
         let mut last_id = FileId(0);
@@ -139,14 +146,17 @@ fn populate_new_names(
 /// If multiple files map to the same directory, the tool will not complain and simply the first
 /// entry to extract to it, will own the path.
 pub fn populate_out_tree(
-    db: &Database, config: &ExtractConfig, shutdown: &Shutdown, use_new_name: bool) -> Result<()> {
+    rt: &ExtractRTArgs, use_new_name: bool) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     debug_assert!(config.paths.extraction_root().is_absolute(),
                   "INVARIANT ERROR: extraction root is not absolute");
     debug_assert!(!db.out_tree_is_built()?, "PRECONDITION FAILED: out tree built");
     if config.placement.absolute_names {
-        populate_out_tree_abs(db, config, shutdown, use_new_name)?;
+        populate_out_tree_abs(rt, use_new_name)?;
     } else {
-        populate_out_tree_rel(db, config, shutdown, use_new_name)?;
+        populate_out_tree_rel(rt, use_new_name)?;
     }
 
     ensure_parent(db)?;
@@ -155,7 +165,9 @@ pub fn populate_out_tree(
 }
 
 /// Elect hard-link canonicals in the out_tree (mark_canonical family of updates).
-fn prepare_hardlink_canonicals(config: &ExtractConfig, db: &Database) -> Result<()> {
+fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
     let updates: u64 = match config.placement.hard_link_grouping {
         HardLinkGrouping::None => db.mark_all_canonical()?,
         HardLinkGrouping::Global => db.mark_global_canonical()?,
@@ -210,7 +222,10 @@ fn apply_renames(
 
 /// Build the out_tree table, if the user selected absolute names for the materialization method.
 fn populate_out_tree_abs(
-    db: &Database, config: &ExtractConfig, shutdown: &Shutdown, use_new_name: bool) -> Result<()> {
+    rt: &ExtractRTArgs, use_new_name: bool) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     debug_assert!(config.placement.absolute_names,
                   "PRECONDITION FAILED: Function builds absolute names");
     let root = config.paths.extraction_root();
@@ -241,11 +256,12 @@ fn populate_out_tree_abs(
 /// might collide. The sources are selected in ascending order (same order as adding and scanning
 /// initially) and their subtree is then materialized at its relative target.
 fn populate_out_tree_rel(
-    db: &Database,
-    config: &ExtractConfig,
-    shutdown: &Shutdown,
+    rt: &ExtractRTArgs,
     use_new_name: bool,
 ) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     let root = config.paths.extraction_root();
     let mut last_source_id = 0i64;
 

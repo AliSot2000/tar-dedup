@@ -10,6 +10,7 @@ use crate::db::{Database, ErrorPhase, ExtractScanState, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
+use crate::unarchive::ExtractRTArgs;
 use crate::unarchive::filter::ParseFilterBuffer;
 use crate::unarchive::filter::run as filter_run;
 use path_clean::PathClean;
@@ -74,20 +75,20 @@ fn flush_scan_recorder(recorder: &mut Recorder, db: Option<&Database>) -> Result
 
 /// Drain the filter_buffer and write it to the db.
 fn store_filter_buffer(
-    fb: &mut Option<ParseFilterBuffer>, db: &Database, config: &ExtractConfig, shutdown: &Shutdown)
+    fb: &mut Option<ParseFilterBuffer>, rt: &ExtractRTArgs)
     -> Result<u64> {
     let result = fb
         .as_ref()
         .expect("PRECONDITION FAILED: Some filter_buffer expected")
         .write_to_db(
             Box::new(|from, line, query|
-                db.add_include_pattern_extract(from, line, query)),
+                rt.db.add_include_pattern_extract(from, line, query)),
             Box::new(|from, line, query|
-                db.add_exclude_pattern_extract(from, line, query)))?;
+                rt.db.add_exclude_pattern_extract(from, line, query)))?;
     tracing::info!("Flushed: {result} filter rows to db");
     *fb = None;
-    if config.filter.eager_filter {
-        filter_run(&db, &config, &shutdown)?
+    if rt.config.filter.eager_filter {
+        filter_run(rt)?
     }
     Ok(result)
 }
@@ -123,7 +124,7 @@ pub fn run(
         remove_temp_db(recorder, &config.paths.temp_db());
         Some(opened)
     } else if footer_this_pass {
-        Some(open_initial_database(&config.paths.temp_db(), db_path, filter_buffer)?)
+        Some(open_initial_database(&config.paths.temp_db(), db_path, filter_buffer, config, shutdown)?)
     } else {
         None
     };
@@ -205,7 +206,7 @@ pub fn run(
 
         tracing::info!("Index: {} Path: {}", member_index, path.display());
 
-        process_entry(config, db_path, &local_dst, &name,
+        process_entry(config, &shutdown, db_path, &local_dst, &name,
                       &mut db, &mut entry, &mut force_buffer, &mut scan, recorder, 
                       filter_buffer
         )?;
@@ -299,6 +300,7 @@ pub fn run(
 /// Precondition: Index is valid (i.e. not extracted yet)
 fn process_entry(
     config: &ExtractConfig,
+    shutdown: &Shutdown,
     db_path: &Path,
     local_dst: &Path,
     name: &str,
@@ -312,7 +314,7 @@ fn process_entry(
     match (name, scan.saw_any_members) {
         // Spec conform: No db, initial snapshot is first.
         (SNAPSHOT_INIT_TAR_NAME, false) => {
-            install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb)?;
+            install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown)?;
             scan.saw_manifest_db = true;
         }
         // Not Spec: Abort
@@ -331,14 +333,14 @@ fn process_entry(
                          attempt to bypass with --force-scan"
                 )));
             } else {
-                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb)?;
+                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown)?;
             }
             let ref_db = db.as_ref().expect(OPT_DB_ERROR);
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
         }
         (SNAPSHOT_TAR_NAME, true) => {
             if config.scan.force_scan && db.is_none() {
-                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb)?;
+                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown)?;
                 let ref_db = db.as_ref().expect(OPT_DB_ERROR);
                 scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
 
@@ -577,7 +579,12 @@ fn open_initial_database(
     let opened = Database::open(target)?;
     opened.init_extract_runtime_state()?;
     opened.normalize_installed_catalog()?;
-    store_filter_buffer(fb, &opened, &config, &shutdown)?;
+    let rt = ExtractRTArgs {
+        config,
+        db: &opened,
+        shutdown,
+    };
+    store_filter_buffer(fb, &rt)?;
     Ok(opened)
 }
 
@@ -589,7 +596,9 @@ fn install_database(
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
     scan: &mut ExtractScanState,
     recorder: &mut Recorder,
-    fb: &mut Option<ParseFilterBuffer>
+    fb: &mut Option<ParseFilterBuffer>,
+    config: &ExtractConfig,
+    shutdown: &Shutdown
 ) -> Result<()> {
     if scan.from_footer {
         match io::copy(entry, &mut io::sink()) {
@@ -602,7 +611,7 @@ fn install_database(
         }
     } else {
         let _ = captured_extract_database(snapshot_tmp, entry, recorder)?;
-        match open_initial_database(snapshot_tmp, db_path, fb) {
+        match open_initial_database(snapshot_tmp, db_path, fb, config, shutdown) {
             Ok(opened) => *db = Some(opened),
             Err(e) => {
                 record_session_error(recorder, e.to_file_stat(Some(db_path)));

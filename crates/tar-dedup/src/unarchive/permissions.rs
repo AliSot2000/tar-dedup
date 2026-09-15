@@ -20,6 +20,7 @@ use crate::db::types::{FileRecord, FileType, OutTreeRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
+use crate::unarchive::ExtractRTArgs;
 use chrono::{DateTime, Utc};
 use filetime::{FileTime, set_file_atime, set_file_mtime, set_file_times};
 use std::fs;
@@ -36,16 +37,19 @@ pub struct OwnerGroupMode {
     mp: Option<file_mode::Mode>,
 }
 
-pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ExtractRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     // Errors encountered while applying metadata are recorded per-file; the recorder
     // flushes them in a single txn at the end (unless `--no-errors`).
     let mut recorder = Recorder::new(db, !config.process.no_errors);
     // Resolve the owner/group policy: stored in the archive or provided on the CLI.
-    let policy: Option<OwnerGroupPolicy> = resolve_owner_group_policy(&config, &db)?;
+    let policy: Option<OwnerGroupPolicy> = resolve_owner_group_policy(rt)?;
 
     // Resolve the mode changes: explicit `--mode` (validated on the CLI), the
     // changes recorded in the archive (`--apply-mode`), or none.
-    let mode_changes = resolve_mode(&config, &db)?;
+    let mode_changes = resolve_mode(rt)?;
 
     let ps = OwnerGroupMode {
         ogp: policy,
@@ -81,8 +85,10 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
 
 /// Resolve the owner group policy based on the cli flags and the presence of an owner group policy
 /// from the database.
-fn resolve_owner_group_policy(config: &ExtractConfig, db: &Database)
+fn resolve_owner_group_policy(rt: &ExtractRTArgs)
     -> Result<Option<OwnerGroupPolicy>> {
+    let config = rt.config;
+    let db = rt.db;
     let policy = match &config.owner_policy {
         OwnerGroupSource::None => None,
         OwnerGroupSource::Cli(p) => Some(p.clone()),
@@ -109,7 +115,9 @@ fn resolve_owner_group_policy(config: &ExtractConfig, db: &Database)
 
 /// Resolve the symbolic mode changes based on the cli flags and the presence of an mode change
 /// string in the database.
-fn resolve_mode(config: &ExtractConfig, db: &Database) -> Result<Option<file_mode::Mode>> {
+fn resolve_mode(rt: &ExtractRTArgs) -> Result<Option<file_mode::Mode>> {
+    let config = rt.config;
+    let db = rt.db;
     let res = match &config.mode_policy {
         ModeSource::None => None,
         ModeSource::Cli(changes) => Some(parse_mode_changes(changes)?),

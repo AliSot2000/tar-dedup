@@ -21,6 +21,15 @@ use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 use crate::unarchive::filter::{ParseFilterBuffer, ingest_filters};
 
+/// Runtime context threaded through the extract pipeline phases.
+/// The scan phase is the exception: it creates the catalog, so it takes its own
+/// arguments (and may observe `db == None` internally).
+pub struct ExtractRTArgs<'a> {
+    pub config: &'a ExtractConfig,
+    pub db: &'a Database,
+    pub shutdown: &'a Shutdown,
+}
+
 pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     let product = ProductPresence::Absent;
 
@@ -47,16 +56,23 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 
     let mut pre_db_recorder = Recorder::speculative(!config.process.no_errors);
     let action = resolve_start(config.process.start_policy, work, product)?;
-    let mut filter_buffer = match action {
+    // TODO resume rework: seeding the db here is an interim measure; on resume the
+    //  work DB already holds the catalog, so allowing any phase but scan to see None
+    //  is purely defensive until resume is reworked.
+    let mut db: Option<Database>;
+    let mut filter_buffer: Option<ParseFilterBuffer>;
+    match action {
         StartAction::RunFresh => {
             state = ExtractRuntimeState::new();
-            Some(ingest_filters(&config, &mut pre_db_recorder)?)
+            db = None;
+            filter_buffer = Some(ingest_filters(&config, &mut pre_db_recorder)?);
         }
         StartAction::Resume => {
             tracing::error!("resuming extract from phase `{}`", state.phase.as_str());
-            Some(ParseFilterBuffer::default())
+            db = Some(Database::open(&db_path)?);
+            filter_buffer = Some(ParseFilterBuffer::default());
         }
-    };
+    }
 
     while state.phase != ExtractPipelinePhase::Done {
         shutdown.check_between_files()?;
@@ -65,35 +81,32 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         match state.phase {
             ExtractPipelinePhase::ScanTar => {
                 tracing::error!("extract: scanning archive");
-                let _db = scan::run(&config, &db_path, &shutdown,
-                                    &mut pre_db_recorder, &mut filter_buffer)?;
+                db = Some(scan::run(&config, &db_path, &shutdown,
+                                    &mut pre_db_recorder, &mut filter_buffer)?);
             }
-            ExtractPipelinePhase::Filter => {
-                let db = Database::open(&db_path)?;
-                filter::run(&db, &config, &shutdown)?;
+            ExtractPipelinePhase::Filter if let Some(ref edb) = db => {
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                filter::run(&rt)?;
             }
-            ExtractPipelinePhase::Rehash => {
-                let db = Database::open(&db_path)?;
-                rehash::run(&config, &db, &shutdown)?;
+            ExtractPipelinePhase::Rehash if let Some(ref edb) = db => {
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                rehash::run(&rt)?;
             }
-            ExtractPipelinePhase::PlacementPrologue => {
-                let db = Database::open(&db_path)?;
-                place_prologue::run(&config, &db, &shutdown)?;
+            ExtractPipelinePhase::PlacementPrologue if let Some(ref edb) = db => {
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                place_prologue::run(&rt)?;
             }
-            ExtractPipelinePhase::Place => {
-                let db = Database::open(&db_path)?;
-                place::run(&config, &db, &shutdown)?;
+            ExtractPipelinePhase::Place if let Some(ref edb) = db => {
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                place::run(&rt)?;
             }
-            ExtractPipelinePhase::Permissions => {
-                let db = Database::open(&db_path)?;
-                permissions::run(&config, &db, &shutdown)?;
+            ExtractPipelinePhase::Permissions if let Some(ref edb) = db => {
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                permissions::run(&rt)?;
             }
-            ExtractPipelinePhase::Cleanup => {
+            ExtractPipelinePhase::Cleanup if let Some(ref edb) = db => {
                 state.phase = ExtractPipelinePhase::Done;
-                {
-                    let db = Database::open(&db_path)?;
-                    db.save_extract_runtime_state(&state)?;
-                }
+                edb.save_extract_runtime_state(&state)?;
                 cleanup::cleanup_workdir(&config, CleanupMode::Extract)?;
                 if config.process.cleanup.keep_stage {
                     tracing::error!(
@@ -103,15 +116,19 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                 }
                 break;
             }
-            ExtractPipelinePhase::Done => break,
+            other => panic!(
+                "INVARIANT ERROR: reached extract phase `{}` without a database",
+                other.as_str(),
+            ),
         }
 
         let Some(next) = state.phase.next() else {
             break;
         };
         state.phase = next;
-        let db = Database::open(&db_path)?;
-        db.save_extract_runtime_state(&state)?;
+        if let Some(ref edb) = db {
+            edb.save_extract_runtime_state(&state)?;
+        }
     }
 
     tracing::error!("extracted to {}", config.paths.extraction_root().display());

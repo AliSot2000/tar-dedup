@@ -5,13 +5,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::config::ExtractConfig;
 use crate::db::Database;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::error::{Error, Result};
 use crate::progress::io_buffer;
 use crate::shutdown::Shutdown;
+use crate::unarchive::ExtractRTArgs;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
@@ -29,7 +29,10 @@ enum RehashOutcome {
     Failed(FileId, String, Option<PathBuf>),
 }
 
-pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ExtractRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     // TODO promote all files that aren't elected to rehash
     // TODO also filer for sha.
     let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?; // TODO that's wrong

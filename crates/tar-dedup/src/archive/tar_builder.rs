@@ -2,6 +2,7 @@ use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
 
+use crate::archive::ArchiveRTArgs;
 use crate::archive_footer;
 use crate::common::files::warn_if_times_changed;
 use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
@@ -18,10 +19,13 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhas
 
 // TODO Consider the transition state of the files that are ingested.
 
-pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     let mut recorder = Recorder::new(db, !config.process.no_errors);
     // Crash / force leftover: truncate incomplete stream C, keep finished A..B.
-    recover_incomplete_session(config, db, &mut recorder)?;
+    recover_incomplete_session(rt, &mut recorder)?;
 
     let archive_offset = archive_file_len(&config.paths.archive_path);
     check_archive_bytes_out(db, archive_offset)?;
@@ -54,7 +58,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         progress.set_message(&format!(
             "archive writing {SNAPSHOT_INIT_TAR_NAME} (initial manifest)"
         ));
-        append_snapshot(&mut writer, config, db, shutdown, true, &mut recorder)?;
+        append_snapshot(&mut writer, rt, true, &mut recorder)?;
     }
 
     // TODO add batching
@@ -138,9 +142,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
 
     end_session(
         writer,
-        config,
-        db,
-        shutdown,
+        rt,
         &progress,
         session_id,
         bytes_in_base,
@@ -181,10 +183,11 @@ fn check_archive_bytes_out(db: &Database, archive_len: u64) -> Result<()> {
 /// Recover from an incomplete session; the whole archive file is session-scoped,
 /// so failures are recorded against the session (not any single file).
 fn recover_incomplete_session(
-    config: &ArchiveConfig,
-    db: &Database,
+    rt: &ArchiveRTArgs,
     recorder: &mut Recorder)
     -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
     let open_session = match db.open_archive_session()? {
         None => return Ok(()),
         Some(s) => s,
@@ -244,13 +247,14 @@ fn force_abort_session(writer: TarWriter, db: &Database, progress: &ByteProgress
 /// append_snapshot, commits the db, stages it, adds it to the archive and removes the stage again.
 fn append_snapshot(
     writer: &mut TarWriter,
-    config: &ArchiveConfig,
-    db: &Database,
-    shutdown: &Shutdown,
+    rt: &ArchiveRTArgs,
     is_init: bool,
     recorder: &mut Recorder)
     -> Result<()> {
 
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     db.checkpoint()?;
     let src = config.paths.db_path();
     let staging = config.paths.stage_archive_snapshot();
@@ -284,15 +288,16 @@ fn append_snapshot(
 
 fn end_session(
     mut writer: TarWriter,
-    config: &ArchiveConfig,
-    db: &Database,
-    shutdown: &Shutdown,
+    rt: &ArchiveRTArgs,
     progress: &ByteProgress,
     session_id: i64,
     bytes_in_base: u64,
     write_tar_eof: bool,
     recorder: &mut Recorder,
 ) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     db.promote_pending_archived()?;
     // Full archive pass only: every remaining row has been considered (or was ineligible).
     if write_tar_eof {
@@ -301,7 +306,7 @@ fn end_session(
     db.stamp_archive_session_finished_at(session_id)?;
 
     progress.set_message(format!("archive writing {SNAPSHOT_TAR_NAME} (progress)").as_str());
-    if let Err(e) = append_snapshot(&mut writer, config, db, shutdown, false, recorder) {
+    if let Err(e) = append_snapshot(&mut writer, rt, false, recorder) {
         if e.is_interrupted() && shutdown.is_force() {
             return force_abort_session(writer, db, progress);
         }

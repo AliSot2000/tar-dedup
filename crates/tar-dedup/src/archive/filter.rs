@@ -1,3 +1,4 @@
+use crate::archive::ArchiveRTArgs;
 use crate::common::filter::{
     FilterSink, ingest_filters as ingest_filter_rules, parse_filter, test_match,
 };
@@ -5,10 +6,11 @@ use crate::config::ArchiveConfig;
 use crate::db::Database;
 use crate::db::types::{FilePhase, StrippedRecord};
 use crate::error::Result;
-use crate::shutdown::Shutdown;
 
 /// Stub filter stage: advance hashed → filtered before dedup.
-pub fn run(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
     let db_files = db.count_entries()?;
     let include_count = db.count_filters(Some(false))?;
     let exclude_count = db.count_filters(Some(true))?;
@@ -29,7 +31,7 @@ pub fn run(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result
     }
     // Perform actual process of filtering. In case this is a noticeable bottleneck, it is a
     // separate function so we can swap in a rayon pool or a crossbeam ... whatever is better.
-    fast_filter(&db, &config, &shutdown)?;
+    fast_filter(rt)?;
     if !config.indexing.no_hardlink_detection {
         let (down, up) = db.fix_up_canonical_flag()?;
         assert_eq!(down, up, "Number of clusters with downgrades did not match numbers with upgrade");
@@ -44,7 +46,10 @@ pub fn run(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result
 
 /// Perform the filtering of files as fast as possible. Currently, with lazy map iterators to avoid
 /// creating two memcopies.
-fn fast_filter(db: &Database, config: &ArchiveConfig, shutdown: &Shutdown) -> Result<()> {
+fn fast_filter(rt: &ArchiveRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     let include_filters = parse_filter(
         &db.get_filters(false)?, "include", config.filter.anchored, config.filter.ignore_case);
     let exclude_filters = parse_filter(
