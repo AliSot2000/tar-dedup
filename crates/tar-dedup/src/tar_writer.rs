@@ -2,8 +2,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use tar::Builder;
 
 use crate::compression::InterruptibleXzEncoder;
@@ -85,12 +85,10 @@ impl TarWriter {
             CompressionFormat::Gz => {
                 CompressLayer::Gz(GzEncoder::new(file, Compression::new(compress_level)))
             }
-            CompressionFormat::Bz2 => {
-                CompressLayer::Bz(bzip2::write::BzEncoder::new(
-                    file,
-                    bzip2::Compression::new(compress_level),
-                ))
-            }
+            CompressionFormat::Bz2 => CompressLayer::Bz(bzip2::write::BzEncoder::new(
+                file,
+                bzip2::Compression::new(compress_level),
+            )),
             CompressionFormat::Zstd => CompressLayer::Zstd(
                 zstd::stream::write::Encoder::new(file, compress_level as i32)
                     .map_err(|e| Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
@@ -148,12 +146,8 @@ impl TarWriter {
 
         let mut sink = self.take_sink(false)?;
 
-        sink
-            .resolve_trailing_eof()
-            .map_err(err_fac)?;
-        sink
-            .flush()
-            .map_err(err_fac)?;
+        sink.resolve_trailing_eof().map_err(err_fac)?;
+        sink.flush().map_err(err_fac)?;
 
         let bytes_out = sink
             .inner
@@ -177,12 +171,8 @@ impl TarWriter {
         let err_fac = error_factory; // Info: Alias for convenience.
 
         let mut sink = self.take_sink(true)?;
-        sink
-            .resolve_trailing_eof()
-            .map_err(err_fac)?;
-        sink
-            .flush()
-            .map_err(err_fac)?;
+        sink.resolve_trailing_eof().map_err(err_fac)?;
+        sink.flush().map_err(err_fac)?;
 
         let bytes_out = sink
             .inner
@@ -414,8 +404,7 @@ impl Write for CompressLayer {
     }
 }
 
-impl CompressLayer
-{
+impl CompressLayer {
     fn finish(self) -> io::Result<File> {
         match self {
             Self::Xz(w) => w.finish(),
