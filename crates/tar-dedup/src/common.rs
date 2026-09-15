@@ -38,13 +38,18 @@ pub const DEFAULT_AUTO_FLUSH_LIMIT: u64 = 10_000;
 /// [`get_id`]: Function gets the id from an entry. This function MUST return an id.
 /// [`process_entries`]: Once the entries are ready, hand control to "loop body" function
 /// [`batch_size`]: Determines the max size of batches from the get_entries function.
-pub fn batched_stepped_loop<ID, ENTRY>(
-    init_id: fn() -> ID,
-    get_entries: fn(&ID, u64) -> Result<Vec<ENTRY>>,
-    get_id: fn(&ENTRY) -> ID,
-    process_entries: fn(Vec<ENTRY>) -> Result<()>,
+pub fn batched_stepped_loop<ID, ENTRY, I, G, GI, P>(
+    mut init_id: I,
+    mut get_entries: G,
+    mut get_id: GI,
+    mut process_entries: P,
     batch_size: u64)
-    -> Result<()> {
+    -> Result<()>
+where
+    I: FnMut() -> ID,
+    G: FnMut(&ID, u64) -> Result<Vec<ENTRY>>,
+    GI: FnMut(&ENTRY) -> ID,
+    P: FnMut(Vec<ENTRY>) -> Result<()> {
 
     let mut last_id: ID = init_id();
     loop {
@@ -60,11 +65,14 @@ pub fn batched_stepped_loop<ID, ENTRY>(
     Ok(())
 }
 
-pub fn batched_loop<ENTRY>(
-    get_entries: fn(u64) -> Result<Vec<ENTRY>>,
+pub fn batched_loop<ENTRY, G, P>(
+    mut get_entries: G,
     batch_size: u64,
-    process_entries: fn(Vec<ENTRY>) -> Result<()>)
-    -> Result<()> {
+    mut process_entries: P)
+    -> Result<()>
+where
+    G: FnMut(u64) -> Result<Vec<ENTRY>>,
+    P: FnMut(Vec<ENTRY>) -> Result<()> {
 
     loop {
         let entries = get_entries(batch_size)?;
