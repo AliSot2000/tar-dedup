@@ -16,9 +16,10 @@ use crate::common::start::{
     ProductPresence, StartAction, StartPolicy, WorkPresence, resolve_start,
 };
 use crate::config::{ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState};
-use crate::db::Database;
+use crate::db::{Database, Recorder};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
+use crate::unarchive::filter::{ParseFilterBuffer, ingest_filters};
 
 pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     let product = ProductPresence::Absent;
@@ -44,15 +45,18 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         WorkPresence::Absent
     };
 
+    let mut pre_db_recorder = Recorder::speculative(!config.process.no_errors);
     let action = resolve_start(config.process.start_policy, work, product)?;
-    match action {
+    let mut filter_buffer = match action {
         StartAction::RunFresh => {
             state = ExtractRuntimeState::new();
+            Some(ingest_filters(&config, &mut pre_db_recorder)?)
         }
         StartAction::Resume => {
-            eprintln!("resuming extract from phase `{}`", state.phase.as_str());
+            tracing::error!("resuming extract from phase `{}`", state.phase.as_str());
+            Some(ParseFilterBuffer::default())
         }
-    }
+    };
 
     while state.phase != ExtractPipelinePhase::Done {
         shutdown.check_between_files()?;
@@ -60,8 +64,9 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 
         match state.phase {
             ExtractPipelinePhase::ScanTar => {
-                eprintln!("extract: scanning archive");
-                let _db = scan::run(&config, &db_path, &shutdown)?;
+                tracing::error!("extract: scanning archive");
+                let _db = scan::run(&config, &db_path, &shutdown,
+                                    &mut pre_db_recorder, &mut filter_buffer)?;
             }
             ExtractPipelinePhase::Filter => {
                 let db = Database::open(&db_path)?;
@@ -91,7 +96,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                 }
                 cleanup::cleanup_workdir(&config, CleanupMode::Extract)?;
                 if config.process.cleanup.keep_stage {
-                    eprintln!(
+                    tracing::error!(
                         "keeping stage (--keep-stage): {}",
                         config.paths.work_dir.display()
                     );
@@ -109,7 +114,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         db.save_extract_runtime_state(&state)?;
     }
 
-    eprintln!("extracted to {}", config.paths.extraction_root().display());
+    tracing::error!("extracted to {}", config.paths.extraction_root().display());
     Ok(())
 }
 
