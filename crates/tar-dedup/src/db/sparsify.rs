@@ -1,6 +1,7 @@
-use rusqlite::{named_params, Connection};
+use rusqlite::{Connection, named_params};
 
 use crate::db::common::SqlFileRow;
+use crate::db::common::generate_archive_filter;
 use crate::db::flags::FileFlag;
 use crate::db::types::FileId;
 use crate::error::Result;
@@ -20,21 +21,20 @@ pub fn promote_non_sparsify_candidates_to_sparsified(
     min_pages: u64,
 ) -> Result<u64> {
     let has_sparse = FileFlag::HasSparse.mask_i64();
-    let n = conn.execute(
+    let filtered_rows= generate_archive_filter(None);
+    let n = conn.execute(&format!(
         "UPDATE files SET phase = 'sparsified'
          WHERE phase = 'deduped'
            AND (
              canonical_id IS NULL
              OR canonical_id != id
-             OR ftype IS NULL
              OR ftype != 'file'
              OR sha1 IS NULL               -- technically implied by canonical_id IS NULL
              OR sparse_count IS NULL       -- sparse_count IS NULL implied by canonical_id IS NULL
              OR sparse_count < :min_pages
              OR (flags & :has_sparse) != 0
-             OR include_reason = 0
-             OR exclude_reason > 0
-           )",
+             OR NOT ({filtered_rows})
+         )"),
         named_params! {
             ":min_pages": min_pages as i64,
             ":has_sparse": has_sparse,
@@ -55,12 +55,11 @@ pub fn list_sparsify_candidates<R: SqlFileRow>(
          WHERE phase = 'deduped'
              AND canonical_id = id
              AND ftype = 'file'
-             AND sha1 IS NOT NULL
              AND sparse_count >= :min_pages -- implies NOT NULL
              AND (flags & :has_sparse) = 0
-             AND include_reason < 0
-             AND exclude_reason = 0
-         ORDER BY id"
+             AND {}
+         ORDER BY id",
+        generate_archive_filter(None)
     ))?;
     let rows = stmt.query_map(
         named_params! {
