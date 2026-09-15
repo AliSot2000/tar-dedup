@@ -96,11 +96,13 @@ pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
         &config.filter.include_from,
         &config.filter.exclude_patterns,
         &config.filter.exclude_from,
-        phase,
         &mut recorder,
+        phase,
         FilterSink {
-            add_include: Box::new(|from, line, query| db.add_include_pattern(from, line, query)),
-            add_exclude: Box::new(|from, line, query| db.add_exclude_pattern(from, line, query)),
+            add_include: Box::new(|from, line, query|
+                db.add_include_pattern(from, line, query)),
+            add_exclude: Box::new(|from, line, query|
+                db.add_exclude_pattern(from, line, query)),
             count_includes: Box::new(|| db.count_filters(Some(false))),
         },
     )?;
