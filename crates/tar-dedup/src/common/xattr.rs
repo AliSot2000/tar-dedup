@@ -1,7 +1,8 @@
 //! Module contains the necessary functionality to get all covered extended attributes of a given file.
 
+use crate::error::{FileStatError, FileStatResult};
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use posix_acl::{PosixACL, Qualifier};
 use selinux::SecurityContext;
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,6 @@ use thiserror::Error;
 use xattrs;
 use xattrs::symlink_set_xattr;
 use xattrs::types::{BString, ZString};
-use crate::error::{FileStatError, FileStatResult};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -49,7 +49,6 @@ pub enum PosixQualifierParserError {
     },
 }
 
-
 /// Fetch the user xattrs of a given path. Returns a json string
 /// The json structure is:
 /// ```json
@@ -63,8 +62,10 @@ pub enum PosixQualifierParserError {
 /// }
 pub fn get_file_xattr(path: &Path) -> FileStatResult<String> {
     let printable_path = path.to_string_lossy();
-    let user_xattr = xattrs::symlink_list_xattr(path)
-        .map_err(|e| {FileStatError::Xattrs{path: path.to_path_buf(), source: e}})?;
+    let user_xattr = xattrs::symlink_list_xattr(path).map_err(|e| FileStatError::Xattrs {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
 
     let mut data = HashMap::new();
 
@@ -100,12 +101,12 @@ pub fn get_file_xattr(path: &Path) -> FileStatResult<String> {
     };
 
     Ok(
-        serde_json::to_string(&dump)
-        .map_err(|e| {FileStatError::Json {path: path.to_path_buf(), source: e}})?
+        serde_json::to_string(&dump).map_err(|e| FileStatError::Json {
+            path: path.to_path_buf(),
+            source: e,
+        })?,
     )
 }
-
-
 
 #[cfg(not(feature = "debug-force-utf8"))]
 fn encode_for_db(target: &OsStr) -> String {
@@ -154,8 +155,10 @@ pub fn get_file_acl(path: &Path) -> FileStatResult<String> {
         json_repr.insert(ser_qual, entry.perm);
     }
     Ok(
-        serde_json::to_string(&json_repr)
-            .map_err(|e| {FileStatError::Json {path: path.to_path_buf(), source: e}})?
+        serde_json::to_string(&json_repr).map_err(|e| FileStatError::Json {
+            path: path.to_path_buf(),
+            source: e,
+        })?,
     )
 }
 
@@ -184,15 +187,15 @@ fn deserialize_to_acl_qualifier(qualifier: &str) -> Result<Qualifier, PosixQuali
             ))),
         },
         Some(("user", id)) => {
-            let uid =  id.parse::<u32>();
+            let uid = id.parse::<u32>();
             match uid {
                 Ok(u) => Ok(Qualifier::User(u)),
                 Err(e) => Err(PosixQualifierParserError::InvalidIdentifier {
                     context: format!("user:{id}"),
                     source: e,
-                })
+                }),
             }
-        },
+        }
         Some(("group", id)) => {
             let gid = id.parse::<u32>();
             match gid {
@@ -200,58 +203,65 @@ fn deserialize_to_acl_qualifier(qualifier: &str) -> Result<Qualifier, PosixQuali
                 Err(e) => Err(PosixQualifierParserError::InvalidIdentifier {
                     context: format!("group:{id}"),
                     source: e,
-                })
+                }),
             }
         }
-        Some((l, r)) => Err(PosixQualifierParserError::UnexpectedString(
-            format!("{l}:{r}"))),
+        Some((l, r)) => Err(PosixQualifierParserError::UnexpectedString(format!(
+            "{l}:{r}"
+        ))),
     }
 }
 
-
 /// Read SELinux Security Context, if exists.
 pub fn get_file_selinux_data(path: &Path) -> FileStatResult<Vec<u8>> {
-    let octx = SecurityContext::of_path(
-        path,
-        false,
-        false)
+    let octx = SecurityContext::of_path(path, false, false)
         .map_err(|e| {FileStatError::SELinux {path: path.to_path_buf(), source: e}})?;
     match octx {
         None => Ok(Vec::new()),
-        Some(ctx) => Ok(ctx.as_bytes().to_vec())
+        Some(ctx) => Ok(ctx.as_bytes().to_vec()),
     }
 }
 
 /// Function expects a json structure from `get_file_xattr`
 pub fn set_file_xattrs(path: &Path, raw_xattr: &str) -> FileStatResult<()> {
-    let dump: XattrDump = serde_json::from_str(raw_xattr)
-        .map_err(|e| {FileStatError::Json {path: path.to_path_buf(), source: e}})?;
+    let dump: XattrDump = serde_json::from_str(raw_xattr).map_err(|e| FileStatError::Json {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
 
     match dump.encoding {
         Encoding::Utf8 => {
             for (k, v) in dump.data {
                 // k, v are already valid UTF-8 strings, use directly
-                symlink_set_xattr(path, k, v)
-                    .map_err(|e| {FileStatError::Xattrs {
-                        path: path.to_path_buf(),
-                        source: e}})?
+                symlink_set_xattr(path, k, v).map_err(|e| FileStatError::Xattrs {
+                    path: path.to_path_buf(),
+                    source: e,
+                })?
             }
         }
         Encoding::Base64 => {
             for (k, v) in dump.data {
-                let key_bytes = STANDARD.decode(&k)
-                    .map_err(|e| {FileStatError::Base64DecodingError {
-                        path: path.to_path_buf(),
-                        source: e}})?;
-                let val_bytes = STANDARD.decode(&v)
-                    .map_err(|e| {FileStatError::Base64DecodingError {
-                        path: path.to_path_buf(),
-                        source: e}})?;
+                let key_bytes =
+                    STANDARD
+                        .decode(&k)
+                        .map_err(|e| FileStatError::Base64DecodingError {
+                            path: path.to_path_buf(),
+                            source: e,
+                        })?;
+                let val_bytes =
+                    STANDARD
+                        .decode(&v)
+                        .map_err(|e| FileStatError::Base64DecodingError {
+                            path: path.to_path_buf(),
+                            source: e,
+                        })?;
                 // use key_bytes / val_bytes to actually call setxattr
-                symlink_set_xattr(path, key_bytes, val_bytes)
-                    .map_err(|e| {FileStatError::Xattrs {
+                symlink_set_xattr(path, key_bytes, val_bytes).map_err(|e| {
+                    FileStatError::Xattrs {
                         path: path.to_path_buf(),
-                        source: e}})?
+                        source: e,
+                    }
+                })?
             }
         }
     }
@@ -263,10 +273,10 @@ pub fn set_file_xattrs(path: &Path, raw_xattr: &str) -> FileStatResult<()> {
 /// The string is parsed, the ACL strucure rebuilt and lastly written to the given `path`
 pub fn set_file_acl(path: &Path, raw_acl: &str) -> FileStatResult<()> {
     let parsed_json: HashMap<String, u32> = serdej_from_str(raw_acl)
-        .map_err(|e| {FileStatError::Json {
+        .map_err(|e| FileStatError::Json {
             path: path.to_path_buf(),
             source: e,
-        }})?;
+        })?;
     let mut new_acls = PosixACL::empty();
 
     // Rebuild ACL
@@ -279,16 +289,20 @@ pub fn set_file_acl(path: &Path, raw_acl: &str) -> FileStatResult<()> {
             key.as_str()
         };
 
-
-        let qualifier = deserialize_to_acl_qualifier(qual_str)
-            .map_err(|e| {FileStatError::PosixQualifierParser {
+        let qualifier = deserialize_to_acl_qualifier(qual_str).map_err(|e| {
+            FileStatError::PosixQualifierParser {
                 path: path.to_path_buf(),
-                source: e
-            }})?;
+                source: e,
+            }
+        })?;
         new_acls.set(qualifier, value);
     }
-    new_acls.write_acl(path)
-        .map_err(|e| {FileStatError::PosixAcl {path: path.to_path_buf(), source: e}})?;
+    new_acls
+        .write_acl(path)
+        .map_err(|e| FileStatError::PosixAcl {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
     Ok(())
 }
 
@@ -300,8 +314,12 @@ pub fn set_file_selinux_data(path: &Path, raw_ctx: &[u8]) -> FileStatResult<()> 
         source: io::Error::new(io::ErrorKind::InvalidData, e),
     })?;
     let parsed_ctx = SecurityContext::from_c_str(&c_string, true);
-    parsed_ctx.set_for_path(&path, false, false)
-        .map_err(|e| {FileStatError::SELinux {path: path.to_path_buf(), source: e}})?;
+    parsed_ctx
+        .set_for_path(&path, false, false)
+        .map_err(|e| FileStatError::SELinux {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
     Ok(())
 }
 
