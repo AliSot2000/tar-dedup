@@ -12,16 +12,16 @@ use crate::db::Database;
 use crate::db::ErrorPhase;
 use crate::db::flags::ErrorFlags;
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
-use crate::error::{Error, FileStatError, Result};
+use crate::error::{Error, Result};
 use crate::progress::CountProgress;
 use crate::shutdown::Shutdown;
 
 enum SparseOutcome {
     Ok(FileId),
-    Err(FileId, FileStatError),
+    Err(FileId, Error),
 }
 
-// TODO add const ERROR_PHASE
+const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Sparsify);
 
 /// Deletes `path` on drop unless [`keep`](Self::keep) was called.
 struct TempSparseFile {
@@ -88,11 +88,9 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     let bar = CountProgress::with_total("sparsify", candidates.len() as u64);
     let results = Mutex::new(Vec::<SparseOutcome>::with_capacity(candidates.len()));
 
-    let checked = PreYield::new(
-        candidates.into_iter(), |record: &StrippedRecord| {
-            warn_if_times_changed(&record.abs_path, record.mtime, record.atime, record.ctime);
-        }
-    );
+    let checked = PreYield::new(candidates.into_iter(), |record: &StrippedRecord| {
+        warn_if_times_changed(&record.abs_path, record.mtime, record.atime, record.ctime);
+    });
 
     let parallel = run_pool(config, shutdown, &bar, &results, checked);
 
@@ -104,16 +102,16 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     for outcome in outcomes {
         match outcome {
             SparseOutcome::Ok(id) => { db.mark_sparsified_sparse(id)?; ok += 1; }
-            SparseOutcome::Err(id, error) => {
+            SparseOutcome::Err(_id, Error::Interrupted) => (),
+            SparseOutcome::Err(id, Error::FileStat(e)) => {
                 db.mark_sparsified_error(id)?;
-                recorder.record_file(
-                    id,
-                    ErrorPhase::Pipeline(crate::config::PipelinePhase::Sparsify),
-                    error,
-                    ErrorFlags::default(),
-                );
+                recorder.record_file(id, ERROR_PHASE, e, ErrorFlags::default());
                 err += 1;
             }
+            SparseOutcome::Err(_id, e) => panic!(
+                "PRECONDITION FAILED: Expected Error::Interrupted or Error::FileStatError, \
+                found: {e}"
+            ),
         }
     }
     recorder.flush()?;
@@ -122,19 +120,12 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
         Ok(()) => {
             bar.finish("sparsify complete");
             sanity_no_deduped(db)?;
-            tracing::info!(
-                ok,
-                err,
-                "sparsify complete"
-            );
+            tracing::info!(ok, err, "sparsify complete");
             Ok(())
         }
         Err(Error::Interrupted) => {
             bar.abandon();
-            tracing::warn!(
-                saved,
-                "sparsify interrupted; completed files saved"
-            );
+            tracing::warn!(saved, "sparsify interrupted; completed files saved");
             Err(Error::Interrupted)
         }
         Err(e) => Err(e),
@@ -162,9 +153,9 @@ fn run_pool(
         checked.par_bridge().try_for_each(|record| {
             shutdown_workers.check_between_files()?;
 
-            let name = record.sparse_member_name().expect(
-                "Invariant: sparsify candidates must be self-canonical files",
-            );
+            let name = record
+                .sparse_member_name()
+                .expect("Invariant: sparsify candidates must be self-canonical files");
             let dst = stage_dir.join(name).clean();
             let tmp = TempSparseFile::new(dst);
 
@@ -196,7 +187,10 @@ fn run_pool(
                     results
                         .lock()
                         .expect("sparsify results lock poisoned")
-                        .push(SparseOutcome::Err(record.id, e.to_file_stat(Some(&record.abs_path))));
+                        .push(SparseOutcome::Err(
+                            record.id,
+                            Error::io(record.abs_path, e),
+                        ));
                     bar.inc(1);
                     Ok(())
                 }
