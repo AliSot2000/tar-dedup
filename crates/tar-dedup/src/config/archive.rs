@@ -195,6 +195,8 @@ impl ArchiveConfig {
             })
             .transpose()?;
 
+        // TODO: call resolve_xz_threads to ensure we have sufficient resources.
+
         if args.page_size == 0 {
             return Err(Error::Config("page_size must be greater than 0".into()));
         }
