@@ -309,7 +309,7 @@ impl ExtractConfig {
                 include_from: args.include_from.clone(),
                 anchored: args.anchored,
                 ignore_case: args.ignore_case,
-                eager_filter: true,
+                eager_filter: !args.lazy_filter,
             },
         })
     }

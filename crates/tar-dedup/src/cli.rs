@@ -682,6 +682,10 @@ pub struct ExtractArgs {
     #[arg(long = "ignore-case", help_heading = "Filtering")]
     pub ignore_case: bool,
 
+    /// Apply include/exclude filters after a later phase (scan) instead of eagerly.
+    #[arg(long = "lazy_filter", default_value_t = false, help_heading = "Filtering")]
+    pub lazy_filter: bool,
+
     /// Abort on the first warning or error instead of continuing where possible.
     #[arg(
         long = "fail-fast",
