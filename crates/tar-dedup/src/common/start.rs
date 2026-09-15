@@ -14,11 +14,7 @@ pub enum StartPolicy {
 
 impl StartPolicy {
     pub fn create_or_fresh(fresh: bool) -> Self {
-        if fresh {
-            Self::Fresh
-        } else {
-            Self::Create
-        }
+        if fresh { Self::Fresh } else { Self::Create }
     }
 }
 
