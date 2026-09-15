@@ -21,7 +21,7 @@ pub fn promote_non_sparsify_candidates_to_sparsified(
     min_pages: u64,
 ) -> Result<u64> {
     let has_sparse = FileFlag::HasSparse.mask_i64();
-    let filtered_rows= generate_archive_filter(None);
+    let filtered_rows = generate_archive_filter(None);
     let n = conn.execute(&format!(
         "UPDATE files SET phase = 'sparsified'
          WHERE phase = 'deduped'
