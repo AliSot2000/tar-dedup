@@ -182,18 +182,21 @@ fn run_pool(
                     drop(tmp);
                     Err(Error::Interrupted)
                 }
-                Err(e) => {
+                Err(e @ Error::FileStat(_)) => {
                     drop(tmp);
                     results
                         .lock()
                         .expect("sparsify results lock poisoned")
                         .push(SparseOutcome::Err(
                             record.id,
-                            Error::io(record.abs_path, e),
+                            e,
                         ));
                     bar.inc(1);
                     Ok(())
                 }
+                Err(other) => panic!(
+                    "Contract violated, only FileStatErrors and Interrupted expected. Got: {other}"
+                ),
             }
         })
     });
