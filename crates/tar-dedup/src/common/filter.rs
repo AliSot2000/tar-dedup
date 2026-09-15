@@ -135,7 +135,7 @@ pub fn ingest_filters(
         recorder,
         e_phase,
     )?;
-    recorder.flush()?;
+    recorder.try_flush()?;
     Ok(())
 }
 
