@@ -1,6 +1,7 @@
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, named_params};
 
+use crate::db::common::generate_archive_filter;
 use crate::db::flags::FileFlag;
 use crate::db::meta;
 use crate::db::types::{ArchiveSession, FileId};
@@ -129,15 +130,17 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Re
     } else {
         ""
     };
-    let total: i64 = conn.query_row(&format!(
-        "SELECT COALESCE(SUM(size), 0) AS total
+    let total: i64 = conn.query_row(
+        &format!(
+            "SELECT COALESCE(SUM(size), 0) AS total
          FROM files
          WHERE canonical_id = id 
             AND phase IN ('staged', 'archived') 
             {filter} 
             AND ftype = 'file'
-            AND include_reason < 0
-            AND exclude_reason = 0"),
+            AND {}",
+            generate_archive_filter(None)
+        ),
         [],
         |row| row.get("total"),
     )?;
@@ -160,12 +163,13 @@ pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Res
             AND phase = 'staged' 
             {filter} 
             AND ftype = 'file'
-            AND include_reason < 0
-            AND exclude_reason = 0
-         ORDER BY ext ASC, size ASC, id ASC"
+            AND {}
+         ORDER BY ext ASC, size ASC, id ASC",
+        generate_archive_filter(None)
     ))?;
     let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Result<u64> {
@@ -174,15 +178,17 @@ pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Resu
     } else {
         ""
     };
-    let total: i64 = conn.query_row(&format!(
+    let total: i64 = conn.query_row(
+        &format!(
         "SELECT COALESCE(SUM(size), 0) AS total
          FROM files
          WHERE canonical_id = id 
             AND phase = 'archived' 
             {filter}
             AND ftype = 'file'
-            AND include_reason < 0
-            AND exclude_reason = 0"),
+            AND {}",
+            generate_archive_filter(None)
+        ),
         [],
         |row| row.get("total"),
     )?;
@@ -194,11 +200,7 @@ pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Resu
 /// Ineligible: non-self-canonical, non-file types, and (when `filter_sha`) missing `sha1`.
 /// Does not touch outcome flags — phase is flow only.
 pub fn promote_ineligible_to_archived(conn: &Connection, filter_sha: bool) -> Result<u64> {
-    let sha_clause = if filter_sha {
-        " OR sha1 IS NULL"
-    } else {
-        ""
-    };
+    let sha_clause = if filter_sha { " OR sha1 IS NULL" } else { "" };
     let stmt = format!(
         "UPDATE files SET phase = 'archived'
          WHERE phase = 'staged'
