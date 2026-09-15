@@ -3,15 +3,11 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::config::ExtractPipelinePhase;
 use crate::db::flags::ErrorFlags;
 use crate::db::types::{FileId, FilterExpression, StrippedRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{FileStatError, Result};
 use regex::{Regex, RegexBuilder};
-
-const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Filter);
-
 
 /// A filter expression compiled to a regex for fast matching.
 pub struct ParsedFilter {
@@ -114,6 +110,7 @@ pub fn ingest_filters(
     exclude_patterns: &[String],
     exclude_from: &[PathBuf],
     recorder: &mut Recorder,
+    e_phase: ErrorPhase,
     sink: FilterSink<'_>,
 ) -> Result<()> {
     handle_pattern_source(
@@ -122,6 +119,7 @@ pub fn ingest_filters(
         "include",
         &sink.add_include,
         recorder,
+        e_phase,
     )?;
 
     if (sink.count_includes)()? == 0 {
@@ -135,6 +133,7 @@ pub fn ingest_filters(
         "exclude",
         &sink.add_exclude,
         recorder,
+        e_phase,
     )?;
     recorder.flush()?;
     Ok(())
@@ -147,6 +146,7 @@ fn handle_pattern_source(
     operation: &str,
     insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
     recorder: &mut Recorder,
+    e_phase: ErrorPhase
 ) -> Result<()> {
     // Scan single argument expressions.
     for (idx, query) in pattern.iter().enumerate() {
@@ -156,7 +156,8 @@ fn handle_pattern_source(
             operation,
             idx as u64,
             insert_fn,
-            recorder
+            recorder,
+            e_phase
         )?;
     }
 
@@ -167,7 +168,7 @@ fn handle_pattern_source(
             Ok(fc) => fc,
             Err(e) => {
                 recorder.record_session(
-                    ERROR_PHASE,
+                    e_phase,
                     FileStatError::Io {
                         path: file.clone(),
                         source: std::io::Error::new(e.kind(), e.to_string()),
@@ -191,6 +192,7 @@ fn handle_pattern_source(
                 idx as u64,
                 insert_fn,
                 recorder,
+                e_phase,
             )?;
         }
     }
@@ -205,13 +207,14 @@ fn handle_query(
     line: u64,
     insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
     recorder: &mut Recorder,
+    e_phase: ErrorPhase
 ) -> Result<()> {
     if Regex::new(query).is_ok() {
         let res = insert_fn(source, Some(line), query)?;
         assert_eq!(res, 1, "DB Failed, expected 1 row to get added, got {res}");
     } else {
         recorder.record_session(
-            ERROR_PHASE,
+            e_phase,
             FileStatError::General {
                 path: None,
                 message: format!(
