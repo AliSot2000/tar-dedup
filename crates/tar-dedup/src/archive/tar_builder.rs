@@ -1,22 +1,25 @@
 use std::fs::OpenOptions;
+use std::io;
 use std::path::Path;
 
 use crate::archive_footer;
 use crate::common::files::warn_if_times_changed;
+use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::config::ArchiveConfig;
-use crate::db::Database;
-use crate::db::flags::{FileFlag, ErrorFlags};
+use crate::db::ErrorPhase;
+use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::StrippedRecord;
-use crate::error::{Error, Result};
+use crate::db::{Database, Recorder};
+use crate::error::{Error, FileStatError, Result};
 use crate::progress::ByteProgress;
 use crate::shutdown::Shutdown;
 use crate::tar_writer::TarWriter;
-use crate::common::{SNAPSHOT_TAR_NAME, SNAPSHOT_INIT_TAR_NAME};
+const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive);
 
 // TODO Consider the transition state of the files that are ingested.
 
 pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
-    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    let mut recorder = Recorder::new(db, !config.process.no_errors);
     // Crash / force leftover: truncate incomplete stream C, keep finished A..B.
     recover_incomplete_session(config, db, &mut recorder)?;
 
@@ -48,9 +51,9 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
 
     // Fresh start into archiving.
     if already_archived == 0 {
-        progress.set_message(
-            &format!("archive writing {SNAPSHOT_INIT_TAR_NAME} (initial manifest)")
-        );
+        progress.set_message(&format!(
+            "archive writing {SNAPSHOT_INIT_TAR_NAME} (initial manifest)"
+        ));
         append_snapshot(&mut writer, config, db, shutdown, true, &mut recorder)?;
     }
 
@@ -60,6 +63,16 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     if to_archive.is_empty() && already_archived == 0 {
         tracing::warn!("no staged files to archive");
     }
+
+    let capture_error = |err: Error, rec: &mut Recorder, fid| {
+        match err {
+            Error::FileStat(e) => rec.record_file(
+                fid, ERROR_PHASE, e, ErrorFlags::default(),
+            ),
+            _ => panic!("PRECONDITION FAILED: Function may only process variant FileStatError")
+        }
+
+    };
 
     let mut stopped = false;
     let mut final_archive = true;
@@ -85,14 +98,10 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
             Ok(t) => t,
             Err(e) => {
                 let err = Error::io(&source, e);
-                recorder.record_file(
-                    record.id,
-                    crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
-                    err.to_file_stat(None),
-                    ErrorFlags::default(),
-                );
+                capture_error(err, &mut recorder, file_id);
                 db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
-                return Err(err);
+                // return Err(err); // TODO why was here error?
+                continue;
             }
         };
         warn_if_times_changed(&target, record.mtime, record.atime, record.ctime);
@@ -101,26 +110,21 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
 
         // TODO Correct capture
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
-            Ok(()) => { 
-                db.set_file_flag(record.id, FileFlag::AppendedPath, true)?; 
-            }
+            Ok(()) => { db.set_file_flag(record.id, FileFlag::AppendedPath, true)?; }
             Err(e) if e.is_interrupted() => {
                 stopped = true;
                 final_archive = false;
                 break;
             }
             Err(e) => {
+                assert!(matches!(e, Error::FileStat(_)),
+                        "Unexpected return type, only FileStatError Expected");
                 tracing::error!(
                     path = %record.abs_path.to_string_lossy(),
                     error = %e,
                     "archive append_path failed; marking ErrorWhileArchive and continuing"
                 );
-                recorder.record_file(
-                    record.id,
-                    crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
-                    e.to_file_stat(None),
-                    ErrorFlags::default(),
-                );
+                capture_error(e, &mut recorder, file_id);
                 db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
                 // Do not set AppendedPath — member was not successfully written.
             }
@@ -179,16 +183,28 @@ fn check_archive_bytes_out(db: &Database, archive_len: u64) -> Result<()> {
 fn recover_incomplete_session(
     config: &ArchiveConfig,
     db: &Database,
-    recorder: &mut crate::db::Recorder,
-) -> Result<()> {
+    recorder: &mut Recorder)
+    -> Result<()> {
     let open_session = match db.open_archive_session()? {
         None => return Ok(()),
         Some(s) => s,
     };
 
-    truncate_archive_at(&config.paths.archive_path, open_session.archive_offset, recorder)?;
+    let res = truncate_archive_at(
+        &config.paths.archive_path,
+        open_session.archive_offset
+    ).map_err(|e| FileStatError::io(&config.paths.archive_path, e));
+
+    match res {
+        Ok(_) => (),
+        Err(e) => {
+            recorder.record_session(ERROR_PHASE, e.recreate(), ErrorFlags::default());
+            return Err(Error::FileStat(e));
+        }
+    }
+
     db.abort_incomplete_archive_session(&open_session)?;
-    
+
     tracing::info!(
         "recovered incomplete archive session at offset {} ({})",
         open_session.archive_offset,
@@ -198,47 +214,26 @@ fn recover_incomplete_session(
 }
 
 /// Truncate archive to `offset` (end of previous finished stream / start of incomplete one).
-fn truncate_archive_at(path: &Path, offset: u64, recorder: &mut crate::db::Recorder) -> Result<()> {
+fn truncate_archive_at(path: &Path, offset: u64) -> io::Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let phase = crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive);
-    let err_converter = |e| Error::io(path, e);
     let file = OpenOptions::new()
         .write(true)
-        .open(path)
-        .map_err(err_converter)?;
-    match file.set_len(offset) {
-        Ok(()) => (),
-        Err(e) => {
-            let err = Error::io(path, e);
-            recorder.record_session(phase, err.to_file_stat(Some(path)), ErrorFlags::default());
-            return Err(err);
-        }
-    }
-    match file.sync_all() {
-        Ok(()) => (),
-        Err(e) => {
-            let err = Error::io(path, e);
-            recorder.record_session(phase, err.to_file_stat(Some(path)), ErrorFlags::default());
-            return Err(err);
-        }
-    }
+        .open(path)?;
+    file.set_len(offset)?;
+    file.sync_all()? ;
     if offset == 0 {
         // Empty archive file: remove so next session starts clean.
         drop(file);
-        let _ = std::fs::remove_file(path);
+        std::fs::remove_file(path)?;
     }
     Ok(())
 }
 
 /// Force abort: abandon the writer in place. Leave session `finalized = 0` and
 /// pending file flags; next run's startup recovery truncates and marks aborted.
-fn force_abort_session(
-    writer: TarWriter,
-    db: &Database,
-    progress: &ByteProgress,
-) -> Result<()> {
+fn force_abort_session(writer: TarWriter, db: &Database, progress: &ByteProgress) -> Result<()> {
     writer.abandon();
     // Ensure pending flags + open session are durable before exit.
     db.checkpoint()?;
@@ -253,28 +248,37 @@ fn append_snapshot(
     db: &Database,
     shutdown: &Shutdown,
     is_init: bool,
-    recorder: &mut crate::db::Recorder,
-) -> Result<()> {
+    recorder: &mut Recorder)
+    -> Result<()> {
 
     db.checkpoint()?;
     let src = config.paths.db_path();
-    let staging = config.paths.work_dir.join(".snapshot-for-tar.sqlite");
+    let staging = config.paths.stage_archive_snapshot();
+    let mut capture_error = |err: &io::Error, path: &Path| {
+        recorder.record_session(
+            ERROR_PHASE,
+            FileStatError::Io {
+                path: path.to_path_buf(),
+                source: io::Error::new(err.kind(), err.to_string())
+            },
+            ErrorFlags::default(),
+        )
+    };
     match std::fs::copy(&src, &staging) {
         Ok(_) => (),
         Err(e) => {
-            let err = Error::io(&staging, e);
-            recorder.record_session(
-                crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
-                err.to_file_stat(Some(&staging)),
-                ErrorFlags::default(),
-            );
-            return Err(err);
+            capture_error(&e, &staging);
+            return Err(Error::io(&staging, e));
         }
     }
     let tar_dst = if is_init { SNAPSHOT_INIT_TAR_NAME } else { SNAPSHOT_TAR_NAME };
     // INFO: append_path might return return interrupted error!
-    let result = writer.append_path(&staging, tar_dst, shutdown, |_| ());
-    let _ = std::fs::remove_file(&staging);
+    let result = writer
+        .append_path(&staging, tar_dst, shutdown, |_| ());
+    match std::fs::remove_file(&staging){
+        Ok(_) => (),
+        Err(e) => capture_error(&e, &staging),
+    };
     result
 }
 
@@ -287,7 +291,7 @@ fn end_session(
     session_id: i64,
     bytes_in_base: u64,
     write_tar_eof: bool,
-    recorder: &mut crate::db::Recorder,
+    recorder: &mut Recorder,
 ) -> Result<()> {
     db.promote_pending_archived()?;
     // Full archive pass only: every remaining row has been considered (or was ineligible).
@@ -327,11 +331,13 @@ fn end_session(
                 }
                 db.checkpoint()?;
                 // Footer catalog is always xz -9e, independent of tar stream compression.
-                match archive_footer::write_footer(&config.paths.archive_path, &config.paths.db_path()) {
+                match archive_footer::write_footer(
+                    &config.paths.archive_path,
+                    &config.paths.db_path()) {
                     Ok(()) => (),
                     Err(e) => {
                         recorder.record_session(
-                            crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive),
+                            ERROR_PHASE,
                             e.to_file_stat(Some(&config.paths.db_path())),
                             ErrorFlags::default(),
                         );
