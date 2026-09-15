@@ -865,7 +865,12 @@ impl<'a> Recorder<'a> {
             flush_limit: crate::common::DEFAULT_AUTO_FLUSH_LIMIT,
         }
     }
-
+    
+    /// Return if the function contains a database, to enable smart flushing.
+    pub fn is_speculative(&self) -> bool {
+        self.db.is_none()
+    }
+    
     /// Attach (or replace) the database reference. Buffered drafts stay buffered;
     /// call [`flush`] to persist them. The referenced database must outlive the
     /// recorder for the remainder of its use.
@@ -983,7 +988,15 @@ impl<'a> Recorder<'a> {
             }
         }
     }
-
+    
+    /// Only flush, if a database is present. Otherwise, hold on to the entries.
+    pub fn try_flush(&mut self) -> Result<u64> {
+        if self.is_speculative() {
+            return Ok(0);
+        };
+        self.flush()
+    }
+    
     /// Flush buffered drafts in a single transaction. Clears the buffer on
     /// success and retains it on failure (so a retry can persist the same rows).
     /// Without an attached database, buffered drafts are kept and the failure to
