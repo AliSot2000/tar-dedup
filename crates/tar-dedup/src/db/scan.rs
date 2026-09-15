@@ -2,13 +2,13 @@ use crate::config::ExtractRuntimeState;
 use crate::db::content_id::parse_content_id;
 use crate::db::extract::{load_extract_runtime_state, save_extract_runtime_state};
 use crate::db::flags::FileFlag;
+use crate::db::types::FileId;
 use crate::db::{ExtractScanState, flags, meta};
 use crate::error::Error;
 use crate::error::Result;
 use rusqlite::{Connection, named_params};
 use std::fs;
 use std::path::Path;
-
 
 // TODO probably should not live here but in the scan.rs file of unarchive/
 /// Mark every content-id named payload sitting in the extract cache as extracted.
@@ -192,6 +192,25 @@ pub fn count_non_appended_by_ftype(conn: &Connection) -> Result<Vec<(String, u64
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+/// Determine if this canonical_id is required by a filtered value
+pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool>{
+    let filter_cols = crate::db::common::generate_archive_and_extract_filter(None);
+    let res = conn.query_row(&format!(
+        "SELECT COUNT(*) AS count
+        FROM files
+        WHERE flag & :archived
+            AND ftype = 'file'
+            AND {filter_cols}
+            AND canonical_id = :id"),
+        named_params! {
+            ":archived": FileFlag::AppendedPath.mask_i64(),
+            ":id": id.0
+        },
+        |row| row.get::<_, i64>("count")
+    )?;
+    Ok(res > 0)
 }
 
 pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState)
