@@ -20,7 +20,7 @@
 - [ ] Progress
 - [ ] Batching
 - [ ] Resume
-- [ ] Filter on extract
+- [/] Filter on extract
 - [ ] All Metadata flag.
 
 ## General:
