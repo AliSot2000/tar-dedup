@@ -10,6 +10,7 @@ use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord, S
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
+use crate::unarchive::ExtractRTArgs;
 use nix::NixPath;
 use nix::libc::makedev;
 use nix::sys::stat::{Mode, SFlag, mknod};
@@ -27,7 +28,10 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Place)
 //  Logging
 //  Progress
 //  Rethink when we are pub and when private
-pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ExtractRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     debug_assert!(db.placement_prologue_done()?,
                   "PRECONDITION FAILED: PlacementPrologue must complete before place");
     let mut recorder = Recorder::new(db, !config.process.no_errors);
@@ -69,7 +73,7 @@ pub fn run(config: &ExtractConfig, db: &Database, shutdown: &Shutdown) -> Result
         // Step 2, first copy files, then hardlink, then create other types
         // (symlinks, char-dev, block-dev, FIFO). Canonical election ran in
         // the PlacementPrologue phase.
-        let (ac, mc, ah, mh, ao, mo) = status_message_rebuilding(&config, &db)?;
+        let (ac, mc, ah, mh, ao, mo) = status_message_rebuilding(rt)?;
         materialize_files(&config, &db, &shutdown, &mut recorder)?;
         materialize_hardlinks(&config, &db, &shutdown, &mut recorder)?;
         materialize_others(&config, &db, &shutdown, &mut recorder)?;
@@ -695,8 +699,10 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
 }
 
 /// Get the number of files, hardlinks and others. Also produce
-pub fn status_message_rebuilding(config: &ExtractConfig, db: &Database)
+pub fn status_message_rebuilding(rt: &ExtractRTArgs)
     -> Result<(u64, u64, u64, u64, u64, u64)> {
+    let config = rt.config;
+    let db = rt.db;
     let all_canonicals = db.count_out_tree_canonicals(None)?;
     let all_hardlinks = db.count_out_tree_hardlinks(None)?;
     let all_other = db.count_out_tree_others(None)?;

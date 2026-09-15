@@ -5,9 +5,9 @@ use crate::common::filter::ingest_filters as internal_ingest_filter;
 use crate::common::filter::{FilterSink, parse_filter, test_match};
 use crate::config::ExtractConfig;
 use crate::db::types::StrippedRecord;
-use crate::db::{Database, ErrorPhase, Recorder};
+use crate::db::{ErrorPhase, Recorder};
 use crate::error::Result;
-use crate::shutdown::Shutdown;
+use crate::unarchive::ExtractRTArgs;
 use std::cell::RefCell;
 
 const BATCH_SIZE: u64 = 100_000;
@@ -52,7 +52,8 @@ impl ParseFilterBuffer {
 // INFO: When no manifest DB was found (truncated / non-conform archive), the extract
 //  filter pass is a deliberate no-op: there is nothing to match against, and filters
 //  stay in `ExtractConfig`. Verified via the row count.
-pub fn run(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ExtractRTArgs) -> Result<()> {
+    let db = rt.db;
     // TODO this guard should not ever fire. Check scan stage.
     if db.count_entries()? == 0 {
         tracing::info!("No catalog present; extract filters not applied (best-effort extraction).");
@@ -78,11 +79,14 @@ pub fn run(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result
         }
     }
 
-    fast_filter(db, config, shutdown)
+    fast_filter(rt)
 }
 
 /// Batched regex match of every `files` row against the extract rules.
-fn fast_filter(db: &Database, config: &ExtractConfig, shutdown: &Shutdown) -> Result<()> {
+fn fast_filter(rt: &ExtractRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     let include_filters = parse_filter(
         &db.get_filters_extract(false)?,
         "include",

@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::archive::ArchiveRTArgs;
 use crate::common::files::{PreYield, warn_if_times_changed};
 use crate::config::ArchiveConfig;
 use crate::db::Database;
@@ -53,7 +54,10 @@ impl Drop for TempSparseFile {
 }
 
 /// Sparsify stage: optional sparse rewrites under `stage/sp.{content_id}`.
-pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     debug_assert_ne!(config.sparse.page_size, 0, "Expected page_size > 0");
     if config.sparse.page_size == 0 {
         return Err(Error::Config("page_size must be greater than 0".into()));

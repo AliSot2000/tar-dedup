@@ -1,5 +1,6 @@
 use walkdir::WalkDir;
 
+use crate::archive::ArchiveRTArgs;
 use crate::common::files::{determine_file_type, original_extension};
 #[cfg(windows)]
 use crate::common::files::get_file_times;
@@ -21,7 +22,10 @@ use std::{fs, io};
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
 
-pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     if db.count_entries()? > 0 {
         tracing::warn!("Found interrupted scan of directories. Purging and starting again.");
         db.purge_entries()?;

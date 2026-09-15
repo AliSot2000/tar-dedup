@@ -1,6 +1,5 @@
+use crate::archive::ArchiveRTArgs;
 use crate::common::files::warn_if_times_changed;
-use crate::config::ArchiveConfig;
-use crate::db::Database;
 use crate::db::flags::FileFlag;
 use crate::db::types::StrippedRecord;
 use crate::error::{FileStatError, Result};
@@ -8,13 +7,14 @@ use path_clean::PathClean;
 use std::fs;
 use std::os::unix::fs::symlink;
 
-use crate::shutdown::Shutdown;
-
 // TODO const ERROR_OHASE
 const EXPECTED_CANONICAL: &str = "stage: Expected only canonical files. \
                             Got wrong file type or non-canonical file";
 
-pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     fs::create_dir_all(config.paths.stage_dir())
         .map_err(|e| crate::error::Error::io(&config.paths.stage_dir(), e))?;
 

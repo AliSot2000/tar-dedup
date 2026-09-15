@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 
+use crate::archive::ArchiveRTArgs;
 use crate::common::files::{PreYield, warn_if_times_changed};
 use crate::config::ArchiveConfig;
 use crate::db::Database;
@@ -160,7 +161,10 @@ fn compare_error_file_id(pair: &ComparePair, e: &Error) -> (FileId, FileStatErro
 }
 
 // =================================================================================================
-pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result<()> {
+pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
+    let config = rt.config;
+    let db = rt.db;
+    let shutdown = rt.shutdown;
     let catalog = db.count_entries()?;
     // Early promote db entries we do not process in this phase
     // TODO: Add eager_filter parameter.

@@ -22,6 +22,13 @@ use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
+/// Runtime context threaded through the archive pipeline phases.
+pub struct ArchiveRTArgs<'a> {
+    pub config: &'a ArchiveConfig,
+    pub db: &'a Database,
+    pub shutdown: &'a Shutdown,
+}
+
 pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
     let product = if archive_footer::has_valid_footer(&config.paths.archive_path) {
         ProductPresence::Finished
@@ -88,8 +95,13 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
     while state.phase != PipelinePhase::Done {
         shutdown.check_between_files()?;
 
+        let rt = ArchiveRTArgs {
+            config: &config,
+            db: &db,
+            shutdown: &shutdown,
+        };
         tracing::info!(phase = state.phase.as_str(), "archive phase");
-        match run_phase(&state.phase, &config, &db, &shutdown) {
+        match run_phase(&state.phase, &rt) {
             Ok(()) => {}
             Err(Error::Interrupted) => {
                 db.save_runtime_state(&state)?;
@@ -172,18 +184,16 @@ fn acquire_workdir_lock(config: &ArchiveConfig) -> Result<std::fs::File> {
 
 fn run_phase(
     phase: &PipelinePhase,
-    config: &ArchiveConfig,
-    db: &Database,
-    shutdown: &Shutdown,
+    rt: &ArchiveRTArgs,
 ) -> Result<()> {
     match phase {
-        PipelinePhase::Inventory => inventory::run(config, db, shutdown),
-        PipelinePhase::Hash => hash::run(config, db, shutdown),
-        PipelinePhase::Filter => filter::run(db, config, shutdown),
-        PipelinePhase::Dedup => dedup::run(config, db, shutdown),
-        PipelinePhase::Sparsify => sparsify::run(config, db, shutdown),
-        PipelinePhase::Stage => stage::run(config, db, shutdown),
-        PipelinePhase::Archive => tar_builder::run(config, db, shutdown),
+        PipelinePhase::Inventory => inventory::run(rt),
+        PipelinePhase::Hash => hash::run(rt),
+        PipelinePhase::Filter => filter::run(rt),
+        PipelinePhase::Dedup => dedup::run(rt),
+        PipelinePhase::Sparsify => sparsify::run(rt),
+        PipelinePhase::Stage => stage::run(rt),
+        PipelinePhase::Archive => tar_builder::run(rt),
         PipelinePhase::Done => Ok(()),
     }
 }
