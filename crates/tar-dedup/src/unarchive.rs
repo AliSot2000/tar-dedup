@@ -1,5 +1,6 @@
 //! Unarchive (extract) pipeline: scan → rehash → placement_prologue → place → permissions → cleanup.
 
+mod filter;
 mod permissions;
 mod place;
 mod place_prologue;
@@ -12,7 +13,7 @@ use std::path::Path;
 
 use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
-    resolve_start, ProductPresence, StartAction, StartPolicy, WorkPresence,
+    ProductPresence, StartAction, StartPolicy, WorkPresence, resolve_start,
 };
 use crate::config::{ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState};
 use crate::db::Database;
@@ -62,6 +63,10 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                 eprintln!("extract: scanning archive");
                 let _db = scan::run(&config, &db_path, &shutdown)?;
             }
+            ExtractPipelinePhase::Filter => {
+                let db = Database::open(&db_path)?;
+                filter::run(&db, &config, &shutdown)?;
+            }
             ExtractPipelinePhase::Rehash => {
                 let db = Database::open(&db_path)?;
                 rehash::run(&config, &db, &shutdown)?;
@@ -104,10 +109,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         db.save_extract_runtime_state(&state)?;
     }
 
-    eprintln!(
-        "extracted to {}",
-        config.paths.extraction_root().display()
-    );
+    eprintln!("extracted to {}", config.paths.extraction_root().display());
     Ok(())
 }
 
