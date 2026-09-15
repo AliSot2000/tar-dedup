@@ -11,6 +11,8 @@ use std::fs;
 use std::path::Path;
 
 // TODO probably should not live here but in the scan.rs file of unarchive/
+// INFO: This function ensures we capture files we might have extracted before and then the archive
+//  was truncated. Extremely unlikely but easier best effort.
 /// Mark every content-id named payload sitting in the extract cache as extracted.
 /// Catches members that were unpacked but not flagged (interrupt between the two).
 /// Promotion stays with snapshot confirmation / [`promote_extracted_to_unarchived`].
