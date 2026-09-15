@@ -1,10 +1,5 @@
 //! Scan/untar: footer-first catalog, else leading `manifest.sqlite`; cache payloads.
 
-use std::fs;
-use std::io;
-use std::io::{BufReader, Read};
-use std::path::{Path, PathBuf};
-
 use crate::archive_footer::read_footer;
 use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::config::ExtractConfig;
@@ -16,7 +11,12 @@ use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
 use crate::unarchive::filter::ParseFilterBuffer;
+use crate::unarchive::filter::run as filter_run;
 use path_clean::PathClean;
+use std::fs;
+use std::io;
+use std::io::{BufReader, Read};
+use std::path::{Path, PathBuf};
 use tar::Entry;
 
 const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";
@@ -73,8 +73,10 @@ fn flush_scan_recorder(recorder: &mut Recorder, db: Option<&Database>) -> Result
 }
 
 /// Drain the filter_buffer and write it to the db.
-fn store_filter_buffer(filter_buffer: &mut Option<ParseFilterBuffer>, db: &Database) -> Result<u64> {
-    let result = filter_buffer
+fn store_filter_buffer(
+    fb: &mut Option<ParseFilterBuffer>, db: &Database, config: &ExtractConfig, shutdown: &Shutdown)
+    -> Result<u64> {
+    let result = fb
         .as_ref()
         .expect("PRECONDITION FAILED: Some filter_buffer expected")
         .write_to_db(
@@ -83,7 +85,10 @@ fn store_filter_buffer(filter_buffer: &mut Option<ParseFilterBuffer>, db: &Datab
             Box::new(|from, line, query|
                 db.add_exclude_pattern_extract(from, line, query)))?;
     tracing::info!("Flushed: {result} filter rows to db");
-    *filter_buffer = None;
+    *fb = None;
+    if config.filter.eager_filter {
+        filter_run(&db, &config, &shutdown)?
+    }
     Ok(result)
 }
 
@@ -198,8 +203,6 @@ pub fn run(
             }
         };
 
-        // TODO prevent extraction if file is unused.
-
         tracing::info!("Index: {} Path: {}", member_index, path.display());
 
         process_entry(config, db_path, &local_dst, &name,
@@ -229,7 +232,13 @@ pub fn run(
         return Err(Error::Config("Archive is Empty".to_string()));
     }
 
+    // Abort case, we have members but we don't want to keep them
     if db.is_none() {
+        if !config.process.cleanup.keep_stage {
+            if let Err(e) = fs::remove_dir_all(config.paths.extract_cache_dir()) {
+                io_error_with_session_scan_error(&config.paths.extract_cache_dir(), recorder, e);
+            };
+        }
         // Nothing to attach the buffered errors to; the flush reports the loss.
         flush_scan_recorder(recorder, db.as_ref())?;
         if config.scan.force_scan {
@@ -243,7 +252,6 @@ pub fn run(
             );
         }
     }
-
     // PRECONDITION: Archive contained at least one element and at least a database and we
     //   fully consumed teh archive.
     validate_result(&scan, resume_db)?;
@@ -357,6 +365,12 @@ fn process_entry(
                     "first tar member is canonical file {content_id} not manifest.sqlite; \
                      bypass available with --force-scan"
                 )));
+            }
+            // Extraction gated due to not selected by filter
+            if let Some(edb) = db {
+                if config.filter.eager_filter && !edb.should_extract_canonical_id(fid)? {
+                    return Ok(())
+                }
             }
             // PRECONDITION: either force_scan && no db is true or we saw at least one member.
             let entry_dst = local_dst.join(name);
@@ -556,13 +570,14 @@ fn captured_extract_database<R: Read>(
 }
 
 /// Install catalog from `temp` into `target`, normalize, and init extract runtime state.
-fn open_initial_database(temp: &Path, target: &Path, fb: &mut Option<ParseFilterBuffer>)
+fn open_initial_database(
+    temp: &Path, target: &Path, fb: &mut Option<ParseFilterBuffer>, config: &ExtractConfig, shutdown: &Shutdown)
     -> Result<Database> {
     Database::install_initial_manifest(temp, target)?;
     let opened = Database::open(target)?;
     opened.init_extract_runtime_state()?;
     opened.normalize_installed_catalog()?;
-    store_filter_buffer(fb, &opened)?;
+    store_filter_buffer(fb, &opened, &config, &shutdown)?;
     Ok(opened)
 }
 
