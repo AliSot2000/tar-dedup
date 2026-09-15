@@ -117,9 +117,7 @@ fn parse_clause(clause: &str) -> Result<TransformStep> {
     let re = regex::RegexBuilder::new(pattern)
         .case_insensitive(case_insensitive)
         .build()
-        .map_err(|e| {
-            Error::Config(format!("invalid --transform regex `{pattern}`: {e}"))
-        })?;
+        .map_err(|e| Error::Config(format!("invalid --transform regex `{pattern}`: {e}")))?;
 
     Ok(TransformStep { re, replace: replacement, global })
 }
