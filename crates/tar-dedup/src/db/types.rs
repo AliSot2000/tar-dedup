@@ -12,7 +12,7 @@ pub struct OutTreeRecord {
     pub abs_path: PathBuf,
     pub file_id: Option<FileId>,
     pub flags: OutTreeFlags,
-    pub canonical_id: OutTreeId,
+    pub canonical_id: Option<OutTreeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,8 +56,10 @@ pub struct FileRecord {
     pub selinux_ctx: Option<Vec<u8>>,
     pub win_perm: Option<String>,
     pub link_dst: Option<PathBuf>,
-    pub include_reason: Option<ExclusionId>,
-    pub exclude_reason: Option<ExclusionId>,
+    pub include_reason_archive: Option<ExclusionId>,
+    pub exclude_reason_archive: Option<ExclusionId>,
+    pub include_reason_extract: Option<ExclusionId>,
+    pub exclude_reason_extract: Option<ExclusionId>,
     pub canonical_id: Option<FileId>,
     pub flags: FileFlags,
     pub phase: FilePhase,
@@ -247,7 +249,6 @@ pub enum FilePhase {
     AtDestination,
     /// Permissions of the file were restored/attempted to restore.
     PermissionsRestored,
-
 }
 
 impl FilePhase {
