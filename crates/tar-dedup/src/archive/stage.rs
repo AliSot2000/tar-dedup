@@ -1,8 +1,8 @@
 use crate::common::files::warn_if_times_changed;
 use crate::config::ArchiveConfig;
+use crate::db::Database;
 use crate::db::flags::FileFlag;
 use crate::db::types::StrippedRecord;
-use crate::db::Database;
 use crate::error::{FileStatError, Result};
 use path_clean::PathClean;
 use std::fs;
@@ -33,7 +33,7 @@ pub fn run(config: &ArchiveConfig, db: &Database, shutdown: &Shutdown) -> Result
     let total_files = file_vec.len();
     for record in file_vec {
         shutdown.check_between_files()?;
-        
+
         // Determine the Source
         let source_path = if record.flags.get(FileFlag::HasSparse) {
             let sparse_name = record.sparse_member_name().expect(EXPECTED_CANONICAL);
