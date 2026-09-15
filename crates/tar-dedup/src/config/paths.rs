@@ -27,6 +27,10 @@ impl PathLayout {
         self.work_dir.join(".snapshot-ingest.tmp")
     }
 
+    pub fn stage_archive_snapshot(&self) -> PathBuf {
+        self.work_dir.join(".snapshot-for-tar.sqlite")
+    }
+
     /// Archive payload directory — same as `work_dir` (flat `.astage`).
     pub fn stage_dir(&self) -> PathBuf {
         self.work_dir.clone()
