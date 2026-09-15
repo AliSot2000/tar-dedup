@@ -15,6 +15,7 @@ use crate::db::{Database, ErrorPhase, ExtractScanState, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
+use crate::unarchive::filter::ParseFilterBuffer;
 use path_clean::PathClean;
 use tar::Entry;
 
@@ -71,11 +72,31 @@ fn flush_scan_recorder(recorder: &mut Recorder, db: Option<&Database>) -> Result
     }
 }
 
+/// Drain the filter_buffer and write it to the db.
+fn store_filter_buffer(filter_buffer: &mut Option<ParseFilterBuffer>, db: &Database) -> Result<u64> {
+    let result = filter_buffer
+        .as_ref()
+        .expect("PRECONDITION FAILED: Some filter_buffer expected")
+        .write_to_db(
+            Box::new(|from, line, query|
+                db.add_include_pattern_extract(from, line, query)),
+            Box::new(|from, line, query|
+                db.add_exclude_pattern_extract(from, line, query)))?;
+    tracing::info!("Flushed: {result} filter rows to db");
+    *filter_buffer = None;
+    Ok(result)
+}
+
 /// Walk the tar stream: load catalog (footer or leading manifest), cache payloads, promote.
-pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Result<Database> {
-    // Errors are buffered speculatively; the database may not exist until the
-    // first catalog member is installed. The boundary flush below persists them.
-    let mut recorder = Recorder::speculative(!config.process.no_errors);
+/// POSTCONDITION filter_buffer contract: Function takes buffer, drains it to db and sets the
+///  buffer to None, to save memory.
+pub fn run(
+    config: &ExtractConfig,
+    db_path: &Path,
+    shutdown: &Shutdown,
+    recorder: &mut Recorder,
+    filter_buffer: &mut Option<ParseFilterBuffer>)
+    -> Result<Database> {
     // INFO: Noop if dir exists!
     // INFO: If we can't create an extract stage, we can only abort.
     fs::create_dir_all(config.paths.extract_cache_dir())
@@ -91,17 +112,13 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
     // TODO fix, you need to move the db from temp_db to db_path, once we have confirmed that it is
     //  valid.
 
-    let mut db = if resume_db {
+    let mut db: Option<Database> = if resume_db {
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
-        remove_temp_db(&mut recorder, &config.paths.temp_db());
+        remove_temp_db(recorder, &config.paths.temp_db());
         Some(opened)
     } else if footer_this_pass {
-        fs::rename(config.paths.temp_db(), db_path).map_err(|e| Error::io(db_path, e))?;
-        let opened = Database::open(db_path)?;
-        opened.init_extract_runtime_state()?;
-        opened.normalize_installed_catalog()?;
-        Some(opened)
+        Some(open_initial_database(&config.paths.temp_db(), db_path, filter_buffer)?)
     } else {
         None
     };
@@ -141,7 +158,7 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
     for (member_index, wrapped_entry) in archive
         .entries()
         .map_err(|e| {
-            io_error_with_session_scan_error(&config.paths.archive_path, &mut recorder, e)
+            io_error_with_session_scan_error(&config.paths.archive_path, recorder, e)
         })?
         .enumerate()
     {
@@ -154,21 +171,21 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
         // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
         if member_index < resume_from {
             wrapped_entry.map_err(|e| {
-                io_error_with_session_scan_error(&config.paths.archive_path, &mut recorder, e)
+                io_error_with_session_scan_error(&config.paths.archive_path, recorder, e)
             })?;
             continue;
         }
 
         let mut entry = wrapped_entry
             .map_err(|e| io_error_with_session_scan_error(
-                &config.paths.archive_path, &mut recorder, e
+                &config.paths.archive_path, recorder, e
         ))?;
         // INFO: On Unix, this should never produce an error
         //  On Windows, this causes an error, if the path is not valid utf-8
         let path = match entry
             .path()
             .map_err(|e| io_error_with_session_scan_error(
-                &config.paths.archive_path, &mut recorder, e
+                &config.paths.archive_path, recorder, e
             )) {
             Ok(p) => p,
             Err(_) => continue,
@@ -176,7 +193,7 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
         let name = match entry_name(&path) {
             Ok(n) => n,
             Err(e) => {
-                record_session_error(&mut recorder, e.to_file_stat(Some(&path)));
+                record_session_error(recorder, e.to_file_stat(Some(&path)));
                 return Err(e);
             }
         };
@@ -186,7 +203,8 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
         tracing::info!("Index: {} Path: {}", member_index, path.display());
 
         process_entry(config, db_path, &local_dst, &name,
-                      &mut db, &mut entry, &mut force_buffer, &mut scan, &mut recorder,
+                      &mut db, &mut entry, &mut force_buffer, &mut scan, recorder, 
+                      filter_buffer
         )?;
 
         scan.saw_any_members = true;
@@ -202,18 +220,18 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
 
     if stopped {
         // Best-effort persist whatever was buffered against the pass's database.
-        flush_scan_recorder(&mut recorder, db.as_ref())?;
+        flush_scan_recorder(recorder, db.as_ref())?;
         return Err(Error::Interrupted);
     }
 
     if !scan.saw_any_members {
-        flush_scan_recorder(&mut recorder, db.as_ref())?;
+        flush_scan_recorder(recorder, db.as_ref())?;
         return Err(Error::Config("Archive is Empty".to_string()));
     }
 
     if db.is_none() {
         // Nothing to attach the buffered errors to; the flush reports the loss.
-        flush_scan_recorder(&mut recorder, db.as_ref())?;
+        flush_scan_recorder(recorder, db.as_ref())?;
         if config.scan.force_scan {
             return Err(Error::Config(
                 "Archive did not contain database. Cannot continue extraction".to_string(),
@@ -281,11 +299,12 @@ fn process_entry(
     force_buffer: &mut Option<Vec<FileId>>,
     scan: &mut ExtractScanState,
     recorder: &mut Recorder,
+    fb: &mut Option<ParseFilterBuffer>
 ) -> Result<()> {
     match (name, scan.saw_any_members) {
         // Spec conform: No db, initial snapshot is first.
         (SNAPSHOT_INIT_TAR_NAME, false) => {
-            install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder)?;
+            install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb)?;
             scan.saw_manifest_db = true;
         }
         // Not Spec: Abort
@@ -304,15 +323,14 @@ fn process_entry(
                          attempt to bypass with --force-scan"
                 )));
             } else {
-                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder)?;
+                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb)?;
             }
             let ref_db = db.as_ref().expect(OPT_DB_ERROR);
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
         }
         (SNAPSHOT_TAR_NAME, true) => {
             if config.scan.force_scan && db.is_none() {
-                captured_copy_database(&config.paths.temp_db(), entry, recorder)?;
-                *db = Some(open_initial_database(&config.paths.temp_db(), db_path)?);
+                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb)?;
                 let ref_db = db.as_ref().expect(OPT_DB_ERROR);
                 scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
 
@@ -328,7 +346,7 @@ fn process_entry(
                         "INVARIANT ERROR: without force, the first member of an archive MUST be an \
                         initial db");
                 let ldb = db.as_ref().expect(OPT_DB_ERROR);
-                let _ = captured_copy_database(&config.paths.temp_snapshot(), entry, recorder)?;
+                let _ = captured_extract_database(&config.paths.temp_snapshot(), entry, recorder)?;
                 ldb.apply_snapshot_promote_unarchived(&config.paths.temp_snapshot())?;
                 scan.snapshots_ingested = ldb.record_snapshot_ingested()?;
             }
@@ -511,7 +529,7 @@ fn store_progress_in_db(db: &mut Option<Database>, scan: &ExtractScanState) -> R
 
 /// Copy the database out of the archive to `dst`, capturing an io failure in the
 /// persistent error log (best-effort; a failed record is ignored) before re-raising.
-fn captured_copy_database<R: Read>(
+fn captured_extract_database<R: Read>(
     dst: &Path,
     entry: &mut R,
     recorder: &mut Recorder,
@@ -538,11 +556,13 @@ fn captured_copy_database<R: Read>(
 }
 
 /// Install catalog from `temp` into `target`, normalize, and init extract runtime state.
-fn open_initial_database(temp: &Path, target: &Path) -> Result<Database> {
+fn open_initial_database(temp: &Path, target: &Path, fb: &mut Option<ParseFilterBuffer>)
+    -> Result<Database> {
     Database::install_initial_manifest(temp, target)?;
     let opened = Database::open(target)?;
     opened.init_extract_runtime_state()?;
     opened.normalize_installed_catalog()?;
+    store_filter_buffer(fb, &opened)?;
     Ok(opened)
 }
 
@@ -554,6 +574,7 @@ fn install_database(
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
     scan: &mut ExtractScanState,
     recorder: &mut Recorder,
+    fb: &mut Option<ParseFilterBuffer>
 ) -> Result<()> {
     if scan.from_footer {
         match io::copy(entry, &mut io::sink()) {
@@ -565,8 +586,8 @@ fn install_database(
             }
         }
     } else {
-        let _ = captured_copy_database(snapshot_tmp, entry, recorder)?;
-        match open_initial_database(snapshot_tmp, db_path) {
+        let _ = captured_extract_database(snapshot_tmp, entry, recorder)?;
+        match open_initial_database(snapshot_tmp, db_path, fb) {
             Ok(opened) => *db = Some(opened),
             Err(e) => {
                 record_session_error(recorder, e.to_file_stat(Some(db_path)));
@@ -703,7 +724,10 @@ mod tests {
         let (config, member) = build_archive(dir.path());
         let db_path = config.paths.db_path();
 
-        let db = run(&config, &db_path, &Shutdown::detached()).expect("scan");
+        let db = run(&config, &db_path, &Shutdown::detached(),
+                     &mut Recorder::speculative(false),
+                     &mut Some(ParseFilterBuffer::default()))
+            .expect("scan");
 
         assert!(config.paths.extract_cache_dir().join(&member).is_file());
         assert_eq!(
@@ -729,12 +753,17 @@ mod tests {
         let db_path = config.paths.db_path();
 
         // First pass installs the catalog so later passes take the resume path.
-        run(&config, &db_path, &Shutdown::detached()).expect("first scan");
+        run(&config, &db_path, &Shutdown::detached(),
+            &mut Recorder::speculative(false),
+            &mut Some(ParseFilterBuffer::default()))
+            .expect("first scan");
 
         // Interrupt before the first member: state is saved, Interrupted propagates.
         let shutdown = Shutdown::detached();
         shutdown.request_graceful();
-        match run(&config, &db_path, &shutdown) {
+        match run(&config, &db_path, &shutdown,
+                  &mut Recorder::speculative(false),
+                  &mut Some(ParseFilterBuffer::default())) {
             Err(Error::Interrupted) => {}
             Err(other) => panic!("expected Interrupted, got {other:?}"),
             Ok(_) => panic!("expected Interrupted, scan returned Ok"),
@@ -754,7 +783,10 @@ mod tests {
         drop(db);
 
         // Resuming must skip the manifest member; re-reading it would be an error.
-        let db = run(&config, &db_path, &Shutdown::detached()).expect("resumed scan");
+        let db = run(&config, &db_path, &Shutdown::detached(),
+                     &mut Recorder::speculative(false),
+                     &mut Some(ParseFilterBuffer::default()))
+            .expect("resumed scan");
         assert_eq!(
             db.count_files_in_phase(FilePhase::Unarchived).expect("count"),
             2
