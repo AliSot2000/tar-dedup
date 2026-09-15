@@ -1,14 +1,15 @@
 //! Scan/untar: footer-first catalog, else leading `manifest.sqlite`; cache payloads.
 
 use std::fs;
+use std::io;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::io;
 
-use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::archive_footer::read_footer;
+use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
+use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FileId, FilePhase};
 use crate::db::{Database, ErrorPhase, ExtractScanState, Recorder};
 use crate::error::{Error, FileStatError, Result};
@@ -16,7 +17,6 @@ use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
 use path_clean::PathClean;
 use tar::Entry;
-use crate::db::flags::{FileFlag, ErrorFlags};
 
 const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(crate::config::ExtractPipelinePhase::ScanTar);
