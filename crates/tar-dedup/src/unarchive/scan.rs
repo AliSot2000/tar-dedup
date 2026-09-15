@@ -38,17 +38,8 @@ fn record_session_error(recorder: &mut Recorder, error: FileStatError) {
 
 /// Record a per-file scan error (e.g. a failed payload `unpack`). The target row
 /// is referenced by `file_id`.
-fn record_file_scan_error(
-    recorder: &mut Recorder,
-    file_id: FileId,
-    error: FileStatError,
-) {
-    recorder.record_file(
-        file_id,
-        ERROR_PHASE,
-        error,
-        ErrorFlags::default(),
-    );
+fn record_file_scan_error(recorder: &mut Recorder, file_id: FileId, error: FileStatError) {
+    recorder.record_file(file_id, ERROR_PHASE, error, ErrorFlags::default());
 }
 
 /// Convert a tar-stream io error into the crate `Error`, buffering a session-scoped
@@ -58,10 +49,7 @@ fn io_error_with_session_scan_error(
     recorder: &mut Recorder,
     e: io::Error,
 ) -> Error {
-    let file_stat = FileStatError::io(
-        archive_path,
-        io::Error::new(e.kind(), e.to_string()),
-    );
+    let file_stat = FileStatError::io(archive_path, io::Error::new(e.kind(), e.to_string()));
     record_session_error(recorder, file_stat);
     Error::io(archive_path, e)
 }
@@ -96,8 +84,12 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
     let resume_db = db_path.is_file();
     // Only a first pass installs the footer catalog; later passes inherit the fact
     // that it came from a footer through `ExtractScanState::from_footer`.
-    let opt_db = read_footer(&config.paths.archive_path, db_path);
+    // INFO: read into a temp file first; installed below via rename to `db_path`.
+    let opt_db = read_footer(&config.paths.archive_path, &config.paths.temp_db());
     let footer_this_pass = !resume_db && opt_db.is_ok();
+
+    // TODO fix, you need to move the db from temp_db to db_path, once we have confirmed that it is
+    //  valid.
 
     let mut db = if resume_db {
         let opened = Database::open(db_path)?;
@@ -116,8 +108,11 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
 
     let local_dst = config.paths.extract_cache_dir();
 
-    let mut force_buffer: Option<Vec<FileId>> =
-        if config.scan.force_scan { Some(Vec::new()) } else { None };
+    let mut force_buffer: Option<Vec<FileId>> = if config.scan.force_scan {
+        Some(Vec::new())
+    } else {
+        None
+    };
 
     // Single source of truth for everything the scan knows about the archive.
     // `footer_this_pass` is folded in here and never consulted again.
@@ -133,19 +128,21 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
     // no second counter that can drift away from the database.
     let snapshots_before = scan.snapshots_ingested;
     let should_skip = resume_db && scan.last_member_index.is_some();
-    let resume_from =
-        if should_skip { scan.last_member_index.expect("Should be defined here") } else { 0 };
+    let resume_from = if should_skip {
+        scan.last_member_index.expect("Should be defined here")
+    } else {
+        0
+    };
 
     let mut stopped = false;
-    let mut archive =
-        open_tar_archive(&config.paths.archive_path, config.decompression)?;
+    let mut archive = open_tar_archive(&config.paths.archive_path, config.decompression)?;
 
     // FEATURE: Switch to seek for tar
     for (member_index, wrapped_entry) in archive
         .entries()
-        .map_err(|e| io_error_with_session_scan_error(
-            &config.paths.archive_path, &mut recorder, e
-        ))?
+        .map_err(|e| {
+            io_error_with_session_scan_error(&config.paths.archive_path, &mut recorder, e)
+        })?
         .enumerate()
     {
         let member_index = member_index as u64;
@@ -156,9 +153,9 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
 
         // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
         if member_index < resume_from {
-            wrapped_entry.map_err(|e| io_error_with_session_scan_error(
-                &config.paths.archive_path, &mut recorder, e
-            ))?;
+            wrapped_entry.map_err(|e| {
+                io_error_with_session_scan_error(&config.paths.archive_path, &mut recorder, e)
+            })?;
             continue;
         }
 
@@ -184,16 +181,16 @@ pub fn run(config: &ExtractConfig, db_path: &Path, shutdown: &Shutdown) -> Resul
             }
         };
 
+        // TODO prevent extraction if file is unused.
+
         tracing::info!("Index: {} Path: {}", member_index, path.display());
 
         process_entry(config, db_path, &local_dst, &name,
-                      &mut db, &mut entry, &mut force_buffer, &mut scan,
-                      &mut recorder,
+                      &mut db, &mut entry, &mut force_buffer, &mut scan, &mut recorder,
         )?;
 
         scan.saw_any_members = true;
         scan.last_member_index = Some(member_index);
-
     }
 
     if !stopped {
@@ -288,10 +285,9 @@ fn process_entry(
     match (name, scan.saw_any_members) {
         // Spec conform: No db, initial snapshot is first.
         (SNAPSHOT_INIT_TAR_NAME, false) => {
-            install_database(db_path, &config.paths.temp_db(), db, entry, scan,
-                             recorder)?;
+            install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder)?;
             scan.saw_manifest_db = true;
-        },
+        }
         // Not Spec: Abort
         // INFO: No truncated case where initial db is not first element.
         //  So unconditionally rejected.
@@ -308,12 +304,11 @@ fn process_entry(
                          attempt to bypass with --force-scan"
                 )));
             } else {
-                install_database(db_path, &config.paths.temp_db(), db, entry, scan,
-                                 recorder)?;
+                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder)?;
             }
             let ref_db = db.as_ref().expect(OPT_DB_ERROR);
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
-        },
+        }
         (SNAPSHOT_TAR_NAME, true) => {
             if config.scan.force_scan && db.is_none() {
                 captured_copy_database(&config.paths.temp_db(), entry, recorder)?;
@@ -337,9 +332,8 @@ fn process_entry(
                 ldb.apply_snapshot_promote_unarchived(&config.paths.temp_snapshot())?;
                 scan.snapshots_ingested = ldb.record_snapshot_ingested()?;
             }
-        },
-        (content_id, saw_first)
-        if let Ok((_, _, fid, _)) = parse_content_id(content_id) => {
+        }
+        (content_id, saw_first) if let Ok((_, _, fid, _)) = parse_content_id(content_id) => {
             if !config.scan.force_scan && !saw_first {
                 return Err(Error::Config(format!(
                     "first tar member is canonical file {content_id} not manifest.sqlite; \
@@ -352,28 +346,26 @@ fn process_entry(
                 Ok(_) => (),
                 Err(e) => {
                     let err = Error::io(&entry_dst, e);
-                    record_file_scan_error(
-                        recorder,
-                        fid,
-                        err.to_file_stat(Some(&entry_dst)),
-                    );
+                    record_file_scan_error(recorder, fid, err.to_file_stat(Some(&entry_dst)));
                     return Err(err);
                 }
             };
 
             if config.scan.force_scan && db.is_none() {
-                let buf = force_buffer.as_mut().expect(
-                    "INVARIANT ERROR: Buffer must be Some(Vec) if force_scan is set",
-                );
+                let buf = force_buffer
+                    .as_mut()
+                    .expect("INVARIANT ERROR: Buffer must be Some(Vec) if force_scan is set");
                 buf.push(fid);
             } else {
                 let ldb = db.as_ref().expect(OPT_DB_ERROR);
                 ldb.set_file_flag(fid, FileFlag::FileExtracted, true)?;
             }
-        },
+        }
         (other, _) => {
-            return Err(Error::Config(format!("tar member `{other}` is neither a catalog \
-                nor a content id; not a tar-dedup archive?")));
+            return Err(Error::Config(format!(
+                "tar member `{other}` is neither a catalog \
+                nor a content id; not a tar-dedup archive?"
+            )));
         }
     }
     Ok(())
@@ -412,7 +404,7 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
         }
         (false, true, true, _) => {
             tracing::warn!("footer and {} snapshot(s) but no manifest. Truncated Archive? ",
-                scan.snapshots_ingested);
+                           scan.snapshots_ingested);
         }
         (true, false, false, _) => {
             tracing::warn!("manifest present, no snapshot ingested. Truncated archive?");
@@ -435,11 +427,7 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
     Ok(())
 }
 
-fn report_scan_completeness(
-    db: &Database,
-    from_footer: bool,
-    force_scan: bool,
-) -> Result<()> {
+fn report_scan_completeness(db: &Database, from_footer: bool, force_scan: bool) -> Result<()> {
     // INFO: AppendedPath = true, FileExtracted = false
     let missing = db.count_missing_payloads()?;
     if missing > 0 {
@@ -588,7 +576,6 @@ fn install_database(
     }
     Ok(())
 }
-
 
 /// Extract and sanitize the entry basename from a tar member path.
 fn entry_name(path: &Path) -> Result<String> {
