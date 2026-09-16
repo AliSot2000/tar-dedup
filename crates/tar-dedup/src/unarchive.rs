@@ -108,12 +108,6 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                 state.phase = ExtractPipelinePhase::Done;
                 edb.save_extract_runtime_state(&state)?;
                 cleanup::cleanup_workdir(&config, CleanupMode::Extract)?;
-                if config.process.cleanup.keep_stage {
-                    tracing::error!(
-                        "keeping stage (--keep-stage): {}",
-                        config.paths.work_dir.display()
-                    );
-                }
                 break;
             }
             other => panic!(
