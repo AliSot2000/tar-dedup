@@ -46,6 +46,7 @@ pub struct CaptureOptions {
     pub do_xattrs: bool,
     pub do_posix_acl: bool,
     pub do_selinux: bool,
+    pub numeric_ids_only: bool,
     /// Symbolic mode changes to apply at extraction (GNU tar `--mode`).
     pub mode: Option<String>,
     /// sed-style name transform to apply at extraction (GNU tar `--transform`).
@@ -73,7 +74,6 @@ pub struct ArchivePipelineOptions {
     pub retry_missing_sha: bool,
     pub write_archive_footer: bool,
     pub clear_archive_meta: bool,
-    pub numeric_ids_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
