@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::cli::ArchiveArgs;
 use crate::common::files::directory_roots_overlap;
 use crate::common::start::StartPolicy;
@@ -12,14 +14,14 @@ use super::{
     default_archive_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_dir, validate_file,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputOptions {
     pub input_dirs: Vec<PathSource>,
     pub files_from: Vec<PathBuf>,
     pub files_from_null: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexingOptions {
     pub no_recursion: bool,
     pub dereference: bool,
@@ -28,7 +30,7 @@ pub struct IndexingOptions {
     pub no_strict_separation: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FilterOptions {
     pub exclude_patterns: Vec<String>,
     pub include_patterns: Vec<String>,
@@ -39,7 +41,7 @@ pub struct FilterOptions {
     pub eager_filter: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaptureOptions {
     pub do_xattrs: bool,
     pub do_posix_acl: bool,
@@ -50,7 +52,7 @@ pub struct CaptureOptions {
     pub transform: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerPolicy {
     pub owner: Option<String>,
     pub owner_map: Option<PathBuf>,
@@ -58,14 +60,14 @@ pub struct OwnerPolicy {
     pub group_map: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparseOptions {
     pub sparsify: bool,
     pub page_size: usize,
     pub min_pages: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchivePipelineOptions {
     pub no_dedup: bool,
     pub retry_missing_sha: bool,
@@ -74,7 +76,7 @@ pub struct ArchivePipelineOptions {
     pub numeric_ids_only: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchiveConfig {
     pub paths: PathLayout,
     pub inputs: InputOptions,
@@ -89,6 +91,17 @@ pub struct ArchiveConfig {
 }
 
 impl ArchiveConfig {
+    /// Build from CLI args, optionally inheriting `base` where the args do not
+    /// define a value (Option-B merge: a field whose arg-derived value matches the
+    /// default is "not defined" and inherits from `base`).
+    pub fn build(args: &ArchiveArgs, base: Option<&ArchiveConfig>) -> Result<Self> {
+        let candidate = Self::try_from(args)?;
+        match base {
+            None => Ok(candidate),
+            Some(base) => Ok(candidate.merge_over(base, &DEFAULT_CONFIG)),
+        }
+    }
+
     pub fn try_from(args: &ArchiveArgs) -> Result<Self> {
         let directory = resolve_cwd(args.directory.as_deref())?;
 
@@ -222,6 +235,7 @@ impl ArchiveConfig {
 
         let start_policy = StartPolicy::create_or_fresh(args.fresh);
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
+        let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
 
         Ok(Self {
             paths: PathLayout {
@@ -251,9 +265,9 @@ impl ArchiveConfig {
                 eager_filter: !args.lazy_filter,
             },
             capture: CaptureOptions {
-                do_xattrs: args.xattrs,
-                do_posix_acl: args.acls,
-                do_selinux: args.selinux,
+                do_xattrs: args.capture_all_metadata || args.xattrs,
+                do_posix_acl: args.capture_all_metadata || args.acls,
+                do_selinux: args.capture_all_metadata || args.selinux,
                 mode: mode_changes,
                 transform,
             },
@@ -272,6 +286,7 @@ impl ArchiveConfig {
             process: ProcessOptions {
                 start_policy,
                 jobs,
+                io_jobs,
                 fail_fast: args.fail_fast,
                 no_errors: args.no_errors,
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
@@ -285,77 +300,6 @@ impl ArchiveConfig {
                 numeric_ids_only: args.numeric_ids_only,
             },
         })
-    }
-
-    /// Minimal config for `resume` when archive runtime state is present.
-    pub fn for_resume(work_dir: PathBuf, jobs: usize, exit_after_stage: Option<ExitAfterStage>) -> Self {
-        Self {
-            paths: PathLayout {
-                archive_path: PathBuf::new(),
-                directory: PathBuf::new(),
-                work_dir,
-            },
-            inputs: InputOptions {
-                input_dirs: Vec::new(),
-                files_from: Vec::new(),
-                files_from_null: false,
-            },
-            indexing: IndexingOptions {
-                no_recursion: false,
-                dereference: false,
-                one_file_system: false,
-                no_hardlink_detection: false,
-                no_strict_separation: false,
-            },
-            filter: FilterOptions {
-                exclude_patterns: Vec::new(),
-                include_patterns: Vec::new(),
-                exclude_from: Vec::new(),
-                include_from: Vec::new(),
-                anchored: false,
-                ignore_case: false,
-                eager_filter: false,
-            },
-            capture: CaptureOptions {
-                do_xattrs: true,
-                do_posix_acl: true,
-                do_selinux: true,
-                mode: None,
-                transform: None,
-            },
-            owner_policy: OwnerPolicy {
-                owner: None,
-                owner_map: None,
-                group: None,
-                group_map: None,
-            },
-            sparse: SparseOptions {
-                sparsify: false,
-                page_size: 4096,
-                min_pages: 0,
-            },
-            compression: CompressionSettings {
-                format: super::compression::CompressionFormat::None,
-                level: 0,
-                xz_extreme: false,
-                memlimit_compress: None,
-            },
-            process: ProcessOptions {
-                start_policy: StartPolicy::Resume,
-                jobs,
-                fail_fast: false,
-                no_errors: false,
-                cleanup: CleanupSettings::from_flags(false, false),
-                exit_after_stage,
-            },
-            pipeline: ArchivePipelineOptions {
-                no_dedup: false,
-                retry_missing_sha: false,
-                write_archive_footer: true,
-                clear_archive_meta: false,
-                numeric_ids_only: false,
-            },
-        }
     }
 }
 
@@ -375,3 +319,114 @@ impl super::WorkLayout for ArchiveConfig {
         }
     }
 }
+
+impl ArchiveConfig {
+    /// Option-B merge: fields whose candidate value matches `default` are "not
+    /// defined" and inherit from `base`; everything else comes from the candidate.
+    fn merge_over(&self, base: &Self, default: &Self) -> Self {
+        Self {
+            paths: self.paths.clone(),
+            inputs: merge_pick(&self.inputs, &base.inputs, &default.inputs),
+            indexing: merge_pick(&self.indexing, &base.indexing, &default.indexing),
+            filter: merge_pick(&self.filter, &base.filter, &default.filter),
+            capture: merge_pick(&self.capture, &base.capture, &default.capture),
+            owner_policy: merge_pick(&self.owner_policy, &base.owner_policy, &default.owner_policy),
+            sparse: merge_pick(&self.sparse, &base.sparse, &default.sparse),
+            compression: merge_pick(&self.compression, &base.compression, &default.compression),
+            process: ProcessOptions {
+                start_policy: self.process.start_policy,
+                jobs: merge_pick_u(self.process.jobs, base.process.jobs, default.process.jobs),
+                io_jobs: merge_pick_u(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
+                fail_fast: merge_pick_b(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
+                no_errors: merge_pick_b(self.process.no_errors, base.process.no_errors, default.process.no_errors),
+                cleanup: self.process.cleanup,
+                exit_after_stage: self.process.exit_after_stage,
+            },
+            pipeline: merge_pick(&self.pipeline, &base.pipeline, &default.pipeline),
+        }
+    }
+}
+
+fn merge_pick<T: PartialEq + Clone>(cand: &T, base: &T, default: &T) -> T {
+    if cand == default { base.clone() } else { cand.clone() }
+}
+
+fn merge_pick_u(cand: usize, base: usize, default: usize) -> usize {
+    if cand == default { base } else { cand }
+}
+
+fn merge_pick_b(cand: bool, base: bool, default: bool) -> bool {
+    if cand == default { base } else { cand }
+}
+
+/// Archive config with every optional bit at its "off" default. Used as the
+/// merge baseline: fields equal to `DEFAULT_CONFIG` count as unset during a
+/// config merge.
+const DEFAULT_CONFIG: ArchiveConfig = ArchiveConfig {
+    paths: PathLayout {
+        archive_path: PathBuf::new(),
+        directory: PathBuf::new(),
+        work_dir: PathBuf::new(),
+    },
+    inputs: InputOptions {
+        input_dirs: Vec::new(),
+        files_from: Vec::new(),
+        files_from_null: false,
+    },
+    indexing: IndexingOptions {
+        no_recursion: false,
+        dereference: false,
+        one_file_system: false,
+        no_hardlink_detection: false,
+        no_strict_separation: false,
+    },
+    filter: FilterOptions {
+        exclude_patterns: Vec::new(),
+        include_patterns: Vec::new(),
+        exclude_from: Vec::new(),
+        include_from: Vec::new(),
+        anchored: false,
+        ignore_case: false,
+        eager_filter: false,
+    },
+    capture: CaptureOptions {
+        do_xattrs: false,
+        do_posix_acl: false,
+        do_selinux: false,
+        mode: None,
+        transform: None,
+    },
+    owner_policy: OwnerPolicy {
+        owner: None,
+        owner_map: None,
+        group: None,
+        group_map: None,
+    },
+    sparse: SparseOptions {
+        sparsify: false,
+        page_size: 0,
+        min_pages: 0,
+    },
+    compression: CompressionSettings {
+        format: super::compression::CompressionFormat::None,
+        level: 0,
+        xz_extreme: false,
+        memlimit_compress: None,
+    },
+    process: ProcessOptions {
+        start_policy: StartPolicy::Create,
+        jobs: 0,
+        io_jobs: 0,
+        fail_fast: false,
+        no_errors: false,
+        cleanup: CleanupSettings { keep_db: false, keep_stage: false },
+        exit_after_stage: None,
+    },
+    pipeline: ArchivePipelineOptions {
+        no_dedup: false,
+        retry_missing_sha: false,
+        write_archive_footer: true,
+        clear_archive_meta: false,
+        numeric_ids_only: false,
+    },
+};
