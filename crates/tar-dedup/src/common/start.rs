@@ -1,8 +1,9 @@
 //! Shared Create / Fresh / Resume start policy for archive and extract.
 
 use crate::error::{Error, Result};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StartPolicy {
     /// New run; error if incomplete work or a finished product already exists.
     Create,
@@ -18,7 +19,7 @@ impl StartPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkPresence {
     /// No usable work database / incomplete state.
     Absent,
@@ -26,7 +27,7 @@ pub enum WorkPresence {
     Incomplete,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProductPresence {
     /// No finished product short-circuit (extract always; archive when file missing/invalid).
     Absent,
@@ -34,7 +35,7 @@ pub enum ProductPresence {
     Finished,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StartAction {
     RunFresh,
     Resume,
