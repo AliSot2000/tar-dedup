@@ -1,6 +1,7 @@
 use clap::Parser;
 
 use tar_dedup::cli::{Cli, Command};
+use tar_dedup::common::start::StartPolicy;
 use tar_dedup::config::{ArchiveConfig, ExtractConfig, ResumeConfig};
 use tar_dedup::db::Database;
 use tar_dedup::error::Error;
@@ -25,19 +26,34 @@ fn main() -> tar_dedup::error::Result<()> {
         }
         Command::Resume(args) => {
             let resume = ResumeConfig::try_from(&args)?;
-            let work_dir = resume.work_dir.clone();
-            let jobs = resume.jobs();
-            let exit_after_stage = resume.overrides.exit_after_stage;
-            let db = Database::open(&work_dir.join("tar-dedup.sqlite"))?;
+            let db = Database::open(&resume.db_path)?;
             if db.load_runtime_state()?.is_some() {
-                let config = ArchiveConfig::for_resume(work_dir, jobs, exit_after_stage);
-                tar_dedup::archive::run(config, shutdown)
+                let mut stored = db.get_archive_config()?.ok_or_else(|| Error::Config(
+                    "no stored archive configuration in work database; \
+                     restart the run with `--fresh` instead".into(),
+                ))?;
+                stored.process.start_policy = StartPolicy::Resume;
+                stored.process.jobs = resume.overrides.jobs.unwrap_or(stored.process.jobs);
+                stored.process.io_jobs = resume.overrides.io_jobs.unwrap_or(stored.process.io_jobs);
+                if let Some(exit) = resume.overrides.exit_after_stage.as_ref() {
+                    stored.process.exit_after_stage = Some(*exit);
+                }
+                tar_dedup::archive::run(stored, shutdown)
             } else if db.load_extract_runtime_state()?.is_some() {
-                let config = ExtractConfig::for_resume(work_dir, jobs);
-                tar_dedup::unarchive::run(config, shutdown)
+                let mut stored = db.get_extract_config()?.ok_or_else(|| Error::Config(
+                    "no stored extract configuration in work database; \
+                     restart the run with `--fresh` instead".into(),
+                ))?;
+                stored.process.start_policy = StartPolicy::Resume;
+                stored.process.jobs = resume.overrides.jobs.unwrap_or(stored.process.jobs);
+                stored.process.io_jobs = resume.overrides.io_jobs.unwrap_or(stored.process.io_jobs);
+                if let Some(exit) = resume.overrides.exit_after_stage.as_ref() {
+                    stored.process.exit_after_stage = Some(*exit);
+                }
+                tar_dedup::unarchive::run(stored, shutdown)
             } else {
                 Err(Error::Config(
-                    "no incomplete archive or extract state in work directory".into(),
+                    "no incomplete archive or extract state in work database".into(),
                 ))
             }
         }
