@@ -71,7 +71,8 @@ pub struct ArchiveArgs {
     pub files_from: Vec<PathBuf>,
 
     /// `-T` records are NUL-terminated (default: newline-separated).
-    #[arg(long = "null", default_value_t = false, help_heading = "Inputs")]
+    #[arg(long = "null", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Inputs")]
+    #[arg(long = "no-null", action = ArgAction::SetFalse)]
     pub null: bool,
 
     // --- Compression ---
@@ -96,31 +97,38 @@ pub struct ArchiveArgs {
     // --- Indexing ---
 
     /// Do not descend into directories.
-    #[arg(long = "no-recursion", default_value_t = false, help_heading = "Indexing")]
+    #[arg(long = "no-recursion", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Indexing")]
+    #[arg(long = "recursion", action = ArgAction::SetFalse)]
     pub no_recursion: bool,
 
     /// Follow symlinks; archive the files they point to (GNU tar `-h`).
-    #[arg(long = "dereference", default_value_t = false, help_heading = "Indexing")]
+    #[arg(long = "dereference", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Indexing")]
+    #[arg(long = "no-dereference", action = ArgAction::SetFalse)]
     pub dereference: bool,
 
     /// Stay on one filesystem when walking input trees.
-    #[arg(long = "one-file-system", default_value_t = false, help_heading = "Indexing")]
+    #[arg(long = "one-file-system", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Indexing")]
+    #[arg(long = "no-one-file-system", action = ArgAction::SetFalse)]
     pub one_file_system: bool,
 
     /// Do not coalesce same (inode, device) hard links in hash/dedup.
     #[arg(
         long = "no-hardlink-detection",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Indexing"
     )]
+    #[arg(long = "hardlink-detection", action = ArgAction::SetFalse)]
     pub no_hardlink_detection: bool,
 
     /// Allow nested or duplicate `-i` / `-T` directory roots (still recorded and walked).
     #[arg(
         long = "no-strict-separation",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Indexing"
     )]
+    #[arg(long = "strict-separation", action = ArgAction::SetFalse)]
     pub no_strict_separation: bool,
 
     // --- Filtering ---
@@ -163,13 +171,15 @@ pub struct ArchiveArgs {
     pub include_from: Vec<PathBuf>,
 
     /// Exclude version control system directories (not implemented yet).
-    #[arg(long = "exclude-vcs", default_value_t = false, help_heading = "Filtering")]
+    #[arg(long = "exclude-vcs", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
+    #[arg(long = "no-exclude-vcs", action = ArgAction::SetFalse)]
     pub exclude_vcs: bool,
 
     /// Read VCS ignore files for exclusions (not implemented yet).
     #[arg(
         long = "exclude-vcs-ignores",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Filtering"
     )]
     pub exclude_vcs_ignores: bool,
@@ -228,7 +238,8 @@ pub struct ArchiveArgs {
 
     /// Capture every metadata attribute (xattrs, ACLs, SELinux); individual
     /// `--no-*` toggles override this on a per-bit basis.
-    #[arg(long = "capture-all-metadata", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "capture-all-metadata", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "no-capture-all-metadata", action = ArgAction::SetFalse)]
     pub capture_all_metadata: bool,
 
     // TODO extraction?
@@ -266,7 +277,8 @@ pub struct ArchiveArgs {
     // --- Sparse Files ---
 
     /// Run the sparsify phase (copy with seeks using `--page-size` / `--min-pages`).
-    #[arg(long = "sparsify", default_value_t = false, help_heading = "Sparse Files")]
+    #[arg(long = "sparsify", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Sparse Files")]
+    #[arg(long = "no-sparsify", action = ArgAction::SetFalse)]
     pub sparsify: bool,
 
     /// Page size in bytes for hash zero-page counting and sparsify.
@@ -309,8 +321,7 @@ pub struct ArchiveArgs {
     #[arg(long = "keep-stage", help_heading = "Process Options")]
     pub keep_stage: bool,
 
-    /// Run through STAGE then exit cleanly (state saved). STAGE: inventory, hash,
-    /// filter, dedup, sparsify, stage, archive/tar, cleanup (alias scan for inventory).
+    /// Run through STAGE then exit cleanly (state saved).
     #[arg(
         long = "exit-after-stage",
         value_name = "STAGE",
@@ -320,31 +331,37 @@ pub struct ArchiveArgs {
     pub exit_after_stage: Option<ExitAfterStageArg>,
 
     /// Abort the run on the first hard failure (instead of soft-continuing where possible).
-    #[arg(long = "fail-fast", default_value_t = false, help_heading = "Process Options")]
+    #[arg(long = "fail-fast", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    #[arg(long = "no-fail-fast", action = ArgAction::SetFalse)]
     pub fail_fast: bool,
 
     /// Record per-file error messages and continue instead of failing the run.
-    #[arg(long = "no-errors", default_value_t = false, help_heading = "Process Options")]
+    #[arg(long = "no-errors", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    #[arg(long = "errors", action = ArgAction::SetFalse)]
     pub no_errors: bool,
 
     /// Apply include/exclude filters after the hash phase.
-    #[arg(long = "lazy_filter", default_value_t = false, help_heading = "Process Options")]
+    #[arg(long = "lazy-filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    #[arg(long = "no-lazy-filter", action = ArgAction::SetFalse)]
     pub lazy_filter: bool,
 
     /// Skip the deduplication phase.
-    #[arg(long = "no-dedup", default_value_t = false, help_heading = "Process Options")]
+    #[arg(long = "no-dedup", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    #[arg(long = "dedup", action = ArgAction::SetFalse)]
     pub no_dedup: bool,
 
     /// Stage/archive files that failed to obtain a SHA-1.
     #[arg(
         long = "retry-missing-sha",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Process Options"
     )]
     pub retry_missing_sha: bool,
 
     /// Do not resolve numeric ids to user/group names during inventory.
-    #[arg(long = "numeric-ids-only", default_value_t = false, help_heading = "Process Options")]
+    #[arg(long = "numeric-ids-only", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    #[arg(long = "no-numeric-ids-only", action = ArgAction::SetFalse)]
     pub numeric_ids_only: bool,
 }
 
@@ -403,8 +420,10 @@ pub struct ExtractArgs {
         long = "absolute",
         visible_alias = "absolute-names",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Archive Paths"
     )]
+    #[arg(long = "no-absolute", action = ArgAction::SetFalse)]
     pub absolute_names: bool,
 
     /// Create a subdirectory so loose archive members are not extracted directly into
@@ -424,6 +443,7 @@ pub struct ExtractArgs {
     #[arg(
         long = "keep-directory-symlink",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Overwrite Control"
     )]
     pub keep_dir_symlink: bool,
@@ -434,14 +454,17 @@ pub struct ExtractArgs {
         short = 'U',
         long = "unlink-first",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Overwrite Control"
     )]
+    #[arg(long = "no-unlink-first", action = ArgAction::SetFalse)]
     pub unlink_first: bool,
 
     /// Skip members whose parent directory does not exist (error with `--fail-fast`).
     #[arg(
         long = "no-create-dirs",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Overwrite Control"
     )]
     pub no_create_dir: bool,
@@ -453,6 +476,7 @@ pub struct ExtractArgs {
     #[arg(
         long = "no-overwrite-dir",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Overwrite Control"
     )]
     pub no_overwrite_dir: bool,
@@ -463,6 +487,7 @@ pub struct ExtractArgs {
     #[arg(
         long = "overwrite-dir",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Overwrite Control"
     )]
     pub force_overwrite_dir: bool,
@@ -480,6 +505,7 @@ pub struct ExtractArgs {
     #[arg(
         long = "silent-conflicts",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Overwrite Control"
     )]
     pub silent_conflicts: bool,
@@ -488,6 +514,7 @@ pub struct ExtractArgs {
     #[arg(
         long = "remove-and-replace",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Overwrite Control"
     )]
     pub remove_and_replace: bool,
@@ -508,6 +535,7 @@ pub struct ExtractArgs {
     #[arg(
         long = "link-tree",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Link Tree"
     )]
     pub link_tree: bool,
@@ -516,6 +544,7 @@ pub struct ExtractArgs {
     #[arg(
         long = "hard-links",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Link Tree"
     )]
     pub use_hard_links: bool,
@@ -525,6 +554,7 @@ pub struct ExtractArgs {
     #[arg(
         long = "absolute-links",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Link Tree"
     )]
     pub absolute_links: bool,
@@ -557,7 +587,8 @@ pub struct ExtractArgs {
     pub map_target: MapResolutionTarget,
 
     /// Fail hard on map/override destinations that the chosen --map-target cannot emit.
-    #[arg(long = "validate-maps", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "validate-maps", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "no-validate-maps", action = ArgAction::SetFalse)]
     pub validate_maps: bool,
 
     /// Force owner for restored members: `NAME`, `UID`, or `NAME:UID`.
@@ -577,11 +608,13 @@ pub struct ExtractArgs {
     pub group_map: Option<PathBuf>,
 
     /// Apply the owner map recorded in the archive (ignored if any `--owner`/`--owner-map` given).
-    #[arg(long = "apply-stored-owner-map", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "apply-stored-owner-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "no-apply-stored-owner-map", action = ArgAction::SetFalse)]
     pub apply_stored_owner_map: bool,
 
     /// Apply the group map recorded in the archive (ignored if any `--group`/`--group-map` given).
-    #[arg(long = "apply-stored-group-map", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "apply-stored-group-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "no-apply-stored-group-map", action = ArgAction::SetFalse)]
     pub apply_stored_group_map: bool,
 
     /// Force symbolic mode CHANGES for restored members; takes precedence over `--apply-mode`.
@@ -589,7 +622,8 @@ pub struct ExtractArgs {
     pub mode: Option<String>,
 
     /// Apply the mode changes recorded in the archive (ignored if `--mode` given).
-    #[arg(long = "apply-mode", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "apply-mode", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "no-apply-mode", action = ArgAction::SetFalse)]
     pub apply_mode: bool,
 
     /// Force a sed-style name transform (GNU tar `--transform`/`--xform`) at
@@ -603,7 +637,8 @@ pub struct ExtractArgs {
     pub transform: Option<String>,
 
     /// Apply the name transform recorded in the archive (ignored if `--transform` given).
-    #[arg(long = "apply-transform", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "apply-transform", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "no-apply-transform", action = ArgAction::SetFalse)]
     pub apply_transform: bool,
 
     /// Strip NUMBER leading path components from file names before extraction.
@@ -617,41 +652,46 @@ pub struct ExtractArgs {
     pub strip_components: u32,
 
     /// Restore archived access times from the database (default: leave untouched).
-    #[arg(long = "apply-atime", action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "apply-atime", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_atime: bool,
 
-    /// Do not restore archived access times (use with `--apply-metadata`).
-    #[arg(long = "no-apply-atime", action = ArgAction::SetFalse, help_heading = "File Attributes")]
+    /// Explicitly do not restore archived access times (overrides `--apply-metadata`).
+    #[arg(long = "no-apply-atime", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_apply_atime: bool,
 
     /// Restore archived modification times from the database (default: leave untouched).
-    #[arg(long = "apply-mtime", action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "apply-mtime", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_mtime: bool,
 
-    /// Do not restore archived modification times (use with `--apply-metadata`).
-    #[arg(long = "no-apply-mtime", action = ArgAction::SetFalse, help_heading = "File Attributes")]
+    /// Explicitly do not restore archived modification times (overrides `--apply-metadata`).
+    #[arg(long = "no-apply-mtime", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_apply_mtime: bool,
 
     /// Do not apply archived extended attributes.
-    #[arg(long = "no-xattrs", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "no-xattrs", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "xattrs", action = ArgAction::SetFalse)]
     pub no_xattrs: bool,
 
     /// Do not apply archived POSIX ACLs.
-    #[arg(long = "no-acls", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "no-acls", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "acls", action = ArgAction::SetFalse)]
     pub no_acls: bool,
 
     /// Do not apply archived SELinux contexts.
-    #[arg(long = "no-selinux", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "no-selinux", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "selinux", action = ArgAction::SetFalse)]
     pub no_selinux: bool,
 
     /// Do not apply archived permissions (mode). Permissions are restored by default.
-    #[arg(long = "no-same-permissions", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "no-same-permissions", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "same-permissions", action = ArgAction::SetFalse)]
     pub no_same_permissions: bool,
 
     /// Apply every metadata attribute recorded in the archive (owner, stored
     /// owner/group maps, mode, transform, atime/mtime, xattrs/acls/selinux, perms).
     /// Individual `--no-*` toggles override this on a per-bit basis.
-    #[arg(long = "apply-metadata", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "apply-metadata", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    #[arg(long = "no-apply-metadata", action = ArgAction::SetFalse)]
     pub apply_metadata: bool,
 
     // --- Process Options ---
@@ -715,19 +755,22 @@ pub struct ExtractArgs {
     pub ignore_case: bool,
 
     /// Apply include/exclude filters after a later phase (scan) instead of eagerly.
-    #[arg(long = "lazy_filter", default_value_t = false, help_heading = "Filtering")]
+    #[arg(long = "lazy_filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
+    #[arg(long = "no-lazy_filter", action = ArgAction::SetFalse)]
     pub lazy_filter: bool,
 
     /// Abort on the first warning or error instead of continuing where possible.
     #[arg(
         long = "fail-fast",
         default_value_t = false,
+        action = ArgAction::SetTrue,
         help_heading = "Process Options"
     )]
     pub fail_fast: bool,
 
     /// Do not record per-file errors in the database.
-    #[arg(long = "no-errors", default_value_t = false, help_heading = "Process Options")]
+    #[arg(long = "no-errors", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    #[arg(long = "errors", action = ArgAction::SetFalse)]
     pub no_errors: bool,
 
     /// After success, keep a timestamped copy of snapshot.sqlite next to the archive.
