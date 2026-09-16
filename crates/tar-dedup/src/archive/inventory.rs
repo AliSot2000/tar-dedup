@@ -17,7 +17,7 @@ use path_clean::PathClean;
 use std::ffi::OsStr;
 use std::fs::Metadata;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
@@ -31,9 +31,9 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         db.purge_entries()?;
     }
 
-    tracing::info!("Inventory pass cannot be gracefully interrupted. \
-                    If force aborted, inventory needs to be run again to ensure consistent \
-                    snapshot of filesystem.");
+    tracing::info!("Inventory pass cannot be gracefully interrupted.
+                    If force aborted, the  passinventory needs to be run again to ensure \
+                    consistent snapshot of filesystem.");
     let mut processed = 0u64;
     let progress = CountProgress::new("inventory");
 
@@ -68,12 +68,14 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     // Handle from-files
     for files_file in config.inputs.files_from.iter() {
-        if files_file == "-" {
+        if files_file.to_path_buf() == PathBuf::from("-") {
             let br = BufReader::new(io::stdin());
-            for element in files_from_reader(br, config.inputs.files_from_null) {
+            let ff_iter = files_from_reader(br, config.inputs.files_from_null);
+            for element in ff_iter {
                 let (line, result) = element;
                 let path = match result {
-                    Ok(path_vec) => path_vec,
+                    Ok(path_vec) => PathBuf::from(&os_str_from_bytes(&path_vec)),
+                    // TODO capture error
                     Err(e) => return Err(Error::io("-", e)),
                 };
 
@@ -85,14 +87,16 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         // Sanity check
         debug_assert!(files_file.is_file(),"Input Dir must contain valid directories");
         debug_assert!(files_file.is_absolute(), "Input Dir must be absolute");
-        debug_assert!(&files_file.clean() == files_file, "Path should be minimal");
+        debug_assert!(files_file.clean() == files_file.to_path_buf(), "Path should be minimal");
 
         // TODO capture error
-        let file = fs::read(files_file).map_err(|e| Error::io(files_file, e))?;
+        let file = fs::read(&files_file)
+            .map_err(|e| Error::io(files_file.to_path_buf(), e))?;
 
         for element in files_from_records(&file, config.inputs.files_from_null) {
-            handle_from_files_line(element, &files_file, &config, &db, &shutdown, &mut processed,
-                                   &progress, &mut recorder)?
+            let (line, path) = element;
+            handle_from_files_line((line, &path), &files_file, &config, &db, &shutdown,
+                                   &mut processed, &progress, &mut recorder)?
         }
     }
     // Set hardlink canonicals if and only if, we want to collapse the hardlinks and
@@ -124,8 +128,8 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 }
 
 /// Process a single line from the --from-files argument
-fn handle_from_files_line(
-    element: (usize, &[u8]),
+fn handle_from_files_line<P: AsRef<Path>>(
+    element: (usize, P),
     from_files_path: &Path,
     config: &ArchiveConfig,
     db: &Database,
@@ -135,8 +139,7 @@ fn handle_from_files_line(
     recorder: &mut crate::db::Recorder,
 ) -> Result<()> {
     let (line, ff) = element;
-    let fpath_os = os_str_from_bytes(ff);
-    let fpath = Path::new(&fpath_os); // TODO force utf8
+    let fpath: &Path = ff.as_ref();
     let from_files_disp_path = from_files_path.display();
 
     let abs_path = if fpath.is_absolute() {
@@ -524,14 +527,14 @@ fn strip_transpose<T>(path: &Path, source: io::Result<T>, errors: &mut Vec<FileS
 /// Split an arbitrary file into slices which are
 /// - delimited by either `\0` or `\n`
 /// - not empty (blank lines / trailing separator)
-fn files_from_records(buf: &[u8], null: bool) -> impl Iterator<Item = (usize, &[u8])> {
+fn files_from_records(buf: &[u8], null: bool) -> impl Iterator<Item = (usize, PathBuf)> + '_ {
     let sep = if null { b'\0' } else { b'\n' };
     buf.split(move |&b| b == sep)
         .enumerate()
         .map(|(line, rec)| (line, rec.strip_suffix(b"\r").unwrap_or(rec)))
-        .filter(|(_line, rec)| !rec.is_empty())
+        .map(|(line, rec)| (line, PathBuf::from(&os_str_from_bytes(rec))))
+        .filter(|(_line, rec)| !rec.as_os_str().is_empty())
 }
-
 /// Split an arbitrary Buffer into slices which are
 /// - delimited by either `\0` or `\n`
 /// - not empty (blank lines / trailing separator)
