@@ -2,18 +2,6 @@ use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-const IO_BUF_SIZE: usize = 1024 * 1024;
-/// Tar read chunk size during archive (keep xz fed without huge resident buffers).
-const ARCHIVE_IO_BUF_SIZE: usize = 4 * 1024 * 1024;
-
-pub fn io_buffer() -> Vec<u8> {
-    vec![0u8; IO_BUF_SIZE]
-}
-
-pub fn archive_io_buffer() -> Vec<u8> {
-    vec![0u8; ARCHIVE_IO_BUF_SIZE]
-}
-
 pub struct ByteProgress {
     bar: ProgressBar,
 }

@@ -22,7 +22,18 @@ pub const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
 /// To ensure the program is responsive, we need to periodically check, if the user interrupted us.
 /// This is the stepsize during read / write operations between successive checks of the program
 /// status.
-pub const COPY_STEP_SIZE: u64 = 1024 * 1024 * 4;
+const IO_BUF_SIZE: usize = 1024 * 1024 * 4;
+
+/// Tar read chunk size during archive (keep xz fed without huge resident buffers).
+const ARCHIVE_IO_BUF_SIZE: usize = 4 * 1024 * 1024;
+
+pub fn io_buffer() -> Vec<u8> {
+    vec![0u8; IO_BUF_SIZE]
+}
+
+pub fn archive_io_buffer() -> Vec<u8> {
+    vec![0u8; ARCHIVE_IO_BUF_SIZE]
+}
 
 /// When processing files, file system entries, ... we take the precaution not to load too much
 /// into ram. Worst case Estimate is 16kiB / Entry, so we try to be conservative with 100'000 as
