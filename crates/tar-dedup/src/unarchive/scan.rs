@@ -573,7 +573,11 @@ fn captured_extract_database<R: Read>(
 
 /// Install catalog from `temp` into `target`, normalize, and init extract runtime state.
 fn open_initial_database(
-    temp: &Path, target: &Path, fb: &mut Option<ParseFilterBuffer>, config: &ExtractConfig, shutdown: &Shutdown)
+    temp: &Path, 
+    target: &Path, 
+    fb: &mut Option<ParseFilterBuffer>,
+    config: &ExtractConfig, 
+    shutdown: &Shutdown)
     -> Result<Database> {
     Database::install_initial_manifest(temp, target)?;
     let opened = Database::open(target)?;
