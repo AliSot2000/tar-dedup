@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 
 use crate::common::perms::MapResolutionTarget;
 
@@ -225,6 +226,11 @@ pub struct ArchiveArgs {
     #[arg(long = "no-selinux", action = ArgAction::SetFalse)]
     pub selinux: bool,
 
+    /// Capture every metadata attribute (xattrs, ACLs, SELinux); individual
+    /// `--no-*` toggles override this on a per-bit basis.
+    #[arg(long = "capture-all-metadata", default_value_t = false, help_heading = "File Attributes")]
+    pub capture_all_metadata: bool,
+
     // TODO extraction?
     /// Force owner for archived members: `NAME`, `UID`, or `NAME:UID` (GNU tar).
     /// Stored as archive policy (meta); applied on extract.
@@ -286,6 +292,10 @@ pub struct ArchiveArgs {
     /// Maximum concurrent workers (rayon pools and xz threads).
     #[arg(long = "jobs", value_name = "N", help_heading = "Process Options")]
     pub jobs: Option<usize>,
+
+    /// Maximum concurrent io-bound workers (dedup, sparsify, place pools).
+    #[arg(long = "io-jobs", value_name = "N", help_heading = "Process Options")]
+    pub io_jobs: Option<usize>,
 
     /// Wipe existing work and archive, then start from inventory.
     #[arg(long = "fresh", help_heading = "Process Options")]
@@ -607,12 +617,20 @@ pub struct ExtractArgs {
     pub strip_components: u32,
 
     /// Restore archived access times from the database (default: leave untouched).
-    #[arg(long = "apply-atime", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "apply-atime", action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_atime: bool,
 
+    /// Do not restore archived access times (use with `--apply-metadata`).
+    #[arg(long = "no-apply-atime", action = ArgAction::SetFalse, help_heading = "File Attributes")]
+    pub no_apply_atime: bool,
+
     /// Restore archived modification times from the database (default: leave untouched).
-    #[arg(long = "apply-mtime", default_value_t = false, help_heading = "File Attributes")]
+    #[arg(long = "apply-mtime", action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_mtime: bool,
+
+    /// Do not restore archived modification times (use with `--apply-metadata`).
+    #[arg(long = "no-apply-mtime", action = ArgAction::SetFalse, help_heading = "File Attributes")]
+    pub no_apply_mtime: bool,
 
     /// Do not apply archived extended attributes.
     #[arg(long = "no-xattrs", default_value_t = false, help_heading = "File Attributes")]
@@ -630,7 +648,21 @@ pub struct ExtractArgs {
     #[arg(long = "no-same-permissions", default_value_t = false, help_heading = "File Attributes")]
     pub no_same_permissions: bool,
 
+    /// Apply every metadata attribute recorded in the archive (owner, stored
+    /// owner/group maps, mode, transform, atime/mtime, xattrs/acls/selinux, perms).
+    /// Individual `--no-*` toggles override this on a per-bit basis.
+    #[arg(long = "apply-metadata", default_value_t = false, help_heading = "File Attributes")]
+    pub apply_metadata: bool,
+
     // --- Process Options ---
+
+    /// Maximum concurrent workers (rayon pools and xz threads).
+    #[arg(long = "jobs", value_name = "N", help_heading = "Process Options")]
+    pub jobs: Option<usize>,
+
+    /// Maximum concurrent io-bound workers (dedup, sparsify, place pools).
+    #[arg(long = "io-jobs", value_name = "N", help_heading = "Process Options")]
+    pub io_jobs: Option<usize>,
 
     /// Wipe extract work (`.estage`) and start over.
     #[arg(long = "fresh", help_heading = "Process Options")]
@@ -707,17 +739,25 @@ pub struct ExtractArgs {
     pub keep_stage: bool,
 }
 
-/// Continue incomplete work. Policy comes from the work DB; only jobs and
-/// `--exit-after-stage` may be overridden.
+/// Continue incomplete work. Policy comes from the work DB; only jobs, `--io-jobs`
+/// and `--exit-after-stage` may be overridden.
 #[derive(Debug, Args)]
 pub struct ResumeArgs {
     /// Work directory (`.astage` / `.estage`) of the interrupted run.
     #[arg(long = "work-dir", value_name = "DIR")]
-    pub work_dir: PathBuf,
+    pub work_dir: Option<PathBuf>,
+
+    /// Path to the work database (`tar-dedup.sqlite`) directly; mutually exclusive with `--work-dir`.
+    #[arg(long = "db", value_name = "FILE")]
+    pub db: Option<PathBuf>,
 
     /// Maximum concurrent workers (rayon pools and xz threads).
     #[arg(long = "jobs", value_name = "N")]
     pub jobs: Option<usize>,
+
+    /// Maximum concurrent io-bound workers (dedup, sparsify, place pools).
+    #[arg(long = "io-jobs", value_name = "N")]
+    pub io_jobs: Option<usize>,
 
     /// Run through STAGE then exit cleanly (state saved).
     #[arg(long = "exit-after-stage", value_name = "STAGE", value_enum)]
@@ -727,7 +767,7 @@ pub struct ResumeArgs {
 /// Pipeline stop point for `--exit-after-stage`.
 ///
 /// Names follow archive file-phase progression (plus `cleanup`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum ExitAfterStageArg {
     /// Walk the input tree / capture metadata (`inventoried`).
@@ -752,7 +792,7 @@ pub enum ExitAfterStageArg {
 }
 
 /// How extraction handles paths that already exist on disk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum ConflictPolicy {
     /// Keep existing files; warn on conflict (GNU tar `--keep-old-files`).
@@ -767,7 +807,7 @@ pub enum ConflictPolicy {
     Replace,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum HardLinkGrouping {
     /// Do not hard link any files which had the same (dev, inode) as on the source file system
