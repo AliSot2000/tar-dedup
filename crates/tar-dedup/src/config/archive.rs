@@ -242,6 +242,10 @@ impl ArchiveConfig {
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
         let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
 
+        // Archive default: capture everything. `--no-capture-all-metadata` flips the
+        // whole group off; per-bit `--x`/`--no-x` override on top (explicit wins).
+        let capture_all = !args.no_capture_all_metadata;
+
         Ok(Self {
             paths: PathLayout {
                 archive_path,
@@ -270,9 +274,18 @@ impl ArchiveConfig {
                 eager_filter: !args.lazy_filter,
             },
             capture: CaptureOptions {
-                do_xattrs: args.capture_all_metadata || args.xattrs,
-                do_posix_acl: args.capture_all_metadata || args.acls,
-                do_selinux: args.capture_all_metadata || args.selinux,
+                do_xattrs: resolve_capture_bit(args.no_xattrs,
+                                               args.xattrs,
+                                               capture_all),
+                do_posix_acl: resolve_capture_bit(args.no_acls,
+                                                  args.acls,
+                                                  capture_all),
+                do_selinux: resolve_capture_bit(args.no_selinux,
+                                                args.selinux,
+                                                capture_all),
+                numeric_ids_only: resolve_capture_bit(args.numeric_ids_only,
+                                                      args.resolve_numeric_ids,
+                                                      capture_all),
                 mode: mode_changes,
                 transform,
             },
@@ -302,7 +315,6 @@ impl ArchiveConfig {
                 retry_missing_sha: args.retry_missing_sha,
                 write_archive_footer: true,
                 clear_archive_meta: false,
-                numeric_ids_only: args.numeric_ids_only,
             },
         })
     }
@@ -358,6 +370,12 @@ fn merge_pick<T: PartialEq + Clone>(cand: &T, base: &T, default: &T) -> T {
 
 fn merge_pick_u(cand: usize, base: usize, default: usize) -> usize {
     if cand == default { base } else { cand }
+}
+
+fn merge_pick_b(cand: bool, base: bool, default: bool) -> bool {
+    if cand == default { base } else { cand }
+}
+
 /// Resolve one capture bit: explicit `--no-x` wins, then `--x`, then the base
 /// (INCLUDE = `true` when `capture_all`, EXCLUDE = `false`).
 fn resolve_capture_bit(no: bool, yes: bool, base: bool) -> bool {
