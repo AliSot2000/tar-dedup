@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::cli::{ConflictPolicy, ExtractArgs, HardLinkGrouping};
 use crate::common::perms::{
     MapResolutionTarget, ModeSource, OwnerGroupSource, infer_same_owner, parse_mode_changes,
@@ -18,7 +20,7 @@ use super::{
 };
 use crate::config::FilterOptions;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacementOptions {
     pub absolute_names: bool,
     pub one_top_level: Option<PathBuf>,
@@ -38,7 +40,7 @@ pub struct PlacementOptions {
     pub recreate_none_file_entries: bool, // TODO CLI
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractAttributeOptions {
     pub restore_owner: bool,
     pub no_overwrite_dir: bool,
@@ -51,7 +53,7 @@ pub struct ExtractAttributeOptions {
     pub no_same_permissions: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerGroupOptions {
     pub target: MapResolutionTarget,
     pub validate_maps: bool,
@@ -60,14 +62,14 @@ pub struct OwnerGroupOptions {
     pub apply_group: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanOptions {
     pub force_scan: bool,
     pub rehash: bool,
     pub clear_archive_meta: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractConfig {
     pub force: bool, // Will force the system just try anyway even tho stuff failed. Might lead to inconsistent states and corrupted data.
     pub paths: PathLayout,
@@ -121,7 +123,7 @@ fn resolve_owner_policy_from_args(
             }
             None => Ok(OwnerGroupSource::None),
         }
-    } else if args.apply_stored_owner_map || args.apply_stored_group_map {
+    } else if args.apply_stored_owner_map || args.apply_stored_group_map || args.apply_metadata {
         Ok(OwnerGroupSource::Stored)
     } else {
         Ok(OwnerGroupSource::None)
@@ -138,7 +140,7 @@ fn resolve_mode_policy_from_args(args: &ExtractArgs) -> Result<ModeSource> {
         }
         parse_mode_changes(changes)?;
         Ok(ModeSource::Cli(changes.clone()))
-    } else if args.apply_mode {
+    } else if args.apply_mode || args.apply_metadata {
         Ok(ModeSource::Stored)
     } else {
         Ok(ModeSource::None)
@@ -155,7 +157,7 @@ fn resolve_transform_policy_from_args(args: &ExtractArgs) -> Result<TransformSou
         }
         parse_transform_expr(expr)?;
         Ok(TransformSource::Cli(expr.clone()))
-    } else if args.apply_transform {
+    } else if args.apply_transform || args.apply_metadata {
         Ok(TransformSource::Stored)
     } else {
         Ok(TransformSource::None)
@@ -179,6 +181,17 @@ fn resolve_map_arg(
 }
 
 impl ExtractConfig {
+    /// Build from CLI args, optionally inheriting `base` where the args do not
+    /// define a value (Option-B merge: a field whose arg-derived value matches the
+    /// default is "not defined" and inherits from `base`).
+    pub fn build(args: &ExtractArgs, base: Option<&ExtractConfig>) -> Result<Self> {
+        let candidate = Self::try_from(args)?;
+        match base {
+            None => Ok(candidate),
+            Some(base) => Ok(candidate.merge_over(base, &DEFAULT_CONFIG)),
+        }
+    }
+
     pub fn try_from(args: &ExtractArgs) -> Result<Self> {
         let directory = resolve_cwd(args.directory.as_deref())?;
         let archive_path = resolve_path_to_abs_path(&args.archive, &directory);
@@ -228,6 +241,8 @@ impl ExtractConfig {
         } else {
             (args.apply_stored_owner_map, args.apply_stored_group_map)
         };
+        let jobs = args.jobs.unwrap_or_else(num_cpus::get);
+        let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
         Ok(Self {
             force: true, // TODO cli
             paths: PathLayout {
@@ -255,15 +270,43 @@ impl ExtractConfig {
                 recreate_none_file_entries: true,
             },
             attributes: ExtractAttributeOptions {
-                restore_owner: args.restore_owner,
+                restore_owner: if args.apply_metadata {
+                    !args.no_same_owner
+                } else {
+                    args.restore_owner
+                },
                 no_overwrite_dir: args.no_overwrite_dir,
                 force_overwrite_dir: args.force_overwrite_dir,
-                apply_atime: args.apply_atime,
-                apply_mtime: args.apply_mtime,
-                no_xattrs: args.no_xattrs,
-                no_acls: args.no_acls,
-                no_selinux: args.no_selinux,
-                no_same_permissions: args.no_same_permissions,
+                apply_atime: if args.apply_metadata {
+                    !args.no_apply_atime
+                } else {
+                    args.apply_atime
+                },
+                apply_mtime: if args.apply_metadata {
+                    !args.no_apply_mtime
+                } else {
+                    args.apply_mtime
+                },
+                no_xattrs: if args.apply_metadata && !args.no_xattrs {
+                    false
+                } else {
+                    args.no_xattrs
+                },
+                no_acls: if args.apply_metadata && !args.no_acls {
+                    false
+                } else {
+                    args.no_acls
+                },
+                no_selinux: if args.apply_metadata && !args.no_selinux {
+                    false
+                } else {
+                    args.no_selinux
+                },
+                no_same_permissions: if args.apply_metadata && !args.no_same_permissions {
+                    false
+                } else {
+                    args.no_same_permissions
+                },
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -272,7 +315,8 @@ impl ExtractConfig {
             },
             process: ProcessOptions {
                 start_policy,
-                jobs: 1,
+                jobs,
+                io_jobs,
                 fail_fast: args.fail_fast,
                 no_errors: args.no_errors,
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
@@ -312,81 +356,6 @@ impl ExtractConfig {
                 eager_filter: !args.lazy_filter,
             },
         })
-    }
-
-    /// Minimal config for `resume` when extract runtime state is present.
-    pub fn for_resume(work_dir: PathBuf, jobs: usize) -> Self {
-        Self {
-            force: true, // TODO cli
-            paths: PathLayout {
-                archive_path: PathBuf::new(),
-                directory: PathBuf::new(),
-                work_dir,
-            },
-            decompression: super::compression::CompressionFormat::None,
-            placement: PlacementOptions {
-                absolute_names: false,
-                one_top_level: None,
-                keep_dir_symlink: false,
-                unlink_first: false,
-                no_create_dir: false,
-                conflict_policy: ConflictPolicy::Replace,
-                silent_conflicts: false,
-                remove_and_replace: false,
-                link_tree: false,
-                use_hard_links: false,
-                absolute_links: false,
-                clean_target: true,
-                link_source: None,
-                no_reflink: false,
-                hard_link_grouping: HardLinkGrouping::Global,
-                recreate_none_file_entries: true,
-            },
-            attributes: ExtractAttributeOptions {
-                restore_owner: false,
-                no_overwrite_dir: false,
-                force_overwrite_dir: false,
-                apply_atime: false,
-                apply_mtime: false,
-                no_xattrs: false,
-                no_acls: false,
-                no_selinux: false,
-                no_same_permissions: false,
-            },
-            scan: ScanOptions {
-                force_scan: false,
-                rehash: true,
-                clear_archive_meta: false,
-            },
-            process: ProcessOptions {
-                start_policy: StartPolicy::Resume,
-                jobs,
-                fail_fast: false,
-                no_errors: false,
-                cleanup: CleanupSettings::from_flags(false, false),
-                exit_after_stage: None,
-            },
-            owner_policy: OwnerGroupSource::None,
-            owner_group: OwnerGroupOptions {
-                target: MapResolutionTarget::NameId,
-                validate_maps: false,
-                same_owner: false,
-                apply_owner: false,
-                apply_group: false,
-            },
-            mode_policy: ModeSource::None,
-            strip_components: 0,
-            transform_policy: TransformSource::None,
-            filter: FilterOptions {
-                exclude_patterns: Vec::new(),
-                include_patterns: Vec::new(),
-                exclude_from: Vec::new(),
-                include_from: Vec::new(),
-                anchored: false,
-                ignore_case: false,
-                eager_filter: true,
-            },
-        }
     }
 
     #[cfg(test)]
@@ -436,9 +405,10 @@ impl ExtractConfig {
             process: ProcessOptions {
                 start_policy: StartPolicy::Create,
                 jobs,
+                io_jobs: jobs,
                 fail_fast: false,
                 no_errors: false,
-                cleanup: CleanupSettings::from_flags(false, false),
+                cleanup: CleanupSettings { keep_db: false, keep_stage: false },
                 exit_after_stage: None,
             },
             owner_policy: OwnerGroupSource::None,
@@ -511,9 +481,10 @@ impl ExtractConfig {
             process: ProcessOptions {
                 start_policy: StartPolicy::Create,
                 jobs: 1,
+                io_jobs: 1,
                 fail_fast: false,
                 no_errors: false,
-                cleanup: CleanupSettings::from_flags(false, false),
+                cleanup: CleanupSettings { keep_db: false, keep_stage: false },
                 exit_after_stage: None,
             },
             owner_policy: OwnerGroupSource::None,
@@ -556,3 +527,121 @@ impl super::WorkLayout for ExtractConfig {
         }
     }
 }
+
+impl ExtractConfig {
+    /// Option-B merge: fields whose candidate value matches `default` are "not
+    /// defined" and inherit from `base`; everything else comes from the candidate.
+    fn merge_over(&self, base: &Self, default: &Self) -> Self {
+        Self {
+            force: self.force,
+            paths: self.paths.clone(),
+            decompression: self.decompression,
+            placement: self.placement.clone(),
+            attributes: self.attributes.clone(),
+            scan: merge_pick(&self.scan, &base.scan, &default.scan),
+            process: ProcessOptions {
+                start_policy: self.process.start_policy,
+                jobs: merge_pick_u(self.process.jobs, base.process.jobs, default.process.jobs),
+                io_jobs: merge_pick_u(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
+                fail_fast: merge_pick_b(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
+                no_errors: merge_pick_b(self.process.no_errors, base.process.no_errors, default.process.no_errors),
+                cleanup: self.process.cleanup,
+                exit_after_stage: self.process.exit_after_stage,
+            },
+            owner_policy: merge_pick(&self.owner_policy, &base.owner_policy, &default.owner_policy),
+            owner_group: self.owner_group.clone(),
+            mode_policy: merge_pick(&self.mode_policy, &base.mode_policy, &default.mode_policy),
+            strip_components: self.strip_components,
+            transform_policy: merge_pick(&self.transform_policy, &base.transform_policy, &default.transform_policy),
+            filter: merge_pick(&self.filter, &base.filter, &default.filter),
+        }
+    }
+}
+
+fn merge_pick<T: PartialEq + Clone>(cand: &T, base: &T, default: &T) -> T {
+    if cand == default { base.clone() } else { cand.clone() }
+}
+
+fn merge_pick_u(cand: usize, base: usize, default: usize) -> usize {
+    if cand == default { base } else { cand }
+}
+
+fn merge_pick_b(cand: bool, base: bool, default: bool) -> bool {
+    if cand == default { base } else { cand }
+}
+
+/// Extract config with every optional bit at its "off" default. Used as the
+/// merge baseline: fields equal to `DEFAULT_CONFIG` count as unset during a
+/// config merge.
+const DEFAULT_CONFIG: ExtractConfig = ExtractConfig {
+    force: false,
+    paths: PathLayout {
+        archive_path: PathBuf::new(),
+        directory: PathBuf::new(),
+        work_dir: PathBuf::new(),
+    },
+    decompression: super::compression::CompressionFormat::None,
+    placement: PlacementOptions {
+        absolute_names: false,
+        one_top_level: None,
+        keep_dir_symlink: false,
+        unlink_first: false,
+        no_create_dir: false,
+        conflict_policy: ConflictPolicy::Replace,
+        silent_conflicts: false,
+        remove_and_replace: false,
+        link_tree: false,
+        use_hard_links: false,
+        absolute_links: false,
+        clean_target: false,
+        link_source: None,
+        no_reflink: false,
+        hard_link_grouping: HardLinkGrouping::Global,
+        recreate_none_file_entries: true,
+    },
+    attributes: ExtractAttributeOptions {
+        restore_owner: false,
+        no_overwrite_dir: false,
+        force_overwrite_dir: false,
+        apply_atime: false,
+        apply_mtime: false,
+        no_xattrs: true,
+        no_acls: true,
+        no_selinux: true,
+        no_same_permissions: true,
+    },
+    scan: ScanOptions {
+        force_scan: false,
+        rehash: true,
+        clear_archive_meta: false,
+    },
+    process: ProcessOptions {
+        start_policy: StartPolicy::Create,
+        jobs: 0,
+        io_jobs: 0,
+        fail_fast: false,
+        no_errors: false,
+        cleanup: CleanupSettings { keep_db: false, keep_stage: false },
+        exit_after_stage: None,
+    },
+    owner_policy: OwnerGroupSource::None,
+    owner_group: OwnerGroupOptions {
+        target: MapResolutionTarget::NameId,
+        validate_maps: false,
+        same_owner: false,
+        apply_owner: false,
+        apply_group: false,
+    },
+    mode_policy: ModeSource::None,
+    strip_components: 0,
+    transform_policy: TransformSource::None,
+    filter: FilterOptions {
+        exclude_patterns: Vec::new(),
+        include_patterns: Vec::new(),
+        exclude_from: Vec::new(),
+        include_from: Vec::new(),
+        anchored: false,
+        ignore_case: false,
+        eager_filter: false,
+    },
+};
