@@ -10,9 +10,10 @@
 
 use crate::error::{Error, Result};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 /// Where the path transform expression comes from on extract (mirrors `ModeSource`).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TransformSource {
     /// No name transformation.
     #[default]
