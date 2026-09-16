@@ -184,7 +184,7 @@ impl OwnerGroupPolicy {
 }
 
 /// Which user/group policy applies during extraction.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OwnerGroupSource {
     /// No mapping.
     #[default]
@@ -196,7 +196,7 @@ pub enum OwnerGroupSource {
 }
 
 /// Which mode-change policy applies during extraction.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ModeSource {
     /// No mode changes.
     #[default]
