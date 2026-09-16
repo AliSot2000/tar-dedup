@@ -145,7 +145,7 @@ fn run_pool(
     checked: impl Iterator<Item = StrippedRecord> + Send,
 ) -> Result<()> {
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
+        .num_threads(config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
