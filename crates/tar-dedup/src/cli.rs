@@ -197,41 +197,42 @@ pub struct ArchiveArgs {
 
     // --- File Attributes ---
 
-    /// Capture POSIX ACLs (default: on).
-    #[arg(
-        long = "acls",
-        default_value_t = true,
-        action = ArgAction::SetTrue,
-        help_heading = "File Attributes"
-    )]
-    #[arg(long = "no-acls", action = ArgAction::SetFalse)]
+    /// Capture POSIX ACLs (default: on via the capture umbrella).
+    #[arg(long = "acls", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub acls: bool,
 
-    /// Capture extended attributes (default: on).
-    #[arg(
-        long = "xattrs",
-        default_value_t = true,
-        action = ArgAction::SetTrue,
-        help_heading = "File Attributes"
-    )]
-    #[arg(long = "no-xattrs", action = ArgAction::SetFalse)]
+    /// Do not capture POSIX ACLs.
+    #[arg(long = "no-acls", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub no_acls: bool,
+
+    /// Capture extended attributes (default: on via the capture umbrella).
+    #[arg(long = "xattrs", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub xattrs: bool,
 
-    /// Capture SELinux contexts (default: on).
-    #[arg(
-        long = "selinux",
-        default_value_t = true,
-        action = ArgAction::SetTrue,
-        help_heading = "File Attributes"
-    )]
-    #[arg(long = "no-selinux", action = ArgAction::SetFalse)]
+    /// Do not capture extended attributes.
+    #[arg(long = "no-xattrs", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub no_xattrs: bool,
+
+    /// Capture SELinux contexts (default: on via the capture umbrella).
+    #[arg(long = "selinux", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub selinux: bool,
 
-    /// Capture every metadata attribute (xattrs, ACLs, SELinux); individual
+    /// Do not capture SELinux contexts.
+    #[arg(long = "no-selinux", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub no_selinux: bool,
+
+    /// Default: capture every metadata attribute (xattrs, ACLs, SELinux, ...). The
     /// `--no-*` toggles override this on a per-bit basis.
-    #[arg(long = "capture-all-metadata", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "no-capture-all-metadata", action = ArgAction::SetFalse)]
-    pub capture_all_metadata: bool,
+    #[arg(long = "no-capture-all-metadata", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub no_capture_all_metadata: bool,
+
+    /// Record numeric uids/gids instead of resolving user/group names during inventory.
+    #[arg(long = "numeric-ids-only", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub numeric_ids_only: bool,
+
+    /// Resolve user/group names during inventory (default; counters `--numeric-ids-only`).
+    #[arg(long = "resolve-numeric-ids", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub resolve_numeric_ids: bool,
 
     // TODO extraction?
     /// Force owner for archived members: `NAME`, `UID`, or `NAME:UID` (GNU tar).
@@ -349,11 +350,6 @@ pub struct ArchiveArgs {
         help_heading = "Process Options"
     )]
     pub retry_missing_sha: bool,
-
-    /// Do not resolve numeric ids to user/group names during inventory.
-    #[arg(long = "numeric-ids-only", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
-    #[arg(long = "no-numeric-ids-only", action = ArgAction::SetFalse)]
-    pub numeric_ids_only: bool,
 }
 
 #[derive(Debug, Args, Default)]
