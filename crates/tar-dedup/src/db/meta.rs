@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 
 use crate::common::perms::OwnerGroupPolicy;
-use crate::config::{ExtractPipelinePhase, PipelinePhase};
+use crate::config::{ArchiveConfig, ExtractConfig, ExtractPipelinePhase, PipelinePhase};
 use crate::db::common::{delete_meta, get_meta, upsert_meta};
 use crate::error::{Error, Result};
 
@@ -35,6 +35,8 @@ pub enum MetaKey {
     ArchiveOwnerPolicy,
     ArchiveModeChanges,
     ArchiveTransform,
+    ArchiveConfig,
+    ExtractConfig,
 }
 
 impl MetaKey {
@@ -58,6 +60,8 @@ impl MetaKey {
             Self::ArchiveOwnerPolicy => "archive_owner_policy",
             Self::ArchiveModeChanges => "archive_mode_changes",
             Self::ArchiveTransform => "archive_transform",
+            Self::ArchiveConfig => "archive_config",
+            Self::ExtractConfig => "extract_config",
         }
     }
 
@@ -81,6 +85,8 @@ impl MetaKey {
             "archive_owner_policy" => Self::ArchiveOwnerPolicy,
             "archive_mode_changes" => Self::ArchiveModeChanges,
             "archive_transform" => Self::ArchiveTransform,
+            "archive_config" => Self::ArchiveConfig,
+            "extract_config" => Self::ExtractConfig,
             _ => return None,
         })
     }
@@ -105,6 +111,8 @@ impl MetaKey {
             Self::ArchiveOwnerPolicy,
             Self::ArchiveModeChanges,
             Self::ArchiveTransform,
+            Self::ArchiveConfig,
+            Self::ExtractConfig,
         ]
     }
 }
@@ -130,6 +138,8 @@ pub enum MetaEntry {
     ArchiveOwnerPolicy(OwnerGroupPolicy),
     ArchiveModeChanges(String),
     ArchiveTransform(String),
+    ArchiveConfig(ArchiveConfig),
+    ExtractConfig(ExtractConfig),
 }
 
 impl MetaEntry {
@@ -153,6 +163,8 @@ impl MetaEntry {
             Self::ArchiveOwnerPolicy(_) => MetaKey::ArchiveOwnerPolicy,
             Self::ArchiveModeChanges(_) => MetaKey::ArchiveModeChanges,
             Self::ArchiveTransform(_) => MetaKey::ArchiveTransform,
+            Self::ArchiveConfig(_) => MetaKey::ArchiveConfig,
+            Self::ExtractConfig(_) => MetaKey::ExtractConfig,
         }
     }
 
@@ -178,6 +190,8 @@ impl MetaEntry {
             }
             Self::ArchiveModeChanges(v) => v.clone(),
             Self::ArchiveTransform(v) => v.clone(),
+            Self::ArchiveConfig(v) => serde_json::to_string(v).expect("archive config serializable"),
+            Self::ExtractConfig(v) => serde_json::to_string(v).expect("extract config serializable"),
         }
     }
 
@@ -222,6 +236,12 @@ impl MetaEntry {
                 .map_err(|_| Error::Config(format!("invalid archive_owner_policy meta: {raw}"))),
             MetaKey::ArchiveModeChanges => Ok(Self::ArchiveModeChanges(raw.to_string())),
             MetaKey::ArchiveTransform => Ok(Self::ArchiveTransform(raw.to_string())),
+            MetaKey::ArchiveConfig => serde_json::from_str(raw)
+                .map(Self::ArchiveConfig)
+                .map_err(|_| Error::Config(format!("invalid archive_config meta: {raw}"))),
+            MetaKey::ExtractConfig => serde_json::from_str(raw)
+                .map(Self::ExtractConfig)
+                .map_err(|_| Error::Config(format!("invalid extract_config meta: {raw}"))),
         }
     }
 }
@@ -479,6 +499,28 @@ pub fn get_archive_transform(conn: &Connection) -> Result<Option<String>> {
 
 pub fn set_archive_transform(conn: &Connection, value: &str) -> Result<()> {
     set_entry(conn, &MetaEntry::ArchiveTransform(value.to_string()))
+}
+
+pub fn get_archive_config(conn: &Connection) -> Result<Option<ArchiveConfig>> {
+    get_typed(conn, MetaKey::ArchiveConfig, |e| match e {
+        MetaEntry::ArchiveConfig(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_archive_config(conn: &Connection, value: &ArchiveConfig) -> Result<()> {
+    set_entry(conn, &MetaEntry::ArchiveConfig(value.clone()))
+}
+
+pub fn get_extract_config(conn: &Connection) -> Result<Option<ExtractConfig>> {
+    get_typed(conn, MetaKey::ExtractConfig, |e| match e {
+        MetaEntry::ExtractConfig(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_extract_config(conn: &Connection, value: &ExtractConfig) -> Result<()> {
+    set_entry(conn, &MetaEntry::ExtractConfig(value.clone()))
 }
 
 // TODO Delete the entirety of the archive keys.
