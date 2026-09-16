@@ -1,11 +1,11 @@
 use crate::archive::ArchiveRTArgs;
 use crate::common::files::{PreYield, warn_if_times_changed};
+use crate::common::io_buffer;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, StrippedRecord};
 use crate::error::{Error, Result};
-use crate::progress::io_buffer;
 use crate::shutdown::Shutdown;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle}; // TODO use our wrapper.
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use sha1::{Digest, Sha1};
@@ -35,7 +35,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         total_entries,
         unshed_files = pending.len(),
         already_hashed,
-        jobs = config.process.jobs,
+        jobs = config.process.effective_jobs(),
         page_size,
         "hash pass"
     );
@@ -45,7 +45,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     }
 
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
+        .num_threads(config.process.effective_jobs())
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
