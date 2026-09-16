@@ -358,6 +358,17 @@ fn merge_pick<T: PartialEq + Clone>(cand: &T, base: &T, default: &T) -> T {
 
 fn merge_pick_u(cand: usize, base: usize, default: usize) -> usize {
     if cand == default { base } else { cand }
+/// Resolve one capture bit: explicit `--no-x` wins, then `--x`, then the base
+/// (INCLUDE = `true` when `capture_all`, EXCLUDE = `false`).
+fn resolve_capture_bit(no: bool, yes: bool, base: bool) -> bool {
+    debug_assert!(!(no && yes), "PRECONDITION FAILED: no and yes prohibited.");
+    if no {
+        false
+    } else if yes {
+        true
+    } else {
+        base
+    }
 }
 
 /// Reject contradictory pairs like `--acls --no-acls` before building the config.
