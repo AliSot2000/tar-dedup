@@ -5,11 +5,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::common::io_buffer;
 use crate::db::Database;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::error::{Error, Result};
-use crate::progress::io_buffer;
 use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -42,7 +42,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     let do_skip = if config.scan.rehash { "" } else { "skip " };
     tracing::info!(
         files = pending.len(),
-        jobs = config.process.jobs,
+        jobs = config.process.effective_jobs(),
         "{do_skip}rehash pass"
     );
 
@@ -57,7 +57,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     }
 
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
+        .num_threads(config.process.effective_jobs())
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
