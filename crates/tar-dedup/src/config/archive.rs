@@ -94,6 +94,10 @@ impl ArchiveConfig {
     /// Build from CLI args, optionally inheriting `base` where the args do not
     /// define a value (Option-B merge: a field whose arg-derived value matches the
     /// default is "not defined" and inherits from `base`).
+    ///
+    /// Pair validation and the capture-umbrella base selection happen first:
+    /// `--no-capture-all-metadata` selects the EXCLUDE preset, otherwise the
+    /// INCLUDE preset (archive default = capture everything).
     pub fn build(args: &ArchiveArgs, base: Option<&ArchiveConfig>) -> Result<Self> {
         validate_capture_pairs(args)?;
         let candidate = Self::try_from(args)?;
