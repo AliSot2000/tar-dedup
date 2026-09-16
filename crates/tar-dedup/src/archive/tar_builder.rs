@@ -60,7 +60,6 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     }
 
     // TODO add batching
-    // TODO change ordering.
     let to_archive = db.list_staged_canonical_ordered(filter_sha)?;
     if to_archive.is_empty() && already_archived == 0 {
         tracing::warn!("no staged files to archive");
@@ -110,7 +109,6 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
         progress.set_file("archive", &record.abs_path);
 
-        // TODO Correct capture
         match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
             Ok(()) => { db.set_file_flag(record.id, FileFlag::AppendedPath, true)?; }
             Err(e) if e.is_interrupted() => {
