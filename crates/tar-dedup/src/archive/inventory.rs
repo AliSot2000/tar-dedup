@@ -105,7 +105,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         tracing::info!("Updated {rows} of hardlink groups to have one canonical");
     }
 
-    if !config.pipeline.numeric_ids_only {
+    if !config.capture.numeric_ids_only {
         db.resolve_numeric_ids(&mut recorder)?;
     }
     recorder.flush()?;
@@ -194,7 +194,7 @@ pub fn handle_dir(
     recorder: &mut crate::db::Recorder)
     -> Result<()> {
 
-    let mut iter = WalkDir::new(&start_dir)
+    let iter = WalkDir::new(&start_dir)
         .follow_links(config.indexing.dereference)
         .follow_root_links(true) // INFO: Custom handling by us
         .same_file_system(config.indexing.one_file_system)
@@ -203,7 +203,7 @@ pub fn handle_dir(
         .contents_first(false)
         .into_iter();
 
-    while let Some(element) = iter.next() {
+    for element in iter {
         shutdown.check_in_flight()?;
         let entry = match element {
             Err(e) => {
@@ -213,7 +213,7 @@ pub fn handle_dir(
                     ERROR_PHASE,
                     FileStatError::General {
                         path: Some(start_dir.to_path_buf()),
-                        message: format!("Failed to access element with error: {e}"),
+                        message: format!("Failed to access element in path with error: {e}"),
                     },
                     crate::db::flags::ErrorFlags::default(),
                 );

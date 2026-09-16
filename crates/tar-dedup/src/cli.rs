@@ -72,7 +72,6 @@ pub struct ArchiveArgs {
 
     /// `-T` records are NUL-terminated (default: newline-separated).
     #[arg(long = "null", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Inputs")]
-    #[arg(long = "no-null", action = ArgAction::SetFalse)]
     pub null: bool,
 
     // --- Compression ---
@@ -98,17 +97,14 @@ pub struct ArchiveArgs {
 
     /// Do not descend into directories.
     #[arg(long = "no-recursion", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Indexing")]
-    #[arg(long = "recursion", action = ArgAction::SetFalse)]
     pub no_recursion: bool,
 
     /// Follow symlinks; archive the files they point to (GNU tar `-h`).
     #[arg(long = "dereference", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Indexing")]
-    #[arg(long = "no-dereference", action = ArgAction::SetFalse)]
     pub dereference: bool,
 
     /// Stay on one filesystem when walking input trees.
     #[arg(long = "one-file-system", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Indexing")]
-    #[arg(long = "no-one-file-system", action = ArgAction::SetFalse)]
     pub one_file_system: bool,
 
     /// Do not coalesce same (inode, device) hard links in hash/dedup.
@@ -118,7 +114,6 @@ pub struct ArchiveArgs {
         action = ArgAction::SetTrue,
         help_heading = "Indexing"
     )]
-    #[arg(long = "hardlink-detection", action = ArgAction::SetFalse)]
     pub no_hardlink_detection: bool,
 
     /// Allow nested or duplicate `-i` / `-T` directory roots (still recorded and walked).
@@ -128,7 +123,6 @@ pub struct ArchiveArgs {
         action = ArgAction::SetTrue,
         help_heading = "Indexing"
     )]
-    #[arg(long = "strict-separation", action = ArgAction::SetFalse)]
     pub no_strict_separation: bool,
 
     // --- Filtering ---
@@ -172,7 +166,6 @@ pub struct ArchiveArgs {
 
     /// Exclude version control system directories (not implemented yet).
     #[arg(long = "exclude-vcs", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
-    #[arg(long = "no-exclude-vcs", action = ArgAction::SetFalse)]
     pub exclude_vcs: bool,
 
     /// Read VCS ignore files for exclusions (not implemented yet).
@@ -191,7 +184,6 @@ pub struct ArchiveArgs {
         action = ArgAction::SetTrue,
         help_heading = "Filtering"
     )]
-    #[arg(long = "no-anchored", action = ArgAction::SetFalse)]
     pub anchored: bool,
 
     /// Case-insensitive pattern matching.
@@ -201,7 +193,6 @@ pub struct ArchiveArgs {
         action = ArgAction::SetTrue,
         help_heading = "Filtering"
     )]
-    #[arg(long = "no-ignore-case", action = ArgAction::SetFalse)]
     pub ignore_case: bool,
 
     // --- File Attributes ---
