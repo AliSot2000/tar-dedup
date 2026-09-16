@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 use crate::cli::ExitAfterStageArg;
 use crate::common::start::StartPolicy;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CleanupSettings {
     pub keep_db: bool,
     pub keep_stage: bool,
@@ -13,7 +15,7 @@ impl CleanupSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExitAfterStage {
     Inventory,
     Hash,
@@ -57,18 +59,29 @@ impl ExitAfterStage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessOptions {
     pub start_policy: StartPolicy,
+    /// Compute-bound workers (compression, pure-db rayon pools).
     pub jobs: usize,
+    /// I/O-bound workers (sparsify, dedup, place pools).
+    pub io_jobs: usize,
     pub fail_fast: bool,
     pub no_errors: bool,
     pub cleanup: CleanupSettings,
     pub exit_after_stage: Option<ExitAfterStage>,
 }
 
-#[derive(Debug, Clone, Default)]
+impl ProcessOptions {
+    /// Workers for stages that are both compute- and io-bound (hash, rehash).
+    pub fn effective_jobs(&self) -> usize {
+        self.jobs.min(self.io_jobs)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResumeOverrides {
     pub jobs: Option<usize>,
+    pub io_jobs: Option<usize>,
     pub exit_after_stage: Option<ExitAfterStage>,
 }
