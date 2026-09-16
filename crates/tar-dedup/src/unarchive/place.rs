@@ -176,7 +176,7 @@ pub fn copy_canonicals_to_source(
         Mutex::new(Vec::new());
     let mut last_id = FileId(0);
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
+        .num_threads(config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
@@ -250,7 +250,7 @@ pub fn link_into_place(
     let base_dir = config.paths.extraction_root().join(&dir_name);
     let results = Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
+        .num_threads(config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
     let shutdown = shutdown.clone();
@@ -383,7 +383,7 @@ pub fn materialize_files(
     let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
+        .num_threads(config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
@@ -457,7 +457,7 @@ pub fn materialize_hardlinks(
     let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
+        .num_threads(config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
@@ -528,7 +528,7 @@ pub fn materialize_others(
     let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
+        .num_threads(config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
