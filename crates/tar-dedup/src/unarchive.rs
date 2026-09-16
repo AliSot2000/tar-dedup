@@ -21,6 +21,8 @@ use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 use crate::unarchive::filter::{ParseFilterBuffer, ingest_filters};
 
+const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";
+
 /// Runtime context threaded through the extract pipeline phases.
 /// The scan phase is the exception: it creates the catalog, so it takes its own
 /// arguments (and may observe `db == None` internally).
@@ -61,6 +63,8 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     //  is purely defensive until resume is reworked.
     let mut db: Option<Database>;
     let mut filter_buffer: Option<ParseFilterBuffer>;
+    // Fresh runs persist the config once the scan has installed the catalog DB.
+    let mut config_written = false;
     match action {
         StartAction::RunFresh => {
             state = ExtractRuntimeState::new();
@@ -71,6 +75,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
             tracing::error!("resuming extract from phase `{}`", state.phase.as_str());
             db = Some(Database::open(&db_path)?);
             filter_buffer = Some(ParseFilterBuffer::default());
+            config_written = true; // stored by the original run
         }
     }
 
@@ -83,6 +88,11 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                 tracing::error!("extract: scanning archive");
                 db = Some(scan::run(&config, &db_path, &shutdown,
                                     &mut pre_db_recorder, &mut filter_buffer)?);
+                if !config_written {
+                    let ldb = db.as_ref().expect(OPT_DB_ERROR);
+                    ldb.set_extract_config(&config)?;
+                    config_written = true;
+                }
             }
             ExtractPipelinePhase::Filter if let Some(ref edb) = db => {
                 let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
