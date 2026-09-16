@@ -7,13 +7,14 @@ use rayon::prelude::*;
 
 use crate::archive::ArchiveRTArgs;
 use crate::common::files::{PreYield, warn_if_times_changed};
+use crate::common::io_buffer;
 use crate::config::ArchiveConfig;
 use crate::db::Database;
 use crate::db::ErrorPhase;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, GroupKey, StrippedRecord};
 use crate::error::{Error, FileStatError, Result};
-use crate::progress::{CountProgress, io_buffer};
+use crate::progress::CountProgress;
 use crate::shutdown::Shutdown;
 
 /// One finished compare: both keys always present.
@@ -189,7 +190,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         skipped_null_sha1,
         skipped_singleton,
         dedup_candidates = candidates,
-        jobs = config.process.jobs,
+        jobs = config.process.io_jobs,
         dedup_fail_fast = config.process.fail_fast,
         "dedup pass"
     );
@@ -229,7 +230,7 @@ fn run_pool(
 ) -> Result<()> {
     // TODO: Better errors.
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.jobs)
+        .num_threads(config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
