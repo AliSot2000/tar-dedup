@@ -553,7 +553,7 @@ pub struct ExtractArgs {
     pub restore_owner: bool,
 
     /// Do not restore archived ownership; files are owned by the extracting process.
-    #[arg(long = "no-same-owner", action = ArgAction::SetFalse, help_heading = "File Attributes")]
+    #[arg(long = "no-same-owner", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_same_owner: bool,
 
     /// How to emit the resolved owner/group: `ids`, `names`, `name-id`, or `id-name` (default `name-id`).
@@ -590,9 +590,17 @@ pub struct ExtractArgs {
     #[arg(long = "apply-stored-owner-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_stored_owner_map: bool,
 
+    /// Do not apply the owner map recorded in the archive.
+    #[arg(long = "no-apply-stored-owner-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub no_apply_stored_owner_map: bool,
+
     /// Apply the group map recorded in the archive (ignored if any `--group`/`--group-map` given).
     #[arg(long = "apply-stored-group-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_stored_group_map: bool,
+
+    /// Do not apply the group map recorded in the archive.
+    #[arg(long = "no-apply-stored-group-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub no_apply_stored_group_map: bool,
 
     /// Force symbolic mode CHANGES for restored members; takes precedence over `--apply-mode`.
     #[arg(long = "mode", value_name = "CHANGES", help_heading = "File Attributes")]
@@ -601,6 +609,10 @@ pub struct ExtractArgs {
     /// Apply the mode changes recorded in the archive (ignored if `--mode` given).
     #[arg(long = "apply-mode", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_mode: bool,
+
+    /// Do not apply the mode changes recorded in the archive.
+    #[arg(long = "no-apply-mode", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub no_apply_mode: bool,
 
     /// Force a sed-style name transform (GNU tar `--transform`/`--xform`) at
     /// extraction; takes precedence over `--apply-transform`.
@@ -616,6 +628,10 @@ pub struct ExtractArgs {
     #[arg(long = "apply-transform", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_transform: bool,
 
+    /// Do not apply the name transform recorded in the archive.
+    #[arg(long = "no-apply-transform", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub no_apply_transform: bool,
+
     /// Strip NUMBER leading path components from file names before extraction.
     /// (GNU tar `--strip-components`; 0 = no-op.)
     #[arg(
@@ -630,7 +646,7 @@ pub struct ExtractArgs {
     #[arg(long = "apply-atime", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_atime: bool,
 
-    /// Explicitly do not restore archived access times (overrides `--apply-metadata`).
+    /// Explicitly do not restore archived access times (overrides `--apply-all-metadata`).
     #[arg(long = "no-apply-atime", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_apply_atime: bool,
 
@@ -638,31 +654,46 @@ pub struct ExtractArgs {
     #[arg(long = "apply-mtime", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_mtime: bool,
 
-    /// Explicitly do not restore archived modification times (overrides `--apply-metadata`).
+    /// Explicitly do not restore archived modification times (overrides `--apply-all-metadata`).
     #[arg(long = "no-apply-mtime", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_apply_mtime: bool,
+
+    /// Apply archived extended attributes.
+    #[arg(long = "xattrs", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub xattrs: bool,
 
     /// Do not apply archived extended attributes.
     #[arg(long = "no-xattrs", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_xattrs: bool,
 
+    /// Apply archived POSIX ACLs.
+    #[arg(long = "acls", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub acls: bool,
+
     /// Do not apply archived POSIX ACLs.
     #[arg(long = "no-acls", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_acls: bool,
+
+    /// Apply archived SELinux contexts.
+    #[arg(long = "selinux", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub selinux: bool,
 
     /// Do not apply archived SELinux contexts.
     #[arg(long = "no-selinux", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_selinux: bool,
 
-    /// Do not apply archived permissions (mode). Permissions are restored by default.
+    /// Apply archived permissions (mode). Permissions are restored by default.
+    #[arg(long = "same-permissions", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
+    pub same_permissions: bool,
+
+    /// Do not apply archived permissions (mode).
     #[arg(long = "no-same-permissions", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_same_permissions: bool,
 
     /// Apply every metadata attribute recorded in the archive (owner, stored
     /// owner/group maps, mode, transform, atime/mtime, xattrs/acls/selinux, perms).
     /// Individual `--no-*` toggles override this on a per-bit basis.
-    #[arg(long = "apply-metadata", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "no-apply-metadata", action = ArgAction::SetFalse)]
+    #[arg(long = "apply-all-metadata", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_metadata: bool,
 
     // --- Process Options ---
