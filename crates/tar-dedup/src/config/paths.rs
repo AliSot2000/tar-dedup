@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathSource {
     pub original_path: PathBuf,
     pub absolute_path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathLayout {
     pub archive_path: PathBuf,
     /// Path-resolution base; extract extraction root.
