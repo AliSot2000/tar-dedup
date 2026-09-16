@@ -48,7 +48,7 @@ impl CompressionFormat {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressionSettings {
     pub format: CompressionFormat,
     /// Compression level for the active filter (ignored when `format` is None).
