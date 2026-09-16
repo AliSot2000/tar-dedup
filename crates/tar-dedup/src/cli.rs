@@ -270,7 +270,6 @@ pub struct ArchiveArgs {
 
     /// Run the sparsify phase (copy with seeks using `--page-size` / `--min-pages`).
     #[arg(long = "sparsify", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Sparse Files")]
-    #[arg(long = "no-sparsify", action = ArgAction::SetFalse)]
     pub sparsify: bool,
 
     /// Page size in bytes for hash zero-page counting and sparsify.
@@ -324,22 +323,18 @@ pub struct ArchiveArgs {
 
     /// Abort the run on the first hard failure (instead of soft-continuing where possible).
     #[arg(long = "fail-fast", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
-    #[arg(long = "no-fail-fast", action = ArgAction::SetFalse)]
     pub fail_fast: bool,
 
     /// Record per-file error messages and continue instead of failing the run.
     #[arg(long = "no-errors", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
-    #[arg(long = "errors", action = ArgAction::SetFalse)]
     pub no_errors: bool,
 
     /// Apply include/exclude filters after the hash phase.
     #[arg(long = "lazy-filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
-    #[arg(long = "no-lazy-filter", action = ArgAction::SetFalse)]
     pub lazy_filter: bool,
 
     /// Skip the deduplication phase.
     #[arg(long = "no-dedup", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
-    #[arg(long = "dedup", action = ArgAction::SetFalse)]
     pub no_dedup: bool,
 
     /// Stage/archive files that failed to obtain a SHA-1.
@@ -410,7 +405,6 @@ pub struct ExtractArgs {
         action = ArgAction::SetTrue,
         help_heading = "Archive Paths"
     )]
-    #[arg(long = "no-absolute", action = ArgAction::SetFalse)]
     pub absolute_names: bool,
 
     /// Create a subdirectory so loose archive members are not extracted directly into
@@ -444,7 +438,6 @@ pub struct ExtractArgs {
         action = ArgAction::SetTrue,
         help_heading = "Overwrite Control"
     )]
-    #[arg(long = "no-unlink-first", action = ArgAction::SetFalse)]
     pub unlink_first: bool,
 
     /// Skip members whose parent directory does not exist (error with `--fail-fast`).
@@ -575,7 +568,6 @@ pub struct ExtractArgs {
 
     /// Fail hard on map/override destinations that the chosen --map-target cannot emit.
     #[arg(long = "validate-maps", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "no-validate-maps", action = ArgAction::SetFalse)]
     pub validate_maps: bool,
 
     /// Force owner for restored members: `NAME`, `UID`, or `NAME:UID`.
@@ -596,12 +588,10 @@ pub struct ExtractArgs {
 
     /// Apply the owner map recorded in the archive (ignored if any `--owner`/`--owner-map` given).
     #[arg(long = "apply-stored-owner-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "no-apply-stored-owner-map", action = ArgAction::SetFalse)]
     pub apply_stored_owner_map: bool,
 
     /// Apply the group map recorded in the archive (ignored if any `--group`/`--group-map` given).
     #[arg(long = "apply-stored-group-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "no-apply-stored-group-map", action = ArgAction::SetFalse)]
     pub apply_stored_group_map: bool,
 
     /// Force symbolic mode CHANGES for restored members; takes precedence over `--apply-mode`.
@@ -610,7 +600,6 @@ pub struct ExtractArgs {
 
     /// Apply the mode changes recorded in the archive (ignored if `--mode` given).
     #[arg(long = "apply-mode", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "no-apply-mode", action = ArgAction::SetFalse)]
     pub apply_mode: bool,
 
     /// Force a sed-style name transform (GNU tar `--transform`/`--xform`) at
@@ -625,7 +614,6 @@ pub struct ExtractArgs {
 
     /// Apply the name transform recorded in the archive (ignored if `--transform` given).
     #[arg(long = "apply-transform", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "no-apply-transform", action = ArgAction::SetFalse)]
     pub apply_transform: bool,
 
     /// Strip NUMBER leading path components from file names before extraction.
@@ -656,22 +644,18 @@ pub struct ExtractArgs {
 
     /// Do not apply archived extended attributes.
     #[arg(long = "no-xattrs", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "xattrs", action = ArgAction::SetFalse)]
     pub no_xattrs: bool,
 
     /// Do not apply archived POSIX ACLs.
     #[arg(long = "no-acls", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "acls", action = ArgAction::SetFalse)]
     pub no_acls: bool,
 
     /// Do not apply archived SELinux contexts.
     #[arg(long = "no-selinux", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "selinux", action = ArgAction::SetFalse)]
     pub no_selinux: bool,
 
     /// Do not apply archived permissions (mode). Permissions are restored by default.
     #[arg(long = "no-same-permissions", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
-    #[arg(long = "same-permissions", action = ArgAction::SetFalse)]
     pub no_same_permissions: bool,
 
     /// Apply every metadata attribute recorded in the archive (owner, stored
@@ -742,8 +726,7 @@ pub struct ExtractArgs {
     pub ignore_case: bool,
 
     /// Apply include/exclude filters after a later phase (scan) instead of eagerly.
-    #[arg(long = "lazy_filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
-    #[arg(long = "no-lazy_filter", action = ArgAction::SetFalse)]
+    #[arg(long = "lazy-filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
     pub lazy_filter: bool,
 
     /// Abort on the first warning or error instead of continuing where possible.
@@ -757,7 +740,6 @@ pub struct ExtractArgs {
 
     /// Do not record per-file errors in the database.
     #[arg(long = "no-errors", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
-    #[arg(long = "errors", action = ArgAction::SetFalse)]
     pub no_errors: bool,
 
     /// After success, keep a timestamped copy of snapshot.sqlite next to the archive.
