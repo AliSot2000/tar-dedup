@@ -95,6 +95,7 @@ impl ArchiveConfig {
     /// define a value (Option-B merge: a field whose arg-derived value matches the
     /// default is "not defined" and inherits from `base`).
     pub fn build(args: &ArchiveArgs, base: Option<&ArchiveConfig>) -> Result<Self> {
+        validate_capture_pairs(args)?;
         let candidate = Self::try_from(args)?;
         match base {
             None => Ok(candidate),
@@ -355,8 +356,23 @@ fn merge_pick_u(cand: usize, base: usize, default: usize) -> usize {
     if cand == default { base } else { cand }
 }
 
-fn merge_pick_b(cand: bool, base: bool, default: bool) -> bool {
-    if cand == default { base } else { cand }
+/// Reject contradictory pairs like `--acls --no-acls` before building the config.
+fn validate_capture_pairs(args: &ArchiveArgs) -> Result<()> {
+    let pairs = [
+        (args.acls, args.no_acls, "--acls", "--no-acls"),
+        (args.xattrs, args.no_xattrs, "--xattrs", "--no-xattrs"),
+        (args.selinux, args.no_selinux, "--selinux", "--no-selinux"),
+        (args.numeric_ids_only, args.resolve_numeric_ids, "--numeric-ids-only", "--resolve-numeric-ids"),
+    ];
+    for (yes, no, yes_flag, no_flag) in pairs {
+        if yes && no {
+            return Err(Error::Config(format!(
+                "conflicting flags {} and {}; pick one",
+                yes_flag, no_flag
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Archive config with every optional bit at its "off" default. Used as the
