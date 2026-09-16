@@ -71,6 +71,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         StartAction::RunFresh => {
             let state = RuntimeState::new(config.process.jobs);
             db.save_runtime_state(&state)?;
+            db.set_archive_config(&config)?;
             filter::ingest_filters(&db, &config)?;
             if let Some(policy) = crate::common::perms::parse_owner_group_args(
                 config.owner_policy.owner.as_deref(),
