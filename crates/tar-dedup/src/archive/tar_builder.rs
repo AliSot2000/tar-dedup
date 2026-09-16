@@ -6,14 +6,12 @@ use crate::archive::ArchiveRTArgs;
 use crate::archive_footer;
 use crate::common::files::warn_if_times_changed;
 use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
-use crate::config::ArchiveConfig;
 use crate::db::ErrorPhase;
 use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::StrippedRecord;
 use crate::db::{Database, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::progress::ByteProgress;
-use crate::shutdown::Shutdown;
 use crate::tar_writer::TarWriter;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive);
 
