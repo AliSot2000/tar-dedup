@@ -487,6 +487,22 @@ impl Database {
         meta::get_archive_transform(&*self.conn())
     }
 
+    pub fn set_archive_config(&self, config: &crate::config::ArchiveConfig) -> Result<()> {
+        meta::set_archive_config(&*self.conn(), config)
+    }
+
+    pub fn get_archive_config(&self) -> Result<Option<crate::config::ArchiveConfig>> {
+        meta::get_archive_config(&*self.conn())
+    }
+
+    pub fn set_extract_config(&self, config: &crate::config::ExtractConfig) -> Result<()> {
+        meta::set_extract_config(&*self.conn(), config)
+    }
+
+    pub fn get_extract_config(&self) -> Result<Option<crate::config::ExtractConfig>> {
+        meta::get_extract_config(&*self.conn())
+    }
+
     pub fn sum_canonical_bytes_to_archive(&self, filter_sha: bool) -> Result<u64> {
         tar_writer::sum_canonical_bytes_to_archive(&*self.conn(), filter_sha)
     }
