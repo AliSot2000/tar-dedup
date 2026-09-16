@@ -8,9 +8,9 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-use super::COPY_STEP_SIZE;
+use super::io_buffer;
 
-/// Copy `src` → `dst` in [`COPY_STEP_SIZE`] chunks, calling `should_interrupt` after each chunk.
+/// Copy `src` → `dst` in 4 MiB chunks, calling `should_interrupt` after each chunk.
 ///
 /// When `should_interrupt()` returns `true`, the partial `dst` is removed and [`Error::Interrupted`]
 /// is returned. When it returns `false`, copying continues until EOF.
@@ -25,7 +25,7 @@ where
     let mut src_file = File::open(src).map_err(|e| Error::io(src, e))?;
     let mut dst_file = File::create(dst).map_err(|e| Error::io(dst, e))?;
 
-    let mut buf = vec![0u8; COPY_STEP_SIZE as usize];
+    let mut buf = io_buffer();
     loop {
         let n = src_file.read(&mut buf).map_err(|e| Error::io(src, e))?;
         if n == 0 {
@@ -400,7 +400,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("src.bin");
         let dst = dir.path().join("dst.bin");
-        let payload: Vec<u8> = (0..COPY_STEP_SIZE as usize + 123)
+        let payload: Vec<u8> = (0..io_buffer().len() + 123)
             .map(|i| (i % 251) as u8)
             .collect();
         fs::write(&src, &payload).expect("write src");
@@ -415,7 +415,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("src.bin");
         let dst = dir.path().join("dst.bin");
-        let payload = vec![0u8; COPY_STEP_SIZE as usize + 1];
+        let payload = vec![0u8; io_buffer().len() + 1];
         fs::write(&src, &payload).expect("write src");
 
         let mut chunks = 0u32;
