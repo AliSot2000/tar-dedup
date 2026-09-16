@@ -14,12 +14,10 @@ use path_clean::PathClean;
 
 use crate::cli::HardLinkGrouping;
 use crate::common::transform::{TransformExpr, TransformSource, parse_transform_expr};
-use crate::config::ExtractConfig;
 use crate::db::Database;
 use crate::db::flags::{OutTreeFlag, OutTreeFlags};
 use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, StrippedRecord};
 use crate::error::Result;
-use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
 
 const BATCH_SIZE: u64 = 10_000;
@@ -149,7 +147,6 @@ pub fn populate_out_tree(
     rt: &ExtractRTArgs, use_new_name: bool) -> Result<()> {
     let config = rt.config;
     let db = rt.db;
-    let shutdown = rt.shutdown;
     debug_assert!(config.paths.extraction_root().is_absolute(),
                   "INVARIANT ERROR: extraction root is not absolute");
     debug_assert!(!db.out_tree_is_built()?, "PRECONDITION FAILED: out tree built");
