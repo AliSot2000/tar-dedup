@@ -60,7 +60,7 @@ pub fn promote_excluded_entries_to_deduped(conn: &Connection) -> Result<u64> {
 pub fn promote_non_file_filtered_to_deduped(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
         "UPDATE files SET phase = 'deduped'
-         WHERE phase = 'filtered' AND (ftype IS NULL OR ftype != 'file')",
+         WHERE phase = 'filtered' AND ftype != 'file'",
         [],
     )?;
     Ok(n as u64)
