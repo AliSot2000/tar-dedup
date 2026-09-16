@@ -20,7 +20,7 @@
 - [ ] Progress
 - [ ] Batching
 - [ ] Resume
-- [/] Filter on extract
+- [X] Filter on extract
 - [ ] All Metadata flag.
 
 ## General:
@@ -31,7 +31,6 @@
 - [ ] Add Platform to metadata
 - [X] Capture Errors in database for review.
 - [X] need to add source root -i flag to the metadata (solved as source table)
-- [ ] Add --batch-size arg to control batch size for single threaded phases
 - [ ] Add archive process started, archive process ended time stamps to the db.
 
 ## Phases
