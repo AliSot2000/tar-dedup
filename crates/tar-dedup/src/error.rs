@@ -4,6 +4,43 @@ use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Panic-on-error extension for any `Result<T, E>` whose error is displayable.
+///
+/// Use it opt-in at the call site where an error *is* a process-abort reason:
+///
+/// ```
+/// let ok = fallible().to_panic()?;
+/// ```
+///
+/// With the `err-to-panic` feature enabled `.to_panic()` converts the `Err`
+/// into a panic (with `RUST_BACKTRACE=1` you get the origin's call stack);
+/// without it the result passes through untouched and `?` propagates as usual.
+/// Errors that are handled locally (per-file recording into the DB, expected
+/// test outcomes, ...) are never affected unless you place `.to_panic()?`.
+pub trait ToPanic<T, E>: Sized {
+    fn to_panic(self) -> std::result::Result<T, E>;
+}
+
+#[cfg(not(feature = "err-to-panic"))]
+impl<T, E> ToPanic<T, E> for std::result::Result<T, E> {
+    #[inline]
+    fn to_panic(self) -> std::result::Result<T, E> {
+        self
+    }
+}
+
+#[cfg(feature = "err-to-panic")]
+impl<T, E: std::fmt::Display> ToPanic<T, E> for std::result::Result<T, E> {
+    #[inline]
+    #[track_caller]
+    fn to_panic(self) -> std::result::Result<T, E> {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("database error: {0}")]
