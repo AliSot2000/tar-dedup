@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod archive_footer;
 pub mod cli;
+pub mod cmd;
 pub mod common;
 pub mod compression;
 pub mod config;
