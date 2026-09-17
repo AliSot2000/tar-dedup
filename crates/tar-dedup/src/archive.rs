@@ -63,7 +63,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
     let mut state = match action {
         StartAction::Resume => {
             let mut state = saved.expect("incomplete work checked above");
-            eprintln!("resuming from phase `{}`", state.phase.as_str());
+            tracing::info!("resuming from phase `{}`", state.phase.as_str());
             state.max_workers = config.process.jobs;
             db.save_runtime_state(&state)?;
             state
@@ -107,12 +107,12 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             Err(Error::Interrupted) => {
                 db.save_runtime_state(&state)?;
                 if shutdown.is_force() {
-                    eprintln!(
+                    tracing::error!(
                         "aborted during {}; in-flight progress discarded — rerun to resume",
                         state.phase.as_str()
                     );
                 } else {
-                    eprintln!(
+                    tracing::error!(
                         "stopped during {}; completed work saved — rerun to resume",
                         state.phase.as_str()
                     );
@@ -136,7 +136,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             .and_then(|s| s.stop_after_phase())
         {
             if completed == stop_after {
-                eprintln!(
+                tracing::info!(
                     "exit-after-stage `{}`: finished `{}`, resume from `{}`",
                     stop_after.as_str(),
                     completed.as_str(),
@@ -150,20 +150,20 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
     drop(db);
     drop(lock);
 
-    eprintln!(
+    tracing::info!(
         "archive written to {}",
         config.paths.archive_path.display()
     );
 
     cleanup::cleanup_workdir(&config, CleanupMode::Archive)?;
     if config.process.cleanup.keep_stage {
-        eprintln!(
+        tracing::info!(
             "keeping stage (--keep-stage): {}",
             config.paths.work_dir.display()
         );
     }
     if config.process.exit_after_stage == Some(ExitAfterStage::Cleanup) {
-        eprintln!("exit-after-stage `cleanup`: finished");
+        tracing::info!("exit-after-stage `cleanup`: finished");
     }
 
     Ok(())

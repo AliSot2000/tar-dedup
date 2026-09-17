@@ -21,7 +21,7 @@ pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode) -> Result<()
             fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
         fs::rename(&db_path, &dest).map_err(|e| Error::io(&dest, e))?;
-        eprintln!("kept database: {}", dest.display());
+        tracing::info!("kept database: {}", dest.display());
     } else if db_path.is_file() {
         fs::remove_file(&db_path).map_err(|e| Error::io(&db_path, e))?;
     }

@@ -77,7 +77,7 @@ impl TarWriter {
                     shutdown.clone(),
                 )?;
                 let hw = InterruptibleXzEncoder::<File>::hardware_threads();
-                eprintln!(
+                tracing::warn!(
                     "xz encoder: {threads} worker thread(s) active ({hw} CPU threads available)"
                 );
                 CompressLayer::Xz(encoder)
