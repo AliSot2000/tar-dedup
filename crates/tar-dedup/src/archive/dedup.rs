@@ -141,6 +141,7 @@ fn compare_one(
 /// `files_equal` only ever produces `FileStat` errors wrapping `Io` (or
 /// `Interrupted`, handled above), so the path is reliable; anything else is
 /// treated as a panic predicate.
+/// PRECONDITION: The Function only covers the FileStat variant. Anything else results in a panic.
 fn compare_error_file_id(pair: &ComparePair, e: &Error) -> (FileId, FileStatError) {
     let path = e.io_path().expect(
         "compare produced a non-Io, non-Interrupted error; \
@@ -158,7 +159,10 @@ fn compare_error_file_id(pair: &ComparePair, e: &Error) -> (FileId, FileStatErro
             pair.candidate_path.display(),
         );
     };
-    (file_id, e.to_file_stat(None))
+    (file_id, e
+        .to_only_file_stat()
+        .expect("PRECONDITION FAILED. FileStatError only expected in this function.")
+    )
 }
 
 // =================================================================================================
@@ -175,9 +179,9 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let skipped_null_sha1 = db.promote_null_sha1_filtered_to_deduped()?;
     let skipped_singleton = db.promote_singleton_filtered_to_deduped()?;
     // INFO: Valid files:
-    //  - NOT (ftype IS NULL OR ftype != 'file')
+    //  - ftype = 'file'
     //  - sha1 IS NOT NULL
-    //  - phase = 'filtered'
+    //  - phase = 'filtered' // eager filter!!
     //  - include_reason_archive < 0 AND exclude_reason_archive = 0
 
     // Get actual number of our candidates.
@@ -289,7 +293,7 @@ fn run_pool(
             Err(e) => return Err(e),
         }
     }
-
+    // TODO different db query
     let leftover = db.count_files_in_phase(FilePhase::Filtered)?;
     // TODO this is also in the category for panic.
     if leftover != 0 {
