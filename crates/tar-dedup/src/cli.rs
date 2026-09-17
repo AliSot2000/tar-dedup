@@ -394,9 +394,9 @@ pub struct ExtractArgs {
     #[arg(long = "work-dir", value_name = "DIR", help_heading = "Archive Paths")]
     pub work_dir: Option<PathBuf>,
 
-    /// Restore using absolute catalog paths (`-P`). With `-C`, join abs paths under
-    /// the extraction root (leading `,/` stripped); without `-C`, restore under
-    /// filesystem root. Alias: `--absolute-names`.
+    /// Restore using absolute catalog paths (`-P`). Extraction join abs paths under
+    /// the extraction root (leading `,/` stripped). To extract to file system root,
+    /// pass `/` as `-C`
     #[arg(
         short = 'P',
         long = "absolute",
