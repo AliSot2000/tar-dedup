@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [features]
 debug-force-utf8 = []
+err-to-panic = []
 
 [dependencies]
 clap = { workspace = true }
