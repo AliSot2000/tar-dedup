@@ -12,6 +12,7 @@
 - [ ] list / inspect command (go through the db and dump the files. csv, parameter to list the columns which we want. 
       (join filter, join filter, join source))
 - [ ] query (query by file, out_tree or error table.)
+- [ ] Add a warn_if_times_changed -> Should also set a flag in the db.
 
 # NOW TODO
 - [X] Placement Conflict Handling
@@ -19,9 +20,9 @@
 - [X] Filename rewriting
 - [ ] Progress
 - [ ] Batching
-- [ ] Resume
+- [X] Resume
 - [X] Filter on extract
-- [ ] All Metadata flag.
+- [X] All Metadata flag.
 
 ## General:
 - [ ] Testing
