@@ -10,7 +10,7 @@ use crate::db::types::{
     ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord,
     StrippedRecord,
 };
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 /// SQL gate fragment selecting rows that passed the archive include/exclude filters.
 /// `prefix` is an optional table alias (e.g. `"f"` → `f.include_reason_archive …`).
@@ -351,7 +351,7 @@ pub fn list_out_tree(
                 {dir_filter}
                 {source_filter}
             ORDER BY o.id
-            LIMIT :batch_size"))?;
+            LIMIT :batch_size")).to_panic()?;
     let params = match (only_dir.is_some(), source_id.is_some()) {
         (false, false) => named_params! {
             ":last_id": last_id.0,
@@ -376,17 +376,19 @@ pub fn list_out_tree(
             ":source_id": source_id.unwrap(),
         },
     };
-    let rows = stmt.query_map(params, |r| OutTreeRecord::from_sql(r, Some("o")))?;
+    let rows = stmt.query_map(params, |r| OutTreeRecord::from_sql(r, Some("o"))).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
+        .to_panic()
         .map_err(Into::into)
 }
 
+// TODO can be done better.
 pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Result<Option<R>> {
     let cols = R::sql_columns(None);
-    let mut stmt = conn.prepare(&format!("SELECT {cols} FROM files WHERE id = :id"))?;
-    let mut rows = stmt.query(named_params! { ":id": file_id.0 })?;
-    if let Some(row) = rows.next()? {
-        return Ok(Some(R::from_row(row, None)?));
+    let mut stmt = conn.prepare(&format!("SELECT {cols} FROM files WHERE id = :id")).to_panic()?;
+    let mut rows = stmt.query(named_params! { ":id": file_id.0 }).to_panic()?;
+    if let Some(row) = rows.next().to_panic()? {
+        return Ok(Some(R::from_row(row, None).to_panic()?));
     }
     Ok(None)
 }
@@ -397,10 +399,10 @@ pub fn get_file_by_path<R: SqlFileRow>(conn: &Connection, abs_path: &Path) -> Re
     let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!(
         "SELECT {cols} FROM files WHERE abs_path = :abs_path"
-    ))?;
-    let mut rows = stmt.query(named_params! { ":abs_path": abs_path.to_string_lossy() })?;
-    if let Some(row) = rows.next()? {
-        return Ok(Some(R::from_row(row, None)?));
+    )).to_panic()?;
+    let mut rows = stmt.query(named_params! { ":abs_path": abs_path.to_string_lossy() }).to_panic()?;
+    if let Some(row) = rows.next().to_panic()? {
+        return Ok(Some(R::from_row(row, None).to_panic()?));
     }
     Ok(None)
 }
@@ -408,7 +410,7 @@ pub fn get_file_by_path<R: SqlFileRow>(conn: &Connection, abs_path: &Path) -> Re
 pub fn count_entries(conn: &Connection) -> Result<u64> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files", [], |row| row.get("count")
-    )?;
+    ).to_panic()?;
     Ok(count as u64)
 }
 
@@ -418,7 +420,7 @@ pub fn count_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<u64> 
         "SELECT COUNT(*) AS count FROM files WHERE phase = :phase",
         named_params! { ":phase": phase.as_str() },
         |row| row.get("count"),
-    )?;
+    ).to_panic()?;
     Ok(count as u64)
 }
 
@@ -427,12 +429,13 @@ pub fn list_files_in_phase<R: SqlFileRow>(conn: &Connection, phase: FilePhase) -
     let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!(
         "SELECT {cols} FROM files WHERE phase = :phase ORDER BY id"
-    ))?;
+    )).to_panic()?;
 
     let rows = stmt.query_map(named_params! { ":phase": phase.as_str() }, |r| {
         R::from_row(r, None)
-    })?;
+    }).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
+        .to_panic()
         .map_err(Into::into)
 }
 
@@ -443,12 +446,12 @@ pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Resul
             ":phase": phase.as_str(),
             ":id": file_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
 pub fn checkpoint(conn: &Connection) -> Result<()> {
-    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").to_panic()?;
     Ok(())
 }
 
@@ -460,7 +463,7 @@ pub(crate) fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<(
             ":key": key,
             ":value": value,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -470,7 +473,7 @@ pub(crate) fn delete_meta(conn: &Connection, key: &str) -> Result<()> {
     conn.execute(
         "DELETE FROM meta WHERE key = :key",
         named_params! { ":key": key },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -482,6 +485,7 @@ pub(crate) fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>> {
         |row| row.get(0),
     )
     .optional()
+    .to_panic()
     .map_err(Into::into)
 }
 
@@ -495,7 +499,7 @@ fn optional_sha1(row: &rusqlite::Row<'_>, prefix: &str) -> rusqlite::Result<Opti
 // TODO joint string parsing function
 fn parse_phase(row: &rusqlite::Row<'_>, prefix: &str) -> rusqlite::Result<FilePhase> {
     let raw: String = row.get(format!("{prefix}phase").as_str())?;
-    FilePhase::parse(&raw).map_err(|e| {
+    FilePhase::parse(&raw).to_panic().map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             0,
             rusqlite::types::Type::Text,
@@ -516,6 +520,7 @@ fn optional_rfc3339(
         None => Ok(None),
         Some(s) => DateTime::parse_from_rfc3339(&s)
             .map(|dt| Some(dt.with_timezone(&Utc)))
+            .to_panic()
             .map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
                     0,
@@ -528,7 +533,7 @@ fn optional_rfc3339(
 
 fn parse_ftype(row: &rusqlite::Row<'_>, column: &str) -> rusqlite::Result<FileType> {
     let raw: String = row.get(column)?;
-    FileType::parse(&raw).map_err(|e| {
+    FileType::parse(&raw).to_panic().map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             0,
             rusqlite::types::Type::Text,

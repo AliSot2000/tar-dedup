@@ -1,7 +1,7 @@
 use rusqlite::{Connection, named_params};
 
 use crate::db::types::FileId;
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 /// Single bit position inside a [`FlagSet`] (the discriminant, not the mask).
 ///
@@ -289,7 +289,7 @@ pub fn insert_ref(conn: &Connection, source_id: i64, file_id: FileId) -> Result<
             ":source_id": source_id,
             ":file_id": file_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(n > 0)
 }
 
@@ -298,7 +298,7 @@ pub fn get_file_flags(conn: &Connection, file_id: FileId) -> Result<FileFlags> {
         "SELECT flags FROM files WHERE id = :id",
         named_params! { ":id": file_id.0 },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok(FileFlags::from_i64(raw))
 }
 
@@ -309,7 +309,7 @@ pub fn set_file_flags(conn: &Connection, file_id: FileId, flags: FileFlags) -> R
             ":flags": flags.to_i64(),
             ":id": file_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -321,7 +321,7 @@ pub fn get_file_flag(conn: &Connection, file_id: FileId, flag: FileFlag) -> Resu
             ":id": file_id.0,
         },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok(set != 0)
 }
 
@@ -337,7 +337,7 @@ pub fn set_file_flag(conn: &Connection, file_id: FileId, flag: FileFlag, on: boo
             ":bit": flag.mask_i64(),
             ":id": file_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(rows_affected as u64)
 }
 
@@ -347,7 +347,7 @@ pub fn get_out_tree_flags(conn: &Connection, out_id: crate::db::types::OutTreeId
         "SELECT flags FROM out_tree WHERE id = :id",
         named_params! { ":id": out_id.0 },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok(OutTreeFlags::from_i64(raw))
 }
 
@@ -362,7 +362,7 @@ pub fn set_out_tree_flags(
             ":flags": flags.to_i64(),
             ":id": out_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -378,7 +378,7 @@ pub fn get_out_tree_flag(
             ":id": out_id.0,
         },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok(set != 0)
 }
 
@@ -399,7 +399,7 @@ pub fn set_out_tree_flag(
             ":bit": flag.mask_i64(),
             ":id": out_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(rows_affected as u64)
 }
 

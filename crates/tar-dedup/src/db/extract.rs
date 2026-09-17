@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::config::ExtractRuntimeState;
 use crate::db::common::SqlFileRow;
 use crate::db::meta;
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 /// Cumulative + per-pass extract scan observations persisted in `meta`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -24,10 +24,10 @@ pub fn list_files_to_restore<R: SqlFileRow>(conn: &Connection) -> Result<Vec<R>>
     let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!(
         "SELECT {cols} FROM files WHERE phase = 'rehashed' ORDER BY id"
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(
-        [], |r| R::from_row(r, None))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        [], |r| R::from_row(r, None)).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 pub fn load_extract_runtime_state(conn: &Connection) -> Result<Option<ExtractRuntimeState>> {

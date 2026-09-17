@@ -4,7 +4,7 @@ use rusqlite::{Connection, named_params};
 
 use crate::db::common::SqlFileRow;
 use crate::db::types::FileId;
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 /// For hardlink detection, grouping based on dev, inode is required. Count all files which could
 /// not be treated because dev or inode is missing.
@@ -13,7 +13,7 @@ pub fn count_missing_dev_inode(conn: &Connection) -> Result<u64> {
         "SELECT COUNT(*) AS count \
         FROM files WHERE ftype = 'file' AND (inode IS NULL OR dev IS NULL)",
         [],
-        |r| r.get("count"))?;
+        |r| r.get("count")).to_panic()?;
     Ok(res as u64)
 }
 
@@ -30,13 +30,13 @@ pub fn list_missing_dev_inode<R: SqlFileRow>(conn: &Connection, last_id: &FileId
          AND (inode IS NULL \
               OR dev IS NULL)\
          ORDER BY id
-         LIMIT :batch_size"))?;
+         LIMIT :batch_size")).to_panic()?;
     let rows = stmt.query_map(named_params! {
             ":last_id": last_id.0,
             ":batch_size": batch_size
         }, |row| R::from_row(row, None)
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 pub fn count_double_canonical_dev_inode_group(conn: &Connection) -> Result<u64> {
@@ -52,7 +52,7 @@ pub fn count_double_canonical_dev_inode_group(conn: &Connection) -> Result<u64> 
             GROUP BY f.dev, f.inode
             HAVING COUNT(DISTINCT f.canonical_id) > 1)",
         [],
-        |r| r.get("count"))?;
+        |r| r.get("count")).to_panic()?;
     Ok(res as u64)
 }
 
@@ -75,15 +75,15 @@ pub fn list_double_canonical_dev_inode_group<R: SqlFileRow>(
                 HAVING COUNT(DISTINCT f.canonical_id) > 1))
         ORDER BY id
         LIMIT :batch_size
-    "))?;
+    ")).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             "last_id:": last_id.0,
             ":batch_size": batch_size,
         },
         |row| R::from_row(row, None)
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// Check how many rows fail the implication name -> id
@@ -94,7 +94,7 @@ pub fn count_id_implication(conn: &Connection) -> Result<u64> {
         WHERE (uid IS NULL AND username IS NOT NULL)
             OR (gid IS NULL AND groupname IS NOT NULL)",
         [],
-        |r| r.get("count"))?;
+        |r| r.get("count")).to_panic()?;
     Ok(res as u64)
 }
 
@@ -109,7 +109,7 @@ pub fn count_missing_unix_infos(conn: &Connection) -> Result<u64> {
             OR inode IS NULL
             OR dev IS NULL",
         [],
-        |r| r.get("count"))?;
+        |r| r.get("count")).to_panic()?;
     Ok(res as u64)
 }
 

@@ -1,7 +1,7 @@
 use crate::db::SqlFileRow;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilterExpression};
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 use rusqlite::{Connection, named_params};
 
 const FILTER_ROWS: &str = "id, source, line, expression";
@@ -21,7 +21,7 @@ fn add_pattern(
             ":from": from,
             ":line": line,
             ":expression": query,
-        })?;
+        }).to_panic()?;
     Ok(n as u64)
 }
 
@@ -55,7 +55,7 @@ fn count_filters_in(conn: &Connection, table: &str, exclude: Option<bool>) -> Re
             false => format!("SELECT COUNT(*) AS count FROM {table} WHERE id < 0"),
         },
     };
-    let result: i64 = conn.query_row(&query, [], |row| row.get("count"))?;
+    let result: i64 = conn.query_row(&query, [], |row| row.get("count")).to_panic()?;
     Ok(result as u64)
 }
 
@@ -70,7 +70,7 @@ pub fn count_filters_extract(conn: &Connection, exclude: Option<bool>) -> Result
 fn get_filters_in(conn: &Connection, table: &str, exclude: bool) -> Result<Vec<FilterExpression>> {
     let filter = if exclude { "id > 0" } else { "id < 0" };
     let query = format!("SELECT {FILTER_ROWS} FROM {table} WHERE {filter}");
-    let mut stmt = conn.prepare(&query)?;
+    let mut stmt = conn.prepare(&query).to_panic()?;
     let rows = stmt.query_map([], |row| {
         Ok(FilterExpression {
             id: row.get("id")?,
@@ -78,8 +78,8 @@ fn get_filters_in(conn: &Connection, table: &str, exclude: bool) -> Result<Vec<F
             line: row.get("line")?,
             expression: row.get("expression")?,
         })
-    })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 pub fn get_filters(conn: &Connection, exclude: bool) -> Result<Vec<FilterExpression>> {
@@ -96,7 +96,7 @@ pub fn apply_no_filter(conn: &Connection) -> Result<u64> {
         "UPDATE files SET phase = 'filtered', include_reason_archive = -1, \
          exclude_reason_archive = 0",
         [],
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -106,7 +106,7 @@ pub fn apply_no_filter_extract(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
         "UPDATE files SET include_reason_extract = -1, exclude_reason_extract = 0",
         [],
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -130,17 +130,18 @@ pub fn get_rows_to_filter<R: SqlFileRow>(
                       ORDER BY id \
                       LIMIT :batch_size",
         R::sql_columns(None)
-    ))?;
+    )).to_panic()?;
 
     let row_mapper = |r: &rusqlite::Row<'_>| -> rusqlite::Result<R> { R::from_row(r, None) };
     let rows = match last_id {
-        None => stmt.query_map(named_params! {":batch_size": batch_size}, row_mapper)?,
+        None => stmt.query_map(named_params! {":batch_size": batch_size}, row_mapper).to_panic()?,
         Some(lid) => stmt.query_map(
             named_params! {":batch_size": batch_size, ":last_id": lid.0},
             row_mapper,
-        )?,
+        ).to_panic()?,
     };
     rows.collect::<rusqlite::Result<Vec<_>>>()
+        .to_panic()
         .map_err(Into::into)
 }
 
@@ -162,17 +163,18 @@ pub fn get_rows_to_filter_extract<R: SqlFileRow>(
                       ORDER BY id \
                       LIMIT :batch_size",
         R::sql_columns(None)
-    ))?;
+    )).to_panic()?;
 
     let row_mapper = |r: &rusqlite::Row<'_>| -> rusqlite::Result<R> { R::from_row(r, None) };
     let rows = match last_id {
-        None => stmt.query_map(named_params! {":batch_size": batch_size}, row_mapper)?,
+        None => stmt.query_map(named_params! {":batch_size": batch_size}, row_mapper).to_panic()?,
         Some(lid) => stmt.query_map(
             named_params! {":batch_size": batch_size, ":last_id": lid.0},
             row_mapper,
-        )?,
+        ).to_panic()?,
     };
     rows.collect::<rusqlite::Result<Vec<_>>>()
+        .to_panic()
         .map_err(Into::into)
 }
 
@@ -183,13 +185,13 @@ pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(
     conn: &mut Connection, results: I)
     -> Result<u64> {
     let mut rows_updated = 0u64;
-    let transaction = conn.transaction()?;
+    let transaction = conn.transaction().to_panic()?;
     let mut stmt = transaction.prepare_cached(
         "UPDATE files \
         SET include_reason_archive = :include_reason, \
             exclude_reason_archive = :exclude_reason, phase = 'filtered' \
         WHERE id = :id",
-    )?;
+    ).to_panic()?;
 
     for (fid, icr, exr) in results {
         rows_updated = rows_updated
@@ -200,7 +202,7 @@ pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(
             })? as u64;
     }
     drop(stmt);
-    transaction.commit()?;
+    transaction.commit().to_panic()?;
     Ok(rows_updated)
 }
 
@@ -211,13 +213,13 @@ pub fn apply_filter_result_extract<I: Iterator<Item = (FileId, i64, i64)>>(
     results: I,
 ) -> Result<u64> {
     let mut rows_updated = 0u64;
-    let transaction = conn.transaction()?;
+    let transaction = conn.transaction().to_panic()?;
     let mut stmt = transaction.prepare_cached(
         "UPDATE files \
         SET include_reason_extract = :include_reason, \
             exclude_reason_extract = :exclude_reason \
         WHERE id = :id",
-    )?;
+    ).to_panic()?;
 
     for (fid, icr, exr) in results {
         rows_updated = rows_updated
@@ -228,20 +230,20 @@ pub fn apply_filter_result_extract<I: Iterator<Item = (FileId, i64, i64)>>(
             })? as u64;
     }
     drop(stmt);
-    transaction.commit()?;
+    transaction.commit().to_panic()?;
     Ok(rows_updated)
 }
 
 /// Drop every non-dummy extract rule and reset the per-file extract reasons, making the
 /// extract filter phase idempotent on resume.
 pub fn clear_extract_filters(conn: &mut Connection) -> Result<()> {
-    let transaction = conn.transaction()?;
-    transaction.execute("DELETE FROM filter_reason_extract WHERE id != 0", [])?;
+    let transaction = conn.transaction().to_panic()?;
+    transaction.execute("DELETE FROM filter_reason_extract WHERE id != 0", []).to_panic()?;
     transaction.execute(
         "UPDATE files SET include_reason_extract = 0, exclude_reason_extract = 0",
         [],
-    )?;
-    transaction.commit()?;
+    ).to_panic()?;
+    transaction.commit().to_panic()?;
     Ok(())
 }
 
@@ -250,7 +252,7 @@ pub fn clear_extract_filters(conn: &mut Connection) -> Result<()> {
 /// PRECONDITION:
 ///   - no_dereference_hardlinks is false.
 pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<(u64, u64)> {
-    let transaction = conn.transaction()?;
+    let transaction = conn.transaction().to_panic()?;
 
     let hardlink_mask = FileFlag::FileHardlinkCanonical.mask_i64();
 
@@ -271,7 +273,7 @@ pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<(u64, u64)> {
             AND SUM(CASE WHEN include_reason_archive < 0 AND exclude_reason_archive = 0
                      THEN 1 ELSE 0 END) > 0",
         named_params! {":hardlinks": hardlink_mask},
-    )?;
+    ).to_panic()?;
 
     // NOTE: replace `flags & 1` with `flags & :hardlinks` — see below for
     // why raw named_params can't be used inside execute_batch, so we build
@@ -282,7 +284,7 @@ pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<(u64, u64)> {
              WHERE flags & :hardlinks != 0
                AND (dev, inode) IN (SELECT dev, inode FROM stale_clusters)",
         named_params! {":hardlinks": hardlink_mask},
-    )?;
+    ).to_panic()?;
 
     let upgraded = transaction.execute(
         "UPDATE files
@@ -294,10 +296,10 @@ pub fn fix_up_canonical_flag(conn: &mut Connection) -> Result<(u64, u64)> {
                  GROUP BY dev, inode
              )",
         named_params! {":hardlinks": hardlink_mask},
-    )?;
+    ).to_panic()?;
 
-    transaction.execute_batch("DROP TABLE stale_clusters")?;
-    transaction.commit()?;
+    transaction.execute_batch("DROP TABLE stale_clusters").to_panic()?;
+    transaction.commit().to_panic()?;
 
     Ok((downgraded as u64, upgraded as u64))
 }

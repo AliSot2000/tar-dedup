@@ -1,9 +1,9 @@
 use rusqlite::Connection;
 
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 pub fn initialize(conn: &Connection) -> Result<()> {
-    conn.execute_batch(SCHEMA)?;
+    conn.execute_batch(SCHEMA).to_panic()?;
     Ok(())
 }
 
