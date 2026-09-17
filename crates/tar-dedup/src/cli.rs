@@ -325,7 +325,7 @@ pub struct ArchiveArgs {
     #[arg(long = "fail-fast", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub fail_fast: bool,
 
-    /// Record per-file error messages and continue instead of failing the run.
+    /// Do not record errors encountered while processing the entries in the database.
     #[arg(long = "no-errors", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub no_errors: bool,
 
