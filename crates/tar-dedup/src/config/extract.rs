@@ -562,6 +562,32 @@ fn merge_pick<T: PartialEq + Clone>(cand: &T, base: &T, default: &T) -> T {
     if cand == default { base.clone() } else { cand.clone() }
 }
 
+/// Reject contradictory pairs like `--apply-atime --no-apply-atime` before building.
+fn validate_metadata_pairs(args: &ExtractArgs) -> Result<()> {
+    let pairs = [
+        (args.restore_owner, args.no_same_owner, "--same-owner", "--no-same-owner"),
+        (args.apply_stored_owner_map, args.no_apply_stored_owner_map, "--apply-stored-owner-map", "--no-apply-stored-owner-map"),
+        (args.apply_stored_group_map, args.no_apply_stored_group_map, "--apply-stored-group-map", "--no-apply-stored-group-map"),
+        (args.apply_mode, args.no_apply_mode, "--apply-mode", "--no-apply-mode"),
+        (args.apply_transform, args.no_apply_transform, "--apply-transform", "--no-apply-transform"),
+        (args.apply_atime, args.no_apply_atime, "--apply-atime", "--no-apply-atime"),
+        (args.apply_mtime, args.no_apply_mtime, "--apply-mtime", "--no-apply-mtime"),
+        (args.xattrs, args.no_xattrs, "--xattrs", "--no-xattrs"),
+        (args.acls, args.no_acls, "--acls", "--no-acls"),
+        (args.selinux, args.no_selinux, "--selinux", "--no-selinux"),
+        (args.same_permissions, args.no_same_permissions, "--same-permissions", "--no-same-permissions"),
+    ];
+    for (yes, no, yes_flag, no_flag) in pairs {
+        if yes && no {
+            return Err(Error::Config(format!(
+                "conflicting flags {} and {}; pick one",
+                yes_flag, no_flag
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn merge_pick_u(cand: usize, base: usize, default: usize) -> usize {
     if cand == default { base } else { cand }
 }
