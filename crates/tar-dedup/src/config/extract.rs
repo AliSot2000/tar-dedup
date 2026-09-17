@@ -89,11 +89,14 @@ pub struct ExtractConfig {
 /// Resolve which owner/group policy applies on extract from the CLI args.
 ///
 /// Explicit `--owner`/`--group`/`--owner-map`/`--group-map` map to a CLI policy and
-/// take precedence over `--apply-stored-*`. Otherwise the stored policy is requested
-/// (`Stored`), to be fetched from the archive footprint by the caller.
+/// take precedence. Otherwise the resolved `apply_owner`/`apply_group` bits request
+/// the stored policy (`Stored`), to be fetched from the archive footprint by the
+/// caller.
 fn resolve_owner_policy_from_args(
     args: &ExtractArgs,
     directory: &Path,
+    apply_owner: bool,
+    apply_group: bool,
 ) -> Result<OwnerGroupSource> {
     let has_cli = args.owner.is_some()
         || args.group.is_some()
@@ -101,7 +104,7 @@ fn resolve_owner_policy_from_args(
         || args.group_map.is_some();
 
     if has_cli {
-        if args.apply_stored_owner_map || args.apply_stored_group_map {
+        if apply_owner || apply_group {
             tracing::warn!(
                 "--apply-stored-owner-map / --apply-stored-group-map ignored; \
                  explicit --owner/--group/--owner-map/--group-map take precedence"
@@ -123,7 +126,7 @@ fn resolve_owner_policy_from_args(
             }
             None => Ok(OwnerGroupSource::None),
         }
-    } else if args.apply_stored_owner_map || args.apply_stored_group_map || args.apply_metadata {
+    } else if apply_owner || apply_group {
         Ok(OwnerGroupSource::Stored)
     } else {
         Ok(OwnerGroupSource::None)
@@ -131,16 +134,16 @@ fn resolve_owner_policy_from_args(
 }
 
 /// Resolve which mode-change policy applies on extract from the CLI args.
-/// Explicit `--mode` takes precedence over `--apply-mode` (which falls back to
+/// Explicit `--mode` takes precedence over `apply_mode` (which falls back to
 /// the archive's recorded changes).
-fn resolve_mode_policy_from_args(args: &ExtractArgs) -> Result<ModeSource> {
+fn resolve_mode_policy_from_args(args: &ExtractArgs, apply_mode: bool) -> Result<ModeSource> {
     if let Some(changes) = &args.mode {
-        if args.apply_mode {
+        if apply_mode {
             tracing::warn!("--apply-mode ignored; explicit --mode takes precedence");
         }
         parse_mode_changes(changes)?;
         Ok(ModeSource::Cli(changes.clone()))
-    } else if args.apply_mode || args.apply_metadata {
+    } else if apply_mode {
         Ok(ModeSource::Stored)
     } else {
         Ok(ModeSource::None)
@@ -148,16 +151,19 @@ fn resolve_mode_policy_from_args(args: &ExtractArgs) -> Result<ModeSource> {
 }
 
 /// Resolve which name-transform policy applies on extract from the CLI args.
-/// Explicit `--transform` takes precedence over `--apply-transform` (which
+/// Explicit `--transform` takes precedence over `apply_transform` (which
 /// falls back to the archive's recorded expression).
-fn resolve_transform_policy_from_args(args: &ExtractArgs) -> Result<TransformSource> {
+fn resolve_transform_policy_from_args(
+    args: &ExtractArgs,
+    apply_transform: bool,
+) -> Result<TransformSource> {
     if let Some(expr) = &args.transform {
-        if args.apply_transform {
+        if apply_transform {
             tracing::warn!("--apply-transform ignored; explicit --transform takes precedence");
         }
         parse_transform_expr(expr)?;
         Ok(TransformSource::Cli(expr.clone()))
-    } else if args.apply_transform || args.apply_metadata {
+    } else if apply_transform {
         Ok(TransformSource::Stored)
     } else {
         Ok(TransformSource::None)
