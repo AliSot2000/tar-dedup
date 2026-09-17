@@ -11,6 +11,7 @@ use crate::common::start::StartPolicy;
 use crate::common::transform::{TransformSource, parse_transform_expr};
 use crate::error::{Error, Result};
 
+use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
 use super::compression::infer_compression_from_suffix;
 use super::paths::PathLayout;
 use super::process::{CleanupSettings, ProcessOptions};
@@ -238,12 +239,12 @@ impl ExtractConfig {
         // group on; per-bit `--x`/`--no-x` override on top (explicit wins).
         let apply_all = args.apply_metadata;
 
-        let apply_owner = resolve_metadata_bit(args.no_apply_stored_owner_map,
-                                               args.apply_stored_owner_map,
-                                               apply_all);
-        let apply_group = resolve_metadata_bit(args.no_apply_stored_group_map,
-                                               args.apply_stored_group_map,
-                                               apply_all);
+        let apply_owner = resolve_bool_flag(args.no_apply_stored_owner_map,
+                                            args.apply_stored_owner_map,
+                                            apply_all);
+        let apply_group = resolve_bool_flag(args.no_apply_stored_group_map,
+                                            args.apply_stored_group_map,
+                                            apply_all);
         // `same_owner` is the inference exception: explicit flags win, then the
         // INCLUDE base infers from the effective uid, EXCLUDE base means no owner.
         let same_owner = if args.no_same_owner {
@@ -255,12 +256,12 @@ impl ExtractConfig {
         } else {
             false
         };
-        let apply_mode = resolve_metadata_bit(args.no_apply_mode,
-                                              args.apply_mode,
-                                              apply_all);
-        let apply_transform = resolve_metadata_bit(args.no_apply_transform,
-                                                   args.apply_transform,
-                                                   apply_all);
+        let apply_mode = resolve_bool_flag(args.no_apply_mode,
+                                           args.apply_mode,
+                                           apply_all);
+        let apply_transform = resolve_bool_flag(args.no_apply_transform,
+                                                args.apply_transform,
+                                                apply_all);
 
         // Stored vs CLI owner/group policy. Explicit --owner/--group/--map take precedence;
         // resolved apply_owner/apply_group fall back to the archive's recorded policy.
@@ -307,12 +308,12 @@ impl ExtractConfig {
                 restore_owner: same_owner,
                 no_overwrite_dir: args.no_overwrite_dir,
                 force_overwrite_dir: args.force_overwrite_dir,
-                apply_atime: resolve_metadata_bit(args.no_apply_atime, args.apply_atime, apply_all),
-                apply_mtime: resolve_metadata_bit(args.no_apply_mtime, args.apply_mtime, apply_all),
-                no_xattrs: !resolve_metadata_bit(args.no_xattrs, args.xattrs, apply_all),
-                no_acls: !resolve_metadata_bit(args.no_acls, args.acls, apply_all),
-                no_selinux: !resolve_metadata_bit(args.no_selinux, args.selinux, apply_all),
-                no_same_permissions: !resolve_metadata_bit(args.no_same_permissions, args.same_permissions, apply_all),
+                apply_atime: resolve_bool_flag(args.no_apply_atime, args.apply_atime, apply_all),
+                apply_mtime: resolve_bool_flag(args.no_apply_mtime, args.apply_mtime, apply_all),
+                no_xattrs: !resolve_bool_flag(args.no_xattrs, args.xattrs, apply_all),
+                no_acls: !resolve_bool_flag(args.no_acls, args.acls, apply_all),
+                no_selinux: !resolve_bool_flag(args.no_selinux, args.selinux, apply_all),
+                no_same_permissions: !resolve_bool_flag(args.no_same_permissions, args.same_permissions, apply_all),
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -531,39 +532,23 @@ impl ExtractConfig {
             decompression: self.decompression,
             placement: self.placement.clone(),
             attributes: self.attributes.clone(),
-            scan: merge_pick(&self.scan, &base.scan, &default.scan),
+            scan: merge_pick_clone(&self.scan, &base.scan, &default.scan),
             process: ProcessOptions {
                 start_policy: self.process.start_policy,
-                jobs: merge_pick_u(self.process.jobs, base.process.jobs, default.process.jobs),
-                io_jobs: merge_pick_u(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
-                fail_fast: merge_pick_b(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
-                no_errors: merge_pick_b(self.process.no_errors, base.process.no_errors, default.process.no_errors),
+                jobs: merge_pick_copy(self.process.jobs, base.process.jobs, default.process.jobs),
+                io_jobs: merge_pick_copy(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
+                fail_fast: merge_pick_copy(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
+                no_errors: merge_pick_copy(self.process.no_errors, base.process.no_errors, default.process.no_errors),
                 cleanup: self.process.cleanup,
                 exit_after_stage: self.process.exit_after_stage,
             },
-            owner_policy: merge_pick(&self.owner_policy, &base.owner_policy, &default.owner_policy),
+            owner_policy: merge_pick_clone(&self.owner_policy, &base.owner_policy, &default.owner_policy),
             owner_group: self.owner_group.clone(),
-            mode_policy: merge_pick(&self.mode_policy, &base.mode_policy, &default.mode_policy),
+            mode_policy: merge_pick_clone(&self.mode_policy, &base.mode_policy, &default.mode_policy),
             strip_components: self.strip_components,
-            transform_policy: merge_pick(&self.transform_policy, &base.transform_policy, &default.transform_policy),
-            filter: merge_pick(&self.filter, &base.filter, &default.filter),
+            transform_policy: merge_pick_clone(&self.transform_policy, &base.transform_policy, &default.transform_policy),
+            filter: merge_pick_clone(&self.filter, &base.filter, &default.filter),
         }
-    }
-}
-
-fn merge_pick<T: PartialEq + Clone>(cand: &T, base: &T, default: &T) -> T {
-    if cand == default { base.clone() } else { cand.clone() }
-}
-
-/// Resolve one metadata bit: explicit `--no-x` wins, then `--x`, then the base
-/// (INCLUDE = `true` when `apply_all`, EXCLUDE = `false`).
-fn resolve_metadata_bit(no: bool, yes: bool, base: bool) -> bool {
-    if no {
-        false
-    } else if yes {
-        true
-    } else {
-        base
     }
 }
 
@@ -591,14 +576,6 @@ fn validate_metadata_pairs(args: &ExtractArgs) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn merge_pick_u(cand: usize, base: usize, default: usize) -> usize {
-    if cand == default { base } else { cand }
-}
-
-fn merge_pick_b(cand: bool, base: bool, default: bool) -> bool {
-    if cand == default { base } else { cand }
 }
 
 /// Extract config with every optional bit at its "off" default. Used as the
