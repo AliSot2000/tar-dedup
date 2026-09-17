@@ -22,6 +22,16 @@ pub enum Command {
     Extract(ExtractArgs),
     /// Continue an interrupted archive or extract from its work directory.
     Resume(ResumeArgs),
+    /// Show archive metadata needed to plan an extraction (catalog, policies).
+    Inspect(ArchiveInputArgs),
+    /// List file-tree members (rows from the `files` table).
+    List(ArchiveInputArgs),
+    /// Machine-formatted (csv/json) dump of the file-tree members.
+    Dump(ArchiveInputArgs),
+    /// Search paths / ids across catalog tables.
+    Query(ArchiveInputArgs),
+    /// Update stored archive/extract parameters and reset pipeline state.
+    Reset(ResetArgs),
 }
 
 #[derive(Debug, Args)]
@@ -805,6 +815,40 @@ pub struct ResumeArgs {
     /// Run through STAGE then exit cleanly (state saved).
     #[arg(long = "exit-after-stage", value_name = "STAGE", value_enum)]
     pub exit_after_stage: Option<ExitAfterStageArg>,
+}
+
+/// Archive-target input for the catalog inspection commands (`inspect`, `list`,
+/// `dump`, `query`). The catalog comes from the archive footer (`-f`) by default,
+/// or from an existing work database directly (`--db` / `--work-dir`). Relative
+/// paths resolve against the current directory.
+#[derive(Debug, Args)]
+pub struct ArchiveInputArgs {
+    // --- Archive Target ---
+
+    /// Archive path; the catalog is read from its seekable sqlite footer.
+    #[arg(short = 'f', value_name = "ARCHIVE", help_heading = "Archive Target")]
+    pub archive: Option<PathBuf>,
+
+    /// Read the catalog from an existing work database file directly.
+    #[arg(long = "db", value_name = "FILE", help_heading = "Archive Target")]
+    pub db: Option<PathBuf>,
+
+    /// Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`.
+    #[arg(long = "work-dir", value_name = "DIR", help_heading = "Archive Target")]
+    pub work_dir: Option<PathBuf>,
+}
+
+/// Reset an interrupted run: re-point its stored parameters and rewind the
+/// pipeline to a consistent state. The work database is named explicitly.
+#[derive(Debug, Args)]
+pub struct ResetArgs {
+    /// Path to the work database (`tar-dedup.sqlite`) directly.
+    #[arg(long = "db", value_name = "FILE")]
+    pub db: Option<PathBuf>,
+
+    /// Work directory of the run (`.astage` / `.estage`), holding `tar-dedup.sqlite`.
+    #[arg(long = "work-dir", value_name = "DIR")]
+    pub work_dir: Option<PathBuf>,
 }
 
 /// Pipeline stop point for `--exit-after-stage`.
