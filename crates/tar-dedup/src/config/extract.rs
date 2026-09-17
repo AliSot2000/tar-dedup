@@ -184,7 +184,12 @@ impl ExtractConfig {
     /// Build from CLI args, optionally inheriting `base` where the args do not
     /// define a value (Option-B merge: a field whose arg-derived value matches the
     /// default is "not defined" and inherits from `base`).
+    ///
+    /// Pair validation runs first; `--apply-all-metadata` selects the INCLUDE base
+    /// (apply every bit) and the default EXCLUDE base applies none, with per-bit
+    /// `--x`/`--no-x` flags overriding the base in either direction.
     pub fn build(args: &ExtractArgs, base: Option<&ExtractConfig>) -> Result<Self> {
+        validate_metadata_pairs(args)?;
         let candidate = Self::try_from(args)?;
         match base {
             None => Ok(candidate),
@@ -560,6 +565,18 @@ impl ExtractConfig {
 
 fn merge_pick<T: PartialEq + Clone>(cand: &T, base: &T, default: &T) -> T {
     if cand == default { base.clone() } else { cand.clone() }
+}
+
+/// Resolve one metadata bit: explicit `--no-x` wins, then `--x`, then the base
+/// (INCLUDE = `true` when `apply_all`, EXCLUDE = `false`).
+fn resolve_metadata_bit(no: bool, yes: bool, base: bool) -> bool {
+    if no {
+        false
+    } else if yes {
+        true
+    } else {
+        base
+    }
 }
 
 /// Reject contradictory pairs like `--apply-atime --no-apply-atime` before building.
