@@ -5,6 +5,7 @@ mod paths;
 mod phases;
 mod process;
 mod resume;
+mod common;
 
 pub use archive::{
     ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
