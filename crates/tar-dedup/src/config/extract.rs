@@ -234,23 +234,46 @@ impl ExtractConfig {
 
         // TODO clean_target and one_top_level IS NONE => warning, no effect.
 
-        if args.no_same_owner && args.restore_owner {
-            tracing::warn!(
-                "Got --no-same-owner and --same-owner or --restore-owner. Option is inferred \
-                from process uid and both flags are ignored."
-            );
-        }
+        // Extract default: apply nothing. `--apply-all-metadata` flips the whole
+        // group on; per-bit `--x`/`--no-x` override on top (explicit wins).
+        let apply_all = args.apply_metadata;
+
+        let apply_owner = resolve_metadata_bit(args.no_apply_stored_owner_map,
+                                               args.apply_stored_owner_map,
+                                               apply_all);
+        let apply_group = resolve_metadata_bit(args.no_apply_stored_group_map,
+                                               args.apply_stored_group_map,
+                                               apply_all);
+        // `same_owner` is the inference exception: explicit flags win, then the
+        // INCLUDE base infers from the effective uid, EXCLUDE base means no owner.
+        let same_owner = if args.no_same_owner {
+            false
+        } else if args.restore_owner {
+            true
+        } else if apply_all {
+            infer_same_owner()
+        } else {
+            false
+        };
+        let apply_mode = resolve_metadata_bit(args.no_apply_mode,
+                                              args.apply_mode,
+                                              apply_all);
+        let apply_transform = resolve_metadata_bit(args.no_apply_transform,
+                                                   args.apply_transform,
+                                                   apply_all);
 
         // Stored vs CLI owner/group policy. Explicit --owner/--group/--map take precedence;
-        // --apply-stored-* fall back to the archive's recorded policy.
-        let owner_policy = resolve_owner_policy_from_args(args, &directory)?;
+        // resolved apply_owner/apply_group fall back to the archive's recorded policy.
+        let owner_policy = resolve_owner_policy_from_args(
+            args, &directory, apply_owner, apply_group
+        )?;
 
-        let mode_policy = resolve_mode_policy_from_args(args)?;
+        let mode_policy = resolve_mode_policy_from_args(args, apply_mode)?;
 
         let (apply_owner, apply_group) = if matches!(owner_policy, OwnerGroupSource::Cli(_)) {
             (false, false)
         } else {
-            (args.apply_stored_owner_map, args.apply_stored_group_map)
+            (apply_owner, apply_group)
         };
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
         let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
@@ -281,43 +304,15 @@ impl ExtractConfig {
                 recreate_none_file_entries: true,
             },
             attributes: ExtractAttributeOptions {
-                restore_owner: if args.apply_metadata {
-                    !args.no_same_owner
-                } else {
-                    args.restore_owner
-                },
+                restore_owner: same_owner,
                 no_overwrite_dir: args.no_overwrite_dir,
                 force_overwrite_dir: args.force_overwrite_dir,
-                apply_atime: if args.apply_metadata {
-                    !args.no_apply_atime
-                } else {
-                    args.apply_atime
-                },
-                apply_mtime: if args.apply_metadata {
-                    !args.no_apply_mtime
-                } else {
-                    args.apply_mtime
-                },
-                no_xattrs: if args.apply_metadata && !args.no_xattrs {
-                    false
-                } else {
-                    args.no_xattrs
-                },
-                no_acls: if args.apply_metadata && !args.no_acls {
-                    false
-                } else {
-                    args.no_acls
-                },
-                no_selinux: if args.apply_metadata && !args.no_selinux {
-                    false
-                } else {
-                    args.no_selinux
-                },
-                no_same_permissions: if args.apply_metadata && !args.no_same_permissions {
-                    false
-                } else {
-                    args.no_same_permissions
-                },
+                apply_atime: resolve_metadata_bit(args.no_apply_atime, args.apply_atime, apply_all),
+                apply_mtime: resolve_metadata_bit(args.no_apply_mtime, args.apply_mtime, apply_all),
+                no_xattrs: !resolve_metadata_bit(args.no_xattrs, args.xattrs, apply_all),
+                no_acls: !resolve_metadata_bit(args.no_acls, args.acls, apply_all),
+                no_selinux: !resolve_metadata_bit(args.no_selinux, args.selinux, apply_all),
+                no_same_permissions: !resolve_metadata_bit(args.no_same_permissions, args.same_permissions, apply_all),
             },
             scan: ScanOptions {
                 force_scan: false,
@@ -337,26 +332,13 @@ impl ExtractConfig {
             owner_group: OwnerGroupOptions {
                 target: args.map_target,
                 validate_maps: args.validate_maps,
-                same_owner: if args.no_same_owner {
-                    false
-                } else if args.restore_owner {
-                    true
-                } else {
-                    let inferred_owner = infer_same_owner();
-                    let argument = if inferred_owner {
-                        "--same-owner"
-                    } else {
-                        "--no-same-owner"
-                    };
-                    tracing::info!("Inferred: {argument}");
-                    inferred_owner
-                },
+                same_owner,
                 apply_owner,
                 apply_group,
             },
             mode_policy,
             strip_components: args.strip_components,
-            transform_policy: resolve_transform_policy_from_args(args)?,
+            transform_policy: resolve_transform_policy_from_args(args, apply_transform)?,
             filter: FilterOptions {
                 exclude_patterns: args.exclude.clone(),
                 include_patterns: args.include.clone(),
@@ -531,7 +513,7 @@ impl super::WorkLayout for ExtractConfig {
         &self.process.cleanup
     }
 
-    fn kept_db_parent<'a>(&'a self, mode: super::CleanupMode) -> &'a Path {
+    fn kept_db_parent(&self, mode: super::CleanupMode) -> &Path {
         match mode {
             super::CleanupMode::Archive => super::path_parent(&self.paths.archive_path),
             super::CleanupMode::Extract => self.paths.extraction_root(),
