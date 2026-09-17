@@ -7,6 +7,7 @@ use crate::common::files::directory_roots_overlap;
 use crate::common::start::StartPolicy;
 use crate::error::{Error, Result};
 
+use super::common::{merge_pick_clone, merge_pick_copy};
 use super::compression::{CompressionSettings, resolve_compression};
 use super::paths::{PathLayout, PathSource};
 use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
@@ -329,7 +330,7 @@ impl super::WorkLayout for ArchiveConfig {
         &self.process.cleanup
     }
 
-    fn kept_db_parent<'a>(&'a self, mode: super::CleanupMode) -> &'a Path {
+    fn kept_db_parent(&self, mode: super::CleanupMode) -> &Path {
         match mode {
             super::CleanupMode::Archive => super::path_parent(&self.paths.archive_path),
             super::CleanupMode::Extract => self.paths.extraction_root(),
@@ -343,37 +344,25 @@ impl ArchiveConfig {
     fn merge_over(&self, base: &Self, default: &Self) -> Self {
         Self {
             paths: self.paths.clone(),
-            inputs: merge_pick(&self.inputs, &base.inputs, &default.inputs),
-            indexing: merge_pick(&self.indexing, &base.indexing, &default.indexing),
-            filter: merge_pick(&self.filter, &base.filter, &default.filter),
-            capture: merge_pick(&self.capture, &base.capture, &default.capture),
-            owner_policy: merge_pick(&self.owner_policy, &base.owner_policy, &default.owner_policy),
-            sparse: merge_pick(&self.sparse, &base.sparse, &default.sparse),
-            compression: merge_pick(&self.compression, &base.compression, &default.compression),
+            inputs: merge_pick_clone(&self.inputs, &base.inputs, &default.inputs),
+            indexing: merge_pick_clone(&self.indexing, &base.indexing, &default.indexing),
+            filter: merge_pick_clone(&self.filter, &base.filter, &default.filter),
+            capture: merge_pick_clone(&self.capture, &base.capture, &default.capture),
+            owner_policy: merge_pick_clone(&self.owner_policy, &base.owner_policy, &default.owner_policy),
+            sparse: merge_pick_clone(&self.sparse, &base.sparse, &default.sparse),
+            compression: merge_pick_clone(&self.compression, &base.compression, &default.compression),
             process: ProcessOptions {
                 start_policy: self.process.start_policy,
-                jobs: merge_pick_u(self.process.jobs, base.process.jobs, default.process.jobs),
-                io_jobs: merge_pick_u(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
-                fail_fast: merge_pick_b(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
-                no_errors: merge_pick_b(self.process.no_errors, base.process.no_errors, default.process.no_errors),
+                jobs: merge_pick_copy(self.process.jobs, base.process.jobs, default.process.jobs),
+                io_jobs: merge_pick_copy(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
+                fail_fast: merge_pick_copy(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
+                no_errors: merge_pick_copy(self.process.no_errors, base.process.no_errors, default.process.no_errors),
                 cleanup: self.process.cleanup,
                 exit_after_stage: self.process.exit_after_stage,
             },
-            pipeline: merge_pick(&self.pipeline, &base.pipeline, &default.pipeline),
+            pipeline: merge_pick_clone(&self.pipeline, &base.pipeline, &default.pipeline),
         }
     }
-}
-
-fn merge_pick<T: PartialEq + Clone>(cand: &T, base: &T, default: &T) -> T {
-    if cand == default { base.clone() } else { cand.clone() }
-}
-
-fn merge_pick_u(cand: usize, base: usize, default: usize) -> usize {
-    if cand == default { base } else { cand }
-}
-
-fn merge_pick_b(cand: bool, base: bool, default: bool) -> bool {
-    if cand == default { base } else { cand }
 }
 
 /// Resolve one capture bit: explicit `--no-x` wins, then `--x`, then the base
@@ -408,9 +397,9 @@ fn validate_capture_pairs(args: &ArchiveArgs) -> Result<()> {
     Ok(())
 }
 
-/// Archive config with every optional bit at its "off" default. Used as the
-/// merge baseline: fields equal to `DEFAULT_CONFIG` count as unset during a
-/// config merge.
+/// Archive config with every optional bit at its default (INCLUDE: capture
+/// metadata, resolve names). Used as the merge baseline: fields equal to
+/// `DEFAULT_CONFIG` count as unset during a config merge.
 const DEFAULT_CONFIG: ArchiveConfig = ArchiveConfig {
     paths: PathLayout {
         archive_path: PathBuf::new(),
@@ -439,9 +428,10 @@ const DEFAULT_CONFIG: ArchiveConfig = ArchiveConfig {
         eager_filter: false,
     },
     capture: CaptureOptions {
-        do_xattrs: false,
-        do_posix_acl: false,
-        do_selinux: false,
+        do_xattrs: true,
+        do_posix_acl: true,
+        do_selinux: true,
+        numeric_ids_only: false,
         mode: None,
         transform: None,
     },
@@ -476,6 +466,5 @@ const DEFAULT_CONFIG: ArchiveConfig = ArchiveConfig {
         retry_missing_sha: false,
         write_archive_footer: true,
         clear_archive_meta: false,
-        numeric_ids_only: false,
     },
 };
