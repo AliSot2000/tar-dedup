@@ -4,7 +4,7 @@ use crate::db::common::SqlFileRow;
 use crate::db::flags::{FileFlag, OutTreeFlag};
 use crate::db::meta;
 use crate::db::types::{FileId, OutTreeId, OutTreeRecord};
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 /// Function inserts the out_tref rows into the out_ref table
 pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Result<()> {
@@ -14,18 +14,18 @@ pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Res
     let mut stmt = conn.prepare(
         "INSERT OR IGNORE INTO ref_out (out_id, source_id)
          VALUES (:out_id, :source_id)",
-    )?;
+    ).to_panic()?;
     for (out_id, source_id) in pairs {
         stmt.execute(named_params! {
             ":out_id": out_id.0,
             ":source_id": source_id,
-        })?;
+        }).to_panic()?;
     }
     Ok(())
 }
 
 pub fn count_out_tree_rows(conn: &Connection) -> Result<u64> {
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM out_tree", [], |row| row.get(0))?;
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM out_tree", [], |row| row.get(0)).to_panic()?;
     Ok(n as u64)
 }
 
@@ -39,7 +39,7 @@ pub fn count_out_tree_canonicals(conn: &Connection, materialized: Option<bool>) 
         None => conn.query_row(
             &sql,
             named_params! { ":dir": OutTreeFlag::IsDirectory.mask_i64() },
-            |row| row.get(0))?,
+            |row| row.get(0)).to_panic()?,
         Some((placed, err)) => conn.query_row(
             &sql,
             named_params! {
@@ -47,7 +47,7 @@ pub fn count_out_tree_canonicals(conn: &Connection, materialized: Option<bool>) 
                 ":placed": placed,
                 ":err": err,
             },
-            |row| row.get(0))?,
+            |row| row.get(0)).to_panic()?,
     };
     Ok(n as u64)
 }
@@ -63,14 +63,14 @@ pub fn count_out_tree_hardlinks(conn: &Connection, materialized: Option<bool>) -
         None => conn.query_row(
             &sql,
             [],
-            |row| row.get(0))?,
+            |row| row.get(0)).to_panic()?,
         Some((placed, err)) => conn.query_row(
             &sql,
             named_params! {
                 ":placed": placed,
                 ":err": err,
             },
-            |row| row.get(0))?,
+            |row| row.get(0)).to_panic()?,
     };
     Ok(n as u64)
 }
@@ -88,7 +88,7 @@ pub fn count_out_tree_others(conn: &Connection, materialized: Option<bool>) -> R
             &sql,
             [],
             |row| row.get(0),
-        )?,
+        ).to_panic()?,
         Some((placed, err)) => conn.query_row(
             &sql,
             named_params! {
@@ -96,7 +96,7 @@ pub fn count_out_tree_others(conn: &Connection, materialized: Option<bool>) -> R
                 ":err": err,
             },
             |row| row.get(0),
-        )?,
+        ).to_panic()?,
     };
     Ok(n as u64)
 }
@@ -119,7 +119,7 @@ fn out_tree_materialized_filter(materialized: Option<bool>) -> (String, Option<(
 }
 
 pub fn count_ref_out_rows(conn: &Connection) -> Result<u64> {
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM ref_out", [], |row| row.get(0))?;
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM ref_out", [], |row| row.get(0)).to_panic()?;
     Ok(n as u64)
 }
 
@@ -152,7 +152,7 @@ pub fn list_canonical_files_for_move<R: SqlFileRow>(
                 AND id > :last_id
                 {sql_filt}
             ORDER BY id LIMIT :batch_size
-        "))?;
+        ")).to_panic()?;
     let results = stmt.query_map(
         named_params! {
             ":extracted": FileFlag::FileExtracted.mask_i64(),
@@ -161,8 +161,8 @@ pub fn list_canonical_files_for_move<R: SqlFileRow>(
             ":moved": FileFlag::AtLinkSource.mask_i64()
         },
         |r| R::from_row(r, None),
-    )?;
-    results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    results.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 pub fn list_out_tree_for_materialization<R: SqlFileRow>(
@@ -180,7 +180,7 @@ pub fn list_out_tree_for_materialization<R: SqlFileRow>(
             AND o.canonical_id = o.id
         ORDER BY o.id
         LIMIT :batch_size
-    "))?;
+    ")).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":last_id": last_id.0,
@@ -190,8 +190,8 @@ pub fn list_out_tree_for_materialization<R: SqlFileRow>(
             let or = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((sr, or))
         },
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 pub fn list_out_tree_for_hardlinks<R: SqlFileRow>(
@@ -211,7 +211,7 @@ pub fn list_out_tree_for_hardlinks<R: SqlFileRow>(
             AND o.canonical_id IS NOT NULL
         ORDER BY o.id
         LIMIT :batch_size
-    "))?;
+    ")).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":last_id": last_id.0,
@@ -222,8 +222,8 @@ pub fn list_out_tree_for_hardlinks<R: SqlFileRow>(
             let or = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((fr, sr, or))
         },
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 pub fn list_out_tree_others<R: SqlFileRow>(conn: &Connection, last_id: &OutTreeId, batch_size: u64)
@@ -239,7 +239,7 @@ pub fn list_out_tree_others<R: SqlFileRow>(conn: &Connection, last_id: &OutTreeI
             AND o.canonical_id IS NULL
         ORDER BY o.id
         LIMIT :batch_size
-    "))?;
+    ")).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":last_id": last_id.0,
@@ -249,8 +249,8 @@ pub fn list_out_tree_others<R: SqlFileRow>(conn: &Connection, last_id: &OutTreeI
             let or = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((sr, or))
         },
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// List all rows (which aren't directories) which remain to be linked into place
@@ -275,7 +275,7 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
             {filter_placed}
             AND f.flags & :moved != 0
         ORDER BY o.id LIMIT :batch_size
-        "))?;
+        ")).to_panic()?;
     let results = stmt.query_map(
         named_params! {
             ":placement": OutTreeFlag::Placed.mask_i64(),
@@ -288,8 +288,8 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
             let or = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((sr, or))
         },
-    )?;
-    results.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    results.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// Mark all entries in the out_tree which are files (iff !dir) and mark them self-canonical.
@@ -304,7 +304,7 @@ pub fn mark_all_canonical(conn: &Connection) -> Result<u64> {
             // ":walked" : OutTreeFlag::EntryWalked.mask_i64(),
             ":dir": OutTreeFlag::IsDirectory.mask_i64(),
         },
-    )?;
+    ).to_panic()?;
     Ok(update as u64)
 }
 
@@ -325,7 +325,7 @@ pub fn mark_global_canonical(conn: &Connection) -> Result<u64> {
                AND can.dev IS NOT NULL AND can.inode IS NOT NULL
              GROUP BY can.dev, can.inode)",
         [],
-    )?;
+    ).to_panic()?;
 
     // Step 2: point every other out_tree row at the elected canonical row of
     // its (dev, inode) group. The correlation is via the group's dedup
@@ -356,7 +356,7 @@ pub fn mark_global_canonical(conn: &Connection) -> Result<u64> {
                  AND wf.ftype = 'file'
            )",
         [],
-    )?;
+    ).to_panic()?;
 
     Ok((updated + updated2) as u64)
 }
@@ -395,7 +395,7 @@ pub fn mark_source_canonical(conn: &Connection, source_id: i64) -> Result<u64> {
                AND ref_out.source_id = :source_id
              GROUP BY can.dev, can.inode)",
         named_params! { ":source_id": source_id },
-    )?;
+    ).to_panic()?;
 
     // Step 2: point every other out_tree row at the elected canonical row of
     // its (dev, inode) group. The correlation is via the group's dedup
@@ -432,7 +432,7 @@ pub fn mark_source_canonical(conn: &Connection, source_id: i64) -> Result<u64> {
                         AND wf.ftype = 'file'
                 )",
         named_params! { ":source_id": source_id },
-    )?;
+    ).to_panic()?;
 
     Ok((updated + updated2) as u64)
 }
@@ -448,7 +448,7 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u6
             ":file_placed": FileFlag::Placed.mask_i64(),
             ":out_placed": OutTreeFlag::Placed.mask_i64(),
         },
-    )?;
+    ).to_panic()?;
     // Reflinked if all are reflink
     let reflinked = conn.execute(
         "UPDATE files SET flags = flags | :file_reflink
@@ -458,7 +458,7 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u6
         ":file_reflink": FileFlag::UsedRefLink.mask_i64(),
         ":out_reflink": OutTreeFlag::UsedRefLink.mask_i64()
         },
-    )?;
+    ).to_panic()?;
     // Conflicts if any conflict happened.
     let conflict = conn.execute(
         "UPDATE files SET flags = flags | :file_conflict
@@ -467,7 +467,7 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u6
         ":file_conflict": FileFlag::Conflict.mask_i64(),
         ":out_conflict": OutTreeFlag::Conflict.mask_i64()
         },
-    )?;
+    ).to_panic()?;
     // Removed previous
     let removed_previous = conn.execute(
         "UPDATE files SET flags = flags | :file_removed
@@ -476,7 +476,7 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u6
         ":file_removed": FileFlag::Conflict.mask_i64(),
         ":out_removed": OutTreeFlag::Conflict.mask_i64()
         },
-    )?;
+    ).to_panic()?;
     // Errored if any are errored
     let errored = conn.execute(
         "UPDATE files SET flags = flags | :file_error
@@ -485,7 +485,7 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u6
         ":file_error": FileFlag::ErrorWhilePlacing.mask_i64(),
         ":out_error": OutTreeFlag::ErrorWhilePlace.mask_i64()
         },
-    )?;
+    ).to_panic()?;
 
     // Skipped Element
     let skipped_elements: i64 = conn.query_row(
@@ -496,7 +496,7 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u6
         ":conflict": OutTreeFlag::Conflict.mask_i64()
         },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok((
         placed as u64,
         reflinked as u64,

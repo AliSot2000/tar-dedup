@@ -5,7 +5,7 @@ use crate::db::common::generate_archive_filter;
 use crate::db::flags::FileFlag;
 use crate::db::meta;
 use crate::db::types::{ArchiveSession, FileId};
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 /// `archive_sessions.finalized` values.
 pub mod session_status {
@@ -26,7 +26,7 @@ pub fn begin_session(conn: &Connection, archive_offset: u64) -> Result<i64> {
             ":started_at": Utc::now().to_rfc3339(),
             ":finalized": session_status::OPEN,
         },
-    )?;
+    ).to_panic()?;
     Ok(conn.last_insert_rowid())
 }
 
@@ -41,7 +41,7 @@ pub fn stamp_session_finished_at(conn: &Connection, session_id: i64) -> Result<(
             ":id": session_id,
             ":open": session_status::OPEN,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -57,7 +57,7 @@ pub fn finalize_session(conn: &Connection, session_id: i64) -> Result<()> {
             ":id": session_id,
             ":open": session_status::OPEN,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -75,6 +75,7 @@ pub fn open_session(conn: &Connection) -> Result<Option<ArchiveSession>> {
         },
     )
     .optional()
+    .to_panic()
     .map_err(Into::into)
 }
 
@@ -83,7 +84,7 @@ pub fn has_finalized_session(conn: &Connection) -> Result<bool> {
         "SELECT COUNT(*) FROM archive_sessions WHERE finalized = :finalized",
         named_params! { ":finalized": session_status::FINALIZED },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok(n > 0)
 }
 
@@ -99,7 +100,7 @@ pub fn mark_session_aborted(conn: &Connection, session_id: i64) -> Result<()> {
             ":id": session_id,
             ":open": session_status::OPEN,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -119,8 +120,8 @@ pub fn reset_archive_state(conn: &Connection) -> Result<()> {
              flags = flags & ~:pending
          WHERE phase = 'archived' OR (flags & :pending) != 0",
         named_params! { ":pending": pending },
-    )?;
-    conn.execute("DELETE FROM archive_sessions", [])?;
+    ).to_panic()?;
+    conn.execute("DELETE FROM archive_sessions", []).to_panic()?;
     Ok(())
 }
 
@@ -143,7 +144,7 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Re
         ),
         [],
         |row| row.get("total"),
-    )?;
+    ).to_panic()?;
     Ok(total as u64)
 }
 
@@ -166,9 +167,10 @@ pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Res
             AND {}
          ORDER BY ext ASC, size ASC, id ASC",
         generate_archive_filter(None)
-    ))?;
-    let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId))?;
+    )).to_panic()?;
+    let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId)).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
+        .to_panic()
         .map_err(Into::into)
 }
 
@@ -191,7 +193,7 @@ pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Resu
         ),
         [],
         |row| row.get("total"),
-    )?;
+    ).to_panic()?;
     Ok(total as u64)
 }
 
@@ -210,7 +212,7 @@ pub fn promote_ineligible_to_archived(conn: &Connection, filter_sha: bool) -> Re
              {sha_clause}
            )"
     );
-    let n = conn.execute(&stmt, {})?;
+    let n = conn.execute(&stmt, {}).to_panic()?;
     Ok(n as u64)
 }
 
@@ -220,7 +222,7 @@ pub fn promote_remainder_to_archived(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
         "UPDATE files SET phase = 'archived' WHERE phase != 'archived'",
         [],
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -235,7 +237,7 @@ pub fn promote_pending_archived(conn: &Connection) -> Result<u64> {
          WHERE (flags & :pending) != 0
            AND phase != 'archived'",
         named_params! { ":pending": pending },
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -248,7 +250,7 @@ pub fn mark_archive_session_pending(conn: &Connection, file_id: FileId) -> Resul
             ":bit": bit,
             ":id": file_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -262,7 +264,7 @@ pub fn clear_archive_session_pending(conn: &Connection) -> Result<u64> {
          WHERE (flags & :bit) != 0
            AND phase != 'archived'",
         named_params! { ":bit": bit },
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 

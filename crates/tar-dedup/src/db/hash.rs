@@ -1,7 +1,7 @@
 use crate::db::SqlFileRow;
 use crate::db::flags::FileFlag;
 use crate::db::types::FileId;
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 use rusqlite::{Connection, named_params};
 
 /// Get all files that still need to be inspected
@@ -32,23 +32,23 @@ pub fn get_entries_to_hash<R: SqlFileRow>(
              {filter_hardlink_canonical} \
              {filtered_selection}"
     );
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare(&sql).to_panic()?;
     let row_mapper = |r: &rusqlite::Row<'_>| R::from_row(r, None);
     let rows = if detect_hardlinks {
         stmt.query_map(named_params! {
             ":sha_error": FileFlag::ErrorWhileHash.mask_i64(),
             ":flag": FileFlag::FileHardlinkCanonical.mask_i64(),
         },
-        row_mapper)?
+        row_mapper).to_panic()?
     } else {
         stmt.query_map(
             named_params! {
                 ":sha_error": FileFlag::ErrorWhileHash.mask_i64()
             },
             row_mapper,
-        )?
+        ).to_panic()?
     };
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// Count all rows that need to be hashed in this phase. Not only the remaining files.
@@ -79,9 +79,9 @@ pub fn count_all_hashable_files(conn: &Connection, eager_filter: bool, detect_ha
         conn.query_row(&sql, named_params! {
             ":flag": FileFlag::FileHardlinkCanonical.mask_i64(),
         },
-        |row| row.get("count"))?
+        |row| row.get("count")).to_panic()?
     } else {
-        conn.query_row(&sql, [], |row| row.get("count"))?
+        conn.query_row(&sql, [], |row| row.get("count")).to_panic()?
     };
     Ok(count as u64)
 }
@@ -103,6 +103,6 @@ pub fn update_file_inspection_per_id(
             ":sparse_count": sparse_count as i64,
             ":id": file_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }

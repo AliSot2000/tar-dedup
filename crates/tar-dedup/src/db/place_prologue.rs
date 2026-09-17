@@ -2,7 +2,7 @@ use crate::db::common::SqlFileRow;
 use crate::db::common::generate_archive_and_extract_filter;
 use crate::db::meta;
 use crate::db::types::{FileId, NewOutTreeRow, OutTreeId};
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 use rusqlite::{Connection, named_params};
 
 pub fn placement_prologue_done(conn: &Connection) -> Result<bool> {
@@ -71,7 +71,7 @@ pub fn list_materialized_entries<R: SqlFileRow>(
             generate_archive_and_extract_filter(Some("f"))
         ),
     };
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare(sql).to_panic()?;
     let params = match source_id {
         Some(sid) => named_params! {
                     ":last_id": last_id.0,
@@ -83,8 +83,8 @@ pub fn list_materialized_entries<R: SqlFileRow>(
             ":batch_size": batch_size,
         },
     };
-    let rows = stmt.query_map(params, |r| R::from_row(r, Some("f")))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    let rows = stmt.query_map(params, |r| R::from_row(r, Some("f"))).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// Record the member-relative `--strip-components` result on a file row.
@@ -97,7 +97,7 @@ pub fn set_file_new_name(conn: &Connection, file_id: FileId, new_name: Option<&s
             ":new_name": new_name,
             ":id" : file_id.0
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -110,13 +110,13 @@ pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result
     let mut insert = conn.prepare(
         "INSERT OR IGNORE INTO out_tree (abs_path, file_id, flags)
          VALUES (:abs_path, :file_id, :flags)",
-    )?;
+    ).to_panic()?;
     for row in rows {
         insert.execute(named_params! {
             ":abs_path": row.abs_path.to_string_lossy().as_ref(),
             ":file_id": row.file_id.map(|id| id.0),
             ":flags": row.flags.to_i64(),
-        })?;
+        }).to_panic()?;
     }
     let mut ids = Vec::with_capacity(rows.len());
     for row in rows {
@@ -124,7 +124,7 @@ pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result
             "SELECT id FROM out_tree WHERE abs_path = :abs_path",
             named_params! { ":abs_path": row.abs_path.to_string_lossy().as_ref() },
             |r| r.get(0),
-        )?;
+        ).to_panic()?;
         ids.push(OutTreeId(id));
     }
     Ok(ids)

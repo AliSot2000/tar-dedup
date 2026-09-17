@@ -3,7 +3,7 @@ use rusqlite::{Connection, named_params};
 use crate::db::common::SqlFileRow;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, GroupKey};
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 /// Set canonical column of the row identified by file_id
 pub fn set_canonical(conn: &Connection, file_id: FileId, canonical_id: FileId) -> Result<()> {
@@ -13,7 +13,7 @@ pub fn set_canonical(conn: &Connection, file_id: FileId, canonical_id: FileId) -
             ":canonical_id": canonical_id.0,
             ":id": file_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -22,7 +22,7 @@ pub fn mark_self_canonical(conn: &Connection, file_id: FileId) -> Result<()> {
     conn.execute(
         "UPDATE files SET canonical_id = id, phase = 'deduped' WHERE id = :id",
         named_params! { ":id": file_id.0 },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -31,7 +31,7 @@ pub fn mark_active_canonical(conn: &Connection, file_id: FileId) -> Result<()> {
     conn.execute(
         "UPDATE files SET canonical_id = id, phase = 'filtered' WHERE id = :id",
         named_params! { ":id": file_id.0 },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -40,7 +40,7 @@ pub fn promote_to_deduped(conn: &Connection, file_id: FileId) -> Result<()> {
     conn.execute(
         "UPDATE files SET phase = 'deduped' WHERE id = :id",
         named_params! { ":id": file_id.0 },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -51,7 +51,7 @@ pub fn promote_excluded_entries_to_deduped(conn: &Connection) -> Result<u64> {
         "UPDATE files SET phase = 'deduped' \
         WHERE include_reason_archive = 0 OR exclude_reason_archive > 0 AND phase = 'filtered'",
         [],
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -62,7 +62,7 @@ pub fn promote_non_file_filtered_to_deduped(conn: &Connection) -> Result<u64> {
         "UPDATE files SET phase = 'deduped'
          WHERE phase = 'filtered' AND ftype != 'file'",
         [],
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -73,7 +73,7 @@ pub fn promote_null_sha1_filtered_to_deduped(conn: &Connection) -> Result<u64> {
         "UPDATE files SET phase = 'deduped'
          WHERE phase = 'filtered' AND sha1 IS NULL",
         [],
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -91,7 +91,7 @@ pub fn promote_singleton_filtered_to_deduped(conn: &Connection) -> Result<u64> {
                HAVING COUNT(*) = 1
            )",
         [],
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -106,7 +106,7 @@ fn parse_group_key_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupKey> {
                 format!("sha1 blob length {}, expected 20", b.len()),
             )),
         )
-    })?;
+    }).to_panic()?;
     let size = row.get::<_, i64>("size")? as u64;
     Ok(GroupKey { sha1, size })
 }
@@ -120,10 +120,10 @@ pub fn pending_duplicate_groups(conn: &Connection) -> Result<Vec<GroupKey>> {
          GROUP BY sha1, size
          HAVING COUNT(*) > 1
             AND SUM(CASE WHEN phase = 'filtered' THEN 1 ELSE 0 END) > 0",
-    )?;
+    ).to_panic()?;
 
-    let rows = stmt.query_map([], parse_group_key_row)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    let rows = stmt.query_map([], parse_group_key_row).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 // TODO handle eager_filter
@@ -138,15 +138,15 @@ pub fn list_filtered_in_group<R: SqlFileRow>(
         "SELECT {cols} FROM files
          WHERE sha1 = :sha1 AND size = :size AND phase = 'filtered'
          ORDER BY id"
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":sha1": sha1.as_slice(),
             ":size": size as i64,
         },
         |r| R::from_row(r, None),
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 pub fn clear_check_with_canonical_completed(
@@ -163,7 +163,7 @@ pub fn clear_check_with_canonical_completed(
             ":sha1": sha1.as_slice(),
             ":size": size as i64,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -183,7 +183,7 @@ pub fn promote_errored_pending_to_deduped(
             ":sha1": sha1.as_slice(),
             ":size": size as i64,
         },
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -193,7 +193,7 @@ pub fn count_check_with_canonical_completed(conn: &Connection) -> Result<u64> {
         "SELECT COUNT(*) FROM files WHERE (flags & :bit) != 0",
         named_params! { ":bit": bit },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -210,7 +210,7 @@ pub fn count_active_canonicals(conn: &Connection, sha1: &[u8; 20], size: u64) ->
             ":size": size as i64,
         },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -253,6 +253,6 @@ pub fn count_electable_pending(conn: &Connection, sha1: &[u8; 20], size: u64) ->
             ":error_bit": error_bit,
         },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }

@@ -3,7 +3,7 @@ use crate::db::flags::ErrorFlags;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, NewFileRecord};
 use crate::db::{ErrorPhase, Recorder, meta};
-use crate::error::{FileStatError, Result};
+use crate::error::{FileStatError, Result, ToPanic};
 use path_clean::PathClean;
 use rusqlite::{Connection, OptionalExtension, named_params};
 use std::iter::zip;
@@ -19,6 +19,7 @@ pub fn file_id_by_abs_path(conn: &Connection, path: &Path) -> Result<Option<File
         |row| row.get(0).map(FileId),
     )
     .optional()
+    .to_panic()
     .map_err(Into::into)
 }
 
@@ -66,7 +67,7 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
             ":minor": record.minor.map(|v| v as i64),
             ":win_perm": record.win_perm.as_deref(),
         },
-    )?;
+    ).to_panic()?;
     Ok(changed > 0)
 }
 
@@ -75,10 +76,13 @@ pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
         return Ok(None);
     };
     let max_workers = meta::get_archive_max_workers(conn)?
-        .ok_or_else(|| crate::error::Error::Config("missing archive_max_workers in meta".into()))?;
-    let snapshot_taken_at = meta::get_archive_snapshot_taken_at(conn)?.ok_or_else(|| {
-        crate::error::Error::Config("missing archive_snapshot_taken_at in meta".into())
-    })?;
+        .ok_or_else(|| crate::error::Error::Config("missing archive_max_workers in meta".into()))
+        .to_panic()?;
+    let snapshot_taken_at = meta::get_archive_snapshot_taken_at(conn)?
+        .ok_or_else(|| {
+            crate::error::Error::Config("missing archive_snapshot_taken_at in meta".into())
+        })
+        .to_panic()?;
 
     Ok(Some(RuntimeState {
         snapshot_taken_at,
@@ -97,21 +101,21 @@ pub fn save_runtime_state(conn: &mut Connection, state: &RuntimeState) -> Result
 }
 
 fn get_all_uids(conn: &Connection) -> Result<Vec<u32>> {
-    let mut stmt = conn.prepare("SELECT DISTINCT uid FROM files WHERE uid IS NOT NULL")?;
+    let mut stmt = conn.prepare("SELECT DISTINCT uid FROM files WHERE uid IS NOT NULL").to_panic()?;
     let rows = stmt.query_map([], |row| {
         let uid: u32 = row.get(0)?;
         Ok(uid)
-    })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 fn get_all_gids(conn: &Connection) -> Result<Vec<u32>> {
-    let mut stmt = conn.prepare("SELECT DISTINCT gid FROM files WHERE gid is NOT NULL")?;
+    let mut stmt = conn.prepare("SELECT DISTINCT gid FROM files WHERE gid is NOT NULL").to_panic()?;
     let rows = stmt.query_map([], |row| {
         let gid: u32 = row.get(0)?;
         Ok(gid)
-    })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// Update all rows where uid matches given `uid` and set username column to `uname`
@@ -122,7 +126,7 @@ fn set_uname_from_uid(conn: &Connection, uid: &u32, uname: &str) -> Result<()> {
             ":uid": uid,
             ":username": uname,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -134,7 +138,7 @@ fn set_gname_from_gid(conn: &Connection, gid: &u32, gname: &str) -> Result<()> {
             ":gid": gid,
             ":groupname": gname,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -151,13 +155,13 @@ pub fn set_hardlink_canonicals(conn: &Connection) -> Result<u64> {
          )",
         named_params! {
             ":flag": FileFlag::FileHardlinkCanonical.mask_i64(),
-        })?;
+        }).to_panic()?;
     Ok(changes as u64)
 }
 
 /// Clear the entire files table.
 pub fn purge_entries(conn: &Connection) -> Result<u64> {
-    let rows = conn.execute("DELETE * FROM files", [])?;
+    let rows = conn.execute("DELETE * FROM files", []).to_panic()?;
     Ok(rows as u64)
 }
 

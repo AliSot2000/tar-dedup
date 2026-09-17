@@ -10,7 +10,7 @@ use rusqlite::{Connection, named_params};
 use crate::db::common::SqlFileRow;
 use crate::db::flags::{FileFlag, OutTreeFlag};
 use crate::db::types::OutTreeRecord;
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 /// Depth of an `out_tree` row in the extraction tree (number of path components).
 /// Ordered deepest-first so directory metadata lands after its contents.
@@ -43,7 +43,7 @@ pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(
            AND o.canonical_id = o.id
          ORDER BY {order}
          LIMIT :batch_size"
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":batch_size": batch_size,
@@ -57,8 +57,8 @@ pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(
             let o = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((r, o))
         },
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// Directory rows whose metadata must still be applied, deepest first.
@@ -82,7 +82,7 @@ pub fn list_out_tree_for_permissions_dirs<R: SqlFileRow>(
            AND o.flags & :applied = 0
          ORDER BY {order}
          LIMIT :batch_size"
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":batch_size": batch_size,
@@ -97,8 +97,8 @@ pub fn list_out_tree_for_permissions_dirs<R: SqlFileRow>(
             let o = OutTreeRecord::from_sql(row, Some("o"))?;
             Ok((r, o))
         },
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// Count of non-dir rows still needing metadata (for progress reporting).
@@ -141,7 +141,7 @@ fn count_out_tree_for_permissions(conn: &Connection, dirs: bool) -> Result<u64> 
          WHERE o.flags & :applied = 0
            {where_extra}"
     );
-    let n: i64 = conn.query_row(&sql, params, |row| row.get(0))?;
+    let n: i64 = conn.query_row(&sql, params, |row| row.get(0)).to_panic()?;
     Ok(n as u64)
 }
 
@@ -160,7 +160,7 @@ pub fn apply_permissions_flags_to_files(conn: &Connection) -> Result<(u64, u64)>
             ":file_applied": FileFlag::AppliedMetadata.mask_i64(),
             ":out_applied": OutTreeFlag::AppliedMetadata.mask_i64(),
         },
-    )?;
+    ).to_panic()?;
     // ErrorWhileApplyingPermissions: ANY out_tree row for the file errored.
     let errored = conn.execute(
         "UPDATE files SET flags = flags | :file_error
@@ -169,7 +169,7 @@ pub fn apply_permissions_flags_to_files(conn: &Connection) -> Result<(u64, u64)>
             ":file_error": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
             ":out_error": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
         },
-    )?;
+    ).to_panic()?;
     Ok((applied as u64, errored as u64))
 }
 
@@ -183,7 +183,7 @@ pub fn list_canonical_files_for_permissions<R: SqlFileRow>(conn: &Connection, ba
             AND flags & :perm_applied = 0
             AND flags & :perm_err = 0
             LIMIT :batch_size"
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":at_dst": FileFlag::AtLinkSource.mask_i64(),
@@ -191,6 +191,6 @@ pub fn list_canonical_files_for_permissions<R: SqlFileRow>(conn: &Connection, ba
             ":perm_err": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
             ":batch_size": batch_size},
         |row| R::from_row(row, None)
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }

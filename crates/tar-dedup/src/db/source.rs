@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::types::SourceRecord;
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 const SOURCE_RECORD_COLUMNS: &str = " id, source, abs_path, original_path, line, flags";
 
@@ -43,7 +43,7 @@ pub fn add_get_source(
             ":org_path": original_path.map(|p| p.to_string_lossy()),
             ":flags": flags.to_i64(),
         },
-    )?;
+    ).to_panic()?;
     let id = conn.query_row(
         "SELECT id FROM source WHERE source = :source AND abs_path = :path AND line = :line",
         named_params! {
@@ -52,7 +52,7 @@ pub fn add_get_source(
             ":line": line,
         },
         |row| row.get(0),
-    )?;
+    ).to_panic()?;
     Ok(id)
 }
 
@@ -90,6 +90,7 @@ pub fn find_overlapping_source(
         |row| Ok((row.get(0)?, PathBuf::from(row.get::<_, String>(1)?))),
     )
     .optional()
+    .to_panic()
     .map_err(Into::into)
 }
 
@@ -116,7 +117,7 @@ pub fn list_sources(
          ORDER BY id ASC \
          LIMIT :batch_size"
     );
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare(&sql).to_panic()?;
     let rows = if only_dirs.is_some() {
         stmt.query_map(
             named_params! {
@@ -125,7 +126,7 @@ pub fn list_sources(
                 ":batch_size": batch_size,
             },
             SourceRecord::from_row,
-        )?
+        ).to_panic()?
     } else {
         stmt.query_map(
             named_params! {
@@ -133,9 +134,9 @@ pub fn list_sources(
                 ":batch_size": batch_size,
             },
             SourceRecord::from_row,
-        )?
+        ).to_panic()?
     };
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 #[cfg(test)]

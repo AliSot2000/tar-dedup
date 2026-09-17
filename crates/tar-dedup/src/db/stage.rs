@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::db::common::SqlFileRow;
 use crate::db::common::generate_archive_filter;
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 pub fn promote_unstageable_files(conn: &Connection, retry_missing_sha: bool) -> Result<u64> {
     let filter_sha = if retry_missing_sha {
@@ -25,7 +25,7 @@ pub fn promote_unstageable_files(conn: &Connection, retry_missing_sha: bool) -> 
         )"
         ),
         [],
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -47,7 +47,7 @@ pub fn list_files_to_stage<R: SqlFileRow>(
                 {filter_sha}",
         R::sql_columns(None),
         generate_archive_filter(None)
-    ))?;
-    let rows = stmt.query_map([], |row| R::from_row(row, None))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    )).to_panic()?;
+    let rows = stmt.query_map([], |row| R::from_row(row, None)).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }

@@ -4,14 +4,14 @@ use crate::db::common::SqlFileRow;
 use crate::db::common::generate_archive_filter;
 use crate::db::flags::FileFlag;
 use crate::db::types::FileId;
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 /// Advance every `deduped` row to `sparsified` (no HasSparse / canonical changes).
 pub fn promote_deduped_to_sparsified(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
         "UPDATE files SET phase = 'sparsified' WHERE phase = 'deduped'",
         [],
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -39,7 +39,7 @@ pub fn promote_non_sparsify_candidates_to_sparsified(
             ":min_pages": min_pages as i64,
             ":has_sparse": has_sparse,
         },
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -60,15 +60,15 @@ pub fn list_sparsify_candidates<R: SqlFileRow>(
              AND {}
          ORDER BY id",
         generate_archive_filter(None)
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":min_pages": min_pages as i64,
             ":has_sparse": has_sparse,
         },
         |r| R::from_row(r, None),
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 pub fn mark_sparsified_sparse(conn: &Connection, file_id: FileId) -> Result<()> {
@@ -79,7 +79,7 @@ pub fn mark_sparsified_sparse(conn: &Connection, file_id: FileId) -> Result<()> 
             ":bit": bit,
             ":id": file_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }
 
@@ -91,6 +91,6 @@ pub fn mark_sparsified_error(conn: &Connection, file_id: FileId) -> Result<()> {
             ":bit": bit,
             ":id": file_id.0,
         },
-    )?;
+    ).to_panic()?;
     Ok(())
 }

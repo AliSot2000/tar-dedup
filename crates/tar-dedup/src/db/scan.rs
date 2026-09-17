@@ -4,8 +4,7 @@ use crate::db::extract::{load_extract_runtime_state, save_extract_runtime_state}
 use crate::db::flags::FileFlag;
 use crate::db::types::FileId;
 use crate::db::{ExtractScanState, flags, meta};
-use crate::error::Error;
-use crate::error::Result;
+use crate::error::{Error, Result, ToPanic};
 use rusqlite::{Connection, named_params};
 use std::fs;
 use std::path::Path;
@@ -54,7 +53,7 @@ pub fn promote_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
                  )
            )",
         named_params! { ":bit": bit },
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -83,7 +82,7 @@ pub fn apply_snapshot_promote_unarchived(
     conn.execute(
         "ATTACH DATABASE :path AS snap",
         named_params! { ":path": path.as_ref() },
-    )?;
+    ).to_panic()?;
     let promoted = conn.execute(
         "UPDATE files
          SET phase = 'unarchived'
@@ -96,7 +95,7 @@ pub fn apply_snapshot_promote_unarchived(
                  )
            )",
         named_params! { ":bit": bit },
-    )?;
+    ).to_panic()?;
     // Descendants of already-unarchived canonicals.
     conn.execute(
         "UPDATE files
@@ -105,8 +104,8 @@ pub fn apply_snapshot_promote_unarchived(
            AND canonical_id IS NOT NULL
            AND canonical_id IN (SELECT id FROM files WHERE phase = 'unarchived')",
         [],
-    )?;
-    conn.execute("DETACH DATABASE snap", [])?;
+    ).to_panic()?;
+    conn.execute("DETACH DATABASE snap", []).to_panic()?;
     Ok(promoted as u64)
 }
 
@@ -124,7 +123,7 @@ pub fn count_missing_payloads(conn: &Connection) -> Result<u64> {
             ":extracted": extracted,
         },
         |row| row.get("count"),
-    )?;
+    ).to_panic()?;
     Ok(count as u64)
 }
 
@@ -142,7 +141,7 @@ pub fn count_unconfirmed_extracted(conn: &Connection) -> Result<u64> {
            )",
         named_params! { ":bit": bit },
         |row| row.get("count"),
-    )?;
+    ).to_panic()?;
     Ok(count as u64)
 }
 
@@ -154,7 +153,7 @@ pub fn count_extracted_canonical(conn: &Connection) -> Result<u64> {
          WHERE canonical_id = id AND (flags & :bit) != 0",
         named_params! { ":bit": bit },
         |row| row.get("count"),
-    )?;
+    ).to_panic()?;
     Ok(count as u64)
 }
 
@@ -169,7 +168,7 @@ pub fn count_extracted_paths(conn: &Connection) -> Result<u64> {
                )",
         named_params! { ":bit": bit },
         |row| row.get("count"),
-    )?;
+    ).to_panic()?;
     Ok(count as u64)
 }
 
@@ -185,15 +184,14 @@ pub fn count_non_appended_by_ftype(conn: &Connection) -> Result<Vec<(String, u64
          GROUP BY ftype
          ORDER BY ft",
         crate::db::common::generate_archive_filter(None),
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(named_params! { ":bit": bit }, |row| {
         Ok((
             row.get::<_, String>("ft")?,
             row.get::<_, i64>("count")? as u64,
         ))
-    })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+    }).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// Determine if this canonical_id is required by a filtered value
@@ -211,7 +209,7 @@ pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool
             ":id": id.0
         },
         |row| row.get::<_, i64>("count")
-    )?;
+    ).to_panic()?;
     Ok(res > 0)
 }
 
@@ -257,7 +255,7 @@ pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
     conn.execute(
         "UPDATE files SET flags = flags & ~:bit",
         named_params! { ":bit": bit },
-    )?;
+    ).to_panic()?;
     // Candidate regular-file rows (and anything still mid-pipeline) → archived.
     conn.execute(
         "UPDATE files
@@ -267,7 +265,7 @@ pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
              'staged', 'archived'
          )",
         [],
-    )?;
+    ).to_panic()?;
     meta::clear_archive_meta(conn)?;
     Ok(())
 }

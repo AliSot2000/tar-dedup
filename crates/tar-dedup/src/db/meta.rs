@@ -12,7 +12,7 @@ use rusqlite::Connection;
 use crate::common::perms::OwnerGroupPolicy;
 use crate::config::{ArchiveConfig, ExtractConfig, ExtractPipelinePhase, PipelinePhase};
 use crate::db::common::{delete_meta, get_meta, upsert_meta};
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ToPanic};
 
 /// Closed set of known `meta.key` strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -268,9 +268,9 @@ pub fn with_meta_txn<T>(
     conn: &mut Connection,
     f: impl FnOnce(&Connection) -> Result<T>,
 ) -> Result<T> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction().to_panic()?;
     let out = f(&tx)?;
-    tx.commit()?;
+    tx.commit().to_panic()?;
     Ok(out)
 }
 
@@ -282,7 +282,7 @@ fn get_typed<T>(
     match get_meta(conn, key.as_str())? {
         None => Ok(None),
         Some(raw) => {
-            let entry = MetaEntry::decode(key, &raw)?;
+            let entry = MetaEntry::decode(key, &raw).to_panic()?;
             extract(entry)
                 .ok_or_else(|| {
                     Error::Config(format!(
@@ -291,6 +291,7 @@ fn get_typed<T>(
                     ))
                 })
                 .map(Some)
+                .to_panic()
         }
     }
 }
@@ -542,14 +543,14 @@ pub struct MetaDump {
 
 /// Classify every `meta` row: known+parseable, unknown key, or known+unparseable.
 pub fn dump_meta(conn: &Connection) -> Result<MetaDump> {
-    let mut stmt = conn.prepare("SELECT key, value FROM meta ORDER BY key")?;
+    let mut stmt = conn.prepare("SELECT key, value FROM meta ORDER BY key").to_panic()?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
+    }).to_panic()?;
 
     let mut dump = MetaDump::default();
     for row in rows {
-        let (key, value) = row?;
+        let (key, value) = row.to_panic()?;
         match MetaKey::parse(&key) {
             None => dump.unknown_keys.push((key, value)),
             Some(meta_key) => match MetaEntry::decode(meta_key, &value) {

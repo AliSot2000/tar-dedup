@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use crate::config::{ExtractPipelinePhase, PipelinePhase};
 use crate::db::flags::{ErrorFlags, ErrorScope};
 use crate::db::types::{FileId, OutTreeId};
-use crate::error::{FileStatError, Result};
+use crate::error::{FileStatError, Result, ToPanic};
 
 /// Phase during which an error was recorded (archive or extract pipeline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +81,7 @@ pub fn insert_errors(conn: &mut Connection, drafts: &[RecordDraft]) -> Result<u6
         return Ok(0);
     }
     let now = Utc::now();
-    let tx = conn.transaction()?;
+    let tx = conn.transaction().to_panic()?;
     let mut stmt = tx.prepare_cached(
         "INSERT INTO errors (
              file_id, out_tree_id, abs_path, error_msg, error_type, phase,
@@ -89,7 +89,7 @@ pub fn insert_errors(conn: &mut Connection, drafts: &[RecordDraft]) -> Result<u6
          ) VALUES (
              :file_id, :out_tree_id, :abs_path, :error_msg, :error_type, :phase,
              :error_misc, :error_datetime, :flags
-         )")?;
+         )").to_panic()?;
     for draft in drafts {
         stmt.execute(named_params! {
             ":file_id": draft.file_id.map(|f| f.0),
@@ -103,10 +103,10 @@ pub fn insert_errors(conn: &mut Connection, drafts: &[RecordDraft]) -> Result<u6
             ":error_misc": error_misc(&draft.error),
             ":error_datetime": now.to_rfc3339(),
             ":flags": draft.flags.to_i64(),
-        })?;
+        }).to_panic()?;
     }
     drop(stmt);
-    tx.commit()?;
+    tx.commit().to_panic()?;
     Ok(count as u64)
 }
 
@@ -136,6 +136,7 @@ pub fn get_record_by_id(conn: &Connection, id: i64) -> Result<Option<ErrorRecord
         parse_row,
     )
     .optional()
+    .to_panic()
     .map_err(Into::into)
 }
 
@@ -144,12 +145,12 @@ pub fn get_record_by_id(conn: &Connection, id: i64) -> Result<Option<ErrorRecord
 pub fn get_records_by_file_id(conn: &Connection, file_id: FileId) -> Result<Vec<ErrorRecord>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {ERROR_COLUMNS} FROM errors WHERE file_id = :file_id ORDER BY id"
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(
         named_params! { ":file_id": file_id.0 },
         parse_row,
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// All error rows bound to an out_tree row.
@@ -157,12 +158,12 @@ pub fn get_records_by_out_tree_id(conn: &Connection, out_tree_id: OutTreeId)
     -> Result<Vec<ErrorRecord>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {ERROR_COLUMNS} FROM errors WHERE out_tree_id = :out_tree_id ORDER BY id"
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(
         named_params! { ":out_tree_id": out_tree_id.0 },
         parse_row,
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// List error rows, batched. `scope` is an OR-able bitset over File/OutTree/Session;
@@ -179,12 +180,12 @@ pub fn list_records(
         "SELECT {ERROR_COLUMNS} FROM errors
          WHERE id > :last_id {scope_clause} {reemit_clause}
          ORDER BY id LIMIT :batch_size"
-    ))?;
+    )).to_panic()?;
     let rows = stmt.query_map(
         named_params! { ":last_id": last_id, ":batch_size": batch_size },
         parse_row,
-    )?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
 /// Count error rows matching scope + flag filter.
@@ -198,7 +199,7 @@ pub fn count_records(
         &format!("SELECT COUNT(*) FROM errors WHERE 1 = 1 {scope_clause} {reemit_clause}"),
         [],
         |r| r.get(0),
-    )?;
+    ).to_panic()?;
     Ok(n as u64)
 }
 
