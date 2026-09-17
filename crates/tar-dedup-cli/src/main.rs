@@ -57,5 +57,10 @@ fn main() -> tar_dedup::error::Result<()> {
                 ))
             }
         }
+        Command::Inspect(args) => tar_dedup::cmd::inspect::run(&args),
+        Command::List(args) => tar_dedup::cmd::list::run(&args),
+        Command::Dump(args) => tar_dedup::cmd::dump::run(&args),
+        Command::Query(args) => tar_dedup::cmd::query::run(&args),
+        Command::Reset(args) => tar_dedup::cmd::reset::run(&args),
     }
 }
