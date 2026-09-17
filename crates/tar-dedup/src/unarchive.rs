@@ -18,6 +18,7 @@ use crate::common::start::{
 use crate::config::{ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState};
 use crate::db::{Database, Recorder};
 use crate::error::{Error, Result};
+use crate::progress::{BarKind, BarScope, EXTRACT_MULTIPLIER, ProgressBarSet, register_mpb};
 use crate::shutdown::Shutdown;
 use crate::unarchive::filter::{ParseFilterBuffer, ingest_filters};
 
@@ -30,9 +31,14 @@ pub struct ExtractRTArgs<'a> {
     pub config: &'a ExtractConfig,
     pub db: &'a Database,
     pub shutdown: &'a Shutdown,
+    pub progress: &'a ProgressBarSet,
 }
 
 pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
+    let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+    register_mpb(progress.mp_handle());
+    let mut bars = BarScope::new(&progress);
+
     let product = ProductPresence::Absent;
 
     if config.process.start_policy == StartPolicy::Fresh {
@@ -79,39 +85,47 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         }
     }
 
+    // Resume anchor: an existing work DB already holds the full catalog.
+    if let Some(edb) = db.as_ref() {
+        progress.set_table_size(edb.count_entries()?);
+    }
+
     while state.phase != ExtractPipelinePhase::Done {
         shutdown.check_between_files()?;
+        enter_phase(&progress, state.phase);
         tracing::info!(phase = state.phase.as_str(), "unarchive phase");
 
         match state.phase {
             ExtractPipelinePhase::ScanTar => {
                 tracing::error!("extract: scanning archive");
                 db = Some(scan::run(&config, &db_path, &shutdown,
-                                    &mut pre_db_recorder, &mut filter_buffer)?);
+                                    &mut pre_db_recorder, &mut filter_buffer, &progress)?);
                 if !config_written {
                     let ldb = db.as_ref().expect(OPT_DB_ERROR);
                     ldb.set_extract_config(&config)?;
                     config_written = true;
                 }
+                let ldb = db.as_ref().expect(OPT_DB_ERROR);
+                progress.set_table_size(ldb.count_entries()?);
             }
             ExtractPipelinePhase::Filter if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
                 filter::run(&rt)?;
             }
             ExtractPipelinePhase::Rehash if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
                 rehash::run(&rt)?;
             }
             ExtractPipelinePhase::PlacementPrologue if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
                 place_prologue::run(&rt)?;
             }
             ExtractPipelinePhase::Place if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
                 place::run(&rt)?;
             }
             ExtractPipelinePhase::Permissions if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown };
+                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
                 permissions::run(&rt)?;
             }
             ExtractPipelinePhase::Cleanup if let Some(ref edb) = db => {
@@ -135,8 +149,26 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         }
     }
 
+    bars.finish();
+    drop(bars);
+
     tracing::error!("extracted to {}", config.paths.extraction_root().display());
     Ok(())
+}
+
+/// Map a phase to its global-bar anchor and swap in the matching phase bar.
+fn enter_phase(progress: &ProgressBarSet, phase: ExtractPipelinePhase) {
+    let (name, kind) = match phase {
+        ExtractPipelinePhase::ScanTar => ("scan", BarKind::Counter),
+        ExtractPipelinePhase::Filter => ("filter", BarKind::Counter),
+        ExtractPipelinePhase::Rehash => ("rehash", BarKind::Count),
+        ExtractPipelinePhase::PlacementPrologue => ("prologue", BarKind::Counter),
+        ExtractPipelinePhase::Place => ("place", BarKind::Count),
+        ExtractPipelinePhase::Permissions => ("permissions", BarKind::Counter),
+        ExtractPipelinePhase::Cleanup => ("cleanup", BarKind::Counter),
+        ExtractPipelinePhase::Done => ("done", BarKind::Counter),
+    };
+    progress.begin_phase(phase.index(), name, kind);
 }
 
 fn load_extract_state(db_path: &Path) -> Result<ExtractRuntimeState> {

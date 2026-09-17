@@ -19,6 +19,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         .map_err(|e| crate::error::Error::io(&config.paths.stage_dir(), e))?;
 
     let promoted = db.promote_unstageable_files(config.pipeline.retry_missing_sha)?;
+    rt.progress.inc_global(promoted);
     tracing::info!("Promoted {promoted} entries to staged which aren't eligible");
 
     // TODO big db integrity check. The DB needs to be clean so it can be extracted correctly.
@@ -80,6 +81,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             }
         }
         db.mark_file_phase(record.id, crate::db::types::FilePhase::Staged)?;
+        rt.progress.inc_both(1);
     }
     recorder.flush()?;
     tracing::info!("Staged {} files", total_files);

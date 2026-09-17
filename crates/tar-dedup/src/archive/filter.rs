@@ -24,6 +24,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                 "Unexpected Filter expression. Filtering perhaps not working correctly?");
 
             let updated = db.apply_no_filter()?;
+            rt.progress.inc_global(updated);
             tracing::info!("No filters present. All {updated} files selected.");
             debug_assert_eq!(db_files, updated, "Updated rows and total rows don't match");
             return Ok(());
@@ -82,6 +83,7 @@ fn fast_filter(rt: &ArchiveRTArgs) -> Result<()> {
             "INVARIANT ERROR: Number of rows updated does not match rows queried. \
                    Rows vanished?"
         );
+        rt.progress.inc_both(updated);
     }
     let rem = db.count_files_in_phase(if config.filter.eager_filter {
         FilePhase::Inventoried

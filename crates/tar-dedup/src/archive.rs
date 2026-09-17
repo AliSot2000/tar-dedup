@@ -20,6 +20,7 @@ use crate::common::start::{
 use crate::config::{ArchiveConfig, ExitAfterStage, PipelinePhase, RuntimeState};
 use crate::db::Database;
 use crate::error::{Error, Result};
+use crate::progress::{ARCHIVE_MULTIPLIER, BarKind, BarScope, ProgressBarSet, register_mpb};
 use crate::shutdown::Shutdown;
 
 /// Runtime context threaded through the archive pipeline phases.
@@ -27,6 +28,7 @@ pub struct ArchiveRTArgs<'a> {
     pub config: &'a ArchiveConfig,
     pub db: &'a Database,
     pub shutdown: &'a Shutdown,
+    pub progress: &'a ProgressBarSet,
 }
 
 pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
@@ -93,6 +95,12 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         }
     };
 
+let progress = ProgressBarSet::new(ARCHIVE_MULTIPLIER);
+    register_mpb(progress.mp_handle());
+    let mut bars = BarScope::new(&progress);
+    // Resume anchor: a work DB already holds the full table size.
+    progress.set_table_size(db.count_entries()?);
+
     while state.phase != PipelinePhase::Done {
         shutdown.check_between_files()?;
 
@@ -100,7 +108,9 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             config: &config,
             db: &db,
             shutdown: &shutdown,
+            progress: &progress,
         };
+        enter_phase(&progress, &state.phase);
         tracing::info!(phase = state.phase.as_str(), "archive phase");
         match run_phase(&state.phase, &rt) {
             Ok(()) => {}
@@ -120,6 +130,11 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
                 return Ok(());
             }
             Err(e) => return Err(e),
+        }
+
+        // The inventory phase establishes the table size for the global bar.
+        if state.phase == PipelinePhase::Inventory {
+            progress.set_table_size(db.count_entries()?);
         }
 
         let completed = state.phase;
@@ -146,6 +161,9 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             }
         }
     }
+
+    bars.finish();
+    drop(bars);
 
     drop(db);
     drop(lock);
@@ -197,4 +215,19 @@ fn run_phase(
         PipelinePhase::Archive => tar_builder::run(rt),
         PipelinePhase::Done => Ok(()),
     }
+}
+
+/// Map a phase to its global-bar anchor and swap in the matching phase bar.
+fn enter_phase(progress: &ProgressBarSet, phase: &PipelinePhase) {
+    let (name, kind) = match phase {
+        PipelinePhase::Inventory => ("inventory", BarKind::Counter),
+        PipelinePhase::Hash => ("hash", BarKind::Count),
+        PipelinePhase::Filter => ("filter", BarKind::Counter),
+        PipelinePhase::Dedup => ("dedup", BarKind::Count),
+        PipelinePhase::Sparsify => ("sparsify", BarKind::Count),
+        PipelinePhase::Stage => ("stage", BarKind::Counter),
+        PipelinePhase::Archive => ("archive", BarKind::Bytes),
+        PipelinePhase::Done => ("done", BarKind::Counter),
+    };
+    progress.begin_phase(phase.index(), name, kind);
 }

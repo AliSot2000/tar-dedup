@@ -12,7 +12,6 @@ use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
-use indicatif::{ProgressBar, ProgressStyle};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use sha1::{Digest, Sha1};
@@ -33,11 +32,11 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     let config = rt.config;
     let db = rt.db;
     let shutdown = rt.shutdown;
+    let progress = rt.progress;
     // TODO promote all files that aren't elected to rehash
     // TODO also filer for sha.
     let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?; // TODO that's wrong
     let total = pending.len() as u64;
-    let already_hashed = 0;
 
     let do_skip = if config.scan.rehash { "" } else { "skip " };
     tracing::info!(
@@ -48,6 +47,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 
     if !config.scan.rehash {
         let n = db.skip_rehash()?;
+        progress.inc_global(n);
         tracing::info!(promoted = n, "rehash skipped; unarchived → rehashed");
         return Ok(());
     }
@@ -65,14 +65,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     let shutdown = shutdown.clone();
     let results = Mutex::new(Vec::<RehashOutcome>::new());
 
-    let bar = ProgressBar::new(total);
-    bar.set_position(already_hashed); // TODO we need proper information
-    bar.set_style(
-        ProgressStyle::with_template("{spinner} rehash [{bar:40.cyan/blue}] {pos}/{len}")
-            .unwrap()
-            .progress_chars("=>-"),
-    );
-    bar.enable_steady_tick(std::time::Duration::from_millis(100));
+    progress.set_phase_total(total);
 
     let parallel = pool.install(|| {
         pending.par_iter().try_for_each(|record| -> Result<()> {
@@ -80,7 +73,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 
             let outcome = rehash_one(&stage_dir, record, &shutdown);
             results.lock().expect("rehash results lock").push(outcome);
-            bar.inc(1);
+            progress.inc_both(1);
             Ok(())
         })
     });
@@ -93,7 +86,6 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     let force = shutdown.is_force();
     match parallel {
         Ok(()) => {
-            bar.finish_with_message(format!("rehash complete ({total}/{total})"));
             let (matches, mismatches, errors) = counts;
             tracing::info!(matches, mismatches, errors, "rehash complete");
             if mismatches > 0 {
@@ -113,12 +105,10 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
             Ok(())
         }
         Err(Error::Interrupted) if force => {
-            bar.abandon();
             tracing::warn!("rehash force-aborted; in-flight progress discarded");
             Err(Error::Interrupted)
         }
         Err(Error::Interrupted) => {
-            bar.abandon();
             tracing::warn!(
                 saved = outcomes.len(),
                 "rehash stopped; completed files saved"

@@ -5,7 +5,6 @@ use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, StrippedRecord};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
-use indicatif::{ProgressBar, ProgressStyle}; // TODO use our wrapper.
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use sha1::{Digest, Sha1};
@@ -18,6 +17,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let config = rt.config;
     let db = rt.db;
     let shutdown = rt.shutdown;
+    let progress = rt.progress;
     let page_size = config.sparse.page_size;
     debug_assert!(page_size > 0, "page_size == 0");
 
@@ -40,6 +40,9 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         "hash pass"
     );
 
+    progress.set_phase_total(hash_needed);
+    progress.set_phase_position(already_hashed);
+
     if pending.is_empty() {
         return Ok(());
     }
@@ -51,15 +54,6 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     let shutdown = shutdown.clone();
     let results = Mutex::new(Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new());
-
-    let bar = ProgressBar::new(hash_needed);
-    bar.set_position(already_hashed);
-    bar.set_style(
-        ProgressStyle::with_template("{spinner} hash [{bar:40.cyan/blue}] {pos}/{len}")
-            .unwrap()
-            .progress_chars("=>-"),
-    );
-    bar.enable_steady_tick(std::time::Duration::from_millis(100));
 
     // `PreYield` stats each file when `par_bridge` pulls it for a worker — just
     // before that file is hashed, not in a bulk pass at the start of the stage.
@@ -74,7 +68,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                 Err(e) => Err(IdError { err: e, id: record.id }),
             };
             results.lock().expect("hash results lock").push(res);
-            bar.inc(1);
+            progress.inc_both(1);
             Ok(())
         })
     });
@@ -118,17 +112,14 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     match parallel {
         Ok(()) => {
-            bar.finish_with_message(format!("hashing complete ({hash_needed}/{hash_needed})"));
             tracing::info!(count = hashed.len(), "hashing complete");
             Ok(())
         }
         Err(Error::Interrupted) if force => {
-            bar.abandon();
             tracing::warn!("hashing force-aborted; in-flight progress discarded");
             Err(Error::Interrupted)
         }
         Err(Error::Interrupted) => {
-            bar.abandon();
             tracing::warn!(saved = hashed.len(), "hashing stopped; completed files saved");
             Err(Error::Interrupted)
         }

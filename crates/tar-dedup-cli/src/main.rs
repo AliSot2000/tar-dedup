@@ -8,9 +8,7 @@ use tar_dedup::error::Error;
 use tar_dedup::shutdown::Shutdown;
 
 fn main() -> tar_dedup::error::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    tar_dedup::progress::init_tracing();
 
     let cli = Cli::parse();
     let shutdown = Shutdown::install()?;
