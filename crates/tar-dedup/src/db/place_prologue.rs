@@ -83,7 +83,7 @@ pub fn list_materialized_entries<R: SqlFileRow>(
             ":batch_size": batch_size,
         },
     };
-    let rows = stmt.query_map(params, |r| R::from_row(r, None))?;
+    let rows = stmt.query_map(params, |r| R::from_row(r, Some("f")))?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
