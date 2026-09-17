@@ -29,19 +29,23 @@ impl Shutdown {
                 match count {
                     1 => {
                         mode_for_handler.store(MODE_GRACEFUL, Ordering::SeqCst);
-                        eprintln!(
-                            "\nGracefully shutdown. Finishing in-flight files (2 more signals to abort now)"
+                        tracing::info!("
+                            Gracefully shutdown. Finishing in-flight files (2 more signals to \
+                            abort now)"
                         );
                     }
                     2 => {
-                        eprintln!(
-                            "\nGracefully shutdown. Finishing in-flight files (one more signal to abort now)"
+                        tracing::info!("
+                            Gracefully shutdown. Finishing in-flight files (one more signal to \
+                            abort now)"
                         );
                     }
                     _ => {
                         mode_for_handler.store(MODE_FORCE, Ordering::SeqCst);
                         if count == 3 {
-                            eprintln!("\nAborting now; in-flight progress is discarded.");
+                            tracing::info!("\
+                            Aborting now; in-flight progress is discarded."
+                            );
                         }
                     }
                 }
