@@ -7,7 +7,7 @@ use crate::common::files::directory_roots_overlap;
 use crate::common::start::StartPolicy;
 use crate::error::{Error, Result};
 
-use super::common::{merge_pick_clone, merge_pick_copy, resolve_capture_bit};
+use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
 use super::compression::{CompressionSettings, resolve_compression};
 use super::paths::{PathLayout, PathSource};
 use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
@@ -275,18 +275,18 @@ impl ArchiveConfig {
                 eager_filter: !args.lazy_filter,
             },
             capture: CaptureOptions {
-                do_xattrs: resolve_capture_bit(args.no_xattrs,
-                                               args.xattrs,
-                                               capture_all),
-                do_posix_acl: resolve_capture_bit(args.no_acls,
-                                                  args.acls,
-                                                  capture_all),
-                do_selinux: resolve_capture_bit(args.no_selinux,
-                                                args.selinux,
+                do_xattrs: resolve_bool_flag(args.no_xattrs,
+                                             args.xattrs,
+                                             capture_all),
+                do_posix_acl: resolve_bool_flag(args.no_acls,
+                                                args.acls,
                                                 capture_all),
-                numeric_ids_only: resolve_capture_bit(args.numeric_ids_only,
-                                                      args.resolve_numeric_ids,
-                                                      capture_all),
+                do_selinux: resolve_bool_flag(args.no_selinux,
+                                              args.selinux,
+                                              capture_all),
+                numeric_ids_only: resolve_bool_flag(args.numeric_ids_only,
+                                                    args.resolve_numeric_ids,
+                                                    capture_all),
                 mode: mode_changes,
                 transform,
             },
