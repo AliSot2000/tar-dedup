@@ -7,7 +7,7 @@ use crate::common::files::directory_roots_overlap;
 use crate::common::start::StartPolicy;
 use crate::error::{Error, Result};
 
-use super::common::{merge_pick_clone, merge_pick_copy};
+use super::common::{merge_pick_clone, merge_pick_copy, resolve_capture_bit};
 use super::compression::{CompressionSettings, resolve_compression};
 use super::paths::{PathLayout, PathSource};
 use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
@@ -362,19 +362,6 @@ impl ArchiveConfig {
             },
             pipeline: merge_pick_clone(&self.pipeline, &base.pipeline, &default.pipeline),
         }
-    }
-}
-
-/// Resolve one capture bit: explicit `--no-x` wins, then `--x`, then the base
-/// (INCLUDE = `true` when `capture_all`, EXCLUDE = `false`).
-fn resolve_capture_bit(no: bool, yes: bool, base: bool) -> bool {
-    debug_assert!(!(no && yes), "PRECONDITION FAILED: no and yes prohibited.");
-    if no {
-        false
-    } else if yes {
-        true
-    } else {
-        base
     }
 }
 
