@@ -11,7 +11,7 @@ use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::StrippedRecord;
 use crate::db::{Database, Recorder};
 use crate::error::{Error, FileStatError, Result};
-use crate::progress::ByteProgress;
+use crate::progress::ProgressBarSet;
 use crate::tar_writer::TarWriter;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive);
 
@@ -33,15 +33,17 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     // Require sha1 unless retry_missing_sha asks to include unhashed files.
     let filter_sha = !config.pipeline.retry_missing_sha;
-    db.promote_ineligible_to_archived(filter_sha)?;
+    let promoted = db.promote_ineligible_to_archived(filter_sha)?;
+    rt.progress.inc_global(promoted);
 
     let bytes_in_base = db.get_archive_bytes_in()?;
     let total_bytes = db.sum_canonical_bytes_to_archive(filter_sha)?;
     let already_archived = db.sum_archived_canonical_bytes(filter_sha)?;
 
     // TODO update eta only when write to buff occurs.
-    let progress = ByteProgress::new("archive", total_bytes);
-    progress.set_position(already_archived);
+    let progress = rt.progress;
+    progress.set_phase_total(total_bytes);
+    progress.set_phase_position(already_archived);
 
     let mut writer = TarWriter::open(
         config.paths.archive_path.clone(),
@@ -53,7 +55,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     // Fresh start into archiving.
     if already_archived == 0 {
-        progress.set_message(&format!(
+        progress.set_phase_msg(&format!(
             "archive writing {SNAPSHOT_INIT_TAR_NAME} (initial manifest)"
         ));
         append_snapshot(&mut writer, rt, true, &mut recorder)?;
@@ -107,10 +109,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         };
         warn_if_times_changed(&target, record.mtime, record.atime, record.ctime);
 
-        progress.set_file("archive", &record.abs_path);
+        progress.set_phase_file("archive", &record.abs_path);
 
-        match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc(n)) {
-            Ok(()) => { db.set_file_flag(record.id, FileFlag::AppendedPath, true)?; }
+        match writer.append_path(&source, &tar_name, shutdown, |n| progress.inc_phase(n)) {
+            Ok(()) => {
+                db.set_file_flag(record.id, FileFlag::AppendedPath, true)?;
+                progress.inc_both(1);
+            }
             Err(e) if e.is_interrupted() => {
                 stopped = true;
                 final_archive = false;
@@ -133,13 +138,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     // Fast exit on force
     if stopped && shutdown.is_force() {
-        return force_abort_session(writer, db, &progress);
+        return force_abort_session(writer, db, progress);
     }
 
     end_session(
         writer,
         rt,
-        &progress,
+        progress,
         session_id,
         bytes_in_base,
         final_archive,
@@ -147,12 +152,10 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     )?;
 
     if stopped {
-        progress.abandon();
         return Err(Error::Interrupted);
     }
 
     recorder.flush()?;
-    progress.finish("archive complete");
     Ok(())
 }
 
@@ -232,7 +235,7 @@ fn truncate_archive_at(path: &Path, offset: u64) -> io::Result<()> {
 
 /// Force abort: abandon the writer in place. Leave session `finalized = 0` and
 /// pending file flags; next run's startup recovery truncates and marks aborted.
-fn force_abort_session(writer: TarWriter, db: &Database, progress: &ByteProgress) -> Result<()> {
+fn force_abort_session(writer: TarWriter, db: &Database, progress: &ProgressBarSet) -> Result<()> {
     writer.abandon();
     // Ensure pending flags + open session are durable before exit.
     db.checkpoint()?;
@@ -285,7 +288,7 @@ fn append_snapshot(
 fn end_session(
     mut writer: TarWriter,
     rt: &ArchiveRTArgs,
-    progress: &ByteProgress,
+    progress: &ProgressBarSet,
     session_id: i64,
     bytes_in_base: u64,
     write_tar_eof: bool,
@@ -294,14 +297,16 @@ fn end_session(
     let config = rt.config;
     let db = rt.db;
     let shutdown = rt.shutdown;
-    db.promote_pending_archived()?;
+    let n_pending = db.promote_pending_archived()?;
+    progress.inc_global(n_pending);
     // Full archive pass only: every remaining row has been considered (or was ineligible).
     if write_tar_eof {
-        db.promote_remainder_to_archived()?;
+        let n_rem = db.promote_remainder_to_archived()?;
+        progress.inc_global(n_rem);
     }
     db.stamp_archive_session_finished_at(session_id)?;
 
-    progress.set_message(format!("archive writing {SNAPSHOT_TAR_NAME} (progress)").as_str());
+    progress.set_phase_msg(&format!("archive writing {SNAPSHOT_TAR_NAME} (progress)"));
     if let Err(e) = append_snapshot(&mut writer, rt, false, recorder) {
         if e.is_interrupted() && shutdown.is_force() {
             return force_abort_session(writer, db, progress);
@@ -309,7 +314,7 @@ fn end_session(
         return Err(e);
     }
 
-    progress.set_message("archive finalizing compression stream");
+    progress.set_phase_msg("archive finalizing compression stream");
     let result = if write_tar_eof {
         // ARCHIVE!!!
         writer.finalize_archive(shutdown)

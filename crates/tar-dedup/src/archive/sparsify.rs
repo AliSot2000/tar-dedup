@@ -14,7 +14,7 @@ use crate::db::ErrorPhase;
 use crate::db::flags::ErrorFlags;
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::error::{Error, Result};
-use crate::progress::CountProgress;
+use crate::progress::ProgressBarSet;
 use crate::shutdown::Shutdown;
 
 enum SparseOutcome {
@@ -74,12 +74,14 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     if !config.sparse.sparsify {
         let n = db.promote_deduped_to_sparsified()?;
+        rt.progress.inc_global(n);
         tracing::info!(count = n, "promoted all deduped → sparsified (min_pages unset)");
         return Ok(());
     };
 
     // PRECONDITION: min_page set.
     let skipped = db.promote_non_sparsify_candidates_to_sparsified(config.sparse.min_pages)?;
+    rt.progress.inc_global(skipped);
     tracing::info!(count = skipped, "promoted non-candidates → sparsified");
 
     // TODO batching!
@@ -89,14 +91,15 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         return Ok(());
     }
 
-    let bar = CountProgress::with_total("sparsify", candidates.len() as u64);
+    let progress = rt.progress;
+    progress.set_phase_total(candidates.len() as u64);
     let results = Mutex::new(Vec::<SparseOutcome>::with_capacity(candidates.len()));
 
     let checked = PreYield::new(candidates.into_iter(), |record: &StrippedRecord| {
         warn_if_times_changed(&record.abs_path, record.mtime, record.atime, record.ctime);
     });
 
-    let parallel = run_pool(config, shutdown, &bar, &results, checked);
+    let parallel = run_pool(config, shutdown, progress, &results, checked);
 
     let outcomes = results.into_inner().expect("sparsify results lock");
     let saved = outcomes.len();
@@ -122,13 +125,11 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     match parallel {
         Ok(()) => {
-            bar.finish("sparsify complete");
             sanity_no_deduped(db)?;
             tracing::info!(ok, err, "sparsify complete");
             Ok(())
         }
         Err(Error::Interrupted) => {
-            bar.abandon();
             tracing::warn!(saved, "sparsify interrupted; completed files saved");
             Err(Error::Interrupted)
         }
@@ -140,7 +141,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 fn run_pool(
     config: &ArchiveConfig,
     shutdown: &Shutdown,
-    bar: &CountProgress,
+    progress: &ProgressBarSet,
     results: &Mutex<Vec<SparseOutcome>>,
     checked: impl Iterator<Item = StrippedRecord> + Send,
 ) -> Result<()> {
@@ -179,7 +180,7 @@ fn run_pool(
                         .lock()
                         .expect("sparsify results lock poisoned")
                         .push(SparseOutcome::Ok(record.id));
-                    bar.inc(1);
+                    progress.inc_both(1);
                     Ok(())
                 }
                 Err(Error::Interrupted) => {
@@ -195,7 +196,7 @@ fn run_pool(
                             record.id,
                             e,
                         ));
-                    bar.inc(1);
+                    progress.inc_both(1);
                     Ok(())
                 }
                 Err(other) => panic!(

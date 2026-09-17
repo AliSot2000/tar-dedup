@@ -73,6 +73,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
             );
 
             let updated = db.apply_no_filter_extract()?;
+            rt.progress.inc_global(updated);
             tracing::info!("No extract filters present. All {updated} files selected.");
             debug_assert_eq!(db_files, updated, "Updated rows and total rows don't match");
             return Ok(());
@@ -127,6 +128,7 @@ fn fast_filter(rt: &ExtractRTArgs) -> Result<()> {
             "INVARIANT ERROR: Number of rows updated does not match rows queried. \
                    Rows vanished?"
         );
+        rt.progress.inc_both(updated);
     }
     Ok(())
 }

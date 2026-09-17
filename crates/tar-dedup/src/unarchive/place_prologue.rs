@@ -26,6 +26,8 @@ const BATCH_SIZE: u64 = 10_000;
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     let config = rt.config;
     let db = rt.db;
+    // Resume display: the out_tree already exists, show its real size.
+    rt.progress.set_phase_total(db.count_out_tree_rows()?);
     if db.placement_prologue_done()? {
         return Ok(());
     }
@@ -39,6 +41,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     if !db.out_tree_is_built()? {
         populate_out_tree(rt, use_new_name)?;
     }
+    rt.progress.set_phase_total(db.count_out_tree_rows()?);
     // Canonical election is DB-only however meaningless in `--link-tree` mode
     // (same branch as the pre-refactor `place::run`).
     if !rt.config.placement.link_tree {
@@ -156,7 +159,7 @@ pub fn populate_out_tree(
         populate_out_tree_rel(rt, use_new_name)?;
     }
 
-    ensure_parent(db)?;
+    ensure_parent(db, rt.progress)?;
     db.set_out_tree_built()?;
     Ok(())
 }
@@ -242,6 +245,7 @@ fn populate_out_tree_abs(
         );
 
         db.insert_out_tree_rows(&processed)?;
+        rt.progress.inc_both(processed.len() as u64);
         // INFO ref table is left empty since we are working with abs_paths
     }
     Ok(())
@@ -308,6 +312,7 @@ fn populate_out_tree_rel(
                     .map(|id| { (id.clone(), source.id) })
                     .collect();
                 db.insert_ref_out_rows(&ref_pairs)?;
+                rt.progress.inc_both(processed.len() as u64);
             }
         }
     }
@@ -318,7 +323,7 @@ fn populate_out_tree_rel(
 /// a `--files-fromm` file had a file with `/path/to/not/covered/directory/file.txt`
 /// where `/path/to/other/*` is covered by recursive index. Creating file.txt would fail because
 /// there's no parent path.
-fn ensure_parent(db: &Database) -> Result<()> {
+fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet) -> Result<()> {
     let mut current_parents: HashSet<PathBuf> = HashSet::new();
     let mut parent_rows: Vec<NewOutTreeRow> = Vec::new();
     let mut last_id = OutTreeId(0);
@@ -344,6 +349,7 @@ fn ensure_parent(db: &Database) -> Result<()> {
                 flags: cref_flags.clone(),
             })
         }
+        progress.inc_both(parent_rows.len() as u64);
         db.insert_out_tree_rows(&parent_rows)?;
         // Clear the accumulators before the next run to avoid huge structures in ram.
         current_parents.clear();

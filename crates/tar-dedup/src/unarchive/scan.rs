@@ -8,6 +8,7 @@ use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FileId, FilePhase};
 use crate::db::{Database, ErrorPhase, ExtractScanState, Recorder};
 use crate::error::{Error, FileStatError, Result};
+use crate::progress::ProgressBarSet;
 use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
 use crate::unarchive::ExtractRTArgs;
@@ -101,7 +102,8 @@ pub fn run(
     db_path: &Path,
     shutdown: &Shutdown,
     recorder: &mut Recorder,
-    filter_buffer: &mut Option<ParseFilterBuffer>)
+    filter_buffer: &mut Option<ParseFilterBuffer>,
+    progress: &ProgressBarSet)
     -> Result<Database> {
     // INFO: Noop if dir exists!
     // INFO: If we can't create an extract stage, we can only abort.
@@ -124,7 +126,7 @@ pub fn run(
         remove_temp_db(recorder, &config.paths.temp_db());
         Some(opened)
     } else if footer_this_pass {
-        Some(open_initial_database(&config.paths.temp_db(), db_path, filter_buffer, config, shutdown)?)
+        Some(open_initial_database(&config.paths.temp_db(), db_path, filter_buffer, config, shutdown, progress)?)
     } else {
         None
     };
@@ -208,9 +210,10 @@ pub fn run(
 
         process_entry(config, &shutdown, db_path, &local_dst, &name,
                       &mut db, &mut entry, &mut force_buffer, &mut scan, recorder, 
-                      filter_buffer
+                      filter_buffer, progress
         )?;
 
+        progress.inc_both(1);
         scan.saw_any_members = true;
         scan.last_member_index = Some(member_index);
     }
@@ -309,12 +312,13 @@ fn process_entry(
     force_buffer: &mut Option<Vec<FileId>>,
     scan: &mut ExtractScanState,
     recorder: &mut Recorder,
-    fb: &mut Option<ParseFilterBuffer>
+    fb: &mut Option<ParseFilterBuffer>,
+    progress: &ProgressBarSet
 ) -> Result<()> {
     match (name, scan.saw_any_members) {
         // Spec conform: No db, initial snapshot is first.
         (SNAPSHOT_INIT_TAR_NAME, false) => {
-            install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown)?;
+            install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown, progress)?;
             scan.saw_manifest_db = true;
         }
         // Not Spec: Abort
@@ -333,14 +337,14 @@ fn process_entry(
                          attempt to bypass with --force-scan"
                 )));
             } else {
-                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown)?;
+                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown, progress)?;
             }
             let ref_db = db.as_ref().expect(OPT_DB_ERROR);
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
         }
         (SNAPSHOT_TAR_NAME, true) => {
             if config.scan.force_scan && db.is_none() {
-                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown)?;
+                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown, progress)?;
                 let ref_db = db.as_ref().expect(OPT_DB_ERROR);
                 scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
 
@@ -577,7 +581,8 @@ fn open_initial_database(
     target: &Path, 
     fb: &mut Option<ParseFilterBuffer>,
     config: &ExtractConfig, 
-    shutdown: &Shutdown)
+    shutdown: &Shutdown,
+    progress: &ProgressBarSet)
     -> Result<Database> {
     Database::install_initial_manifest(temp, target)?;
     let opened = Database::open(target)?;
@@ -587,6 +592,7 @@ fn open_initial_database(
         config,
         db: &opened,
         shutdown,
+        progress,
     };
     store_filter_buffer(fb, &rt)?;
     Ok(opened)
@@ -602,8 +608,9 @@ fn install_database(
     recorder: &mut Recorder,
     fb: &mut Option<ParseFilterBuffer>,
     config: &ExtractConfig,
-    shutdown: &Shutdown
-) -> Result<()> {
+    shutdown: &Shutdown,
+    progress: &ProgressBarSet)
+ -> Result<()> {
     if scan.from_footer {
         match io::copy(entry, &mut io::sink()) {
             Ok(_) => (),
@@ -615,7 +622,7 @@ fn install_database(
         }
     } else {
         let _ = captured_extract_database(snapshot_tmp, entry, recorder)?;
-        match open_initial_database(snapshot_tmp, db_path, fb, config, shutdown) {
+        match open_initial_database(snapshot_tmp, db_path, fb, config, shutdown, progress) {
             Ok(opened) => *db = Some(opened),
             Err(e) => {
                 record_session_error(recorder, e.to_file_stat(Some(db_path)));
@@ -754,7 +761,9 @@ mod tests {
 
         let db = run(&config, &db_path, &Shutdown::detached(),
                      &mut Recorder::speculative(false),
-                     &mut Some(ParseFilterBuffer::default()))
+                     &mut Some(ParseFilterBuffer::default()),
+                     &crate::progress::ProgressBarSet::new(
+                         crate::progress::EXTRACT_MULTIPLIER))
             .expect("scan");
 
         assert!(config.paths.extract_cache_dir().join(&member).is_file());
@@ -783,15 +792,17 @@ mod tests {
         // First pass installs the catalog so later passes take the resume path.
         run(&config, &db_path, &Shutdown::detached(),
             &mut Recorder::speculative(false),
-            &mut Some(ParseFilterBuffer::default()))
+            &mut Some(ParseFilterBuffer::default()),
+            &crate::progress::ProgressBarSet::new(crate::progress::EXTRACT_MULTIPLIER))
             .expect("first scan");
 
         // Interrupt before the first member: state is saved, Interrupted propagates.
         let shutdown = Shutdown::detached();
         shutdown.request_graceful();
+        let progress = crate::progress::ProgressBarSet::new(crate::progress::EXTRACT_MULTIPLIER);
         match run(&config, &db_path, &shutdown,
                   &mut Recorder::speculative(false),
-                  &mut Some(ParseFilterBuffer::default())) {
+                  &mut Some(ParseFilterBuffer::default()), &progress) {
             Err(Error::Interrupted) => {}
             Err(other) => panic!("expected Interrupted, got {other:?}"),
             Ok(_) => panic!("expected Interrupted, scan returned Ok"),
@@ -813,7 +824,9 @@ mod tests {
         // Resuming must skip the manifest member; re-reading it would be an error.
         let db = run(&config, &db_path, &Shutdown::detached(),
                      &mut Recorder::speculative(false),
-                     &mut Some(ParseFilterBuffer::default()))
+                     &mut Some(ParseFilterBuffer::default()),
+                     &crate::progress::ProgressBarSet::new(
+                         crate::progress::EXTRACT_MULTIPLIER))
             .expect("resumed scan");
         assert_eq!(
             db.count_files_in_phase(FilePhase::Unarchived).expect("count"),

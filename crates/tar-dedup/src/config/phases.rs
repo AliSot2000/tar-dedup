@@ -40,6 +40,20 @@ impl PipelinePhase {
         }
     }
 
+    /// Phase ordinal used for the global bar anchor (`index * table_size`).
+    pub fn index(self) -> u64 {
+        match self {
+            Self::Inventory => 0,
+            Self::Hash => 1,
+            Self::Filter => 2,
+            Self::Dedup => 3,
+            Self::Sparsify => 4,
+            Self::Stage => 5,
+            Self::Archive => 6,
+            Self::Done => 7,
+        }
+    }
+
     pub fn parse(raw: &str) -> crate::error::Result<Self> {
         match raw {
             "inventory" => Ok(Self::Inventory),
@@ -110,6 +124,22 @@ impl ExtractPipelinePhase {
             Self::Permissions => Some(Self::Cleanup),
             Self::Cleanup => Some(Self::Done),
             Self::Done => None,
+        }
+    }
+
+    /// Phase ordinal used for the global bar anchor (`index * table_size`).
+    /// `Cleanup` is index 6 of a 6-element pipeline, so it snaps the global to
+    /// 100% (no per-element work of its own).
+    pub fn index(self) -> u64 {
+        match self {
+            Self::ScanTar => 0,
+            Self::Filter => 1,
+            Self::Rehash => 2,
+            Self::PlacementPrologue => 3,
+            Self::Place => 4,
+            Self::Permissions => 5,
+            Self::Cleanup => 6,
+            Self::Done => 7,
         }
     }
 }

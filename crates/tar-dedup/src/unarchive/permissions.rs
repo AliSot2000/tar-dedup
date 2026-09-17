@@ -19,6 +19,7 @@ use crate::db::flags::{ErrorFlags, FileFlag, OutTreeFlag};
 use crate::db::types::{FileRecord, FileType, OutTreeRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
+use crate::progress::ProgressBarSet;
 use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
 use chrono::{DateTime, Utc};
@@ -56,16 +57,17 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         mp: mode_changes,
     };
 
+    let progress = rt.progress;
     if config.placement.link_tree {
-        apply_permissions_link_sources(&config, &db, &mut recorder, &shutdown, &ps)?;
+        apply_permissions_link_sources(&config, &db, &mut recorder, &shutdown, &ps, progress)?;
     } else {
         // Files (and non-directory entries) first.
-        process_batches(&mut recorder, config, db, shutdown, &ps, false)?;
+        process_batches(&mut recorder, config, db, shutdown, &ps, false, progress)?;
     }
 
     // Directories, only when `--overwrite-dir` is requested.
     if config.attributes.force_overwrite_dir {
-        process_batches(&mut recorder, config, db, shutdown, &ps, true)?;
+        process_batches(&mut recorder, config, db, shutdown, &ps, true, progress)?;
     }
 
     recorder.flush()?;
@@ -136,6 +138,7 @@ fn process_batches(
     shutdown: &Shutdown,
     ps: &OwnerGroupMode,
     dirs: bool,
+    progress: &ProgressBarSet,
 ) -> Result<()> {
     loop {
         shutdown.check_between_files()?;
@@ -148,6 +151,7 @@ fn process_batches(
                 .collect()
         };
         if batch.is_empty() { break }
+        let n = batch.len() as u64;
 
         for (record, out) in batch {
             shutdown.check_between_files()?;
@@ -180,6 +184,7 @@ fn process_batches(
                 }
             }
         }
+        progress.inc_both(n);
     }
     Ok(())
 }
@@ -191,7 +196,8 @@ pub fn apply_permissions_link_sources(
     db: &Database,
     rec: &mut Recorder,
     shutdown: &Shutdown,
-    ps: &OwnerGroupMode)
+    ps: &OwnerGroupMode,
+    progress: &ProgressBarSet)
     -> Result<()> {
     let dir_name = match &config.placement.link_source {
         None => PathBuf::from(".sources"),
@@ -202,6 +208,8 @@ pub fn apply_permissions_link_sources(
         shutdown.check_between_files()?;
 
         let files: Vec<FileRecord> = db.list_canonical_files_for_permissions(BATCH_SIZE)?;
+        let n = files.len() as u64;
+        if files.is_empty() { break }
         for file in files {
             let id = file.content_id().expect("Copied requires content_id to exist");
             let tgt_path = base_dir.join(id.0);
@@ -216,7 +224,9 @@ pub fn apply_permissions_link_sources(
                 }
             }
         }
+        progress.inc_both(n);
     }
+    Ok(())
 }
 
 /// Apply metadata for a single canonical `Placed` row. Errors are collected and

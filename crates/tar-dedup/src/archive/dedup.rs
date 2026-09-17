@@ -14,7 +14,7 @@ use crate::db::ErrorPhase;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, GroupKey, StrippedRecord};
 use crate::error::{Error, FileStatError, Result};
-use crate::progress::CountProgress;
+use crate::progress::ProgressBarSet;
 use crate::shutdown::Shutdown;
 
 /// One finished compare: both keys always present.
@@ -97,7 +97,7 @@ fn compare_one(
     pair: &ComparePair,
     shutdown: &Shutdown,
     results: &Mutex<Vec<CompareOutcome>>,
-    bar: &CountProgress,
+    progress: &ProgressBarSet,
     detect_hardlinks: bool,
 ) -> Result<()> {
 
@@ -133,7 +133,7 @@ fn compare_one(
             candidate_id: pair.candidate_id,
             equal,
         });
-    bar.inc(1);
+    progress.inc_both(1);
     Ok(())
 }
 
@@ -178,6 +178,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let skipped_non_file = db.promote_non_file_filtered_to_deduped()?;
     let skipped_null_sha1 = db.promote_null_sha1_filtered_to_deduped()?;
     let skipped_singleton = db.promote_singleton_filtered_to_deduped()?;
+    // The bulk skips above left the phase; credit the global for each of them
+    // (Scheme B: the phase bar only tracks the remaining candidates).
+    let progress = rt.progress;
+    progress.inc_global(excluded_files);
+    progress.inc_global(skipped_non_file);
+    progress.inc_global(skipped_null_sha1);
+    progress.inc_global(skipped_singleton);
     // INFO: Valid files:
     //  - ftype = 'file'
     //  - sha1 IS NOT NULL
@@ -205,23 +212,10 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     }
 
     // Bar tracks compare/promote workload among candidates only — not catalog size
-    // or the bulk SQL skips above.
-    let bar = CountProgress::with_total("dedup", candidates);
-    bar.set_position(0);
+    // or the bulk SQL skips above (those already credited the global).
+    progress.set_phase_total(candidates);
 
-    let result = run_pool(config, db, shutdown, &bar);
-
-    match result {
-        Ok(()) => {
-            bar.finish("dedup complete");
-            Ok(())
-        }
-        Err(Error::Interrupted) => {
-            bar.abandon();
-            Err(Error::Interrupted)
-        }
-        Err(e) => Err(e),
-    }
+    run_pool(config, db, shutdown, progress)
 }
 
 /// Function encapsulates the iteration deduplication rounds. Structure is chosen this way as to
@@ -230,7 +224,7 @@ fn run_pool(
     config: &ArchiveConfig,
     db: &Database,
     shutdown: &Shutdown,
-    bar: &CountProgress,
+    progress: &ProgressBarSet,
 ) -> Result<()> {
     // TODO: Better errors.
     let pool = ThreadPoolBuilder::new()
@@ -245,7 +239,7 @@ fn run_pool(
         let mut pairs: Vec<ComparePair> = Vec::new();
         let mut groups_needing_end: Vec<GroupKey> = Vec::new();
 
-        let next_state = prepare_round(&mut pairs, &mut groups_needing_end, bar, db, config)?;
+        let next_state = prepare_round(&mut pairs, &mut groups_needing_end, progress, db, config)?;
         match next_state {
             (true, false) => break,
             (false, true) => continue,
@@ -264,7 +258,7 @@ fn run_pool(
             tc_pair_iter
                 .par_bridge()
                 .try_for_each(|pair| compare_one(
-                    pair, &shutdown_workers, &results, bar, !config.indexing.no_hardlink_detection
+                    pair, &shutdown_workers, &results, progress, !config.indexing.no_hardlink_detection
                 ))
         });
 
@@ -314,7 +308,7 @@ fn run_pool(
 fn prepare_round(
     pairs: &mut Vec<ComparePair>,
     groups_needing_end: &mut Vec<GroupKey>,
-    bar: &CountProgress,
+    progress: &ProgressBarSet,
     db: &Database,
     config: &ArchiveConfig)
     -> Result<(bool, bool)> {
@@ -356,7 +350,7 @@ fn prepare_round(
     for key in &errored_only_groups {
         let n = db.promote_errored_pending_to_deduped(&key.sha1, key.size)?;
         db.clear_check_with_canonical_completed(&key.sha1, key.size)?;
-        bar.inc(n);
+        progress.inc_both(n);
         did_work = true;
     }
 

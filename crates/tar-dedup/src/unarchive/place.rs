@@ -9,6 +9,7 @@ use crate::db::flags::{ErrorFlags, FileFlag, OutTreeFlag};
 use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
+use crate::progress::ProgressBarSet;
 use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
 use nix::NixPath;
@@ -35,6 +36,8 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     debug_assert!(db.placement_prologue_done()?,
                   "PRECONDITION FAILED: PlacementPrologue must complete before place");
     let mut recorder = Recorder::new(db, !config.process.no_errors);
+    let progress = rt.progress;
+    progress.set_phase_total(db.count_out_tree_rows()?);
     let capture_error = |rec: &mut Recorder, path: &PathBuf, iof: fn(&Path)
         -> io::Result<()>| {
         match iof(&path) {
@@ -60,23 +63,23 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     }
     // Step 1.2 Create directoris if required
     if !config.placement.no_create_dir && !db.dir_tree_is_built()? {
-        prepare_extraction_dir(&db, &config, shutdown, &mut recorder)?;
+        prepare_extraction_dir(&db, &config, shutdown, &mut recorder, progress)?;
     }
 
     // Step 2, move the canonical files into place for link_tree
     if config.placement.link_tree {
         tracing::info!("Moving canonical file in place for link tree...");
-        copy_canonicals_to_source(&config, &db, &shutdown, &mut recorder)?;
+        copy_canonicals_to_source(&config, &db, &shutdown, &mut recorder, progress)?;
         // INFO: For linking, we ignore the canonical_id
-        link_into_place(&config, &db, &shutdown, &mut recorder)?;
+        link_into_place(&config, &db, &shutdown, &mut recorder, progress)?;
     } else {
         // Step 2, first copy files, then hardlink, then create other types
         // (symlinks, char-dev, block-dev, FIFO). Canonical election ran in
         // the PlacementPrologue phase.
-        let (ac, mc, ah, mh, ao, mo) = status_message_rebuilding(rt)?;
-        materialize_files(&config, &db, &shutdown, &mut recorder)?;
-        materialize_hardlinks(&config, &db, &shutdown, &mut recorder)?;
-        materialize_others(&config, &db, &shutdown, &mut recorder)?;
+        let (_ac, _mc, _ah, _mh, _ao, _mo) = status_message_rebuilding(rt)?;
+        materialize_files(&config, &db, &shutdown, &mut recorder, progress)?;
+        materialize_hardlinks(&config, &db, &shutdown, &mut recorder, progress)?;
+        materialize_others(&config, &db, &shutdown, &mut recorder, progress)?;
     }
     recorder.flush()?;
     let (placed, ref_linked, conflict, removed, errored, skipped) = db.apply_flags_to_files()?;
@@ -121,6 +124,7 @@ pub fn prepare_extraction_dir(
     config: &ExtractConfig,
     shutdown: &Shutdown,
     recorder: &mut Recorder,
+    progress: &ProgressBarSet,
 ) -> Result<()> {
     // TODO info that this process cannot be gracefully interrupted.
     debug_assert!(config.paths.extraction_root().is_absolute(),
@@ -136,11 +140,13 @@ pub fn prepare_extraction_dir(
         let dirs = db.list_out_tree(last_id, BATCH_SIZE, None, Some(true))?;
         if dirs.is_empty() { break }
         last_id = dirs.last().expect("PRECONDITION FAILED: Expected at least one entry").id;
+        let n = dirs.len() as u64;
 
         for dir in dirs {
             shutdown.check_in_flight()?;
             build_path(&config, &mut already_checked, &dir.abs_path, dir.id, recorder)?;
         }
+        progress.inc_both(n);
     }
     db.set_dir_tree_built()?;
     Ok(())
@@ -152,6 +158,7 @@ pub fn copy_canonicals_to_source(
     db: &Database,
     shutdown: &Shutdown,
     recorder: &mut Recorder,
+    progress: &ProgressBarSet,
 ) -> Result<()> {
     let dir_name = match &config.placement.link_source {
         None => PathBuf::from(".sources"),
@@ -186,6 +193,7 @@ pub fn copy_canonicals_to_source(
             true, last_id, BATCH_SIZE)?;
         if to_copy.is_empty() { break }
         last_id = to_copy.last().expect("PRECONDITION FAILED: Not Empty").id;
+        let n = to_copy.len() as u64;
 
         // Parallel File Move
         let parallel = pool.install(|| {
@@ -232,6 +240,7 @@ pub fn copy_canonicals_to_source(
             }
         }
         recorder.flush()?;
+        progress.inc_both(n);
     }
     Ok(())
 }
@@ -241,8 +250,9 @@ pub fn copy_canonicals_to_source(
 /// Files are linked to the link source and all others links, fifo, char dev, block dev are created,
 /// sockets noted but cannot be created
 pub fn link_into_place(
-    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder)
-    -> Result<()> {
+    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder,
+    progress: &ProgressBarSet,
+) -> Result<()> {
     let dir_name = match &config.placement.link_source {
         None => PathBuf::from(".sources"),
         Some(v) => v.to_path_buf(),
@@ -260,6 +270,7 @@ pub fn link_into_place(
             BATCH_SIZE, true
         )?;
         if entries.is_empty() { break }
+        let n = entries.len() as u64;
 
         let parallel = pool.install(|| {
             entries.par_iter().try_for_each(
@@ -363,6 +374,7 @@ pub fn link_into_place(
             }
         }
         recorder.flush()?;
+        progress.inc_both(n);
     }
     Ok(())
 }
@@ -372,8 +384,9 @@ pub fn link_into_place(
 /// Iterate through the out_tree and reflink / copy all files into placed which are marked as
 /// (hardlink) canonicals. (out_tree.canonical_id = id)
 pub fn materialize_files(
-    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder)
-    -> Result<()> {
+    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder,
+    progress: &ProgressBarSet,
+) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
     let cache_dir = config.paths.extract_cache_dir();
@@ -398,6 +411,7 @@ pub fn materialize_files(
             .expect("PRECONDITION FAILED: at least one element should exist")
             .1
             .id;
+        let n = entries.len() as u64;
 
         let parallel = pool.install(|| {
             entries.par_iter().try_for_each(|(canonical, target)| -> Result<()> {
@@ -441,6 +455,7 @@ pub fn materialize_files(
 
         process_results(copied, recorder, &db, false, true)?;
         recorder.flush()?;
+        progress.inc_both(n);
     }
     Ok(())
 }
@@ -448,8 +463,9 @@ pub fn materialize_files(
 /// Create all the hardlinks after the copy stage.
 /// PRECONDITION: Function must be called after the [`materialize_files`]
 pub fn materialize_hardlinks(
-    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder)
-    -> Result<()> {
+    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder,
+    progress: &ProgressBarSet,
+) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
     let shutdown = shutdown.clone();
@@ -472,6 +488,7 @@ pub fn materialize_hardlinks(
             .expect("PRECONDITION FAILED: at least one element should exist")
             .1
             .id;
+        let n = entries.len() as u64;
 
         let parallel = pool.install(|| {
             entries.par_iter().try_for_each(
@@ -511,6 +528,7 @@ pub fn materialize_hardlinks(
 
         process_results(copied, recorder, &db, true, false)?;
         recorder.flush()?;
+        progress.inc_both(n);
     }
     Ok(())
 }
@@ -519,7 +537,7 @@ pub fn materialize_hardlinks(
 /// (symlink, fifo, character device, block device, socket)
 pub fn materialize_others(
     config: &ExtractConfig, db: &Database, shutdown: &Shutdown,
-    recorder: &mut Recorder,
+    recorder: &mut Recorder, progress: &ProgressBarSet,
 ) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
@@ -540,6 +558,7 @@ pub fn materialize_others(
         if entries.is_empty() { break }
         last_id = entries
             .last().expect("PRECONDITION FAILED: at least one element should exist").1.id;
+        let n = entries.len() as u64;
 
         let parallel = pool.install(|| {
             entries.par_iter().try_for_each(
@@ -582,6 +601,7 @@ pub fn materialize_others(
 
         process_results(copied, recorder, &db, false, false)?;
         recorder.flush()?;
+        progress.inc_both(n);
     }
     Ok(())
 }

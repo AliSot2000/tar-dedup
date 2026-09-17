@@ -10,7 +10,7 @@ use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::types::{FileType, NewFileRecord};
 use crate::db::{Database, ErrorPhase};
 use crate::error::{Error, FileStatError, Result};
-use crate::progress::CountProgress;
+use crate::progress::ProgressBarSet;
 use crate::shutdown::Shutdown;
 use chrono::{DateTime, Utc};
 use path_clean::PathClean;
@@ -26,6 +26,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let config = rt.config;
     let db = rt.db;
     let shutdown = rt.shutdown;
+    let progress = rt.progress;
     if db.count_entries()? > 0 {
         tracing::warn!("Found interrupted scan of directories. Purging and starting again.");
         db.purge_entries()?;
@@ -35,7 +36,6 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                     If force aborted, the  passinventory needs to be run again to ensure \
                     consistent snapshot of filesystem.");
     let mut processed = 0u64;
-    let progress = CountProgress::new("inventory");
 
     // One recorder for the whole pass; auto-flush bounds the buffer on error-heavy
     // filesystems, and the final flush happens on drop even if the pass aborts.
@@ -109,7 +109,6 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         db.resolve_numeric_ids(&mut recorder)?;
     }
     recorder.flush()?;
-    progress.finish("inventory complete");
     let missing_dev_ino_count = db.count_missing_dev_inode()?;
     if missing_dev_ino_count > 0 {
         tracing::warn!("Encountered {missing_dev_ino_count} files without dev or inode information.\
@@ -135,7 +134,7 @@ fn handle_from_files_line<P: AsRef<Path>>(
     db: &Database,
     shutdown: &Shutdown,
     processed: &mut u64,
-    progress: &CountProgress,
+    progress: &ProgressBarSet,
     recorder: &mut crate::db::Recorder,
 ) -> Result<()> {
     let (line, ff) = element;
@@ -190,7 +189,7 @@ pub fn handle_dir(
     source_id: i64,
     start_dir: &Path,
     processed: &mut u64,
-    progress: &CountProgress,
+    progress: &ProgressBarSet,
     recorder: &mut crate::db::Recorder)
     -> Result<()> {
 
@@ -233,7 +232,7 @@ pub fn handle_entry_base(
     source_id: i64,
     config: &ArchiveConfig,
     db: &Database,
-    progress: &CountProgress,
+    progress: &ProgressBarSet,
     processed: &mut u64,
     recorder: &mut crate::db::Recorder)
     -> Result<()> {
@@ -255,7 +254,7 @@ pub fn handle_entry(
     source_id: i64,
     config: &ArchiveConfig,
     db: &Database,
-    progress: &CountProgress,
+    progress: &ProgressBarSet,
     processed: &mut u64,
     recorder: &mut crate::db::Recorder)
     -> Result<()> {
@@ -390,7 +389,7 @@ pub fn handle_entry(
         },
     )? {
         *processed += 1;
-        progress.inc(1);
+        progress.inc_both(1);
     }
 
     // Persist the accumulated per-file errors (xattr/ACL/SELinux/ftype/times/read-link).
@@ -418,7 +417,7 @@ pub fn handle_entry(
     source_id: i64,
     _config: &ArchiveConfig,
     db: &Database,
-    progress: &CountProgress,
+    progress: &ProgressBarSet,
     processed: &mut u64,
     recorder: &mut crate::db::Recorder)
     -> Result<()> {
@@ -489,7 +488,7 @@ pub fn handle_entry(
         },
     )? {
         *processed += 1;
-        progress.inc(1);
+        progress.inc_both(1);
         // TODO deal with the error vec!
     }
     Ok(())
