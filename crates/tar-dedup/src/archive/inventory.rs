@@ -5,14 +5,14 @@ use crate::common::files::{determine_file_type, original_extension};
 #[cfg(windows)]
 use crate::common::files::get_file_times;
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
-use crate::config::ArchiveConfig;
-use crate::db::flags::{SourceFlag, SourceFlags};
+use crate::db::Recorder;
+use crate::db::flags::{ErrorFlags, SourceFlag, SourceFlags};
 use crate::db::types::{FileType, NewFileRecord};
-use crate::db::{Database, ErrorPhase};
+use crate::db::ErrorPhase;
 use crate::error::{Error, FileStatError, Result};
-use crate::progress::ProgressBarSet;
-use crate::shutdown::Shutdown;
+use crate::progress::BarKind;
 use chrono::{DateTime, Utc};
+use indicatif::ProgressBar;
 use path_clean::PathClean;
 use std::ffi::OsStr;
 use std::fs::Metadata;
@@ -21,29 +21,35 @@ use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
+const SUB_BAR_PREFIX: &str = "Scanning Entries in: ";
 
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
-    let config = rt.config;
-    let db = rt.db;
-    let shutdown = rt.shutdown;
-    let progress = rt.progress;
-    if db.count_entries()? > 0 {
+    let total_sources = rt.config.inputs.input_dirs.len() + rt.config.inputs.files_from.len();
+    debug_assert!(rt.config.inputs.input_dirs.len() + rt.config.inputs.files_from.len() > 0,
+        "PRECONDITION FAILED: Expected at least one element across --files-from and --input-dir");
+
+    if rt.db.count_entries()? > 0 {
         tracing::warn!("Found interrupted scan of directories. Purging and starting again.");
-        db.purge_entries()?;
+        rt.db.purge_entries()?;
     }
 
     tracing::info!("Inventory pass cannot be gracefully interrupted.
-                    If force aborted, the  passinventory needs to be run again to ensure \
+                    If force aborted, the inventory pass needs to be run again to ensure \
                     consistent snapshot of filesystem.");
     let mut processed = 0u64;
+    rt.progress.set_table_size(total_sources as u64);
+    let sub_bar = rt.progress.push_sub_bar("Scanned Entries", BarKind::Counter);
 
     // One recorder for the whole pass; auto-flush bounds the buffer on error-heavy
     // filesystems, and the final flush happens on drop even if the pass aborts.
-    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
 
     // Handle input directories
-    for (index, input_dir) in config.inputs.input_dirs.iter().enumerate() {
-        shutdown.check_in_flight()?;
+    // INFO: Already sanitized those dirs, that they dont overlap.
+    for (index, input_dir) in rt.config.inputs.input_dirs.iter().enumerate() {
+        rt.shutdown.check_in_flight()?;
+        sub_bar.set_position(0);
+        sub_bar.set_message(format!("{SUB_BAR_PREFIX}'{}'", input_dir.absolute_path.display()));
 
         tracing::info!(root = %input_dir.absolute_path.display(), "inventory pass");
 
@@ -55,33 +61,37 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         debug_assert!(input_dir.absolute_path.clean() == input_dir.absolute_path,
                       "Path should be minimal");
 
-        let source_id = db.add_get_source(
+        let source_id = rt.db.add_get_source(
             &input_dir.absolute_path,
             "--input-dir",
             Some(index as u64),
             Some(&input_dir.original_path),
             SourceFlags::default().with(SourceFlag::IsDirectory, true),
         )?;
-        handle_dir(&config, &db, &shutdown, source_id, &input_dir.absolute_path,
-                   &mut processed, &progress, &mut recorder)?;
+        handle_dir(&rt, &sub_bar, source_id, &input_dir.absolute_path,
+                   &mut processed, &mut recorder)?;
+        rt.progress.inc_both(1);
     }
 
     // Handle from-files
-    for files_file in config.inputs.files_from.iter() {
+    for files_file in rt.config.inputs.files_from.iter() {
+        sub_bar.set_position(0);
+        sub_bar.set_message(format!("{SUB_BAR_PREFIX}'{}'", files_file.display()));
         if files_file.to_path_buf() == PathBuf::from("-") {
             let br = BufReader::new(io::stdin());
-            let ff_iter = files_from_reader(br, config.inputs.files_from_null);
+            let ff_iter = files_from_reader(br, rt.config.inputs.files_from_null);
             for element in ff_iter {
                 let (line, result) = element;
                 let path = match result {
                     Ok(path_vec) => PathBuf::from(&os_str_from_bytes(&path_vec)),
-                    // TODO capture error
+                    // TODO capture error and dont raise
                     Err(e) => return Err(Error::io("-", e)),
                 };
 
-                handle_from_files_line((line, &path), &files_file, &config, &db, &shutdown,
-                                       &mut processed, &progress, &mut recorder)?
+                handle_from_files_line(&rt, &sub_bar, (line, &path), &files_file,
+                                       &mut processed, &mut recorder)?
             }
+            rt.progress.inc_both(1);
             continue;
         }
         // Sanity check
@@ -93,23 +103,25 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         let file = fs::read(&files_file)
             .map_err(|e| Error::io(files_file.to_path_buf(), e))?;
 
-        for element in files_from_records(&file, config.inputs.files_from_null) {
+        for element in files_from_records(&file, rt.config.inputs.files_from_null) {
             let (line, path) = element;
-            handle_from_files_line((line, &path), &files_file, &config, &db, &shutdown,
-                                   &mut processed, &progress, &mut recorder)?
+            handle_from_files_line(&rt, &sub_bar, (line, &path), &files_file,
+                                   &mut processed, &mut recorder)?
         }
+        rt.progress.inc_both(1);
     }
+
     // Set hardlink canonicals if and only if, we want to collapse the hardlinks and
-    if !config.indexing.no_hardlink_detection {
-        let rows = db.set_hardlink_canonicals()?;
+    if !rt.config.indexing.no_hardlink_detection {
+        let rows = rt.db.set_hardlink_canonicals()?;
         tracing::info!("Updated {rows} of hardlink groups to have one canonical");
     }
 
-    if !config.capture.numeric_ids_only {
-        db.resolve_numeric_ids(&mut recorder)?;
+    if !rt.config.capture.numeric_ids_only {
+        rt.db.resolve_numeric_ids(&mut recorder)?;
     }
     recorder.flush()?;
-    let missing_dev_ino_count = db.count_missing_dev_inode()?;
+    let missing_dev_ino_count = rt.db.count_missing_dev_inode()?;
     if missing_dev_ino_count > 0 {
         tracing::warn!("Encountered {missing_dev_ino_count} files without dev or inode information.\
          Those files won't be captured by hardlink detection");
@@ -117,9 +129,9 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // TODO: Add inspect with query for missing files.
     tracing::info!(
         entries_processed = processed,
-        total_unique_entries = db.count_entries()?,
+        total_unique_entries = rt.db.count_entries()?,
         "inventory indexed");
-    let failed_implication = db.count_id_implication()?;
+    let failed_implication = rt.db.count_id_implication()?;
     assert_eq!(failed_implication, 0, "INVARIANT FAILED: Number of files with username / groupname \
         set but not uid / gid set MUST be 0");
 
@@ -128,15 +140,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
 /// Process a single line from the --from-files argument
 fn handle_from_files_line<P: AsRef<Path>>(
+    rt: &ArchiveRTArgs,
+    sub_bar: &ProgressBar,
     element: (usize, P),
     from_files_path: &Path,
-    config: &ArchiveConfig,
-    db: &Database,
-    shutdown: &Shutdown,
     processed: &mut u64,
-    progress: &ProgressBarSet,
-    recorder: &mut crate::db::Recorder,
-) -> Result<()> {
+    recorder: &mut Recorder)
+    -> Result<()> {
     let (line, ff) = element;
     let fpath: &Path = ff.as_ref();
     let from_files_disp_path = from_files_path.display();
@@ -144,15 +154,15 @@ fn handle_from_files_line<P: AsRef<Path>>(
     let abs_path = if fpath.is_absolute() {
         fpath.to_path_buf().clean()
     } else {
-        config.paths.directory.join(fpath).clean()
+        rt.config.paths.directory.join(fpath).clean()
     };
     debug_assert!(abs_path.is_absolute(), "Path must be absolute now");
 
     if abs_path.is_dir() {
-        if let Some((_, existing)) = db.find_overlapping_source(
-            &abs_path, config.indexing.no_recursion)? {
+        if let Some((_, existing)) = rt.db.find_overlapping_source(
+            &abs_path, rt.config.indexing.no_recursion)? {
 
-            if !config.indexing.no_strict_separation {
+            if !rt.config.indexing.no_strict_separation {
                 return Err(Error::Config(format!(
                     "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
                     abs_path.display(),
@@ -162,16 +172,14 @@ fn handle_from_files_line<P: AsRef<Path>>(
         }
     }
 
-    let source_id = db.add_get_source(
+    let source_id = rt.db.add_get_source(
         &abs_path,
         &format!("--files-from={from_files_disp_path}"),
         Some(line as u64),
         Some(&fpath.clean()),
         SourceFlags::default().with(SourceFlag::IsDirectory, abs_path.is_dir()),
     )?;
-    handle_dir(
-        &config, &db, &shutdown, source_id, &abs_path, processed, &progress, recorder,
-    )?;
+    handle_dir(&rt, &sub_bar, source_id, &abs_path, processed, recorder)?;
 
     Ok(())
 }
@@ -183,27 +191,25 @@ fn handle_from_files_line<P: AsRef<Path>>(
 /// - Path is directory.
 /// - Path is on the same file system if called recursively
 pub fn handle_dir(
-    config: &ArchiveConfig,
-    db: &Database,
-    shutdown: &Shutdown,
+    rt: &ArchiveRTArgs,
+    sub_bar: &ProgressBar,
     source_id: i64,
     start_dir: &Path,
     processed: &mut u64,
-    progress: &ProgressBarSet,
-    recorder: &mut crate::db::Recorder)
+    recorder: &mut Recorder)
     -> Result<()> {
 
     let iter = WalkDir::new(&start_dir)
-        .follow_links(config.indexing.dereference)
+        .follow_links(rt.config.indexing.dereference)
         .follow_root_links(true) // INFO: Custom handling by us
-        .same_file_system(config.indexing.one_file_system)
+        .same_file_system(rt.config.indexing.one_file_system)
         .min_depth(0)
-        .max_depth(if config.indexing.no_recursion { 1 } else { usize::MAX })
+        .max_depth(if rt.config.indexing.no_recursion { 1 } else { usize::MAX })
         .contents_first(false)
         .into_iter();
 
     for element in iter {
-        shutdown.check_in_flight()?;
+        rt.shutdown.check_in_flight()?;
         let entry = match element {
             Err(e) => {
                 // Failed to access a single element while walking; the file row
@@ -214,49 +220,46 @@ pub fn handle_dir(
                         path: Some(start_dir.to_path_buf()),
                         message: format!("Failed to access element in path with error: {e}"),
                     },
-                    crate::db::flags::ErrorFlags::default(),
+                    ErrorFlags::default(),
                 );
                 tracing::error!("Failed to access element with error: {e}"); // TODO fail fast
                 continue;
             }
             Ok(entry) => entry,
         };
-        handle_entry_base(
-            &entry.path(), source_id, &config, &db, &progress, processed, recorder)?;
+        handle_entry_base(&rt, sub_bar, &entry.path(), source_id, processed, recorder)?;
     }
     Ok(())
 }
 
 pub fn handle_entry_base(
+    rt: &ArchiveRTArgs,
+    sub_bar: &ProgressBar,
     path: &Path,
     source_id: i64,
-    config: &ArchiveConfig,
-    db: &Database,
-    progress: &ProgressBarSet,
     processed: &mut u64,
-    recorder: &mut crate::db::Recorder)
+    recorder: &mut Recorder)
     -> Result<()> {
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
 
     // Preflight: already inventoried — attach this source without restatting.
-    if let Some(file_id) = db.file_id_by_abs_path(path)? {
-        db.add_ref(source_id, file_id)?;
+    if let Some(file_id) = rt.db.file_id_by_abs_path(path)? {
+        rt.db.add_ref(source_id, file_id)?;
         return Ok(());
     }
 
-    handle_entry(&path, source_id, &config, &db, &progress, processed, recorder)
+    handle_entry(&rt, &sub_bar, &path, source_id, processed, recorder)
 }
 
 /// PRECONDITION: path is abs.
 #[cfg(unix)]
 pub fn handle_entry(
+    rt: &ArchiveRTArgs,
+    sub_bar: &ProgressBar,
     path: &Path,
     source_id: i64,
-    config: &ArchiveConfig,
-    db: &Database,
-    progress: &ProgressBarSet,
     processed: &mut u64,
-    recorder: &mut crate::db::Recorder)
+    recorder: &mut Recorder)
     -> Result<()> {
     debug_assert!(path.is_absolute(), "PRECONDITION FAILED: path should always be abs");
     use std::os::unix::fs::MetadataExt;
@@ -273,7 +276,7 @@ pub fn handle_entry(
                     path: path.to_path_buf(),
                     source: io::Error::new(e.kind(), e.to_string()),
                 },
-                crate::db::flags::ErrorFlags::default(),
+                ErrorFlags::default(),
             );
             // The recorder is shared per-pass; flush everything before returning
             // the error so this record is not lost to the abort.
@@ -345,26 +348,26 @@ pub fn handle_entry(
     };
 
     // Optional data
-    let xattrs = if config.capture.do_xattrs {
+    let xattrs = if rt.config.capture.do_xattrs {
         match get_file_xattr(path) {
             Err(e) => { enc_err.push(e); None }
             Ok(md) => Some(md),
         }
     } else { None };
-    let posix_acl = if config.capture.do_posix_acl {
+    let posix_acl = if rt.config.capture.do_posix_acl {
         match get_file_acl(path) {
             Err(e) => { enc_err.push(e); None},
             Ok(md) => Some(md),
         }
     } else { None };
-    let selinux_ctx = if config.capture.do_selinux {
+    let selinux_ctx = if rt.config.capture.do_selinux {
         match get_file_selinux_data(path) {
             Err(e) => { enc_err.push(e); None},
             Ok(md) => Some(md),
         }
     } else { None };
 
-    if db.insert_file_and_ref(
+    if rt.db.insert_file_and_ref(
         source_id,
         &NewFileRecord {
             abs_path: path.clean().to_path_buf(),
@@ -389,20 +392,20 @@ pub fn handle_entry(
         },
     )? {
         *processed += 1;
-        progress.inc_both(1);
+        sub_bar.inc(1);
     }
 
     // Persist the accumulated per-file errors (xattr/ACL/SELinux/ftype/times/read-link).
     if !enc_err.is_empty() {
         // Row was just inserted above, so the id must exist.
-        let file_id = db.file_id_by_abs_path(path)?.expect(
+        let file_id = rt.db.file_id_by_abs_path(path)?.expect(
             "INVARIANT ERROR: file was inserted, id lookup must succeed");
         for error in enc_err {
             recorder.record_file(
                 file_id,
                 ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
                 error,
-                crate::db::flags::ErrorFlags::default(),
+                ErrorFlags::default(),
             );
         }
     }
@@ -413,13 +416,12 @@ pub fn handle_entry(
 /// PRECONDITION: path is abs.
 #[cfg(windows)]
 pub fn handle_entry(
+    rt: &ArchiveRTArgs,
+    sub_bar: &ProgressBar,
     path: &Path,
     source_id: i64,
-    _config: &ArchiveConfig,
-    db: &Database,
-    progress: &ProgressBarSet,
     processed: &mut u64,
-    recorder: &mut crate::db::Recorder)
+    recorder: &mut Recorder)
     -> Result<()> {
     let mut enc_err = Vec::new();
     debug_assert!(path.is_absolute(), "PRECONDITION FAILED: path should always be abs");
@@ -488,7 +490,7 @@ pub fn handle_entry(
         },
     )? {
         *processed += 1;
-        progress.inc_both(1);
+        sub_bar.inc(1);
         // TODO deal with the error vec!
     }
     Ok(())
