@@ -27,16 +27,19 @@ impl PipelinePhase {
         }
     }
 
-    pub fn next(self) -> Option<Self> {
-        match self {
-            Self::Inventory => Some(Self::Hash),
-            Self::Hash => Some(Self::Filter),
-            Self::Filter => Some(Self::Dedup),
-            Self::Dedup => Some(Self::Sparsify),
-            Self::Sparsify => Some(Self::Stage),
-            Self::Stage => Some(Self::Archive),
-            Self::Archive => Some(Self::Done),
-            Self::Done => None,
+    pub fn next(self, eager_filter: bool) -> Option<Self> {
+        match (self, eager_filter) {
+            (Self::Inventory, true) => Some(Self::Filter),
+            (Self::Inventory, false) => Some(Self::Hash),
+            (Self::Hash, true) => Some(Self::Dedup),
+            (Self::Hash, false) => Some(Self::Filter),
+            (Self::Filter, true) => Some(Self::Hash),
+            (Self::Filter, false) => Some(Self::Dedup),
+            (Self::Dedup, _) => Some(Self::Sparsify),
+            (Self::Sparsify, _) => Some(Self::Stage),
+            (Self::Stage, _) => Some(Self::Archive),
+            (Self::Archive, _) => Some(Self::Done),
+            (Self::Done, _) => None,
         }
     }
 
