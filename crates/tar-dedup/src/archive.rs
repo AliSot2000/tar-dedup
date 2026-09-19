@@ -66,6 +66,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         StartAction::Resume => {
             let mut state = saved.expect("incomplete work checked above");
             tracing::info!("resuming from phase `{}`", state.phase.as_str());
+            // TODO really:qm:
             state.max_workers = config.process.jobs;
             db.save_runtime_state(&state)?;
             state
@@ -95,25 +96,28 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         }
     };
 
-let progress = ProgressBarSet::new(ARCHIVE_MULTIPLIER);
+    let progress = ProgressBarSet::new(ARCHIVE_MULTIPLIER);
     register_mpb(progress.mp_handle());
     let mut bars = BarScope::new(&progress);
     // Resume anchor: a work DB already holds the full table size.
-    progress.set_table_size(db.count_entries()?);
+    let entries = db.count_entries()?;
+    let tbl_size = if entries > 0 { entries } else { 100 };
+    progress.set_table_size(tbl_size);
+
+    let rt = ArchiveRTArgs {
+        config: &config,
+        db: &db,
+        shutdown: &shutdown,
+        progress: &progress,
+    };
 
     while state.phase != PipelinePhase::Done {
         shutdown.check_between_files()?;
 
-        let rt = ArchiveRTArgs {
-            config: &config,
-            db: &db,
-            shutdown: &shutdown,
-            progress: &progress,
-        };
         enter_phase(&progress, &state.phase);
         tracing::info!(phase = state.phase.as_str(), "archive phase");
         match run_phase(&state.phase, &rt) {
-            Ok(()) => {}
+            Ok(()) => {exit_phase(&progress, &state.phase, &db)?}
             Err(Error::Interrupted) => {
                 db.save_runtime_state(&state)?;
                 if shutdown.is_force() {
@@ -132,24 +136,19 @@ let progress = ProgressBarSet::new(ARCHIVE_MULTIPLIER);
             Err(e) => return Err(e),
         }
 
-        // The inventory phase establishes the table size for the global bar.
-        if state.phase == PipelinePhase::Inventory {
-            progress.set_table_size(db.count_entries()?);
-        }
-
         let completed = state.phase;
         if let Some(next) = state.phase.next() {
             state.phase = next;
             db.save_runtime_state(&state)?;
         } else {
+            // Exit loop, if we have arrived at end of pipeline.
             break;
         }
 
         if let Some(stop_after) = config
             .process
             .exit_after_stage
-            .and_then(|s| s.stop_after_phase())
-        {
+            .and_then(|s| s.stop_after_phase()) {
             if completed == stop_after {
                 tracing::info!(
                     "exit-after-stage `{}`: finished `{}`, resume from `{}`",
@@ -160,7 +159,13 @@ let progress = ProgressBarSet::new(ARCHIVE_MULTIPLIER);
                 return Ok(());
             }
         }
+        // PRECONDITION: Done should have left earlier. Here we should end up when we have
+        debug_assert_ne!(state.phase, PipelinePhase::Done,
+                         "Here, the Archive should have been created successfully");
     }
+    // PRECONDITION: Successfully wrote to archive
+    debug_assert_eq!(state.phase, PipelinePhase::Done,
+                     "Here, the Archive should have been created successfully");
 
     bars.finish();
     drop(bars);
@@ -220,7 +225,7 @@ fn run_phase(
 /// Map a phase to its global-bar anchor and swap in the matching phase bar.
 fn enter_phase(progress: &ProgressBarSet, phase: &PipelinePhase) {
     let (name, kind) = match phase {
-        PipelinePhase::Inventory => ("inventory", BarKind::Counter),
+        PipelinePhase::Inventory => ("inventoried sources:  ", BarKind::Counter),
         PipelinePhase::Hash => ("hash", BarKind::Count),
         PipelinePhase::Filter => ("filter", BarKind::Counter),
         PipelinePhase::Dedup => ("dedup", BarKind::Count),
@@ -230,4 +235,20 @@ fn enter_phase(progress: &ProgressBarSet, phase: &PipelinePhase) {
         PipelinePhase::Done => ("done", BarKind::Counter),
     };
     progress.begin_phase(phase.index(), name, kind);
+}
+
+/// Handle cleanup or any post operation actions. Importantly, these actions should only be run,
+/// in case the phase that is being treated has finished successfully.
+fn exit_phase(progress: &ProgressBarSet, phase: &PipelinePhase, db: &Database) -> Result<()> {
+    match phase {
+        PipelinePhase::Inventory => {progress.set_table_size(db.count_entries()?)},
+        PipelinePhase::Hash => {},
+        PipelinePhase::Filter => {},
+        PipelinePhase::Dedup => {},
+        PipelinePhase::Sparsify => {},
+        PipelinePhase::Stage => {},
+        PipelinePhase::Archive => {},
+        PipelinePhase::Done => {},
+    }
+    Ok(())
 }
