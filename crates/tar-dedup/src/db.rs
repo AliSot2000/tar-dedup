@@ -195,12 +195,20 @@ impl Database {
         flags::set_out_tree_flag(&*self.conn(), out_id, flag, on)
     }
 
+    pub fn promote_unhasheable_files(&self,
+                                     eager_filter: bool,
+                                     detect_hardlinks: bool) -> Result<u64> {
+        hash::promote_unhasheable_files(&self.conn(), eager_filter, detect_hardlinks)
+        
+    }
+    
     pub fn get_entries_to_hash<R: SqlFileRow>(
         &self,
         eager_filter: bool,
         detect_hardlinks: bool,
+        batch_size: u64,
     ) -> Result<Vec<R>> {
-        hash::get_entries_to_hash(&*self.conn(), eager_filter, detect_hardlinks)
+        hash::get_entries_to_hash(&*self.conn(), eager_filter, detect_hardlinks, batch_size)
     }
 
     pub fn count_all_hashable_files(
@@ -210,6 +218,12 @@ impl Database {
     ) -> Result<u64> {
         hash::count_all_hashable_files(&*self.conn(), eager_filter, detect_hardlinks)
     }
+
+    pub fn count_pending_hashable_files(&self, eager_filter: bool, detect_hardlinks: bool) 
+        -> Result<u64> {
+        hash::count_pending_hashable_files(&self.conn(), eager_filter, detect_hardlinks)
+    }
+
 
     pub fn update_file_inspection_per_id(
         &self,
