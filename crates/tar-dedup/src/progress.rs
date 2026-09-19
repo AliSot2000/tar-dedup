@@ -24,7 +24,7 @@ pub const EXTRACT_MULTIPLIER: u64 = 6;
 /// `Bytes` need a length (`set_phase_total`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BarKind {
-    /// Spinner + running count: `{spinner} {msg} {pos} items`.
+    /// Spinner + running count: `{spinner} {msg} {pos}`.
     Counter,
     /// Spinner + fraction bar: `{spinner} {msg} [{bar:40}] {pos}/{len}`.
     Count,
@@ -34,9 +34,10 @@ pub enum BarKind {
 
 const GLOBAL_TEMPLATE: &str = "{msg} [{bar:48.green/black}] {percent:>3}%";
 
+// TODO wide
 fn style_for(kind: BarKind) -> ProgressStyle {
     let template = match kind {
-        BarKind::Counter => "{spinner} {msg} {pos} items",
+        BarKind::Counter => "{spinner} {msg} {pos}",
         BarKind::Count => "{spinner} {msg} [{bar:40.cyan/blue}] {pos}/{len}",
         BarKind::Bytes => {
             "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} @ {bytes_per_sec}"
