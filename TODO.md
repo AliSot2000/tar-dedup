@@ -23,6 +23,8 @@
 - [X] Resume
 - [X] Filter on extract
 - [X] All Metadata flag.
+- [ ] Force utf8 (any non-utf8 string panics and aborts.)
+
 
 ## General:
 - [ ] Testing
