@@ -152,9 +152,9 @@ pub fn count_all_hashable_files(conn: &Connection, eager_filter: bool, detect_ha
         ""
     };
     let sql = format!(
-        "SELECT COUNT(*) AS count FROM files WHERE phase = {phase} \
-             AND ftype = 'file' \
-             {filter_hardlink_canonical} \
+        "SELECT COUNT(*) AS count FROM files WHERE phase = {phase}
+             AND ftype = 'file'
+             {filter_hardlink_canonical}
              {filtered_selection}"
     );
     let count: i64 = if detect_hardlinks {
@@ -172,10 +172,10 @@ pub fn update_file_inspection_per_id(
     conn: &Connection, file_id: FileId, digest: [u8; 20], sparse_count: u64, update_hardlinks: bool)
     -> Result<()> {
     let sql = if update_hardlinks {
-        "UPDATE files SET sha1 = :sha1, sparse_count = :sparse_count, phase = 'hashed' \
+        "UPDATE files SET sha1 = :sha1, sparse_count = :sparse_count, phase = 'hashed'
             WHERE (dev, inode) IN (SELECT dev, inode FROM files WHERE id = :id)"
     } else {
-        "UPDATE files SET sha1 = :sha1, sparse_count = :sparse_count, phase = 'hashed' \
+        "UPDATE files SET sha1 = :sha1, sparse_count = :sparse_count, phase = 'hashed'
          WHERE id = :id"
     };
     conn.execute(
