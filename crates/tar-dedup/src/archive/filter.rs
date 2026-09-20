@@ -103,6 +103,7 @@ pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
         &config.filter.include_from,
         &config.filter.exclude_patterns,
         &config.filter.exclude_from,
+        config.filter.ignore_case,
         &mut recorder,
         phase,
         FilterSink {
