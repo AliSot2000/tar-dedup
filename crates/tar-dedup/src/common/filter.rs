@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-
+use indicatif::ProgressBar;
 use crate::db::flags::ErrorFlags;
 use crate::db::types::{FileId, FilterExpression, StrippedRecord};
 use crate::db::{ErrorPhase, Recorder};
@@ -33,6 +33,7 @@ pub fn parse_filter(
     operation: &str,
     anchored: bool,
     ignore_case: bool,
+    cp: Option<&ProgressBar>
 ) -> Vec<ParsedFilter> {
     let mut parsed_filters: Vec<ParsedFilter> = Vec::with_capacity(filters.len());
     for filter in filters {
@@ -62,6 +63,9 @@ pub fn parse_filter(
             id: filter.id,
             expression: regex,
         });
+        if let Some(bar) = cp {
+            bar.inc(1);
+        }
     }
     parsed_filters
 }
