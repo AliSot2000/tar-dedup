@@ -137,7 +137,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         }
 
         let completed = state.phase;
-        if let Some(next) = state.phase.next() {
+        if let Some(next) = state.phase.next(config.filter.eager_filter) {
             state.phase = next;
             db.save_runtime_state(&state)?;
         } else {
@@ -227,7 +227,7 @@ fn enter_phase(progress: &ProgressBarSet, phase: &PipelinePhase) {
     let (name, kind) = match phase {
         PipelinePhase::Inventory => ("inventoried sources:  ", BarKind::Counter),
         PipelinePhase::Hash => ("hash", BarKind::Count),
-        PipelinePhase::Filter => ("filter", BarKind::Counter),
+        PipelinePhase::Filter => ("filter", BarKind::Count),
         PipelinePhase::Dedup => ("dedup", BarKind::Count),
         PipelinePhase::Sparsify => ("sparsify", BarKind::Count),
         PipelinePhase::Stage => ("stage", BarKind::Counter),
