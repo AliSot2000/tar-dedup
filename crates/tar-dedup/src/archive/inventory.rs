@@ -19,6 +19,7 @@ use std::fs::Metadata;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
+use dedent::dedent;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
 const SUB_BAR_PREFIX: &str = "Scanning Entries in: ";
@@ -33,9 +34,11 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         rt.db.purge_entries()?;
     }
 
-    tracing::info!("Inventory pass cannot be gracefully interrupted.
-                    If force aborted, the inventory pass needs to be run again to ensure \
-                    consistent snapshot of filesystem.");
+    // TOOD dedent figure out.
+    tracing::info!(dedent!("
+        Inventory pass cannot be gracefully interrupted. \
+        If force aborted, the inventory pass needs to be run again to ensure \
+        consistent snapshot of filesystem."));
     let mut processed = 0u64;
     rt.progress.set_table_size(total_sources as u64);
     let sub_bar = rt.progress.push_sub_bar("Scanned Entries", BarKind::Counter);
