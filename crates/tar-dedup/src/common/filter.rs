@@ -9,6 +9,8 @@ use crate::db::{ErrorPhase, Recorder};
 use crate::error::{FileStatError, Result};
 use regex::{Regex, RegexBuilder};
 
+const REGEX_UTF_8: bool = true;
+
 /// A filter expression compiled to a regex for fast matching.
 pub struct ParsedFilter {
     pub id: i64,
@@ -41,7 +43,7 @@ pub fn parse_filter(
         };
         let regex = match RegexBuilder::new(&aexp)
             .case_insensitive(ignore_case)
-            .unicode(false) // TODO needs to be done with --force-utf8
+            .unicode(REGEX_UTF_8) // TODO needs to be done with --force-utf8
             .build()
         {
             Ok(regex) => regex,
