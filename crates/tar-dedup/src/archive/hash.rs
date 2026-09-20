@@ -12,6 +12,11 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
+use common::batched_loop;
+use crate::common;
+
+// TODO via args
+const BATCH_SIZE: u64 = 10_000;
 
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let config = rt.config;
@@ -26,14 +31,14 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         config.filter.eager_filter,
         !config.indexing.no_hardlink_detection,
     )?;
-    let pending = db.get_entries_to_hash(
+    let pending = db.count_pending_hashable_files(
         config.filter.eager_filter,
         !config.indexing.no_hardlink_detection,
     )?;
-    let already_hashed = hash_needed.saturating_sub(pending.len() as u64);
+    let already_hashed = hash_needed.saturating_sub(pending);
     tracing::info!(
         total_entries,
-        unshed_files = pending.len(),
+        unshed_files = pending,
         already_hashed,
         jobs = config.process.effective_jobs(),
         page_size,
@@ -42,89 +47,103 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     progress.set_phase_total(hash_needed);
     progress.set_phase_position(already_hashed);
+    let promoted_entries = db.promote_unhasheable_files(
+        rt.config.filter.eager_filter,
+        !config.indexing.no_hardlink_detection)?;
+    tracing::info!("Promoted {promoted_entries} entries which cannot be hashed.");
+    progress.inc_global(total_entries - hash_needed);
 
-    if pending.is_empty() {
+    if pending == 0 {
         return Ok(());
     }
 
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    let shutdown = shutdown.clone();
+    let results = Mutex::new(Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(config.process.effective_jobs())
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
-    let shutdown = shutdown.clone();
-    let results = Mutex::new(Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new());
+    // Method to pull next batch of entries from the db
+    let pull_next_entries = |batch_size| db.get_entries_to_hash(
+        config.filter.eager_filter, !config.indexing.no_hardlink_detection, batch_size);
 
-    // `PreYield` stats each file when `par_bridge` pulls it for a worker — just
-    // before that file is hashed, not in a bulk pass at the start of the stage.
-    let checked = PreYield::new(pending.iter(), |record: &&StrippedRecord| {
-        warn_if_times_changed(&record.abs_path, record.mtime, record.atime, record.ctime);
-    });
-    let parallel = pool.install(|| {
-        checked.par_bridge().try_for_each(|record| {
-            shutdown.check_between_files()?;
-            let res = match hash_file(&record.abs_path, page_size, &shutdown) {
-                Ok((digest, zero_blocks)) => Ok((record.id, digest, zero_blocks)),
-                Err(e) => Err(IdError { err: e, id: record.id }),
-            };
-            results.lock().expect("hash results lock").push(res);
-            progress.inc_both(1);
-            Ok(())
-        })
-    });
-
-    // INFO: flow system later on.
-    let _future_vec = Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new();
-    let hashed = std::mem::replace(
-        &mut *results.lock().expect("hash results lock"),
-        _future_vec);
-
-    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
-    for res in &hashed {
-        match res {
-            Ok((id, digest, zero_blocks)) => {
-                db.update_file_inspection_per_id(
-                    *id,
-                    *digest,
-                    *zero_blocks,
-                    !config.indexing.no_hardlink_detection,
-                )?;
+    // Method to process the next batch of entries from the db.
+    let loop_iteration = |entries: Vec<StrippedRecord>| {
+        // `PreYield` stats each file when `par_bridge` pulls it for a worker — just
+        // before that file is hashed, not in a bulk pass at the start of the stage.
+        let checked = PreYield::new(
+            entries.iter(),
+            |record: &&StrippedRecord| {
+                warn_if_times_changed(&record.abs_path, record.mtime, record.atime, record.ctime);
             }
-            Err(e) => {
-                let ra = db.set_file_flag(e.id, FileFlag::ErrorWhileHash, true)?;
-                assert_eq!(ra, 1, "Rows affected must be 1. Got {ra}. \
+        );
+        let parallel = pool.install(|| {
+            checked.par_bridge().try_for_each(|record| {
+                shutdown.check_between_files()?;
+                let res = match hash_file(&record.abs_path, page_size, &shutdown) {
+                    Ok((digest, zero_blocks)) => Ok((record.id, digest, zero_blocks)),
+                    Err(e) => Err(IdError { err: e, id: record.id }),
+                };
+                results.lock().expect("hash results lock").push(res);
+                progress.inc_both(1);
+                Ok(())
+            })
+        });
+
+        let _future_vec = Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new();
+        let hashed = std::mem::replace(
+            &mut *results.lock().expect("hash results lock"),
+            _future_vec);
+
+        for res in &hashed {
+            match res {
+                Ok((id, digest, zero_blocks)) => {
+                    db.update_file_inspection_per_id(
+                        *id,
+                        *digest,
+                        *zero_blocks,
+                        !config.indexing.no_hardlink_detection,
+                    )?;
+                }
+                Err(e) => {
+                    let ra = db.set_file_flag(e.id, FileFlag::ErrorWhileHash, true)?;
+                    assert_eq!(ra, 1, "Rows affected must be 1. Got {ra}. \
                 0 - row vanished, >1 id constraint violated.");
-                record_hash_error(&mut recorder, &e);
+                    record_hash_error(&mut recorder, &e);
+                }
             }
         }
-    }
+
+        // Handle rayon pool result
+        match parallel {
+            Ok(()) => {
+                tracing::info!(count = hashed.len(), "hashing complete");
+                Ok(())
+            }
+            Err(Error::Interrupted) if shutdown.is_force() => {
+                tracing::warn!("hashing force-aborted; in-flight progress discarded");
+                Err(Error::Interrupted)
+            }
+            Err(Error::Interrupted) => {
+                tracing::warn!(saved = hashed.len(), "hashing stopped; completed files saved");
+                Err(Error::Interrupted)
+            }
+            Err(e) => Err(e),
+        }
+    };
+
+    batched_loop(pull_next_entries, BATCH_SIZE, loop_iteration)?;
+
     recorder.flush()?;
-
-    let force = shutdown.is_force();
-
-    // TODO dummy update of the remining entries.
 
     let double_canonical = db.count_double_canonical_dev_inode_group()?;
     if double_canonical > 0 {
         panic!("Encountered {double_canonical} Hard Link files. \
             which have two different hashes. Assuming files modified while hashing.");
     }
-
-    match parallel {
-        Ok(()) => {
-            tracing::info!(count = hashed.len(), "hashing complete");
-            Ok(())
-        }
-        Err(Error::Interrupted) if force => {
-            tracing::warn!("hashing force-aborted; in-flight progress discarded");
-            Err(Error::Interrupted)
-        }
-        Err(Error::Interrupted) => {
-            tracing::warn!(saved = hashed.len(), "hashing stopped; completed files saved");
-            Err(Error::Interrupted)
-        }
-        Err(e) => Err(e),
-    }
+    Ok(())
 }
 
 /// Record a per-file hash failure in the persistent error log (best-effort).
@@ -165,7 +184,13 @@ fn hash_file(path: &Path, page_size: usize, shutdown: &Shutdown) -> Result<([u8;
     let mut carry_zero = true;
 
     loop {
-        shutdown.check_in_flight()?;
+        match shutdown.check_in_flight() {
+            Ok(_) => (),
+            Err(e) => {
+                tracing::info!("Rayon Thread got In Flight Interrupt");
+                return Err(e);
+            }
+        };
         let n = file.read(&mut read_buf).map_err(|e| Error::io(path, e))?;
         if n == 0 {
             break;
