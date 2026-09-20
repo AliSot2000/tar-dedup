@@ -25,21 +25,16 @@ pub fn promote_unhasheable_files(conn: &Connection, eager_filter: bool, detect_h
         ""
     };
     let sql = format!(
-        "UPDATE files SET phase = 'hashed' WHERE phase = {phase} \
-             AND (ftype != 'file' \
-                   {filtered_selection})\
-                   {filter_hardlink_canonical})"
+        "UPDATE files SET phase = 'hashed' WHERE phase = {phase}
+             AND (ftype != 'file'
+                   {filtered_selection}
+                   {filter_hardlink_canonical}) "
     );
     let params = if detect_hardlinks {
         named_params! {
             ":hardlink": FileFlag::FileHardlinkCanonical.mask_i64(),
-            ":sha_error": FileFlag::ErrorWhileHash.mask_i64()
         }
-    } else {
-        named_params! {
-            ":sha_error": FileFlag::ErrorWhileHash.mask_i64()
-        }
-    };
+    } else { named_params!{} };
     let count  = conn.execute(&sql, params).to_panic()?;
     Ok(count as u64)
 }
