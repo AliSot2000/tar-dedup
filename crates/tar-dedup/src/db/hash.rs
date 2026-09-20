@@ -110,13 +110,13 @@ pub fn count_pending_hashable_files(conn: &Connection, eager_filter: bool, detec
         ""
     };
     let sql = format!(
-        "SELECT COUNT(*) AS count \
-         FROM files \
-         WHERE phase = {phase} \
-             AND ftype = 'file'\
-             AND (flags & :sha_error) = 0 \
-             AND sha1 IS NULL \
-             {filter_hardlink_canonical} \
+        "SELECT COUNT(*) AS count
+         FROM files
+         WHERE phase = {phase}
+             AND ftype = 'file'
+             AND (flags & :sha_error) = 0
+             AND sha1 IS NULL
+             {filter_hardlink_canonical}
              {filtered_selection}"
     );
     let params = if detect_hardlinks {
