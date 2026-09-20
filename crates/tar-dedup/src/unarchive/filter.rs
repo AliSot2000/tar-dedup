@@ -9,6 +9,7 @@ use crate::db::{ErrorPhase, Recorder};
 use crate::error::Result;
 use crate::unarchive::ExtractRTArgs;
 use std::cell::RefCell;
+use crate::progress::BarKind;
 
 const BATCH_SIZE: u64 = 100_000;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(crate::config::ExtractPipelinePhase::Filter);
@@ -88,18 +89,28 @@ fn fast_filter(rt: &ExtractRTArgs) -> Result<()> {
     let config = rt.config;
     let db = rt.db;
     let shutdown = rt.shutdown;
+    let add_flt = rt.progress.push_sub_bar("Loading Filters from the DB...",
+                                           BarKind::Counter);
+    let include_count = db.count_filters(Some(false))?;
+    let exclude_count = db.count_filters(Some(true))?;
+    add_flt.set_length(include_count + exclude_count);
+
     let include_filters = parse_filter(
         &db.get_filters_extract(false)?,
         "include",
         config.filter.anchored,
         config.filter.ignore_case,
+        Some(&add_flt)
     );
     let exclude_filters = parse_filter(
         &db.get_filters_extract(true)?,
         "exclude",
         config.filter.anchored,
         config.filter.ignore_case,
+        Some(&add_flt)
     );
+
+    drop(add_flt);
 
     let mut last_id = None;
     loop {
@@ -116,6 +127,7 @@ fn fast_filter(rt: &ExtractRTArgs) -> Result<()> {
                 .expect("INVARIANT ERROR: Batch empty, should contain something")
                 .id,
         );
+        // TODO counts and progresssbar, check filtering
         let processed = batch
             .iter()
             .map(|rec| test_match(&include_filters, &exclude_filters, rec));
