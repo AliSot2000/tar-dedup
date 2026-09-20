@@ -207,26 +207,34 @@ fn handle_query(
     line: u64,
     insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
     recorder: &mut Recorder,
-    e_phase: ErrorPhase
-) -> Result<()> {
-    if Regex::new(query).is_ok() {
-        let res = insert_fn(source, Some(line), query)?;
-        assert_eq!(res, 1, "DB Failed, expected 1 row to get added, got {res}");
-    } else {
-        recorder.record_session(
-            e_phase,
-            FileStatError::General {
-                path: None,
-                message: format!(
-                    "Failed to parse {operation} pattern from {source}, \
-                                 line: {line}, expression: {query}"
-                ),
-            },
-            ErrorFlags::default(),
-        );
-        tracing::error!(
-            "Failed to parse {operation} pattern from {source}, line: {line}, expression: {query}"
-        );
+    e_phase: ErrorPhase,
+    ignore_case: bool)
+    -> Result<()> {
+    match RegexBuilder::new(query)
+        .case_insensitive(ignore_case)
+        .unicode(REGEX_UTF_8) // TODO needs to be done with --force-utf8
+        .build() {
+        Ok(_regex) => {
+            let res = insert_fn(source, Some(line), query)?;
+            assert_eq!(res, 1, "DB Failed, expected 1 row to get added, got {res}");
+        },
+        Err(e) => {
+            let error_msg = e.to_string();
+            recorder.record_session(
+                e_phase,
+                FileStatError::General {
+                    path: None,
+                    message: format!(
+                        "Failed to parse {operation} pattern from {source}, \
+                                 line: {line}, expression: {query}, error: {error_msg}"
+                    ),
+                },
+                ErrorFlags::default(),
+            );
+            tracing::error!("Failed to parse {operation} pattern from {source}, line: {line}, \
+                expression: {query}, error: {error_msg}"
+            );
+        }
     }
     Ok(())
 }
