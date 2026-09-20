@@ -111,6 +111,7 @@ pub fn ingest_filters(
     include_from: &[PathBuf],
     exclude_patterns: &[String],
     exclude_from: &[PathBuf],
+    ignore_case: bool,
     recorder: &mut Recorder,
     e_phase: ErrorPhase,
     sink: FilterSink<'_>,
@@ -119,6 +120,7 @@ pub fn ingest_filters(
         include_patterns,
         include_from,
         "include",
+        ignore_case,
         &sink.add_include,
         recorder,
         e_phase,
@@ -133,6 +135,7 @@ pub fn ingest_filters(
         exclude_patterns,
         exclude_from,
         "exclude",
+        ignore_case,
         &sink.add_exclude,
         recorder,
         e_phase,
@@ -146,9 +149,10 @@ fn handle_pattern_source(
     pattern: &[String],
     files: &[PathBuf],
     operation: &str,
+    ignore_case: bool,
     insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
     recorder: &mut Recorder,
-    e_phase: ErrorPhase
+    e_phase: ErrorPhase,
 ) -> Result<()> {
     // Scan single argument expressions.
     for (idx, query) in pattern.iter().enumerate() {
@@ -159,7 +163,8 @@ fn handle_pattern_source(
             idx as u64,
             insert_fn,
             recorder,
-            e_phase
+            e_phase,
+            ignore_case,
         )?;
     }
 
@@ -195,6 +200,7 @@ fn handle_pattern_source(
                 insert_fn,
                 recorder,
                 e_phase,
+                ignore_case,
             )?;
         }
     }
