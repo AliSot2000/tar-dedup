@@ -1,19 +1,20 @@
 use crate::archive::ArchiveRTArgs;
-use crate::common::files::{PreYield, warn_if_times_changed};
-use crate::common::io_buffer;
+use crate::common;
+use crate::common::IO_BUF_SIZE;
+use crate::common::files::warn_if_times_changed;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, StrippedRecord};
 use crate::error::{Error, Result};
+use crate::progress::BarKind;
 use crate::shutdown::Shutdown;
+use common::batched_loop;
+use indicatif::ProgressBar;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use sha1::{Digest, Sha1};
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
-use std::sync::Mutex;
-use common::batched_loop;
-use crate::common;
 
 // TODO via args
 const BATCH_SIZE: u64 = 10_000;
