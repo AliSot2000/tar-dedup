@@ -20,55 +20,52 @@ use std::io::Read;
 const BATCH_SIZE: u64 = 10_000;
 
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
-    let config = rt.config;
     let db = rt.db;
     let shutdown = rt.shutdown;
-    let progress = rt.progress;
-    let page_size = config.sparse.page_size;
-    debug_assert!(page_size > 0, "page_size == 0");
+    debug_assert!(rt.config.sparse.page_size > 0, "page_size == 0");
 
     let total_entries = db.count_entries()?;
     let hash_needed = db.count_all_hashable_files(
-        config.filter.eager_filter,
-        !config.indexing.no_hardlink_detection,
+        rt.config.filter.eager_filter,
+        !rt.config.indexing.no_hardlink_detection,
     )?;
     let pending = db.count_pending_hashable_files(
-        config.filter.eager_filter,
-        !config.indexing.no_hardlink_detection,
+        rt.config.filter.eager_filter,
+        !rt.config.indexing.no_hardlink_detection,
     )?;
     let already_hashed = hash_needed.saturating_sub(pending);
     tracing::info!(
         total_entries,
         unshed_files = pending,
         already_hashed,
-        jobs = config.process.effective_jobs(),
-        page_size,
+        jobs = rt.config.process.effective_jobs(),
+        page_size = rt.config.sparse.page_size,
         "hash pass"
     );
 
-    progress.set_phase_total(hash_needed);
-    progress.set_phase_position(already_hashed);
+    rt.progress.set_phase_total(hash_needed);
+    rt.progress.set_phase_position(already_hashed);
     let promoted_entries = db.promote_unhasheable_files(
         rt.config.filter.eager_filter,
-        !config.indexing.no_hardlink_detection)?;
+        !rt.config.indexing.no_hardlink_detection)?;
     tracing::info!("Promoted {promoted_entries} entries which cannot be hashed.");
-    progress.inc_global(total_entries - hash_needed);
+    rt.progress.inc_global(total_entries - hash_needed);
 
     if pending == 0 {
         return Ok(());
     }
 
-    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    let mut recorder = crate::db::Recorder::new(db, !rt.config.process.no_errors);
     let shutdown = shutdown.clone();
     let results = Mutex::new(Vec::<std::result::Result<(FileId, [u8; 20], u64), IdError>>::new());
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.effective_jobs())
+        .num_threads(rt.config.process.effective_jobs())
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
     // Method to pull next batch of entries from the db
     let pull_next_entries = |batch_size| db.get_entries_to_hash(
-        config.filter.eager_filter, !config.indexing.no_hardlink_detection, batch_size);
+        rt.config.filter.eager_filter, !rt.config.indexing.no_hardlink_detection, batch_size);
 
     // Method to process the next batch of entries from the db.
     let loop_iteration = |entries: Vec<StrippedRecord>| {
