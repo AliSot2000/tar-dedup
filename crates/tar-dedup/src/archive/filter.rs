@@ -8,6 +8,8 @@ use crate::db::types::{FilePhase, StrippedRecord};
 use crate::error::Result;
 use crate::progress::BarKind;
 
+const BATCH_SIZE: u64 = 100_000;
+
 /// Stub filter stage: advance hashed → filtered before dedup.
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let config = rt.config;
@@ -80,7 +82,6 @@ fn fast_filter(rt: &ArchiveRTArgs) -> Result<()> {
     let mut exclude_by_include = 0u64;
     let mut exclude_by_exclude = 0u64;
 
-    const BATCH_SIZE: u64 = 100_000;
     let mut last_id = None;
     loop {
         shutdown.check_between_files()?;
