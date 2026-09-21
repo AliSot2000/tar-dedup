@@ -418,7 +418,6 @@ fn strip_relative_member(member: &str, strip: u32) -> String {
                 panic!("Unexpected path component {}. Only `Normal` expected",
                        component_to_str(&other)
                 );
-                None
             }
         })
         .collect();
