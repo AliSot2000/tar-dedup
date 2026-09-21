@@ -319,16 +319,8 @@ impl Database {
         filter::fix_up_canonical_flag(&mut *self.conn_mut())
     }
 
-    pub fn promote_non_file_filtered_to_deduped(&self) -> Result<u64> {
-        dedup::promote_non_file_filtered_to_deduped(&*self.conn())
-    }
-
-    pub fn promote_null_sha1_filtered_to_deduped(&self) -> Result<u64> {
-        dedup::promote_null_sha1_filtered_to_deduped(&*self.conn())
-    }
-
-    pub fn promote_singleton_filtered_to_deduped(&self) -> Result<u64> {
-        dedup::promote_singleton_filtered_to_deduped(&*self.conn())
+    pub fn promote_singleton_filtered_to_deduped(&self, eager_filter: bool) -> Result<u64> {
+        dedup::promote_singleton_filtered_to_deduped(&*self.conn(), eager_filter)
     }
 
     pub fn promote_deduped_to_sparsified(&self) -> Result<u64> {
