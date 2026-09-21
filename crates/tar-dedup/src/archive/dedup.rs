@@ -378,9 +378,10 @@ fn load_pending_groups(db: &Database) -> Result<Vec<(GroupKey, Vec<StrippedRecor
     let mut groups = Vec::new();
     for key in db.pending_duplicate_groups()? {
         let members: Vec<StrippedRecord> = db.list_filtered_in_group(&key.sha1, key.size)?;
-        if members.is_empty() {
-            continue;
-        }
+        assert!(
+            !members.is_empty(),
+            "PRECONDITION FAILED: Only groups with at least two members should have been produced."
+        );
         groups.push((key, members));
     }
     Ok(groups)
