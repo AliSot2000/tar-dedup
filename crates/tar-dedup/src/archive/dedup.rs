@@ -346,6 +346,10 @@ fn prepare_round(
             "dedup fail-fast: {} group(s) could not elect a canonical (compare error(s) recorded)",
             errored_only_groups.len()
         )));
+    } else {
+        tracing::error!(
+            "dedup fail-fast: {} group(s) could not elect a canonical (compare error(s) recorded)",
+            errored_only_groups.len());
     }
     for key in &errored_only_groups {
         let n = rt.db.promote_errored_pending_to_deduped(&key.sha1, key.size)?;
