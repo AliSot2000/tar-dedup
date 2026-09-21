@@ -168,6 +168,7 @@ fn compare_error_file_id(pair: &ComparePair, e: &Error) -> (FileId, FileStatErro
 
 // =================================================================================================
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
+    let eager_filter = rt.config.filter.eager_filter;
     let config = rt.config;
     let db = rt.db;
     let shutdown = rt.shutdown;
@@ -175,31 +176,32 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // Early promote db entries we do not process in this phase
     // TODO: Add eager_filter parameter.
     //  Batching!
-    let excluded_files = db.promote_excluded_entries_to_deduped()?;
-    let skipped_non_file = db.promote_non_file_filtered_to_deduped()?;
-    let skipped_null_sha1 = db.promote_null_sha1_filtered_to_deduped()?;
-    let skipped_singleton = db.promote_singleton_filtered_to_deduped()?;
+    let ineligible = db.promote_non_ineligible_entries_to_dedup(eager_filter)?;
+
+    let skipped_singleton = db.promote_singleton_filtered_to_deduped(eager_filter)?;
     // The bulk skips above left the phase; credit the global for each of them
     // (Scheme B: the phase bar only tracks the remaining candidates).
     let progress = rt.progress;
-    progress.inc_global(excluded_files);
-    progress.inc_global(skipped_non_file);
-    progress.inc_global(skipped_null_sha1);
+    progress.inc_global(ineligible);
     progress.inc_global(skipped_singleton);
     // INFO: Valid files:
     //  - ftype = 'file'
     //  - sha1 IS NOT NULL
-    //  - phase = 'filtered' // eager filter!!
+    //  - phase = 'filtered' / 'hashed' => eager filter!!
+    //  - flags & hash_error = 0
     //  - include_reason_archive < 0 AND exclude_reason_archive = 0
 
+    let prev_phase = if rt.config.filter.eager_filter {
+        FilePhase::Hashed
+    } else {
+        FilePhase::Filtered
+    };
     // Get actual number of our candidates.
-    let candidates = db.count_files_in_phase(FilePhase::Filtered)?;
+    let candidates = db.count_files_in_phase(prev_phase)?;
 
     tracing::info!(
         catalog,
-        excluded_files,
-        skipped_non_file,
-        skipped_null_sha1,
+        ineligible_files = ineligible,
         skipped_singleton,
         dedup_candidates = candidates,
         jobs = config.process.io_jobs,
