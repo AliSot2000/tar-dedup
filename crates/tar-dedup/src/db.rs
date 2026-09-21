@@ -22,7 +22,7 @@ mod dedup;
 mod errors;
 mod extract;
 mod filter;
-mod hash;
+pub(crate) mod hash;
 mod integrity;
 mod inventory;
 pub mod meta;
