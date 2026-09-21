@@ -8,7 +8,6 @@ use rayon::prelude::*;
 use crate::archive::ArchiveRTArgs;
 use crate::common::files::{PreYield, warn_if_times_changed};
 use crate::common::io_buffer;
-use crate::config::ArchiveConfig;
 use crate::db::Database;
 use crate::db::ErrorPhase;
 use crate::db::flags::FileFlag;
@@ -16,6 +15,8 @@ use crate::db::types::{FileId, FilePhase, GroupKey, StrippedRecord};
 use crate::error::{Error, FileStatError, Result};
 use crate::progress::ProgressBarSet;
 use crate::shutdown::Shutdown;
+use std::fs::File;
+use std::io::Read;
 
 /// One finished compare: both keys always present.
 /// `Ok(equal)` on a completed byte compare; `Err((file_id, error))` for the side
@@ -501,9 +502,6 @@ fn sanity_check_flags(db: &Database) -> Result<()> {
 /// Check that two files are binary identical (and have same length).
 /// Returns our custom Error with io variant.
 fn files_equal(a: &Path, b: &Path, shutdown: &Shutdown) -> Result<bool> {
-    use std::fs::File;
-    use std::io::Read;
-
     let mut fa = File::open(a).map_err(|e| Error::io(a, e))?;
     let mut fb = File::open(b).map_err(|e| Error::io(b, e))?;
 
