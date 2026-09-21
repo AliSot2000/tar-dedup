@@ -292,9 +292,10 @@ fn run_pool(rt: &ArchiveRTArgs) -> Result<()> {
     let leftover = rt.db.count_files_in_phase(FilePhase::Filtered)?;
     // TODO this is also in the category for panic.
     if leftover != 0 {
-        return Err(Error::Config(format!(
-            "dedup finished with {leftover} file(s) still in filtered (expected 0 after skips + rounds)"
-        )));
+        panic!(
+            "dedup finished with {leftover} file(s) still in filtered \
+            (expected 0 after skips + rounds)"
+        );
     }
 
     sanity_check_flags(rt.db)?;
