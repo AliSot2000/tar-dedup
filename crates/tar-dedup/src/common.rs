@@ -22,7 +22,7 @@ pub const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
 /// To ensure the program is responsive, we need to periodically check, if the user interrupted us.
 /// This is the stepsize during read / write operations between successive checks of the program
 /// status.
-const IO_BUF_SIZE: usize = 1024 * 1024 * 4;
+pub const IO_BUF_SIZE: usize = 1024 * 1024 * 4;
 
 /// Tar read chunk size during archive (keep xz fed without huge resident buffers).
 const ARCHIVE_IO_BUF_SIZE: usize = 4 * 1024 * 1024;
