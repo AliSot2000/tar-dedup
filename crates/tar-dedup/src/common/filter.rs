@@ -1,13 +1,13 @@
 //! Shared filter application used by both the archive and extract pipelines.
 
-use std::fs;
-use std::path::PathBuf;
-use indicatif::ProgressBar;
 use crate::db::flags::ErrorFlags;
 use crate::db::types::{FileId, FilterExpression, StrippedRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{FileStatError, Result};
+use indicatif::ProgressBar;
 use regex::{Regex, RegexBuilder};
+use std::fs;
+use std::path::PathBuf;
 
 const REGEX_UTF_8: bool = true;
 
