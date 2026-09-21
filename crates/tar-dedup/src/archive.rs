@@ -160,7 +160,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             }
         }
         // PRECONDITION: Done should have left earlier. Here we should end up when we have
-        debug_assert_ne!(state.phase, PipelinePhase::Done,
+        debug_assert_ne!(completed, PipelinePhase::Done,
                          "Here, the Archive should have been created successfully");
     }
     // PRECONDITION: Successfully wrote to archive
