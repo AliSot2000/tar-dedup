@@ -359,11 +359,11 @@ impl Database {
         dedup::promote_to_deduped(&*self.conn(), file_id)
     }
 
-    pub fn promote_excluded_entries_to_deduped(&self) -> Result<u64> {
-        dedup::promote_excluded_entries_to_deduped(&self.conn())
+    pub fn promote_non_ineligible_entries_to_dedup(&self, eager_filter:bool ) -> Result<u64> {
+        dedup::promote_non_ineligible_entries_to_dedup(&self.conn(), eager_filter)
     }
 
-    pub fn clear_check_with_canonical_completed(&self, sha1: &[u8; 20], size: u64) -> Result<()> {
+    pub fn clear_check_with_canonical_completed(&self, sha1: &[u8; 20], size: u64) -> Result<u64> {
         dedup::clear_check_with_canonical_completed(&*self.conn(), sha1, size)
     }
 
