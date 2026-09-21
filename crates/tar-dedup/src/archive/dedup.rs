@@ -225,7 +225,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 /// keep all thing related to the Rayon Thread Pool inside a single function.
 fn run_pool(rt: &ArchiveRTArgs) -> Result<()> {
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.io_jobs)
+        .num_threads(rt.config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
@@ -246,8 +246,8 @@ fn run_pool(rt: &ArchiveRTArgs) -> Result<()> {
             All other possible values allowed. Invariant violated."),
         }
 
-        let results = Mutex::new(Vec::<CompareOutcome>::with_capacity(pairs.len()));
         let shutdown_workers = rt.shutdown.clone();
+        let results: Mutex<Vec<CompareOutcome>> = Mutex::new(Vec::with_capacity(pairs.len()));
         // time checked = tc
         let tc_pair_iter = PreYield::new(pairs.iter(), warn_compare_pair_times);
 
