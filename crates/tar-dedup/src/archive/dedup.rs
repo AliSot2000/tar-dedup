@@ -457,6 +457,11 @@ fn apply_outcome(db: &Database, recorder: &mut crate::db::Recorder, outcome: Com
             )?;
         }
         Err((failed, error)) => {
+            db.set_file_flag(
+                outcome.candidate_id,
+                FileFlag::CheckWithCanonicalCompleted,
+                true,
+            )?;
             db.set_file_flag(failed, FileFlag::ErrorWhileDedup, true)?;
             recorder.record_file(
                 failed,
