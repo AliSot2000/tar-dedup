@@ -57,27 +57,32 @@ fn fast_filter(rt: &ArchiveRTArgs) -> Result<()> {
     let db = rt.db;
     let shutdown = rt.shutdown;
 
-    // TODO correct representation of parsing.
-    // Filter parsing
-    let add_flt = rt.progress.push_sub_bar("Loading Filters from the DB...", BarKind::Counter);
-    let include_count = db.count_filters(Some(false))?;
-    let exclude_count = db.count_filters(Some(true))?;
-    add_flt.set_length(include_count + exclude_count);
-
-    let include_filters = parse_filter(
-        &db.get_filters(false)?, "include", config.filter.anchored, config.filter.ignore_case, Some(&add_flt));
-    let exclude_filters = parse_filter(
-        &db.get_filters(true)?, "exclude", config.filter.anchored, config.filter.ignore_case, Some(&add_flt));
-
-    drop(add_flt);
-
-    // Filtering
+    // Filtering Progress Setup
     let already_filtered = db.count_files_in_phase(FilePhase::Filtered)?;
     let total = db.count_entries()?;
     rt.progress.set_phase_total(total);
     rt.progress.inc_both(already_filtered);
 
-    let files_tot = db.count_entries()?;
+    // Filter parsing
+    let add_flt = rt.progress.push_sub_bar("Loading Filters from the DB...", BarKind::Count);
+    add_flt.set_length(db.count_filters(Some(true))? + db.count_filters(Some(false))?);
+
+    let include_filters = parse_filter(
+        &db.get_filters(false)?,
+        "include",
+        config.filter.anchored,
+        config.filter.ignore_case,
+        Some(&add_flt));
+    let exclude_filters = parse_filter(
+        &db.get_filters(true)?,
+        "exclude",
+        config.filter.anchored,
+        config.filter.ignore_case,
+        Some(&add_flt));
+
+    drop(add_flt);
+
+    // Perform filtering
     let mut included = 0u64;
     let mut exclude_by_include = 0u64;
     let mut exclude_by_exclude = 0u64;
@@ -131,7 +136,7 @@ fn fast_filter(rt: &ArchiveRTArgs) -> Result<()> {
     } else {
         FilePhase::Hashed
     })?;
-    tracing::info!("Filtered {files_tot} entries, deemed: {included} included, {exclude_by_include} \
+    tracing::info!("Filtered {total} entries, deemed: {included} included, {exclude_by_include} \
         excluded by include filter, {exclude_by_exclude} excluded by exclude filter.");
     assert_eq!(0, rem, "INVARIANT ERROR: {rem} files in previous phase. Zero expected.");
     // TODO sanity check, filters set, and not null
