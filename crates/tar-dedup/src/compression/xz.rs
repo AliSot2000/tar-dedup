@@ -38,7 +38,7 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
     let mut threads = requested;
     let mut memusage = mt_memusage(threads, preset);
 
-    tracing::error!(
+    tracing::info!(
         "xz: {} of memory is required for preset -{}{} with {} thread(s).",
         format_mib(memusage),
         level,
@@ -47,7 +47,7 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
     );
 
     if let Some(limit) = memlimit {
-        tracing::error!("xz: the memory limit is {}.", format_mib(limit));
+        tracing::info!("xz: the memory limit is {}.", format_mib(limit));
         while memusage > limit && threads > 1 {
             threads -= 1;
             memusage = mt_memusage(threads, preset);
@@ -62,7 +62,7 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
             )));
         }
         if threads < requested {
-            tracing::error!(
+            tracing::warn!(
                 "xz: reduced threads from {requested} to {threads} to stay within the {} limit",
                 format_mib(limit)
             );
