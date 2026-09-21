@@ -117,15 +117,27 @@ future config flag (`--per-thread-progress`).
   - Layer A (ERROR only): `fmt::layer().with_writer(std::io::stderr)`,
     filter = `EnvFilter` ∧ level == error.
   - Layer B (WARN..TRACE): custom `MakeWriter`:
-    - MPB registered → `mp.suspend(|| writeln!(stdout, …))` (suspend runs `f`
-      even on hidden targets, so piped runs still emit lines);
-    - else → plain stdout.
+    - MPB registered and stdout is a tty → `MultiProgress::println(line)`,
+      which renders the line above all bars as one coordinated frame
+      (multi-line / wrapped events cannot desync the cursor). ANSI is off on
+      this layer so the lines count correctly.
+    - else (hidden/not registered) → plain stdout.
     filter = `EnvFilter` ∧ level < error (no ERROR duplication).
+    Events are pushed to a queue drained by a dedicated thread (~25 Hz) that
+    joins bursts (e.g. the hash WARN storm) into a single `println` frame, so
+    the output stays Docker-like instead of one redraw per event. Known
+    trade-off: `MultiProgress::println` accumulates printed lines in the frame
+    for the run's lifetime (unbounded for extremely chatty runs).
   - Base filter: `EnvFilter::builder().with_default_directive(LevelFilter::INFO.into()).from_env_lossy()`.
 - Global `static LOG_MPB: Mutex<Option<Arc<MultiProgress>>>`; `ProgressBarSet`
   stores an `Arc<MultiProgress>`; `run` registers on start and clears on exit.
-  Lines emitted before registration fall back to plain streams.
 - Existing `eprintln!` sites in `archive::run` / `unarchive::run` stay as-is.
+
+> **Why not `suspend`**: an external write under `suspend` must keep the cursor
+> inside the erased bar area; a tracing event may span more terminal lines
+> (timestamp + multi-line message) than the area, so the following redraw
+> re-emits bar lines into the log region. `println` owns the full frame
+> (`[log lines, …bar lines]`) inside indicatif's own accounting.
 
 ## Wiring
 - `ArchiveRTArgs` and `ExtractRTArgs` gain `pub progress: &'a ProgressBarSet`.
@@ -193,3 +205,8 @@ polished where trivial.
 1. Extract payload-candidate counts + place multi-sub-bar polish.
 2. Per-thread sub-bars behind a future config flag (aggregate stays default).
 3. CLI verbosity flags (user's own design; deferred).
+4. **Feature idea**: colored stdout logs. ANSI is currently disabled on the
+   stdout layer because colored lines would corrupt indicatif's width/line
+   accounting when routed through `MultiProgress::println`. Re-enable via a
+   safe wrapper (strip ANSI for width computation but re-emit for display, or
+   an upstream indicatif feature). Errors keep color on stderr.
