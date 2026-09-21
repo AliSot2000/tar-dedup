@@ -74,7 +74,6 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             ),
             _ => panic!("PRECONDITION FAILED: Function may only process variant FileStatError")
         }
-
     };
 
     let mut stopped = false;
