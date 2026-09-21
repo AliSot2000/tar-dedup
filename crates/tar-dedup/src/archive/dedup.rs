@@ -218,31 +218,25 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // or the bulk SQL skips above (those already credited the global).
     progress.set_phase_total(candidates);
 
-    run_pool(config, db, shutdown, progress)
+    run_pool(&rt)
 }
 
 /// Function encapsulates the iteration deduplication rounds. Structure is chosen this way as to
 /// keep all thing related to the Rayon Thread Pool inside a single function.
-fn run_pool(
-    config: &ArchiveConfig,
-    db: &Database,
-    shutdown: &Shutdown,
-    progress: &ProgressBarSet,
-) -> Result<()> {
-    // TODO: Better errors.
+fn run_pool(rt: &ArchiveRTArgs) -> Result<()> {
     let pool = ThreadPoolBuilder::new()
         .num_threads(config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
-    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    let mut recorder = crate::db::Recorder::new(rt.db, !rt.config.process.no_errors);
     loop {
-        shutdown.check_between_files()?;
+        rt.shutdown.check_between_files()?;
 
         let mut pairs: Vec<ComparePair> = Vec::new();
         let mut groups_needing_end: Vec<GroupKey> = Vec::new();
 
-        let next_state = prepare_round(&mut pairs, &mut groups_needing_end, progress, db, config)?;
+        let next_state = prepare_round(&mut pairs, &mut groups_needing_end, &rt)?;
         match next_state {
             (true, false) => break,
             (false, true) => continue,
@@ -252,8 +246,8 @@ fn run_pool(
             All other possible values allowed. Invariant violated."),
         }
 
-        let shutdown_workers = shutdown.clone();
         let results = Mutex::new(Vec::<CompareOutcome>::with_capacity(pairs.len()));
+        let shutdown_workers = rt.shutdown.clone();
         // time checked = tc
         let tc_pair_iter = PreYield::new(pairs.iter(), warn_compare_pair_times);
 
@@ -261,7 +255,11 @@ fn run_pool(
             tc_pair_iter
                 .par_bridge()
                 .try_for_each(|pair| compare_one(
-                    pair, &shutdown_workers, &results, progress, !config.indexing.no_hardlink_detection
+                    pair,
+                    &shutdown_workers,
+                    &results,
+                    rt.progress,
+                    !rt.config.indexing.no_hardlink_detection
                 ))
         });
 
@@ -269,7 +267,7 @@ fn run_pool(
         let outcomes = results.into_inner().expect("dedup results lock");
         let saved = outcomes.len();
         for outcome in outcomes {
-            apply_outcome(db, &mut recorder, outcome)?;
+            apply_outcome(rt.db, &mut recorder, outcome)?;
         }
         recorder.flush()?;
 
@@ -277,7 +275,7 @@ fn run_pool(
             Ok(()) => {
                 // Only end the round when every scheduled pair finished.
                 for key in &groups_needing_end {
-                    end_round(db, key)?;
+                    end_round(rt.db, key)?;
                 }
             }
             Err(Error::Interrupted) => {
@@ -291,7 +289,7 @@ fn run_pool(
         }
     }
     // TODO different db query
-    let leftover = db.count_files_in_phase(FilePhase::Filtered)?;
+    let leftover = rt.db.count_files_in_phase(FilePhase::Filtered)?;
     // TODO this is also in the category for panic.
     if leftover != 0 {
         return Err(Error::Config(format!(
@@ -299,7 +297,7 @@ fn run_pool(
         )));
     }
 
-    sanity_check_flags(db)?;
+    sanity_check_flags(rt.db)?;
     tracing::info!("dedup complete");
     Ok(())
 }
@@ -311,15 +309,13 @@ fn run_pool(
 fn prepare_round(
     pairs: &mut Vec<ComparePair>,
     groups_needing_end: &mut Vec<GroupKey>,
-    progress: &ProgressBarSet,
-    db: &Database,
-    config: &ArchiveConfig)
+    rt: &ArchiveRTArgs)
     -> Result<(bool, bool)> {
 
     let mut errored_only_groups: Vec<GroupKey> = Vec::new();
     let mut did_work = false;
 
-    let groups = load_pending_groups(db)?;
+    let groups = load_pending_groups(rt.db)?;
     if groups.is_empty() {
         // break
         return Ok((true, false));
@@ -327,7 +323,7 @@ fn prepare_round(
 
     // Deal with any potentially halted progress.
     for (key, members) in groups {
-        match establish_group_state(db, key, members, config.process.fail_fast)? {
+        match establish_group_state(rt.db, key, members, rt.config.process.fail_fast)? {
             GroupPrep::ErroredOnly { key } => {
                 errored_only_groups.push(key);
             }
@@ -344,22 +340,22 @@ fn prepare_round(
     // Deal with errored out groups (=> no members, no candidate, no new candidates).
     // With `fail_fast` this is a halting condition: every member errored, so the whole
     // group (and the files already recorded against it) surfaces to the user.
-    if config.process.fail_fast && !errored_only_groups.is_empty() {
+    if rt.config.process.fail_fast && !errored_only_groups.is_empty() {
         return Err(Error::Config(format!(
             "dedup fail-fast: {} group(s) could not elect a canonical (compare error(s) recorded)",
             errored_only_groups.len()
         )));
     }
     for key in &errored_only_groups {
-        let n = db.promote_errored_pending_to_deduped(&key.sha1, key.size)?;
-        db.clear_check_with_canonical_completed(&key.sha1, key.size)?;
-        progress.inc_both(n);
+        let n = rt.db.promote_errored_pending_to_deduped(&key.sha1, key.size)?;
+        rt.db.clear_check_with_canonical_completed(&key.sha1, key.size)?;
+        rt.progress.inc_both(n);
         did_work = true;
     }
 
     if pairs.is_empty() {
         for key in groups_needing_end {
-            end_round(db, key)?;
+            end_round(rt.db, key)?;
             did_work = true;
         }
         if !did_work {
