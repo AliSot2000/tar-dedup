@@ -29,6 +29,19 @@ pub fn generate_archive_and_extract_filter(prefix: Option<&str>) -> String {
     )
 }
 
+
+/// Run `f` inside a transaction. `f` receives `&Connection` (the transaction
+/// derefs to one) so typed setters work inside or outside a txn.
+pub fn with_transaction<T>(
+    conn: &mut Connection,
+    f: impl FnOnce(&Connection) -> Result<T>)
+    -> Result<T> {
+    let tx = conn.transaction().to_panic()?;
+    let out = f(&tx)?;
+    tx.commit().to_panic()?;
+    Ok(out)
+}
+
 /// Row type that can be SELECTed from `files` and mapped from a rusqlite row.
 pub trait SqlFileRow: Sized {
     /// Comma-separated column list (no `SELECT` keyword).
@@ -327,6 +340,7 @@ impl OutTreeRecord {
     }
 }
 
+// INFO: Used in different stages!
 /// List all elements of the out_tree in batches.
 pub fn list_out_tree(
     conn: &Connection,
