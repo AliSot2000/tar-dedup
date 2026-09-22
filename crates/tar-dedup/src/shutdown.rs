@@ -70,6 +70,8 @@ impl Shutdown {
     pub fn is_force(&self) -> bool {
         self.mode.load(Ordering::SeqCst) == MODE_FORCE
     }
+    
+    pub fn is_interrupted(&self) -> bool { self.mode.load(Ordering::SeqCst) == MODE_GRACEFUL }
 
     /// Stop before starting a new unit of work (file, group, tar entry, …).
     pub fn check_between_files(&self) -> Result<()> {
