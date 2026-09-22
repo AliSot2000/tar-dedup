@@ -161,6 +161,36 @@ struct IdError {
     id: FileId,
 }
 
+/// Worker thread: pulls one file at a time, hashes it, forwards the outcome.
+/// Owns its bar and read buffer; only touches the channels and `tracing`.
+fn hash_worker(
+    bar: ProgressBar,
+    page_size: usize,
+    shutdown: Shutdown,
+    work: Receiver<StrippedRecord>,
+    out: Sender<HashingOutcome>,
+) {
+    let mut buf = Vec::<u8>::new();
+    loop {
+        match work.recv() {
+            Ok(row) => {
+                if shutdown.check_between_files().is_err() {
+                    break;
+                }
+                bar.reset();
+                bar.set_length(row.size);
+                bar.set_message(format!("Hashing {}", row.abs_path.display()));
+                warn_if_times_changed(&row.abs_path, row.mtime, row.atime, row.ctime);
+                let res = hash_one(&mut buf, &row.abs_path, page_size, &shutdown, Some(&bar))
+                    .map(|(digest, zero_blocks)| (row.id, digest, zero_blocks))
+                    .map_err(|err| IdError { err, id: row.id });
+                out.send(res).expect("hash worker: result channel closed");
+            }
+            Err(_) => break
+        }
+    }
+}
+
 /// Single-pass SHA-1 and empty-page count.
 ///
 /// `buf` is the worker's reusable read buffer (sized once here); `pb`
