@@ -1,4 +1,5 @@
 use crate::config::ExtractRuntimeState;
+use crate::db::common::with_transaction;
 use crate::db::content_id::parse_content_id;
 use crate::db::extract::{load_extract_runtime_state, save_extract_runtime_state};
 use crate::db::flags::FileFlag;
@@ -215,7 +216,7 @@ pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool
 
 pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState)
     -> Result<()> {
-    meta::with_meta_txn(conn, |conn| {
+    with_transaction(conn, |conn| {
         meta::set_scan_tar_saw_manifest_db(conn, state.saw_manifest_db)?;
         meta::set_scan_tar_saw_any_members(conn, state.saw_any_members)?;
         meta::set_scan_tar_complete(conn, state.scan_complete)?;

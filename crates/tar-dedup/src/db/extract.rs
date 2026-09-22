@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 
 use crate::config::ExtractRuntimeState;
-use crate::db::common::SqlFileRow;
+use crate::db::common::{SqlFileRow, with_transaction};
 use crate::db::meta;
 use crate::error::{Result, ToPanic};
 
@@ -42,7 +42,7 @@ pub fn load_extract_runtime_state(conn: &Connection) -> Result<Option<ExtractRun
 }
 
 pub fn save_extract_runtime_state(conn: &mut Connection, state: &ExtractRuntimeState) -> Result<()> {
-    meta::with_meta_txn(conn, |conn| {
+    with_transaction(conn, |conn| {
         meta::set_extract_phase(conn, state.phase)?;
         meta::set_extract_snapshots_ingested(conn, state.snapshots_ingested)?;
         Ok(())

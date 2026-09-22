@@ -1,4 +1,5 @@
 use crate::config::RuntimeState;
+use crate::db::common::with_transaction;
 use crate::db::flags::ErrorFlags;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, NewFileRecord};
@@ -92,7 +93,7 @@ pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
 }
 
 pub fn save_runtime_state(conn: &mut Connection, state: &RuntimeState) -> Result<()> {
-    meta::with_meta_txn(conn, |conn| {
+    with_transaction(conn, |conn| {
         meta::set_archive_phase(conn, state.phase)?;
         meta::set_archive_snapshot_taken_at(conn, state.snapshot_taken_at)?;
         meta::set_archive_max_workers(conn, state.max_workers)?;
