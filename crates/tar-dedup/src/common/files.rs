@@ -124,9 +124,9 @@ pub fn warn_if_times_changed(
     path: &Path,
     mtime: Option<DateTime<Utc>>,
     atime: Option<DateTime<Utc>>,
-    ctime: Option<DateTime<Utc>>,
-) {
-    let meta = match std::fs::metadata(path) {
+    ctime: Option<DateTime<Utc>>)
+    -> bool {
+    let meta = match fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(
@@ -134,7 +134,7 @@ pub fn warn_if_times_changed(
                 error = %e,
                 "could not stat file for timestamp check"
             );
-            return;
+            return true;
         }
     };
 
@@ -151,7 +151,9 @@ pub fn warn_if_times_changed(
             changed = %changed.join(","),
             "file timestamps changed since inventory (possible concurrent modification)"
         );
+        return true;
     }
+    false
 }
 
 /// Add the `name` to the `out` iff expected != live and both destruct correctly to Ok/Some.
