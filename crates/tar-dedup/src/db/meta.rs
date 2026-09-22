@@ -11,7 +11,7 @@ use rusqlite::Connection;
 
 use crate::common::perms::OwnerGroupPolicy;
 use crate::config::{ArchiveConfig, ExtractConfig, ExtractPipelinePhase, PipelinePhase};
-use crate::db::common::{delete_meta, get_meta, upsert_meta};
+use crate::db::common::{delete_meta, get_meta, upsert_meta, with_transaction};
 use crate::error::{Error, Result, ToPanic};
 
 /// Closed set of known `meta.key` strings.
@@ -527,7 +527,7 @@ pub fn set_extract_config(conn: &Connection, value: &ExtractConfig) -> Result<()
 // TODO Delete the entirety of the archive keys.
 /// Drop tar-writer byte counters. Archive/extract phase keys are left standing.
 pub fn clear_archive_meta(conn: &mut Connection) -> Result<()> {
-    with_meta_txn(conn, |conn| {
+    with_transaction(conn, |conn| {
         delete_meta(conn, MetaKey::TarWriterBytesIn.as_str())?;
         delete_meta(conn, MetaKey::TarWriterBytesOut.as_str())?;
         Ok(())
