@@ -1,9 +1,11 @@
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::thread;
 use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use std::mem::take;
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::{FilterExt, LevelFilter, filter_fn};
@@ -11,6 +13,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry;
+
 
 /// Number of element-iterating phases in the archive pipeline (Cleanup-style
 /// no-op phases excluded). Every `files` row advances the global bar once per
@@ -54,6 +57,9 @@ fn style_for(kind: BarKind) -> ProgressStyle {
 /// so log lines are printed above the bars.
 static LOG_MPB: Mutex<Option<Arc<MultiProgress>>> = Mutex::new(None);
 
+// INFO: Since we are partially capturing the ProgressBarSet for rayon / multiprocessing. We need
+//  to make all things either behind one single mutex or multiple mutex-es to ensure we don't end
+//  with memory corruption
 /// One shared bar set: a fixed bottom global bar (percent only) plus the
 /// current phase bar(s) above it. All bars draw to stdout; `MultiProgress`
 /// auto-hides when stdout is not a terminal — `suspend`-printed logs still emit.
@@ -62,10 +68,21 @@ pub struct ProgressBarSet {
     global: ProgressBar,
     phase: Mutex<Option<ProgressBar>>,
     subs: Mutex<Vec<ProgressBar>>,
+    thread_bars: Mutex<ThreadBars>,
     table_size: Mutex<u64>,
     multiplier: u64,
 }
 
+/// Lazy pool of per-thread sub-bars, one per rayon worker (`rayon::current_thread_index()`).
+/// Bars are only materialized on first use by their thread and live until
+/// [`ProgressBarSet::create_thread_bars`] resets the pool or `drop_thread_bars` removes them.
+struct ThreadBars {
+    kind: Option<BarKind>,
+    count: usize,
+    bars: Vec<Option<ProgressBar>>,
+}
+
+// TODO why is phase behind mutex? Doesn't progress already do mutex et al?
 impl ProgressBarSet {
     pub fn new(multiplier: u64) -> Self {
         let mp = Arc::new(MultiProgress::new());
@@ -80,7 +97,12 @@ impl ProgressBarSet {
             global,
             phase: Mutex::new(None),
             subs: Mutex::new(Vec::new()),
-            table_size: Mutex::new(0),
+            thread_bars: Mutex::new(ThreadBars {
+                kind: None,
+                count: 0,
+                bars: Vec::new(),
+            }),
+            table_size: Mutex::new(1),
             multiplier,
         }
     }
@@ -150,9 +172,77 @@ impl ProgressBarSet {
         bar
     }
 
+    /// Prepare a lazy per-thread bar pool for the current phase. Call once at the
+    /// start of a parallel phase; bars are materialized on first use by each
+    /// thread index (`thread_bar`) and torn down with [`Self::drop_thread_bars`]
+    /// at the end. `count` is the worker pool size (`effective_jobs`).
+    pub fn create_thread_bars(&self, kind: BarKind, count: usize) {
+        debug_assert!(count > 0, "thread bar pool must have at least one slot");
+        // Defensive: rip out anything a previous phase forgot to drop. Runs
+        // before taking the lock below — `drop_thread_bars` locks this Mutex.
+        self.drop_thread_bars();
+        let mut tb = self.thread_bars
+            .lock()
+            .expect("progress thread-bars lock poisoned");
+        tb.kind = Some(kind);
+        tb.count = count;
+        tb.bars.resize_with(count, || None);
+    }
+
+    /// Fetch the bar for a worker thread, creating it on first use. The returned
+    /// handle is reused by that thread index for the whole phase (reset + resize
+    /// per new file); collected by `drop_thread_bars`.
+    pub fn thread_bar(&self, idx: usize) -> ProgressBar {
+        // Attempt to get an existing bar and validate the idx.
+        let mut tb = self.thread_bars
+            .lock()
+            .expect("progress thread-bars lock poisoned");
+        if tb.bars.len() <= idx {
+            panic!("Index out of bounds {idx} is not in bars with len: {}", tb.bars.len());
+        }
+        if let Some(b) = &tb.bars[idx] {
+            return b.clone();
+        }
+
+        // PRECONDITION: No bar present in the vec.
+        let kind = tb.kind.expect(
+            "INVARIANT ERROR: create_thread_bars must be called before thread_bar");
+        let bar = make_bar(kind, "");
+
+        // Insert the bar into the MultiProgress bar.
+        match self.phase.lock().expect("progress phase lock poisoned").as_ref() {
+            Some(p) => self.mp.insert_before(p, bar.clone()),
+            None => self.mp.insert_before(&self.global, bar.clone()),
+        };
+
+        // Update the vector with the new bar.
+        tb.bars[idx] = Some(bar.clone());
+        bar
+    }
+
+    /// Remove every thread bar created since the last `create_thread_bars`,
+    /// leaving only the phase bar and the global bar. Idempotent.
+    pub fn drop_thread_bars(&self) {
+        let mut tb = self.thread_bars
+            .lock()
+            .expect("progress thread-bars lock poisoned");
+
+        // Drop the bars
+        for slot in take(&mut tb.bars) {
+            if let Some(b) = slot {
+                b.finish_and_clear();
+                self.mp.remove(&b);
+            }
+        }
+        tb.count = 0;
+        tb.kind = None;
+    }
+
     /// Advance the phase bar and the global by `n`.
     pub fn inc_both(&self, n: u64) {
-        if let Some(p) = self.phase.lock().expect("progress phase lock poisoned").as_ref() {
+        if let Some(p) = self.phase
+            .lock()
+            .expect("progress phase lock poisoned").as_ref() {
             p.inc(n);
         }
         self.global.inc(n);
@@ -165,7 +255,10 @@ impl ProgressBarSet {
 
     /// Advance only the phase bar (byte-level progress inside a file).
     pub fn inc_phase(&self, n: u64) {
-        if let Some(p) = self.phase.lock().expect("progress phase lock poisoned").as_ref() {
+        if let Some(p) = self.phase
+            .lock()
+            .expect("progress phase lock poisoned")
+            .as_ref() {
             p.inc(n);
         }
     }
@@ -189,15 +282,22 @@ impl ProgressBarSet {
     }
 
     fn finish_current(&self, kind: ResetKind) {
-        if let Some(p) = self.phase.lock().expect("progress phase lock poisoned").take() {
+        if let Some(p) = self.phase
+            .lock()
+            .expect("progress phase lock poisoned")
+            .take() {
             reset_bar(&p, kind);
             self.mp.remove(&p);
         }
-        let subs = std::mem::take(&mut *self.subs.lock().expect("progress subs lock poisoned"));
+        let subs = take(&mut *self
+            .subs
+            .lock()
+            .expect("progress subs lock poisoned"));
         for s in subs {
             reset_bar(&s, kind);
             self.mp.remove(&s);
         }
+        self.drop_thread_bars();
     }
 }
 
@@ -279,7 +379,9 @@ pub fn init_tracing() {
 
     let stdout_layer = tracing_subscriber::fmt::layer()
         .with_writer(LogWriter)
-        .with_ansi(io::stdout().is_terminal())
+        // ANSI-free: colored lines would break indicatif's width/line accounting
+        // when they are piped through `MultiProgress::println`.
+        .with_ansi(false)
         .with_filter(env.and(below_error));
 
     registry().with(error_layer).with(stdout_layer).init();
@@ -302,11 +404,17 @@ struct LogLine;
 
 impl Write for LogLine {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mpb = LOG_MPB.lock().expect("LOG_MPB lock poisoned").clone();
-        match mpb {
-            Some(mp) => mp.suspend(|| write_plain(buf)),
-            None => write_plain(buf),
-        }
+        // Log lines go through the MPB's own draw path (`println`) whenever the
+        // bars are live: it renders them above all bars as one coordinated
+        // frame, so multi-line/wrapped events cannot desync the terminal.
+        // Raw `suspend` writes are not usable here — an event may span more
+        // terminal lines than the bar area, misaligning the cursor.
+        //
+        // Events are queued and flushed by a dedicated thread (~25 Hz) so a
+        // burst (e.g. the WARN storm of many worker threads) collapses into a
+        // few frames instead of one redraw per event.
+        log_queue().push(buf);
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -314,11 +422,79 @@ impl Write for LogLine {
     }
 }
 
-fn write_plain(buf: &[u8]) -> io::Result<usize> {
-    let mut out = io::stdout();
-    out.write_all(buf)?;
-    out.flush()?;
-    Ok(buf.len())
+/// Coalesced stdout log sink. `MultiProgress::println` is called from a
+/// dedicated thread, draining all events that arrived during a ~40 ms window
+/// into a single frame above the bars (Docker-style multi-line output).
+struct LogQueue {
+    buf: Mutex<Vec<Vec<u8>>>,
+    cv: Condvar,
+}
+
+static LOG_QUEUE: OnceLock<Arc<LogQueue>> = OnceLock::new();
+
+fn log_queue() -> &'static Arc<LogQueue> {
+    LOG_QUEUE.get_or_init(|| {
+        let q = Arc::new(LogQueue {
+            buf: Mutex::new(Vec::new()),
+            cv: Condvar::new(),
+        });
+        let q2 = q.clone();
+        thread::Builder::new()
+            .name("tar-dedup-log".into())
+            .spawn(move || log_flush_loop(q2))
+            .expect("spawn log flusher");
+        q
+    })
+}
+
+impl LogQueue {
+    fn push(&self, buf: &[u8]) {
+        let mut guard = self.buf.lock().expect("log queue lock poisoned");
+        guard.push(buf.to_vec());
+        self.cv.notify_one();
+    }
+
+    fn drain(&self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut *self.buf.lock().expect("log queue lock poisoned"))
+    }
+}
+
+fn log_flush_loop(q: Arc<LogQueue>) {
+    loop {
+        let mut guard = q.buf.lock().expect("log queue lock poisoned");
+        while guard.is_empty() {
+            guard = q
+                .cv
+                .wait_timeout(guard, Duration::from_millis(40))
+                .unwrap()
+                .0;
+        }
+        let batch = std::mem::take(&mut *guard);
+        drop(guard);
+        if !batch.is_empty() {
+            log_flush_batch(&batch);
+        }
+    }
+}
+
+fn log_flush_batch(batch: &[Vec<u8>]) {
+    let mpb = LOG_MPB.lock().expect("LOG_MPB lock poisoned").clone();
+    match mpb {
+        Some(mp) if !mp.is_hidden() => {
+            let mut msg = String::new();
+            for b in batch {
+                msg.push_str(&String::from_utf8_lossy(b));
+            }
+            let _ = mp.println(msg);
+        }
+        _ => {
+            let mut out = io::stdout();
+            for b in batch {
+                let _ = out.write_all(b);
+            }
+            let _ = out.flush();
+        }
+    }
 }
 
 /// Register the bar set with the log writer; called when a run starts.
@@ -328,6 +504,14 @@ pub fn register_mpb(mp: Arc<MultiProgress>) {
 
 pub fn unregister_mpb() {
     *LOG_MPB.lock().expect("LOG_MPB lock poisoned") = None;
+    // Drain the queue so the tail of the run is not lost between run end and
+    // process exit (the flusher thread stays alive for later runs).
+    if let Some(q) = LOG_QUEUE.get() {
+        let tail = q.drain();
+        if !tail.is_empty() {
+            log_flush_batch(&tail);
+        }
+    }
 }
 
 fn truncate_middle(s: &str, max_chars: usize) -> String {
