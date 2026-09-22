@@ -163,18 +163,29 @@ struct IdError {
 
 /// Single-pass SHA-1 and empty-page count.
 ///
+/// `buf` is the worker's reusable read buffer (sized once here); `pb`
+/// advances live per buffer so a huge file's bar stays responsive.
+///
 /// Bytes are hashed as read. Separately, the stream is partitioned into fixed
 /// `page_size` windows (independent of the I/O buffer). Only **full**
 /// all-zero windows count; a short trailing window does not (same rule as
 /// `sparse-cp::sparse_page_count`).
 ///
-/// Zero checks slice `read_buf` in place. Across a read boundary we only keep
+/// Zero checks slice `buf` in place. Across a read boundary we only keep
 /// `carry_len` / `carry_zero` — never the leftover bytes themselves.
-fn hash_file(path: &Path, page_size: usize, shutdown: &Shutdown) -> Result<([u8; 20], u64)> {
+fn hash_one(
+    buf: &mut Vec<u8>,
+    path: &Path,
+    page_size: usize,
+    shutdown: &Shutdown,
+    pb: Option<&ProgressBar>,
+) -> Result<([u8; 20], u64)> {
     let mut file = File::open(path).map_err(|e| Error::io(path, e))?;
+    if buf.len() < IO_BUF_SIZE {
+        buf.resize_with(IO_BUF_SIZE, || 0u8);
+    }
 
     let mut hasher = Sha1::new();
-    let mut read_buf = io_buffer();
     let mut zero_blocks = 0u64;
     // Incomplete page spanning the previous read: length so far, and whether
     // those bytes were all zero. `carry_len > 0` is the "cut off by buffer" flag.
@@ -185,15 +196,15 @@ fn hash_file(path: &Path, page_size: usize, shutdown: &Shutdown) -> Result<([u8;
         match shutdown.check_in_flight() {
             Ok(_) => (),
             Err(e) => {
-                tracing::info!("Rayon Thread got In Flight Interrupt");
+                tracing::info!("hash worker got in-flight interrupt");
                 return Err(e);
             }
         };
-        let n = file.read(&mut read_buf).map_err(|e| Error::io(path, e))?;
+        let n = file.read(buf).map_err(|e| Error::io(path, e))?;
         if n == 0 {
             break;
         }
-        hasher.update(&read_buf[..n]);
+        hasher.update(&buf[..n]);
 
         let mut i = 0usize;
 
@@ -201,11 +212,11 @@ fn hash_file(path: &Path, page_size: usize, shutdown: &Shutdown) -> Result<([u8;
         if carry_len > 0 {
             let need = page_size - carry_len;
             if n < need {
-                carry_zero &= is_all_zero(&read_buf[..n]);
+                carry_zero &= is_all_zero(&buf[..n]);
                 carry_len += n;
                 continue;
             }
-            if carry_zero && is_all_zero(&read_buf[..need]) {
+            if carry_zero && is_all_zero(&buf[..need]) {
                 zero_blocks += 1;
             }
             carry_len = 0;
@@ -215,7 +226,7 @@ fn hash_file(path: &Path, page_size: usize, shutdown: &Shutdown) -> Result<([u8;
 
         // Scan contiguous buffer
         while i + page_size <= n {
-            if is_all_zero(&read_buf[i..i + page_size]) {
+            if is_all_zero(&buf[i..i + page_size]) {
                 zero_blocks += 1;
             }
             i += page_size;
@@ -225,7 +236,10 @@ fn hash_file(path: &Path, page_size: usize, shutdown: &Shutdown) -> Result<([u8;
         let rem = n - i;
         if rem > 0 {
             carry_len = rem;
-            carry_zero = is_all_zero(&read_buf[i..n]);
+            carry_zero = is_all_zero(&buf[i..n]);
+        }
+        if let Some(pb) = pb {
+            pb.inc(n as u64);
         }
     }
 
