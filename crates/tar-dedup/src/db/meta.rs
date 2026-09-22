@@ -262,18 +262,6 @@ fn parse_u64(key: MetaKey, raw: &str) -> Result<u64> {
         .map_err(|_| Error::Config(format!("invalid u64 meta `{}`: {raw}", key.as_str())))
 }
 
-/// Run `f` inside a transaction. `f` receives `&Connection` (the transaction
-/// derefs to one) so typed setters work inside or outside a txn.
-pub fn with_meta_txn<T>(
-    conn: &mut Connection,
-    f: impl FnOnce(&Connection) -> Result<T>,
-) -> Result<T> {
-    let tx = conn.transaction().to_panic()?;
-    let out = f(&tx)?;
-    tx.commit().to_panic()?;
-    Ok(out)
-}
-
 fn get_typed<T>(
     conn: &Connection,
     key: MetaKey,
