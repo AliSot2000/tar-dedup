@@ -174,7 +174,7 @@ fn push_if_changed(
 
 /// Get all times associated with the file. Result is `(mtime, atime, ctime)`.
 pub fn get_file_times(
-    meta: &std::fs::Metadata,
+    meta: &fs::Metadata,
 ) -> (
     io::Result<DateTime<Utc>>,
     io::Result<DateTime<Utc>>,
@@ -183,15 +183,15 @@ pub fn get_file_times(
     (file_mtime(meta), file_atime(meta), file_ctime(meta))
 }
 
-fn file_mtime(meta: &std::fs::Metadata) -> io::Result<DateTime<Utc>> {
+fn file_mtime(meta: &fs::Metadata) -> io::Result<DateTime<Utc>> {
     Ok(DateTime::<Utc>::from(meta.modified()?))
 }
 
-fn file_atime(meta: &std::fs::Metadata) -> io::Result<DateTime<Utc>> {
+fn file_atime(meta: &fs::Metadata) -> io::Result<DateTime<Utc>> {
     Ok(DateTime::<Utc>::from(meta.accessed()?))
 }
 
-fn file_ctime(meta: &std::fs::Metadata) -> io::Result<DateTime<Utc>> {
+fn file_ctime(meta: &fs::Metadata) -> io::Result<DateTime<Utc>> {
     Ok(DateTime::<Utc>::from(meta.created()?))
 }
 
