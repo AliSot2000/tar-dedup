@@ -147,7 +147,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 /// Record a per-file hash failure in the persistent error log (best-effort).
 /// `hash_file` failures are `FileStat` (per-file) errors; the carried
 /// [`FileStatError`](crate::error::FileStatError) is recreated on the way in.
-fn record_hash_error(recorder: &mut crate::db::Recorder, e: &&IdError) {
+fn record_hash_error(recorder: &mut crate::db::Recorder, e: &IdError) {
     recorder.record_file(
         e.id,
         crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Hash),
