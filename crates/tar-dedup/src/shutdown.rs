@@ -82,7 +82,7 @@ impl Shutdown {
         }
     }
 
-    /// Abort long-running work immediately (force only).
+    /// Abort long-running work immediately (force only). Only raises variant Interrupted.
     pub fn check_in_flight(&self) -> Result<()> {
         if self.is_force() {
             Err(Error::Interrupted)
