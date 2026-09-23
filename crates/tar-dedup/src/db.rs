@@ -278,8 +278,110 @@ impl Database {
         )
     }
 
-    pub fn pending_duplicate_groups(&self) -> Result<Vec<GroupKey>> {
-        dedup::pending_duplicate_groups(&*self.conn())
+    pub fn ingest_hash_outcome(
+        &self, results: &Vec<HashingOutcome>, update_hardlinks: bool)
+        -> Result<u64> {
+        hash::ingest_hash_outcome(&mut self.conn_mut(), results, update_hardlinks)
+    }
+
+    pub fn promote_singleton_filtered_to_deduped(&self, eager_filter: bool) -> Result<u64> {
+        dedup::promote_singleton_filtered_to_deduped(&*self.conn(), eager_filter)
+    }
+
+    pub fn promote_non_ineligible_entries_to_dedup(&self, eager_filter: bool) -> Result<u64> {
+        dedup::promote_non_ineligible_entries_to_dedup(&*self.conn(), eager_filter)
+    }
+
+    /// Create `dedup_progress` + the per-connection `dedup_inflight` TEMP table.
+    /// Idempotent. Call once before the dedup FSM.
+    pub fn create_temp_dedup_table(&self) -> Result<()> {
+        dedup::create_temp_dedup_table(&*self.conn())
+    }
+
+    /// Drop `dedup_progress`. Success-path only; leave in place across
+    /// interrupts/resumes so the group state survives.
+    pub fn drop_temp_dedup_table(&self) -> Result<()> {
+        dedup::drop_temp_dedup_table(&*self.conn())
+    }
+
+    /// Add duplicate `(sha1, size)` groups into `dedup_progress` (idempotent).
+    pub fn populate_temp_table(&self, eager_filter: bool) -> Result<u64> {
+        dedup::populate_temp_table(&*self.conn(), eager_filter)
+    }
+
+    /// Groups still needing work (`ready`/`searching`/`finished`).
+    pub fn count_pending_dedup_groups(&self) -> Result<u64> {
+        dedup::count_pending_dedup_groups(&*self.conn())
+    }
+
+    /// Phase-bar total: files inside duplicate groups (still `<prev>` or already
+    /// `deduped`) — every one of these ends the phase `deduped`.
+    pub fn count_dedup_phase_total(&self, eager_filter: bool) -> Result<u64> {
+        dedup::count_dedup_phase_total(&*self.conn(), eager_filter)
+    }
+
+    /// Of [`Self::count_dedup_phase_total`], how many are already `deduped`.
+    pub fn count_dedup_phase_position(&self, eager_filter: bool) -> Result<u64> {
+        dedup::count_dedup_phase_position(&*self.conn(), eager_filter)
+    }
+
+    /// `searching` -> `finished` (guarded SQL; only complete groups flip).
+    pub fn searching_to_finished(&self, eager_filter: bool) -> Result<u64> {
+        dedup::searching_to_finished(&mut *self.conn_mut(), eager_filter)
+    }
+
+    /// `finished` -> `errored`; promotes the group's remaining files. Returns
+    /// `(groups errored, files promoted)`.
+    pub fn finish_to_error(&self, eager_filter: bool) -> Result<(u64, u64)> {
+        dedup::finish_to_error(&mut *self.conn_mut(), eager_filter)
+    }
+
+    /// `finished` -> `done`; promotes the group's remaining files. Returns the
+    /// files promoted.
+    pub fn finish_to_done(&self, eager_filter: bool) -> Result<u64> {
+        dedup::finish_to_done(&mut *self.conn_mut(), eager_filter)
+    }
+
+    /// `finished` -> `ready`; retires the canonical. Returns the canonicals
+    /// promoted.
+    pub fn finish_to_ready(&self, eager_filter: bool) -> Result<u64> {
+        dedup::finish_to_ready(&mut *self.conn_mut(), eager_filter)
+    }
+
+    /// `ready` -> `searching`: elects canuseslonals and closes lone-canonical
+    /// groups. Returns `(canonicals elected, files promoted)`.
+    pub fn ready_to_searching(&self, eager_filter: bool) -> Result<(u64, u64)> {
+        dedup::ready_to_searching(&mut *self.conn_mut(), eager_filter)
+    }
+
+    /// Next slice of `(candidate, canonical)` pairs still awaiting compare.
+    /// `dedup_inflight` excludes pairs already handed out (scan restart-safe).
+    pub fn list_pending_comparisons<R: SqlFileRow>(
+        &self, eager_filter: bool, last_candidate_id: u64, limit: u64)
+        -> Result<Vec<(R, R)>> {
+        dedup::list_pending_comparisons::<R>(
+            &*self.conn(), eager_filter, last_candidate_id, limit)
+    }
+
+    pub fn mark_inflight(&self, ids: &[FileId]) -> Result<()> {
+        dedup::mark_inflight(&*self.conn(), ids)
+    }
+
+    pub fn unmark_inflight(&self, ids: &[FileId]) -> Result<()> {
+        dedup::unmark_inflight(&*self.conn(), ids)
+    }
+
+    // TODO: Mark file and descendants in Phase
+    pub fn set_canonical(&self, file_id: FileId, canonical_id: FileId) -> Result<()> {
+        dedup::set_canonical(&*self.conn(), file_id, canonical_id)
+    }
+
+    pub fn mark_self_canonical(&self, file_id: FileId) -> Result<()> {
+        dedup::mark_self_canonical(&*self.conn(), file_id)
+    }
+
+    pub fn count_check_with_canonical_completed(&self) -> Result<u64> {
+        dedup::count_check_with_canonical_completed(&*self.conn())
     }
 
     pub fn add_include_pattern(&self, from: &str, line: Option<u64>, query: &str) -> Result<u64> {
@@ -356,10 +458,6 @@ impl Database {
         filter::fix_up_canonical_flag(&mut *self.conn_mut())
     }
 
-    pub fn promote_singleton_filtered_to_deduped(&self, eager_filter: bool) -> Result<u64> {
-        dedup::promote_singleton_filtered_to_deduped(&*self.conn(), eager_filter)
-    }
-
     pub fn promote_deduped_to_sparsified(&self) -> Result<u64> {
         sparsify::promote_deduped_to_sparsified(&*self.conn())
     }
@@ -386,59 +484,6 @@ impl Database {
 
     pub fn list_files_to_stage<R: SqlFileRow>(&self, retry_missing_sha: bool) -> Result<Vec<R>> {
         stage::list_files_to_stage(&self.conn(), retry_missing_sha)
-    }
-
-    pub fn mark_active_canonical(&self, file_id: FileId) -> Result<()> {
-        dedup::mark_active_canonical(&*self.conn(), file_id)
-    }
-
-    pub fn promote_to_deduped(&self, file_id: FileId) -> Result<()> {
-        dedup::promote_to_deduped(&*self.conn(), file_id)
-    }
-
-    pub fn promote_non_ineligible_entries_to_dedup(&self, eager_filter:bool ) -> Result<u64> {
-        dedup::promote_non_ineligible_entries_to_dedup(&self.conn(), eager_filter)
-    }
-
-    pub fn clear_check_with_canonical_completed(&self, sha1: &[u8; 20], size: u64) -> Result<u64> {
-        dedup::clear_check_with_canonical_completed(&*self.conn(), sha1, size)
-    }
-
-    pub fn promote_errored_pending_to_deduped(&self, sha1: &[u8; 20], size: u64) -> Result<u64> {
-        dedup::promote_errored_pending_to_deduped(&*self.conn(), sha1, size)
-    }
-
-    pub fn count_check_with_canonical_completed(&self) -> Result<u64> {
-        dedup::count_check_with_canonical_completed(&*self.conn())
-    }
-
-    pub fn count_active_canonicals(&self, sha1: &[u8; 20], size: u64) -> Result<u64> {
-        dedup::count_active_canonicals(&*self.conn(), sha1, size)
-    }
-
-    pub fn promote_active_canonical_in_group(&self, sha1: &[u8; 20], size: u64) {
-        dedup::promote_active_canonical_in_group(&*self.conn(), sha1, size)
-    }
-
-    pub fn count_electable_pending(&self, sha1: &[u8; 20], size: u64) -> Result<u64> {
-        dedup::count_electable_pending(&*self.conn(), sha1, size)
-    }
-
-    pub fn list_filtered_in_group<R: SqlFileRow>(
-        &self,
-        sha1: &[u8; 20],
-        size: u64,
-    ) -> Result<Vec<R>> {
-        dedup::list_filtered_in_group(&*self.conn(), sha1, size)
-    }
-
-    // TODO: Mark file and descendants in Phase
-    pub fn set_canonical(&self, file_id: FileId, canonical_id: FileId) -> Result<()> {
-        dedup::set_canonical(&*self.conn(), file_id, canonical_id)
-    }
-
-    pub fn mark_self_canonical(&self, file_id: FileId) -> Result<()> {
-        dedup::mark_self_canonical(&*self.conn(), file_id)
     }
 
     pub fn load_runtime_state(&self) -> Result<Option<RuntimeState>> {
