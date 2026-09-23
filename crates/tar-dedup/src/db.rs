@@ -6,10 +6,10 @@ use rusqlite::Connection;
 use crate::config::{ExtractRuntimeState, RuntimeState};
 use crate::db::flags::{FileFlag, FileFlags, OutTreeFlag, OutTreeFlags, SourceFlags};
 use crate::db::types::{
-    ArchiveSession, FileId, FilePhase, FilterExpression, GroupKey, NewFileRecord, NewOutTreeRow,
+    ArchiveSession, FileId, FilePhase, FilterExpression, NewFileRecord, NewOutTreeRow,
     OutTreeId, OutTreeRecord, SourceRecord,
 };
-use crate::error::Result;
+use crate::error::{Result, ToPanic};
 
 pub mod flags;
 pub mod types;
@@ -18,7 +18,7 @@ pub use errors::{ErrorPhase, ErrorRecord, RecordDraft};
 
 mod common;
 pub mod content_id;
-mod dedup;
+pub(crate) mod dedup;
 mod errors;
 mod extract;
 mod filter;
@@ -40,6 +40,7 @@ mod tar_writer;
 pub use common::SqlFileRow;
 pub use extract::ExtractScanState;
 pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
+use crate::db::hash::HashingOutcome;
 
 pub struct Database {
     conn: RefCell<Connection>,
