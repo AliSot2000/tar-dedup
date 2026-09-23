@@ -202,6 +202,17 @@ impl Database {
         hash::promote_unhasheable_files(&self.conn(), eager_filter, detect_hardlinks)
         
     }
+
+    /// Run `f` inside a transaction. `f` receives `&Connection` (the
+    /// transaction derefs to one) so typed setters work inside or outside a txn.
+    pub fn with_transaction<T>(&self, f: impl FnOnce(&Connection) -> Result<T>)
+        -> Result<T> {
+        let mut conn = self.conn_mut();
+        let tx = conn.transaction().to_panic()?;
+        let out = f(&tx)?;
+        tx.commit().to_panic()?;
+        Ok(out)
+    }
     
     pub fn get_entries_to_hash<R: SqlFileRow>(
         &self,
@@ -210,6 +221,31 @@ impl Database {
         batch_size: u64,
     ) -> Result<Vec<R>> {
         hash::get_entries_to_hash(&*self.conn(), eager_filter, detect_hardlinks, batch_size)
+    }
+
+    /// Create the `hash_queue` ordering table (idempotent).
+    pub fn create_hash_queue(&self) -> Result<()> {
+        hash::create_hash_queue(&*self.conn())
+    }
+
+    /// Populate `hash_queue` with the full, stable set of hashable files in
+    /// `size DESC` order (idempotent; see `db/hash.rs`).
+    pub fn populate_hash_queue(&self, eager_filter: bool, detect_hardlinks: bool) -> Result<u64> {
+        hash::populate_hash_queue(&*self.conn(), eager_filter, detect_hardlinks)
+    }
+
+    /// Next slice of still-pending hash rows, in `hash_queue` (size-DESC)
+    /// order, as `(queue_position, record)` pairs. All SQLite lives in
+    /// `db/hash.rs`; a long-lived prepared cursor cannot outlive its owning
+    /// connection, so the pass streams in `limit` slices.
+    pub fn pull_pending_hash_rows<R: SqlFileRow>(&self, index: u64, limit: u64)
+        -> Result<Vec<(u64, R)>> {
+        hash::pull_pending_hash_rows(&*self.conn(), index, limit)
+    }
+
+    /// Drop the `hash_queue` ordering table (idempotent). Success-path only.
+    pub fn drop_hash_queue(&self) -> Result<()> {
+        hash::drop_hash_queue(&*self.conn())
     }
 
     pub fn count_all_hashable_files(
