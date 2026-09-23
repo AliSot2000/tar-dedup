@@ -295,3 +295,36 @@ pub fn update_file_inspection_per_id(
     ).to_panic()?;
     Ok(())
 }
+
+pub fn ingest_hash_outcome(
+    conn: &mut Connection, results: &Vec<HashingOutcome>, update_hardlinks: bool)
+    -> Result<u64> {
+    let tx = conn.transaction().to_panic()?;
+    for outcome in results.iter() {
+        match outcome {
+            Ok(hs ) => {
+                if hs.modified {
+                    set_file_flag(&tx, hs.id, FileFlag::Modified, true)?;
+                }
+                update_file_inspection_per_id(
+                    &tx, hs.id, hs.hash, hs.zero_pages, update_hardlinks
+                )?;
+            }
+            Err(he ) => {
+                if he.modified {
+                    set_file_flag(&tx, he.id, FileFlag::Modified, true)?;
+                }
+                match &he.err {
+                    Error::Interrupted => (),
+                    Error::FileStat(_) => {
+                        let _ = set_file_flag(&tx, he.id, FileFlag::ErrorWhileHash, true)?;
+                    },
+                    other => panic!(
+                        "Invariant Error. Only FileStatError and Interrupted expected. Got: {other}"
+                    ),
+                }
+            }
+        }
+    }
+    Ok(0)
+}
