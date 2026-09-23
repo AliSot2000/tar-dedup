@@ -163,58 +163,6 @@ pub fn promote_unhasheable_files(conn: &Connection, eager_filter: bool, detect_h
     Ok(count as u64)
 }
 
-/// Get all files that still need to be inspected
-pub fn get_entries_to_hash<R: SqlFileRow>(
-    conn: &Connection, eager_filter: bool, detect_hardlinks: bool, batch_size: u64)
-    -> Result<Vec<R>> {
-    let cols = R::sql_columns(None);
-    let phase = if eager_filter {
-        "'filtered'"
-    } else {
-        "'inventoried'"
-    };
-    let filtered_selection = if eager_filter {
-        format!("AND {}", generate_archive_filter(None))
-    } else {
-        String::new()
-    };
-    let filter_hardlink_canonical = if detect_hardlinks {
-        "AND (flags & :flag) != 0"
-    } else {
-        ""
-    };
-    let sql = format!(
-        "SELECT {cols} FROM files WHERE phase = {phase}
-             AND (flags & :sha_error) = 0
-             AND sha1 IS NULL
-             AND ftype = 'file'
-             {filter_hardlink_canonical}
-             {filtered_selection}
-             ORDER BY size DESC
-             LIMIT :batch_size"
-    );
-    let mut stmt = conn.prepare(&sql).to_panic()?;
-    let row_mapper = |r: &rusqlite::Row<'_>| R::from_row(r, None);
-
-    let rows = if detect_hardlinks {
-        stmt.query_map(named_params! {
-            ":sha_error": FileFlag::ErrorWhileHash.mask_i64(),
-            ":flag": FileFlag::FileHardlinkCanonical.mask_i64(),
-            ":batch_size": batch_size,
-        },
-        row_mapper).to_panic()?
-    } else {
-        stmt.query_map(
-            named_params! {
-                ":sha_error": FileFlag::ErrorWhileHash.mask_i64(),
-                ":batch_size": batch_size,
-            },
-            row_mapper,
-        ).to_panic()?
-    };
-    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
-}
-
 /// Count all rows that remain to be hashed in this phase.
 pub fn count_pending_hashable_files(conn: &Connection, eager_filter: bool, detect_hardlinks: bool)
     -> Result<u64> {
