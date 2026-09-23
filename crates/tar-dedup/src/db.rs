@@ -214,15 +214,6 @@ impl Database {
         Ok(out)
     }
     
-    pub fn get_entries_to_hash<R: SqlFileRow>(
-        &self,
-        eager_filter: bool,
-        detect_hardlinks: bool,
-        batch_size: u64,
-    ) -> Result<Vec<R>> {
-        hash::get_entries_to_hash(&*self.conn(), eager_filter, detect_hardlinks, batch_size)
-    }
-
     /// Create the `hash_queue` ordering table (idempotent).
     pub fn create_hash_queue(&self) -> Result<()> {
         hash::create_hash_queue(&*self.conn())
