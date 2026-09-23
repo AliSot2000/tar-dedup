@@ -1,9 +1,24 @@
 use crate::db::SqlFileRow;
 use crate::db::common::generate_archive_filter;
-use crate::db::flags::FileFlag;
+use crate::db::flags::{FileFlag, set_file_flag};
 use crate::db::types::FileId;
-use crate::error::{Result, ToPanic};
+use crate::error::{Error, Result, ToPanic};
 use rusqlite::{Connection, named_params};
+
+
+pub struct HashError {
+    pub modified: bool,
+    pub id: FileId,
+    pub err: Error,
+}
+
+pub struct HashSuccess {
+    pub modified: bool,
+    pub id: FileId,
+    pub zero_pages: u64,
+    pub hash: [u8; 20],
+}
+pub type HashingOutcome = std::result::Result<HashSuccess, HashError>;
 
 
 /// Shared WHERE selecting *all* files the hash phase will ever touch — the
