@@ -22,14 +22,14 @@ fn populate_out_tree_absolute_dirs_files_and_ancestor_null_file_id() {
     assert_eq!(db.count_ref_out_rows().expect("ref_out"), 0);
 
     let file_row = db
-        .list_out_tree_files(None, 100, None)
+        .list_out_tree(OutTreeId(0), 100, None, Some(false))
         .expect("files")
         .into_iter()
         .find(|r| r.file_id == Some(file_id))
         .expect("file row");
     assert_eq!(file_row.abs_path, extract_root.join("project/src/main.rs"));
 
-    let dir_rows = db.list_out_tree_dirs(None, 100, None).expect("dirs");
+    let dir_rows = db.list_out_tree(OutTreeId(0), 100, None, Some(true))?;
     assert_eq!(dir_rows.len(), 1);
     assert_eq!(dir_rows[0].file_id, Some(dir_id));
     assert_eq!(dir_rows[0].abs_path, extract_root.join("project/src"));
@@ -91,7 +91,7 @@ fn populate_out_tree_relative_ref_out_and_multi_file_id() {
     assert!(paths.contains(&extract_root.join("b/shared.txt")));
 
     let for_a = db
-        .list_out_tree_files(None, 100, Some(source_a))
+        .list_out_tree(OutTreeId(0), 100, None, Some(false))
         .expect("source a files");
     assert!(for_a.iter().any(|r| r.file_id == Some(shared)));
 }
@@ -112,11 +112,11 @@ fn list_out_tree_dirs_joins_files_ftype() {
     common::populate_out_tree(&db, &config);
 
     assert_eq!(
-        db.list_out_tree_dirs(None, 100, None).expect("dirs").len(),
+        db.list_out_tree(OutTreeId(0), 100, None, Some(true)).expect("dirs").len(),
         1
     );
     assert_eq!(
-        db.list_out_tree_files(None, 100, None)
+        db.list_out_tree(OutTreeId(0), 100, None, Some(false))
             .expect("files")
             .len(),
         1
