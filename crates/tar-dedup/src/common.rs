@@ -9,6 +9,7 @@ pub mod transform;
 pub mod xattr;
 
 use crate::error::Result;
+use std::thread::JoinHandle;
 
 // Constants reused across the project that need to be coherent.
 
@@ -91,4 +92,13 @@ where
         process_entries(entries)?;
     }
     Ok(())
+}
+
+pub fn at_least_one_running(threads: &Vec<&JoinHandle<()>>) -> bool {
+    for handle in threads {
+        if !handle.is_finished() {
+            return true;
+        }
+    }
+    false
 }
