@@ -33,7 +33,7 @@ mod rehash;
 mod scan;
 mod schema;
 mod source;
-mod sparsify;
+pub(crate) mod sparsify;
 mod stage;
 mod tar_writer;
 
@@ -42,6 +42,7 @@ pub use extract::ExtractScanState;
 pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
 use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
+use crate::db::sparsify::SparseOutcome;
 
 pub struct Database {
     conn: RefCell<Connection>,
@@ -464,16 +465,38 @@ impl Database {
         sparsify::promote_non_sparsify_candidates_to_sparsified(&*self.conn(), min_pages)
     }
 
-    pub fn list_sparsify_candidates<R: SqlFileRow>(&self, min_pages: u64) -> Result<Vec<R>> {
-        sparsify::list_sparsify_candidates(&*self.conn(), min_pages)
+    /// Create the `sparsify_queue` ordering table (idempotent).
+    pub fn create_sparsify_queue(&self) -> Result<()> {
+        sparsify::create_sparsify_queue(&*self.conn())
     }
 
-    pub fn mark_sparsified_sparse(&self, file_id: FileId) -> Result<()> {
-        sparsify::mark_sparsified_sparse(&*self.conn(), file_id)
+    /// Populate `sparsify_queue` with the full, stable set of sparsify
+    /// candidates in `size DESC` order (idempotent; see `db/sparsify.rs`).
+    pub fn populate_sparsify_queue(&self, min_pages: u64) -> Result<u64> {
+        sparsify::populate_sparsify_queue(&*self.conn(), min_pages)
     }
 
-    pub fn mark_sparsified_error(&self, file_id: FileId) -> Result<()> {
-        sparsify::mark_sparsified_error(&*self.conn(), file_id)
+    /// Next slice of still-pending sparsify rows, in `sparsify_queue`
+    /// (size-DESC) order, as `(queue_position, record)` pairs.
+    pub fn pull_pending_sparsify_rows<R: SqlFileRow>(&self, index: u64, limit: u64)
+        -> Result<Vec<(u64, R)>> {
+        sparsify::pull_pending_sparsify_rows(&*self.conn(), index, limit)
+    }
+
+    /// Drop the `sparsify_queue` ordering table (idempotent). Success-path only.
+    pub fn drop_sparsify_queue(&self) -> Result<()> {
+        sparsify::drop_sparsify_queue(&*self.conn())
+    }
+
+    /// Rows still awaiting a sparse rewrite (matches the feed pull).
+    pub fn count_pending_sparsify_candidates(&self, min_pages: u64) -> Result<u64> {
+        sparsify::count_pending_sparsify_candidates(&*self.conn(), min_pages)
+    }
+
+    /// Apply a batch of worker outcomes (flags + `sparsified` promotion) in one
+    /// transaction. Returns the rows advanced to `sparsified`.
+    pub fn ingest_sparsify_outcome(&self, results: &Vec<SparseOutcome>) -> Result<u64> {
+        sparsify::ingest_sparsify_outcome(&mut self.conn_mut(), results)
     }
 
     pub fn promote_unstageable_files(&self, retry_missing_sha: bool) -> Result<u64> {
