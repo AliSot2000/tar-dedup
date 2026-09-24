@@ -590,6 +590,8 @@ fn lookup_gid(_name: &str) -> Option<u32> {
 // Testing
 // -------------------------------------------------------------------------------------------------
 
+// TODO nonexisting group name
+
 #[cfg(test)]
 mod tests {
     use super::*;
