@@ -39,7 +39,7 @@ The hash phase was just refactored (worker state machine → `handle_send_receiv
   mirrors `request_graceful`): `self.mode.store(MODE_FORCE, Ordering::SeqCst)`. Required
   because `MODE_FORCE` is otherwise only reachable through 3 real SIGINTs (which must not hit
   the test process). Put it in `src/shutdown.rs` next to `request_graceful`; add a tiny
-  `#[cfg(test)] mod tests` there too (construct, `request_graceful`, `is_interrupted`;
+  `#[cfg(test)] mod tests` there too (construct, `request_graceful`, `is_graceful`;
   `request_force`, `is_force`; assert `check_in_flight` errors only after force).
 
 ## Current pipeline shape (context to rebuild from)
@@ -281,3 +281,50 @@ with raw `conn.execute("INSERT INTO files (id, abs_path, ext, size, ftype, phase
   where they exist, raw `conn.execute`/`query_row` inside `db.with_transaction(|conn| …)` where
   they don't (same-crate tests may use `crate::db::schema::initialize` +
   `rusqlite::Connection::open` for the db module tests instead of `Database`).
+## As built (2026-09-24)
+
+Implemented inline in `src/archive/hash.rs`, `src/db/hash.rs`, `src/shutdown.rs`. Global
+result: `cargo test -p tar-dedup --lib` → 116 passed / 4 failed, where the 4 failures are the
+pre-existing broken tests (`db::inventory::tests::major_minor_null_for_regular_file`,
+`db::inventory::tests::two_sources_share_one_file_row`,
+`unarchive::scan::tests::scan_caches_payloads_and_promotes_on_snapshot`, `…scan_interrupt_…` —
+the last two trip a pre-existing `"no such column: flag"` SQL bug in `scan.rs`). Hash suite:
+21 passed / 0 failed / 1 ignored, stable across 3 consecutive runs.
+
+Production bugfixes required by the tests (all in scope of the plan's no-hang/no-panic
+conditions):
+
+1. `db::hash.rs::ingest_hash_outcome` never called `tx.commit()` — every hash outcome was
+   rolled back, so **no digest/phase ever persisted**. Added the missing commit (this is why
+   the earlier sessions' `ingest_only_wrote_when_modified` symptom existed).
+2. `archive/hash.rs::handle_send_receive_loop` tail rework:
+   - Steady state now drains until `received == feed_total`, where `received` is a
+     `Arc<AtomicU64>` counter incremented by `drain_chunk` (two `Arc` locals sidestep the
+     dialect's closure-capture borrow rules, which forbid reading `pending_out`/`dequeue_total`
+     outside the closures). The receiver is no longer dropped while the last worker's `out.send`
+     is still in flight (was: `result channel closed` panic + lost tail outcome).
+   - Interrupt path: force/graceful no longer relies on the old phase-2 `queue_index ==
+     feed_total` (racy) but on a quiet window of 250×4 ms after the last received outcome, so
+     late-starting or in-flight workers finish (graceful) or abort (force) safely.
+   - Phase-1/2 loops break on any non-running shutdown; force previously wedged the loop in a
+     full-channel `try_send` retry when the work channel saturated beyond the (exited) workers.
+3. `archive/hash.rs::run` tail now keys on `is_running()`: force returns `Err(Error::Interrupted)`
+   and leaves `hash_queue` in place (previously force "succeeded", dropped the queue, and let
+   unhashed rows advance to dedup).
+4. Removed the dead, non-compiling `db::dedup::ingest_compare_result` (unreferenced; the real
+   ingestion lives in `archive/dedup.rs::apply_chunk`). Only this blocked the build.
+
+Test-side deviations from the plan:
+
+- `interrupt_dequeue_only` trigger drops the `work.len() == 0` conjunction (a 1 ms poll would
+  miss that microsecond window); it now uses the same bar `pos(>0)->0` signal as mid-feed.
+- `triple_interrupt_force_discards_in_flight` asserts `completed <= 1` (0 is valid when the
+  abort lands on a between-file check rather than mid-read) and leans on the DB state.
+- `run_hashes_and_stores_digests` asserts `sparse_count == 4` for the 4-zero-pages + random-tail
+  file (plan draft said 3 — arithmetic).
+- File sizes raised to 8–16 MiB for the interrupt tests so a starved trigger thread still lands
+  mid-run; the tests remain scheduling-sensitive by nature (caveat for CI). The 32 MiB force
+  file is unchanged.
+- `mid_feed`/`dequeue_only` keep a `Vec::<(FileId, [u8;20])>::new()` expected list; verdicts
+  compare stored digests.
+- `#[ignore]` verified valid for `batch_size_parity_stub`.
