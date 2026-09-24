@@ -225,10 +225,8 @@ pub fn handle_send_receive_loop(
 
         drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
         // Leave for dequeue loop.
-        if feed_exhausted && feed_idx == feed_buf.len() {
-            break;
-        }
-        if !one_running() {
+        if feed_exhausted && feed_idx == feed_buf.len()
+            || !one_running() {
             break;
         }
         if !busy {
@@ -250,13 +248,10 @@ pub fn handle_send_receive_loop(
     // comes first.
     loop {
         busy = false;
-        if dequeue_total == feed_total {
-            break;
-        }
-        if !one_running() {
-            break;
-        }
-        if exited_workers == rt.config.process.effective_jobs() as u64 {
+        if rt.shutdown.is_interrupted()
+            || dequeue_total == feed_total
+            || !one_running()
+            || exited_workers == rt.config.process.effective_jobs() as u64 {
             break;
         }
         drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
