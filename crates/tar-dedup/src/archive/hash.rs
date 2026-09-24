@@ -144,6 +144,7 @@ pub fn handle_send_receive_loop(
     let mut feed_buf = Vec::<(u64, StrippedRecord)>::new();
     let mut feed_idx = 0usize;
     let mut feed_exhausted = false;
+    #[warn(unused_assignments)]
     let mut busy = false;
 
     let mut dequeue_total = 0u64;
