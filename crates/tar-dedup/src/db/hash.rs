@@ -277,3 +277,232 @@ pub fn ingest_hash_outcome(
     tx.commit().to_panic()?;
     Ok(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema;
+    use crate::error::{Error, FileStatError, Result};
+    use std::panic::AssertUnwindSafe;
+    use std::panic::catch_unwind;
+    use std::path::PathBuf;
+
+    // FileFlag bit masks (bits 5/6) — literals keep constants const-callable.
+    const FLAG_MODIFIED: i64 = 1i64 << 5;
+    const FLAG_SHA_ERROR: i64 = 1i64 << 6;
+
+    fn open_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = Connection::open(&dir.path().join("t.sqlite")).expect("open conn");
+        schema::initialize(&conn).expect("schema init");
+        (dir, conn)
+    }
+
+    fn insert_row(conn: &Connection, id: i64, abs_path: &str, dev: i64, inode: i64) {
+        conn.execute(
+            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, dev, inode) \
+             VALUES (:id, :abs_path, '.bin', 0, 'file', 'inventoried', :dev, :inode)",
+            named_params! {
+                ":id": id,
+                ":abs_path": abs_path,
+                ":dev": dev,
+                ":inode": inode,
+            },
+        ).expect("insert row");
+    }
+
+    fn insert_default_row(conn: &Connection, id: i64) {
+        let abs_path = format!("/tmp/file{id}.bin");
+        insert_row(conn, id, abs_path.as_str(), 777, id * 1000);
+    }
+
+    fn row_flags(conn: &Connection, id: i64) -> i64 {
+        conn.query_row(
+            "SELECT flags FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get(0),
+        ).expect("read flags")
+    }
+
+    fn row_sha1(conn: &Connection, id: i64) -> Option<Vec<u8>> {
+        conn.query_row(
+            "SELECT sha1 FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        ).expect("read sha1")
+    }
+
+    fn row_phase(conn: &Connection, id: i64) -> String {
+        conn.query_row(
+            "SELECT phase FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get::<_, String>(0),
+        ).expect("read phase")
+    }
+
+    #[test]
+    fn ingest_writes_digest_phase_sparse_count() {
+        let (_dir, mut conn) = open_db();
+        insert_default_row(&conn, 1);
+        let digest: [u8; 20] = [7u8; 20];
+        let mut outcomes = Vec::<HashingOutcome>::new();
+        outcomes.push(Ok(HashSuccess {
+            id: FileId(1),
+            modified: false,
+            zero_pages: 7,
+            hash: digest,
+        }));
+
+        let applied = ingest_hash_outcome(&mut conn, &outcomes, false).expect("ingest");
+
+        assert_eq!(applied, 0);
+        assert_eq!(row_flags(&conn, 1) & FLAG_MODIFIED, 0);
+        assert_eq!(row_sha1(&conn, 1), Some(digest.as_slice().to_vec()));
+        assert_eq!(
+            conn.query_row(
+                "SELECT sparse_count FROM files WHERE id = 1", [], |row| row.get::<_, i64>(0)
+            ).expect("sparse"),
+            7
+        );
+        assert_eq!(row_phase(&conn, 1), "hashed");
+    }
+
+    #[test]
+    fn ingest_sets_modified_flag_on_ok_and_err() {
+        let (_dir, mut conn) = open_db();
+        insert_default_row(&conn, 1);
+        insert_default_row(&conn, 2);
+        let digest: [u8; 20] = [9u8; 20];
+        let mut outcomes = Vec::<HashingOutcome>::new();
+        outcomes.push(Ok(HashSuccess {
+            id: FileId(1), modified: true, zero_pages: 0, hash: digest,
+        }));
+        outcomes.push(Err(HashError {
+            id: FileId(2),
+            modified: true,
+            err: Error::FileStat(FileStatError::General {
+                path: None,
+                message: "boom".to_string(),
+            }),
+        }));
+
+        ingest_hash_outcome(&mut conn, &outcomes, false).expect("ingest");
+
+        assert_ne!(row_flags(&conn, 1) & FLAG_MODIFIED, 0);
+        assert_ne!(row_flags(&conn, 2) & FLAG_MODIFIED, 0);
+    }
+
+    #[test]
+    fn ingest_filestat_error_sets_error_while_hash() {
+        let (_dir, mut conn) = open_db();
+        insert_default_row(&conn, 1);
+        let mut outcomes = Vec::<HashingOutcome>::new();
+        outcomes.push(Err(HashError {
+            id: FileId(1),
+            modified: false,
+            err: Error::FileStat(FileStatError::Io {
+                path: PathBuf::from("/tmp/nope.bin"),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied, "denied".to_string(),
+                ),
+            }),
+        }));
+
+        ingest_hash_outcome(&mut conn, &outcomes, false).expect("ingest");
+
+        assert_ne!(row_flags(&conn, 1) & FLAG_SHA_ERROR, 0);
+        assert_eq!(row_flags(&conn, 1) & FLAG_MODIFIED, 0);
+        if let Some(_) = row_sha1(&conn, 1) {
+            panic!("FileStat error must not store a digest");
+        }
+        assert_eq!(row_phase(&conn, 1), "inventoried");
+    }
+
+    #[test]
+    fn ingest_discards_interrupted_untouched() {
+        let (_dir, mut conn) = open_db();
+        insert_default_row(&conn, 1);
+        let mut outcomes = Vec::<HashingOutcome>::new();
+        outcomes.push(Err(HashError {
+            id: FileId(1),
+            modified: false,
+            err: Error::Interrupted,
+        }));
+
+        ingest_hash_outcome(&mut conn, &outcomes, false).expect("ingest");
+
+        assert_eq!(row_flags(&conn, 1), 0);
+        assert_eq!(row_phase(&conn, 1), "inventoried");
+        if let Some(_) = row_sha1(&conn, 1) {
+            panic!("Interrupted outcome must not store a digest");
+        }
+    }
+
+    #[test]
+    fn ingest_panics_on_invalid_error_variants() {
+        let variants = [
+            Error::Config("invalid config".into()),
+            Error::Other(anyhow::anyhow!("boom")),
+            Error::Database(rusqlite::Error::InvalidParameterName("boom".to_string())),
+        ];
+        for variant in variants {
+            let (_dir, mut conn) = open_db();
+            insert_default_row(&conn, 1);
+            let mut outcomes = Vec::<HashingOutcome>::new();
+            outcomes.push(Err(HashError {
+                id: FileId(1),
+                modified: false,
+                err: variant,
+            }));
+            let res = catch_unwind(AssertUnwindSafe(|| -> Result<()> {
+                let _ = ingest_hash_outcome(&mut conn, &outcomes, false)?;
+                Ok(())
+            }));
+            assert!(res.is_err());
+        }
+    }
+
+    #[test]
+    fn update_file_inspection_propagates_hardlink_group() {
+        let (_dir, conn) = open_db();
+        insert_row(&conn, 1, "/tmp/a.bin", 5, 10);
+        insert_row(&conn, 2, "/tmp/b.bin", 5, 10);
+        let digest: [u8; 20] = [3u8; 20];
+
+        update_file_inspection_per_id(&conn, FileId(1), digest, 3, true).expect("update");
+
+        assert_eq!(row_sha1(&conn, 1), Some(digest.as_slice().to_vec()));
+        assert_eq!(row_sha1(&conn, 2), Some(digest.as_slice().to_vec()));
+        assert_eq!(
+            conn.query_row(
+                "SELECT sparse_count FROM files WHERE id = 2", [], |row| row.get::<_, i64>(0)
+            ).expect("sparse"),
+            3
+        );
+        assert_eq!(row_phase(&conn, 2), "hashed");
+        assert_eq!(
+            conn.query_row(
+                "SELECT sparse_count FROM files WHERE id = 1", [], |row| row.get::<_, i64>(0)
+            ).expect("sparse"),
+            3
+        );
+        assert_eq!(row_phase(&conn, 1), "hashed");
+    }
+
+    #[test]
+    fn update_file_inspection_single_row_without_hardlinks() {
+        let (_dir, conn) = open_db();
+        insert_row(&conn, 1, "/tmp/a.bin", 5, 10);
+        insert_row(&conn, 2, "/tmp/b.bin", 5, 10);
+        let digest: [u8; 20] = [3u8; 20];
+
+        update_file_inspection_per_id(&conn, FileId(1), digest, 1, false).expect("update");
+
+        assert_eq!(row_sha1(&conn, 1), Some(digest.as_slice().to_vec()));
+        assert_eq!(row_phase(&conn, 1), "hashed");
+        if let Some(_) = row_sha1(&conn, 2) {
+            panic!("without hardlink propagation the sibling row must stay untouched");
+        }
+        assert_eq!(row_phase(&conn, 2), "inventoried");
+    }
+}
