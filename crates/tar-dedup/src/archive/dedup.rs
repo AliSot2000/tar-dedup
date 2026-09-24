@@ -169,6 +169,7 @@ fn run_enqueue_dequeue_loop_dedup(
     let mut completed = 0u64;
     let mut fail_fast_hit = false;
     let mut pending_out = Vec::<CompareOutcome>::new();
+    #[warn(unused_assignments)]
     let mut busy = false;
 
     let mut apply_chunk = |pending: &mut Vec<CompareOutcome>|
