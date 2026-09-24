@@ -1,6 +1,6 @@
 mod common;
 
-use tar_dedup::db::types::FileType;
+use tar_dedup::db::types::{FileType, OutTreeId};
 
 /// What: absolute-mode populate inserts catalog dirs/files and ancestor dirs.
 /// Why: out_tree must mirror the full fixed output tree before place runs.
