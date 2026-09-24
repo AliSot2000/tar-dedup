@@ -67,11 +67,22 @@ impl Shutdown {
         self.mode.store(MODE_GRACEFUL, Ordering::SeqCst);
     }
 
+    /// Request an immediate abort (discard in-flight progress; see `check_in_flight`).
+    pub fn request_force(&self) {
+        self.mode.store(MODE_FORCE, Ordering::SeqCst);
+    }
+
     pub fn is_force(&self) -> bool {
         self.mode.load(Ordering::SeqCst) == MODE_FORCE
     }
     
-    pub fn is_interrupted(&self) -> bool { self.mode.load(Ordering::SeqCst) == MODE_GRACEFUL }
+    pub fn is_graceful(&self) -> bool { self.mode.load(Ordering::SeqCst) == MODE_GRACEFUL }
+
+    pub fn is_interrupted(&self) -> bool {
+        let mode = self.mode.load(Ordering::SeqCst);
+        mode == MODE_GRACEFUL || mode == MODE_FORCE
+    }
+
 
     /// Stop before starting a new unit of work (file, group, tar entry, …).
     pub fn check_between_files(&self) -> Result<()> {
@@ -89,5 +100,35 @@ impl Shutdown {
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graceful_request_stops_between_units_not_in_flight() {
+        let s = Shutdown::detached();
+        assert!(!s.is_interrupted());
+        assert!(s.check_between_files().is_ok());
+        assert!(s.check_in_flight().is_ok());
+
+        s.request_graceful();
+        assert!(s.is_graceful());
+        assert!(s.is_interrupted());
+        assert!(s.check_between_files().is_err());
+        assert!(s.check_in_flight().is_ok());
+    }
+
+    #[test]
+    fn force_request_aborts_everywhere() {
+        let s = Shutdown::detached();
+
+        s.request_force();
+        assert!(s.is_force());
+        assert!(s.is_interrupted());
+        assert!(s.check_between_files().is_err());
+        assert!(s.check_in_flight().is_err());
     }
 }
