@@ -40,6 +40,7 @@ mod tar_writer;
 pub use common::SqlFileRow;
 pub use extract::ExtractScanState;
 pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
+use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
 
 pub struct Database {
@@ -373,6 +374,12 @@ impl Database {
 
     pub fn count_check_with_canonical_completed(&self) -> Result<u64> {
         dedup::count_check_with_canonical_completed(&*self.conn())
+    }
+
+    pub fn ingest_compare_outcome(
+        &self, results: &Vec<CompareOutcome>)
+        -> Result<u64> {
+        dedup::ingest_compare_outcome(&mut self.conn_mut(), &results)
     }
 
     pub fn add_include_pattern(&self, from: &str, line: Option<u64>, query: &str) -> Result<u64> {
