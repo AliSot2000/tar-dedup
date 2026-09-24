@@ -1,6 +1,6 @@
 use crate::archive::ArchiveRTArgs;
 use crate::common::files::warn_if_times_changed;
-use crate::common::io_buffer;
+use crate::common::{at_least_one_running, io_buffer};
 use crate::db::Recorder;
 use crate::db::flags::ErrorFlags;
 use crate::db::hash::{HashError, HashSuccess, HashingOutcome};
@@ -79,6 +79,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     let (work_s, work_r) = bounded::<StrippedRecord>(WORK_CAPACITY);
     let (out_s, out_r) = bounded::<Option<HashingOutcome>>(OUT_CAPACITY);
+    let mut thread_handles = Vec::with_capacity(jobs);
 
     for i in 0..jobs {
         let bar = bars[i].clone();
@@ -86,15 +87,20 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         let os = out_s.clone();
         let sh = shutdown.clone();
         let ps = page_size;
-        thread::Builder::new()
+        let res = thread::Builder::new()
             .name(format!("hash-worker-{i}").into())
             .spawn(move || hash_worker(bar, ps, sh, wr, os))
             .expect("spawn hash worker");
+        thread_handles.push(res);
     }
     drop(work_r);
     drop(out_s);
 
-    let completed = handle_send_receive_loop(&rt, work_s, out_r)?;
+    let is_running = || {
+        at_least_one_running(&thread_handles.iter().collect())
+    };
+
+    let completed = handle_send_receive_loop(&rt, work_s, out_r, is_running)?;
     progress.drop_thread_bars();
 
     let double_canonical = db.count_double_canonical_dev_inode_group()?;
@@ -124,7 +130,10 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 /// The state machine for the enqueue / dequeue process is quite involved and pollutes the name
 /// space of the function, which is why it is moved to a separate function.
 pub fn handle_send_receive_loop(
-    rt: &ArchiveRTArgs, send: Sender<StrippedRecord>, recv: Receiver<Option<HashingOutcome>>)
+    rt: &ArchiveRTArgs,
+    send: Sender<StrippedRecord>,
+    recv: Receiver<Option<HashingOutcome>>,
+    one_running: impl Fn() -> bool)
     -> Result<u64> {
     // Feed cursor over `hash_queue`: `queue_index` is the last consumed queue
     // position. The pull filters to still-pending rows, so a file already
@@ -218,6 +227,9 @@ pub fn handle_send_receive_loop(
         if feed_exhausted && feed_idx == feed_buf.len() {
             break;
         }
+        if !one_running() {
+            break;
+        }
         if !busy {
             thread::sleep(Duration::from_millis(10));
         }
@@ -235,25 +247,21 @@ pub fn handle_send_receive_loop(
     // falls back to a short quiet window after the last received outcome —
     // long enough for the in-flight file to finish or be aborted, whichever
     // comes first.
-    let mut quiet_streak = 0u32;
     loop {
+        busy = false;
         if dequeue_total == feed_total {
+            break;
+        }
+        if !one_running() {
             break;
         }
         if exited_workers == rt.config.process.effective_jobs() as u64 {
             break;
         }
-        if quiet_streak >= 250 {
-            break;
-        }
-        busy = false;
         drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
-        if busy {
-            quiet_streak = 0;
-        } else {
-            quiet_streak += 1;
+        if !busy {
+            thread::sleep(Duration::from_millis(4));
         }
-        thread::sleep(Duration::from_millis(4));
     }
     drain_chunk(&mut busy, true, &mut dequeue_total, &mut exited_workers)?;
     drop(recv);
@@ -592,13 +600,17 @@ mod tests {
         let sh = shutdown.clone();
         let wr = work_r.clone();
         let os = out_s.clone();
-        thread::Builder::new().name("hash-worker-test".into())
+        let mut handles = Vec::new();
+
+        let thread = thread::Builder::new().name("hash-worker-test".into())
             .spawn(move || hash_worker(bar, ps, sh, wr, os))
             .expect("spawn hash worker");
+        handles.push(&thread);
         drop(work_r);
         drop(out_s);
+        let one_running = || { at_least_one_running(&handles) };
         let rt = ArchiveRTArgs { config, db, shutdown, progress };
-        handle_send_receive_loop(&rt, work_s, out_r).expect("hash send/receive loop")
+        handle_send_receive_loop(&rt, work_s, out_r, one_running).expect("hash send/receive loop")
     }
 
     #[test]
@@ -921,9 +933,11 @@ mod tests {
             }
             sh2.request_graceful();
         });
+        let handles = Vec::from([&trigger]);
 
+        let one_running = || at_least_one_running(&handles);
         let completed = handle_send_receive_loop(
-            &world.rt(), work_s, out_r).expect("hash send/receive loop");
+            &world.rt(), work_s, out_r, one_running).expect("hash send/receive loop");
         trigger.join().expect("join trigger");
         world.progress.drop_thread_bars();
 
@@ -982,9 +996,11 @@ mod tests {
             }
             sh2.request_force();
         });
+        let handles = Vec::from([&trigger]);
 
         let completed = handle_send_receive_loop(
-            &world.rt(), work_s, out_r).expect("hash send/receive loop");
+            &world.rt(), work_s, out_r,
+            || at_least_one_running(&handles)).expect("hash send/receive loop");
         trigger.join().expect("join trigger");
         world.progress.drop_thread_bars();
 
