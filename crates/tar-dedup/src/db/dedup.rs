@@ -87,7 +87,9 @@ fn prev_phase(eager_filter: bool) -> &'static str {
 
 /// Create the `dedup_progress` group table plus the `dedup_inflight` marker
 /// table (a real SQLite TEMPORARY table — cleared every connection, no drop).
-/// Idempotent.
+/// Idempotent. The marker set is emptied on (re-)create: a resume always
+/// starts from a blank marker set (fresh process anyways), and clearing it lets
+/// an in-process re-run heal markers left behind by an interrupted phase.
 pub fn create_temp_dedup_table(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS dedup_progress (
@@ -106,6 +108,7 @@ pub fn create_temp_dedup_table(conn: &Connection) -> Result<()> {
          )",
         [],
     ).to_panic()?;
+    conn.execute("DELETE FROM dedup_inflight", []).to_panic()?;
     Ok(())
 }
 
@@ -202,12 +205,12 @@ pub fn searching_to_finished(conn: &mut Connection, eager_filter: bool) -> Resul
                    WHERE phase = '{}'
                    GROUP BY sha1, size
                    HAVING COUNT(*) > 0
-                       -- Has Canonical
-                       AND SUM(CASE WHEN canonical_id IS NOT NULL THEN 1 ELSE 0 END) = 1
+                       -- Has Canonical (exactly one self-canonical row)
+                       AND SUM(CASE WHEN canonical_id = id THEN 1 ELSE 0 END) = 1
                        -- no other files than canonical or checked (second check is sound)
                        AND SUM(CASE
                            WHEN (flags & :flag_completed) != 0 THEN 1
-                           WHEN canonical_id IS NOT NULL THEN 1
+                           WHEN canonical_id = id THEN 1
                            ELSE 0 END) = COUNT(*))",
             phase
         ),
@@ -241,7 +244,7 @@ pub fn finish_to_error(conn: &mut Connection, eager_filter: bool) -> Result<(u64
                        -- at least one error present
                        AND SUM(CASE WHEN (flags & :error_flag) != 0 THEN 1 ELSE 0 END) > 0
                        -- has canonical (criteria for 'finished')
-                       AND SUM(CASE WHEN canonical_id IS NOT NULL THEN 1 ELSE 0 END) = 1)",
+                       AND SUM(CASE WHEN canonical_id = id THEN 1 ELSE 0 END) = 1)",
             phase
         ),
         named_params! {
@@ -282,7 +285,7 @@ pub fn finish_to_done(conn: &mut Connection, eager_filter: bool) -> Result<u64> 
                        -- no remaining checked
                        AND SUM(CASE WHEN (flags & :check_flag) != 0 THEN 1 ELSE 0 END) = 0
                        -- has canonical (criteria for 'finished')
-                       AND SUM(CASE WHEN canonical_id IS NOT NULL THEN 1 ELSE 0 END) = 1)",
+                       AND SUM(CASE WHEN canonical_id = id THEN 1 ELSE 0 END) = 1)",
             phase
         ),
         named_params! {
@@ -326,7 +329,7 @@ pub fn finish_to_ready(conn: &mut Connection, eager_filter: bool) -> Result<u64>
                        -- at least one remaining without error
                        AND SUM(CASE WHEN (flags & :error_flag) = 0 THEN 1 ELSE 0 END) > 0
                        -- has canonical (criteria for 'finished')
-                       AND SUM(CASE WHEN canonical_id IS NOT NULL THEN 1 ELSE 0 END) = 1)",
+                       AND SUM(CASE WHEN canonical_id = id THEN 1 ELSE 0 END) = 1)",
             phase
         ),
         named_params! {
@@ -426,8 +429,18 @@ pub fn ready_to_searching(conn: &mut Connection, eager_filter: bool) -> Result<(
         ),
         [],
     ).to_panic()?;
+    // Any group still 'ready' has no in-phase member left (a lone canonical
+    // was promoted above): close it. Guards on the member set so a group whose
+    // only candidate failed election (e.g. all errored) is NOT closed here.
     tx.execute(
-        "UPDATE dedup_progress SET state = 'done' WHERE state = 'ready'",
+        &format!(
+            "UPDATE dedup_progress SET state = 'done'
+             WHERE state = 'ready'
+               AND (sha1, size) NOT IN (SELECT sha1, size
+                   FROM files
+                   WHERE phase = '{}')",
+            phase
+        ),
         [],
     ).to_panic()?;
     tx.commit().to_panic()?;
@@ -602,7 +615,7 @@ pub fn ingest_compare_outcome(
                 assert_eq!(1, set_file_flag(
                     &tx, outcome.candidate_id, FileFlag::CheckWithCanonicalCompleted, true)?);
             }
-            Err((failed_id, error)) => {
+            Err((failed_id, _error)) => {
                 assert_eq!(1, set_file_flag(
                     &tx, outcome.candidate_id, FileFlag::CheckWithCanonicalCompleted, true)?);
                 assert_eq!(1, set_file_flag(
@@ -610,6 +623,10 @@ pub fn ingest_compare_outcome(
 
             }
         }
+        // Clear the in-flight marker once the outcome is applied: dropping it
+        // earlier would leave the candidate excluded from any later round's
+        // `list_pending_comparisons` scan, wedging multi-round groups.
+        unmark_inflight(&tx, &[outcome.candidate_id])?;
     }
     tx.commit().to_panic()?;
     Ok(resolved)
