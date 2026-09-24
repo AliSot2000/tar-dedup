@@ -78,7 +78,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     }
 
     let (work_s, work_r) = bounded::<StrippedRecord>(WORK_CAPACITY);
-    let (out_s, out_r) = bounded::<HashingOutcome>(OUT_CAPACITY);
+    let (out_s, out_r) = bounded::<Option<HashingOutcome>>(OUT_CAPACITY);
 
     for i in 0..jobs {
         let bar = bars[i].clone();
@@ -124,7 +124,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 /// The state machine for the enqueue / dequeue process is quite involved and pollutes the name
 /// space of the function, which is why it is moved to a separate function.
 pub fn handle_send_receive_loop(
-    rt: &ArchiveRTArgs, send: Sender<StrippedRecord>, recv: Receiver<HashingOutcome>)
+    rt: &ArchiveRTArgs, send: Sender<StrippedRecord>, recv: Receiver<Option<HashingOutcome>>)
     -> Result<u64> {
     // Feed cursor over `hash_queue`: `queue_index` is the last consumed queue
     // position. The pull filters to still-pending rows, so a file already
@@ -261,7 +261,7 @@ fn hash_worker(
     page_size: usize,
     shutdown: Shutdown,
     work: Receiver<StrippedRecord>,
-    out: Sender<HashingOutcome>) -> () {
+    out: Sender<Option<HashingOutcome>>) -> () {
     let mut buf = io_buffer();
     loop {
         // INFO: Destroy channel to exit the worker!
