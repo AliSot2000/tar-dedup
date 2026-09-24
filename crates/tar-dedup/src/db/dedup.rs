@@ -113,6 +113,7 @@ pub fn create_temp_dedup_table(conn: &Connection) -> Result<()> {
 /// path only; it must survive interrupts so a resumed run reuses group state.
 pub fn drop_temp_dedup_table(conn: &Connection) -> Result<()> {
     conn.execute("DROP TABLE IF EXISTS dedup_progress", []).to_panic()?;
+    conn.execute("DROP TABLE IF EXISTS dedup_inflight", []).to_panic()?;
     Ok(())
 }
 
