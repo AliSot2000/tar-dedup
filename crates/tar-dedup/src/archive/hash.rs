@@ -397,3 +397,674 @@ fn hash_one(
 fn is_all_zero(chunk: &[u8]) -> bool {
     chunk.iter().all(|&b| b == 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::IO_BUF_SIZE;
+    use crate::common::files::original_extension;
+    use crate::common::start::StartPolicy;
+    use crate::config::{
+        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, CleanupSettings, CompressionFormat,
+        CompressionSettings, FilterOptions, IndexingOptions, InputOptions, OwnerPolicy, PathLayout,
+        PipelinePhase, ProcessOptions, SparseOptions,
+    };
+    use crate::db::flags::FileFlag;
+    use crate::db::types::{FileId, FilePhase, FileType, NewFileRecord};
+    use crate::db::{Database, ErrorPhase, Recorder};
+    use crate::error::{Error, FileStatError};
+    use crate::progress::ProgressBarSet;
+    use chrono::{DateTime, Utc};
+    use nix::unistd::geteuid;
+    use rusqlite::named_params;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    fn pattern(n: usize, seed: u8) -> Vec<u8> {
+        (0..n).map(|i| ((i % 251) as u8) ^ seed).collect()
+    }
+
+    fn sha1_of(payload: &[u8]) -> [u8; 20] {
+        let mut hasher = Sha1::new();
+        hasher.update(payload);
+        hasher.finalize().into()
+    }
+
+    fn test_archive_config() -> ArchiveConfig {
+        ArchiveConfig {
+            paths: PathLayout {
+                archive_path: PathBuf::new(),
+                directory: PathBuf::new(),
+                work_dir: PathBuf::new(),
+            },
+            inputs: InputOptions {
+                input_dirs: Vec::new(),
+                files_from: Vec::new(),
+                files_from_null: false,
+            },
+            indexing: IndexingOptions {
+                no_recursion: false,
+                dereference: false,
+                one_file_system: false,
+                no_hardlink_detection: true,
+                no_strict_separation: false,
+            },
+            filter: FilterOptions {
+                exclude_patterns: Vec::new(),
+                include_patterns: Vec::new(),
+                exclude_from: Vec::new(),
+                include_from: Vec::new(),
+                anchored: false,
+                ignore_case: false,
+                eager_filter: false,
+            },
+            capture: CaptureOptions {
+                do_xattrs: false,
+                do_posix_acl: false,
+                do_selinux: false,
+                numeric_ids_only: false,
+                mode: None,
+                transform: None,
+            },
+            owner_policy: OwnerPolicy {
+                owner: None,
+                owner_map: None,
+                group: None,
+                group_map: None,
+            },
+            sparse: SparseOptions { sparsify: false, page_size: 4096, min_pages: 0 },
+            compression: CompressionSettings {
+                format: CompressionFormat::None,
+                level: 0,
+                xz_extreme: false,
+                memlimit_compress: None,
+            },
+            process: ProcessOptions {
+                start_policy: StartPolicy::Create,
+                jobs: 4,
+                io_jobs: 4,
+                fail_fast: false,
+                no_errors: false,
+                cleanup: CleanupSettings { keep_db: false, keep_stage: false },
+                exit_after_stage: None,
+            },
+            pipeline: ArchivePipelineOptions {
+                no_dedup: true,
+                retry_missing_sha: false,
+                write_archive_footer: false,
+                clear_archive_meta: false,
+            },
+        }
+    }
+
+    struct TestWorld {
+        dir: tempfile::TempDir,
+        db: Database,
+        shutdown: Shutdown,
+        progress: ProgressBarSet,
+        config: ArchiveConfig,
+    }
+
+    impl TestWorld {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Database::open(&dir.path().join("test.sqlite")).expect("open db");
+            Self {
+                dir,
+                db,
+                shutdown: Shutdown::detached(),
+                progress: ProgressBarSet::new(7),
+                config: test_archive_config(),
+            }
+        }
+
+        fn rt(&self) -> ArchiveRTArgs<'_> {
+            ArchiveRTArgs {
+                config: &self.config,
+                db: &self.db,
+                shutdown: &self.shutdown,
+                progress: &self.progress,
+            }
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.dir.path().join(name)
+        }
+
+        fn add_file(&self, name: &str, payload: &[u8]) -> FileId {
+            let path = self.dir.path().join(name);
+            std::fs::write(&path, payload).expect("write test payload");
+            self.insert_recorded(&path, payload.len(), None, None, None)
+        }
+
+        fn add_file_recorded(
+            &self, name: &str, payload: &[u8],
+            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
+            -> FileId {
+            let path = self.dir.path().join(name);
+            std::fs::write(&path, payload).expect("write test payload");
+            self.insert_recorded(&path, payload.len(), mtime, atime, ctime)
+        }
+
+        fn insert_recorded(
+            &self, path: &Path, size: usize,
+            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
+            -> FileId {
+            self.db.insert_file(&NewFileRecord {
+                abs_path: PathBuf::from(path),
+                ext: original_extension(path),
+                size: size as u64,
+                mtime, atime, ctime,
+                uid: None, gid: None, mode: None,
+                ftype: Some(FileType::File),
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None,
+                device_id: None, inode_id: None, major: None, minor: None,
+            }).expect("insert test file");
+            self.db.file_id_by_abs_path(path).expect("lookup test file").expect("file present")
+        }
+
+        fn sparse_count(&self, id: FileId) -> i64 {
+            self.db.with_transaction(|conn| {
+                let v: i64 = conn.query_row(
+                    "SELECT sparse_count FROM files WHERE id = :id",
+                    named_params! { ":id": id.0 },
+                    |r| r.get(0),
+                ).expect("read sparse_count");
+                Ok(v)
+            }).expect("sparse_count read")
+        }
+
+        fn hashed_digest(&self, id: FileId) -> Option<[u8; 20]> {
+            self.db.get_file_by_id::<StrippedRecord>(id)
+                .expect("get row")
+                .expect("row present")
+                .sha1
+        }
+    }
+
+    /// One worker + one bar, driving `handle_send_receive_loop` to completion.
+    fn run_loop(
+        db: &Database, shutdown: &Shutdown, progress: &ProgressBarSet, config: &ArchiveConfig,
+        bar: ProgressBar, work_cap: usize) -> u64 {
+        let (work_s, work_r) = bounded::<StrippedRecord>(work_cap);
+        let (out_s, out_r) = bounded::<Option<HashingOutcome>>(OUT_CAPACITY);
+        let ps = config.sparse.page_size;
+        let sh = shutdown.clone();
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        thread::Builder::new().name("hash-worker-test".into())
+            .spawn(move || hash_worker(bar, ps, sh, wr, os))
+            .expect("spawn hash worker");
+        drop(work_r);
+        drop(out_s);
+        let rt = ArchiveRTArgs { config, db, shutdown, progress };
+        handle_send_receive_loop(&rt, work_s, out_r).expect("hash send/receive loop")
+    }
+
+    #[test]
+    fn run_hashes_and_stores_digests() {
+        let world = TestWorld::new();
+        let big = pattern(1024 * 1024, 3);
+        let tiny = pattern(7, 9);
+        let empty: Vec<u8> = Vec::<u8>::new();
+        let mut mixed = Vec::<u8>::new();
+        mixed.resize_with(4 * 4096 + 1024, || 0u8);
+        for (i, b) in pattern(1024, 5).iter().enumerate() {
+            mixed[4 * 4096 + i] = *b;
+        }
+
+        let id_big = world.add_file("big.bin", &big);
+        let id_dup = world.add_file("dup.bin", &big);
+        let id_tiny = world.add_file("tiny.bin", &tiny);
+        let id_empty = world.add_file("empty.bin", &empty);
+        let id_mixed = world.add_file("mixed.bin", &mixed);
+
+        run(&world.rt()).expect("hash run");
+
+        for (id, payload) in [
+            (id_big, &big),
+            (id_dup, &big),
+            (id_tiny, &tiny),
+            (id_empty, &empty),
+            (id_mixed, &mixed),
+        ] {
+            let row = world.db.get_file_by_id::<StrippedRecord>(id)
+                .expect("get row").expect("row present");
+            assert_eq!(row.phase, FilePhase::Hashed);
+            assert_eq!(row.sha1, Some(sha1_of(payload)));
+        }
+        // the four full zero pages are counted, the short random tail is not.
+        assert_eq!(world.sparse_count(id_mixed), 4);
+        assert_eq!(world.sparse_count(id_big), 0);
+    }
+
+    #[test]
+    fn unreadable_file_recorded_not_fatal() {
+        // A 0o000 file is still readable by root; the test needs a real
+        // permission failure.
+        if geteuid().is_root() {
+            return;
+        }
+        let world = TestWorld::new();
+        let payload = pattern(64 * 1024, 1);
+        let id_ok1 = world.add_file("ok1.bin", &payload);
+        let id_bad = world.add_file("bad.bin", &payload);
+        let id_ok2 = world.add_file("ok2.bin", &payload);
+
+        let bad_path = world.path("bad.bin");
+        std::fs::set_permissions(&bad_path, std::fs::Permissions::from_mode(0))
+            .expect("chmod 000");
+
+        run(&world.rt()).expect("hash run tolerates an unreadable file");
+
+        assert_eq!(
+            world.db.get_file_flag(id_bad, FileFlag::ErrorWhileHash).expect("flag"),
+            true
+        );
+        if let Some(_) = world.hashed_digest(id_bad) {
+            panic!("unreadable file must not get a digest");
+        }
+        assert_ne!(
+            world.db.get_records_by_file_id(id_bad).expect("records").len(),
+            0
+        );
+        for id in [id_ok1, id_ok2] {
+            assert_eq!(world.hashed_digest(id), Some(sha1_of(&payload)));
+            assert_eq!(
+                world.db.get_file_by_id::<StrippedRecord>(id)
+                    .expect("get row").expect("row").phase,
+                FilePhase::Hashed
+            );
+        }
+    }
+
+    #[test]
+    fn modified_file_flagged() {
+        let world = TestWorld::new();
+        let now = Utc::now();
+        let stale = DateTime::from_timestamp(now.timestamp() - 3600, 0).expect("stale");
+        let payload = pattern(128 * 1024, 4);
+        let id = world.add_file_recorded("mod.bin", &payload, Some(stale), None, None);
+
+        run(&world.rt()).expect("hash run");
+
+        assert_eq!(
+            world.db.get_file_flag(id, FileFlag::Modified).expect("flag"),
+            true
+        );
+        assert_eq!(world.hashed_digest(id), Some(sha1_of(&payload)));
+    }
+
+    #[test]
+    fn hash_order_is_size_desc() {
+        let world = TestWorld::new();
+        let id_small = world.add_file("s.bin", &pattern(1024 * 1024, 1));
+        let id_mid = world.add_file("m.bin", &pattern(4 * 1024 * 1024 + 1, 2));
+        let id_big = world.add_file("b.bin", &pattern(8 * 1024 * 1024, 3));
+
+        world.db.create_hash_queue().expect("create queue");
+        world.db.populate_hash_queue(false, false).expect("populate queue");
+
+        let ids = world.db.pull_pending_hash_rows::<StrippedRecord>(0, 100)
+            .expect("pull")
+            .into_iter()
+            .map(|pair| pair.1.id)
+            .collect::<Vec<FileId>>();
+        assert_eq!(ids, [id_big, id_mid, id_small].to_vec());
+    }
+
+    #[test]
+    fn zero_page_counter_partial_last_page() {
+        let world = TestWorld::new();
+        let path = world.path("z1.bin");
+        let payload = vec![0u8; 3 * 4096 + 4089];
+        std::fs::write(&path, &payload).expect("write");
+        let mut buf = io_buffer();
+        let (_hash, sparse) = hash_one(&mut buf, &path, 4096, &Shutdown::detached(), None)
+            .expect("hash");
+        assert_eq!(sparse, 3);
+    }
+
+    #[test]
+    fn zero_page_counter_exact_multiple() {
+        let world = TestWorld::new();
+        let path = world.path("z2.bin");
+        let payload = vec![0u8; 40 * 4096];
+        std::fs::write(&path, &payload).expect("write");
+        let mut buf = io_buffer();
+        let (_hash, sparse) = hash_one(&mut buf, &path, 4096, &Shutdown::detached(), None)
+            .expect("hash");
+        assert_eq!(sparse, 40);
+    }
+
+    #[test]
+    fn zero_page_counter_mixed_content() {
+        let world = TestWorld::new();
+        let path = world.path("z3.bin");
+        let mut payload = vec![0u8; 2 * 4096];
+        for b in pattern(4096, 7) {
+            payload.push(b);
+        }
+        std::fs::write(&path, &payload).expect("write");
+        let mut buf = io_buffer();
+        let (_hash, sparse) = hash_one(&mut buf, &path, 4096, &Shutdown::detached(), None)
+            .expect("hash");
+        assert_eq!(sparse, 2);
+    }
+
+    #[test]
+    fn zero_page_counter_crosses_buffer_boundary() {
+        let world = TestWorld::new();
+        let path = world.path("z4.bin");
+        let payload = vec![0u8; IO_BUF_SIZE + 2 * 4096 + 4089];
+        std::fs::write(&path, &payload).expect("write");
+        let mut buf = io_buffer();
+        let (_hash, sparse) = hash_one(&mut buf, &path, 4096, &Shutdown::detached(), None)
+            .expect("hash");
+        assert_eq!(sparse, ((IO_BUF_SIZE + 2 * 4096) / 4096) as u64);
+    }
+
+    #[test]
+    fn record_hash_error_persists_filestat() {
+        let world = TestWorld::new();
+        let id = world.add_file("e.bin", &pattern(1024, 1));
+        let mut recorder = Recorder::new(&world.db, true);
+        record_hash_error(&mut recorder, &HashError {
+            id,
+            modified: false,
+            err: Error::FileStat(FileStatError::Io {
+                path: PathBuf::from("/tmp/e.bin"),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied, "nope".to_string()),
+            }),
+        });
+        recorder.flush().expect("flush recorder");
+
+        let records = world.db.get_records_by_file_id(id).expect("records");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].file_id, Some(id));
+        assert_eq!(records[0].error_type, "Io/PermissionDenied");
+        assert_eq!(records[0].phase, ErrorPhase::Pipeline(PipelinePhase::Hash));
+    }
+
+    #[test]
+    fn final_drain_applies_partial_batch_no_loss() {
+        let world = TestWorld::new();
+        let mut expected = Vec::<(FileId, [u8; 20])>::new();
+        for i in 0..3 {
+            let payload = pattern(1024 * 1024 + i, i as u8);
+            let name = format!("f{i}.bin");
+            let id = world.add_file(name.as_str(), &payload);
+            expected.push((id, sha1_of(&payload)));
+        }
+        world.db.create_hash_queue().expect("create queue");
+        world.db.populate_hash_queue(false, false).expect("populate queue");
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let completed = run_loop(
+            &world.db, &world.shutdown, &world.progress, &world.config,
+            world.progress.thread_bar(0), 2);
+        world.progress.drop_thread_bars();
+
+        assert_eq!(completed, 3);
+        for (id, digest) in expected {
+            assert_eq!(world.hashed_digest(id), Some(digest));
+        }
+    }
+
+    #[test]
+    fn interrupt_mid_feed_pauses_and_resume_completes() {
+        let world = TestWorld::new();
+        let mut expected = Vec::<(FileId, [u8; 20])>::new();
+        for i in 0..8 {
+            let payload = pattern(8 * 1024 * 1024 + i, i as u8);
+            let name = format!("f{i}.bin");
+            let id = world.add_file(name.as_str(), &payload);
+            expected.push((id, sha1_of(&payload)));
+        }
+        world.db.create_hash_queue().expect("create queue");
+        world.db.populate_hash_queue(false, false).expect("populate queue");
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let bar = world.progress.thread_bar(0);
+        let sh2 = world.shutdown.clone();
+        let bar_obs = bar.clone();
+        let trigger = thread::spawn(move || {
+            // Fire once the worker completed a whole file (position went > 0
+            // and reset to 0 between files) — at least one outcome is already
+            // in-hand, and the worker is never mid-file when the loop sees us.
+            let mut started = false;
+            for _ in 0..20_000 {
+                if started && bar_obs.position() == 0 {
+                    sh2.request_graceful();
+                    return;
+                }
+                if bar_obs.position() > 0 {
+                    started = true;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            sh2.request_graceful();
+        });
+
+        let completed = run_loop(
+            &world.db, &world.shutdown, &world.progress, &world.config, bar, 2);
+        trigger.join().expect("join trigger");
+        world.progress.drop_thread_bars();
+
+        assert!(completed >= 1);
+        assert!(completed < 8);
+        let pending_remaining = world.db
+            .count_pending_hashable_files(false, false).expect("pending");
+        assert_eq!(pending_remaining, 8 - completed);
+        // interrupt/resume keeps the ordering table (drop happens on success only)
+        let queue_alive = world.db.pull_pending_hash_rows::<StrippedRecord>(0, 100)
+            .expect("queue survives interrupt");
+        assert_ne!(queue_alive.len(), 0);
+
+        // Resume with a fresh shutdown: everything still pending is hashed.
+        let sh3 = Shutdown::detached();
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let completed2 = run_loop(
+            &world.db, &sh3, &world.progress, &world.config,
+            world.progress.thread_bar(0), 2);
+        world.progress.drop_thread_bars();
+
+        assert_eq!(completed + completed2, 8);
+        for (id, digest) in expected {
+            assert_eq!(world.hashed_digest(id), Some(digest));
+        }
+    }
+
+    #[test]
+    fn interrupt_dequeue_only_finishes_in_flight() {
+        let world = TestWorld::new();
+        for i in 0..3 {
+            let payload = pattern(16 * 1024 * 1024 + i, i as u8);
+            let name = format!("g{i}.bin");
+            world.add_file(name.as_str(), &payload);
+        }
+        world.db.create_hash_queue().expect("create queue");
+        world.db.populate_hash_queue(false, false).expect("populate queue");
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let bar = world.progress.thread_bar(0);
+        let (work_s, work_r) = bounded::<StrippedRecord>(2);
+        let (out_s, out_r) = bounded::<Option<HashingOutcome>>(OUT_CAPACITY);
+        let sh = world.shutdown.clone();
+        let ps = world.config.sparse.page_size;
+        let wbar = bar.clone();
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        thread::Builder::new().name("hash-worker-test".into())
+            .spawn(move || hash_worker(wbar, ps, sh, wr, os))
+            .expect("spawn hash worker");
+        drop(work_r);
+        drop(out_s);
+
+        let sh2 = world.shutdown.clone();
+        let bar_obs = bar.clone();
+        let trigger = thread::spawn(move || {
+            // All fed rows are already in the worker's hands (the cap-2 channel
+            // drained into the worker) and one full file completed: graceful
+            // must finish the in-flight file but drop anything not started yet.
+            let mut started = false;
+            for _ in 0..20_000 {
+                if started && bar_obs.position() == 0 {
+                    sh2.request_graceful();
+                    return;
+                }
+                if bar_obs.position() > 0 {
+                    started = true;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            sh2.request_graceful();
+        });
+
+        let completed = handle_send_receive_loop(
+            &world.rt(), work_s, out_r).expect("hash send/receive loop");
+        trigger.join().expect("join trigger");
+        world.progress.drop_thread_bars();
+
+        // Graceful stop: at least the completed file's outcome survived.
+        assert!(completed >= 1);
+        let pending_remaining = world.db
+            .count_pending_hashable_files(false, false).expect("pending");
+        assert_eq!(pending_remaining, 3 - completed);
+
+        let sh3 = Shutdown::detached();
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let completed2 = run_loop(
+            &world.db, &sh3, &world.progress, &world.config,
+            world.progress.thread_bar(0), 2);
+        world.progress.drop_thread_bars();
+        assert_eq!(completed + completed2, 3);
+        assert_eq!(
+            world.db.count_pending_hashable_files(false, false).expect("pending"),
+            0
+        );
+    }
+
+    #[test]
+    fn triple_interrupt_force_discards_in_flight() {
+        let world = TestWorld::new();
+        let payload = pattern(32 * 1024 * 1024, 11);
+        let id = world.add_file("huge.bin", &payload);
+        world.db.create_hash_queue().expect("create queue");
+        world.db.populate_hash_queue(false, false).expect("populate queue");
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let bar = world.progress.thread_bar(0);
+        let (work_s, work_r) = bounded::<StrippedRecord>(2);
+        let (out_s, out_r) = bounded::<Option<HashingOutcome>>(OUT_CAPACITY);
+        let sh = world.shutdown.clone();
+        let ps = world.config.sparse.page_size;
+        let wbar = bar.clone();
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        thread::Builder::new().name("hash-worker-test".into())
+            .spawn(move || hash_worker(wbar, ps, sh, wr, os))
+            .expect("spawn hash worker");
+        drop(work_r);
+        drop(out_s);
+
+        let sh2 = world.shutdown.clone();
+        let bar_obs = bar.clone();
+        let trigger = thread::spawn(move || {
+            // Fire mid-read: the worker aborts at the next in-flight check.
+            for _ in 0..20_000 {
+                if bar_obs.position() > 0 {
+                    sh2.request_force();
+                    return;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            sh2.request_force();
+        });
+
+        let completed = handle_send_receive_loop(
+            &world.rt(), work_s, out_r).expect("hash send/receive loop");
+        trigger.join().expect("join trigger");
+        world.progress.drop_thread_bars();
+
+        // The interrupted outcome was processed (counted) but must not persist
+        // anything: no digest, no error flag, no error log row. (`completed`
+        // can be 0 if the abort landed on a between-files check instead of
+        // inside the read; both states still discard the in-flight file.)
+        assert!(completed <= 1);
+        if let Some(_) = world.hashed_digest(id) {
+            panic!("force-aborted hash must not commit a digest");
+        }
+        assert_eq!(
+            world.db.get_file_flag(id, FileFlag::ErrorWhileHash).expect("flag"),
+            false
+        );
+        assert_eq!(
+            world.db.get_records_by_file_id(id).expect("records").len(),
+            0
+        );
+        // the row is still pending and the queue survives for the resume
+        assert_eq!(
+            world.db.count_pending_hashable_files(false, false).expect("pending"),
+            1
+        );
+        let sh3 = Shutdown::detached();
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let completed2 = run_loop(
+            &world.db, &sh3, &world.progress, &world.config,
+            world.progress.thread_bar(0), 2);
+        world.progress.drop_thread_bars();
+        assert_eq!(completed2, 1);
+        assert_eq!(world.hashed_digest(id), Some(sha1_of(&payload)));
+    }
+
+    #[test]
+    fn run_force_before_start_returns_interrupted() {
+        let world = TestWorld::new();
+        let payload = pattern(1024 * 1024, 1);
+        let id = world.add_file("a.bin", &payload);
+        world.shutdown.request_force();
+
+        let res = run(&world.rt());
+
+        assert!(matches!(res, Err(Error::Interrupted)));
+        if let Some(_) = world.hashed_digest(id) {
+            panic!("force-aborted hash run must not commit a digest");
+        }
+        // the ordering table survives for the resume
+        let _ = world.db.pull_pending_hash_rows::<StrippedRecord>(0, 100)
+            .expect("queue survives");
+    }
+
+    #[test]
+    #[ignore]
+    fn batch_size_parity_stub() {
+        // TODO(batch_size): once a `--batch_size` knob exists, slice the same
+        // DB with different batch sizes and assert identical result order.
+        let world = TestWorld::new();
+        for i in 0..5 {
+            let payload = pattern(1024, i as u8);
+            let name = format!("b{i}.bin");
+            world.add_file(name.as_str(), &payload);
+        }
+        world.db.create_hash_queue().expect("create queue");
+        world.db.populate_hash_queue(false, false).expect("populate queue");
+        let all = world.db.pull_pending_hash_rows::<StrippedRecord>(0, 100).expect("pull all");
+        let mut collected = Vec::<u64>::new();
+        let mut pos = 0u64;
+        loop {
+            let batch = world.db.pull_pending_hash_rows::<StrippedRecord>(pos, 2)
+                .expect("pull batch");
+            if batch.is_empty() {
+                break;
+            }
+            for pair in batch {
+                let (p, _row) = pair;
+                collected.push(p);
+                pos = p;
+            }
+        }
+        assert_eq!(collected, all.into_iter().map(|pair| pair.0).collect::<Vec<u64>>());
+    }
+}
