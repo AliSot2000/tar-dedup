@@ -102,9 +102,8 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     drop(work_r);
     drop(out_s);
 
-    let one_running = || at_least_one_running(&thread_handles.iter().collect());
     let (fail_fast_hit, completed) = run_enqueue_dequeue_loop_dedup(
-        &rt, work_s, out_r, one_running
+        &rt, work_s, out_r, thread_handles
     )?;
 
     rt.progress.drop_thread_bars();
@@ -149,7 +148,7 @@ fn run_enqueue_dequeue_loop_dedup(
     rt: &ArchiveRTArgs,
     send: Sender<ComparePair>,
     recv: Receiver<Option<CompareOutcome>>,
-    one_running: impl Fn() -> bool)
+    mut handles: Vec<thread::JoinHandle<()>>)
     -> Result<(bool, u64)> {
 
     // Feed cursor over the candidate space. `dedup_inflight` (TEMP) marks pairs
@@ -160,7 +159,6 @@ fn run_enqueue_dequeue_loop_dedup(
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
 
     // Feeder running variables
-    let mut last_candidate = 0u64;
     let mut feed_buf = Vec::<(StrippedRecord, StrippedRecord)>::new();
     let mut feed_i = 0usize;
 
@@ -215,14 +213,21 @@ fn run_enqueue_dequeue_loop_dedup(
         Ok(())
     };
 
-    // Run the send receive loop
+    // Run the send receive loop. Each iteration drains the outcome channel
+    // (override: a ragged tail applies immediately, so a small run's final
+    // batch still advances the FSM in-loop), steps the per-group FSM, then
+    // feeds the next candidate slice. The candidate scan restarts at id 0 on
+    // every refill: `dedup_inflight` (TEMP) already makes the pull exactly-once
+    // (see `list_pending_comparisons`), and a monotonic `last_candidate` cursor
+    // would wrongly skip candidates re-elected across rounds.
+    let mut feed_exhausted = false;
     loop {
         busy = false;
         if rt.shutdown.is_interrupted() {
             break;
         }
         // Handle dequeu side.
-        drain_chunk(&mut busy, &mut exited_threads, &mut dequeued_total, false)?;
+        drain_chunk(&mut busy, &mut exited_threads, &mut dequeued_total, true)?;
 
         // 2) Per-group FSM — advanced every iteration: guarded SQL flips only
         //    complete groups, so a slow 50 GiB group never stalls the rest.
@@ -248,37 +253,42 @@ fn run_enqueue_dequeue_loop_dedup(
         if rt.db.count_pending_dedup_groups()? == 0 {
             break;
         }
-        // 3) Feed the pipeline. When the candidate slice runs out, restart the
-        //    scan from the top: `dedup_inflight` + the check/promoted filters
-        //    make re-listing exactly-once, and freshly transitioned groups are
-        //    picked up by the fresh pull.
+        // 3) Feed the pipeline. A fresh pull from the top on every refill lets
+        //    freshly transitioned rounds (and their re-eligible candidates) be
+        //    picked up; the empty-pull below only means every remaining
+        //    candidate is in flight or none exists.
         if feed_i == feed_buf.len() {
             feed_buf = rt.db.list_pending_comparisons::<StrippedRecord>(
-                eager_filter, last_candidate, FEED_CHUNK as u64
+                eager_filter, 0, FEED_CHUNK as u64
             )?;
             feed_i = 0;
-            if feed_buf.is_empty() {
-                break;
-            } else {
-                last_candidate = feed_buf[feed_buf.len() - 1].0.id.0 as u64;
-            }
+            feed_exhausted = feed_buf.is_empty();
         }
-        let mut sent = Vec::<FileId>::new();
-        while feed_i < feed_buf.len() {
-            let candidate = &feed_buf[feed_i].0;
-            let canonical = &feed_buf[feed_i].1;
-            match send.try_send(compare_pair(canonical, candidate)) {
-                Ok(_) => {
-                    sent.push(candidate.id);
-                    busy = true;
-                    feed_i += 1;
-                    feed_total += 1;
+        if !feed_exhausted {
+            let mut sent = Vec::<FileId>::new();
+            while feed_i < feed_buf.len() {
+                let candidate = &feed_buf[feed_i].0;
+                let canonical = &feed_buf[feed_i].1;
+                match send.try_send(compare_pair(canonical, candidate)) {
+                    Ok(_) => {
+                        sent.push(candidate.id);
+                        busy = true;
+                        feed_i += 1;
+                        feed_total += 1;
+                    }
+                    Err(_) => break
                 }
-                Err(_) => break
+            }
+            if !sent.is_empty() {
+                rt.db.mark_inflight(&sent)?;
             }
         }
-        if !sent.is_empty() {
-            rt.db.mark_inflight(&sent)?;
+        // Nothing left to feed and every handed-out outcome is back in hand:
+        // no further drain or FSM step can change anything. (The drain above
+        // applies `pending_out` unconditionally, so it is empty here.) The
+        // drain tail below still joins the workers and flushes the recorder.
+        if feed_exhausted && feed_i == feed_buf.len() && dequeued_total == feed_total {
+            break;
         }
         if !busy {
             thread::sleep(Duration::from_millis(1));
@@ -299,13 +309,22 @@ fn run_enqueue_dequeue_loop_dedup(
         if exited_threads == rt.config.process.io_jobs as u64 {
             break;
         }
-        if !one_running() {
+        if !at_least_one_running(&handles.iter().collect()) {
             break;
         }
         drain_chunk(&mut busy, &mut exited_threads, &mut dequeued_total, true)?;
         if !busy {
             thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    // Close out the worker threads before dropping the channel: each worker
+    // sends its last outcome/None *before* it returns, so joining every handle
+    // guarantees no `out.send` can hit a dropped receiver (panics on "result
+    // channel closed"). `join` also honours "finish in-flight" on a graceful
+    // stop (workers exit after their current pair resolves).
+    for handle in take(&mut handles) {
+        let _ = handle.join();
     }
 
     // Definitively drain whatever the workers still produce (incl. after an
