@@ -274,5 +274,6 @@ pub fn ingest_hash_outcome(
             }
         }
     }
+    tx.commit().to_panic()?;
     Ok(0)
 }
