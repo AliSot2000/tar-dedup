@@ -138,10 +138,10 @@ pub fn handle_send_receive_loop(
     let mut busy = false;
 
     let mut dequeue_total = 0u64;
+    let mut exited_workers = 0u64;
     let mut feed_total = 0u64;
     let mut completed = 0u64;
     let mut pending_out = Vec::<HashingOutcome>::new();
-
 
     let mut apply_chunk = |pending: &mut Vec<HashingOutcome>| -> Result<u64> {
         let items = take(pending);
@@ -166,16 +166,19 @@ pub fn handle_send_receive_loop(
         Ok(n)
     };
 
-    let mut drain_chunk = |is_busy: &mut bool, drain_override: bool|
-                           -> Result<()> {
+    let mut drain_chunk = |
+        is_busy: &mut bool, drain_override: bool,
+        dequeue: &mut u64, exit: &mut u64|
+        -> Result<()> {
         // Drain finished outcomes into a small batch.
         while pending_out.len() < DRAIN_CHUNK {
             match recv.try_recv() {
-                Ok(res) => {
+                Ok(Some(res)) => {
                     pending_out.push(res);
                     *is_busy = true;
-                    dequeue_total += 1;
+                    *dequeue += 1;
                 }
+                Ok(None) => *exit += 1,
                 Err(_) => break
             }
         }
@@ -187,6 +190,10 @@ pub fn handle_send_receive_loop(
     };
 
     loop {
+        // Any pending shutdown (graceful *or* force) stops the feed: workers
+        // observe it between files / in-flight and either finish or abort, so
+        // keeping the feed open would only pile up rows nobody consumes (and
+        // on force could wedge the loop in a full-channel retry).
         if rt.shutdown.is_interrupted() { break; }
         busy = false;
         if feed_idx == feed_buf.len() {
@@ -206,7 +213,7 @@ pub fn handle_send_receive_loop(
             }
         }
 
-        drain_chunk(&mut busy, false)?;
+        drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
         // Leave for dequeue loop.
         if feed_exhausted && feed_idx == feed_buf.len() {
             break;
@@ -219,25 +226,36 @@ pub fn handle_send_receive_loop(
     // Cut the feed side; idle workers end their receive loop.
     drop(send);
 
-    // Progress to drain only
+    // Drain to completion. A row handed to a worker becomes durable only once
+    // its outcome is applied here, so the channel must stay open until every
+    // fed row is accounted for — dropping it earlier turns the last `out.send`
+    // into a Disconnected panic and loses the outcome. Steady state ends the
+    // instant `feed_total` outcomes are pulled. An interrupt may drop rows (a
+    // worker stopped between files produces no outcome for it), so that case
+    // falls back to a short quiet window after the last received outcome —
+    // long enough for the in-flight file to finish or be aborted, whichever
+    // comes first.
+    let mut quiet_streak = 0u32;
     loop {
-        if rt.shutdown.is_interrupted() { break; }
-        busy = false;
-        drain_chunk(&mut busy, false)?;
-
-        // Condition, everything is both enqueued and dequeud. Need to finish buffers.
-        if queue_index == feed_total {
+        if dequeue_total == feed_total {
             break;
         }
-
-        if !busy {
-            thread::sleep(Duration::from_millis(10));
+        if exited_workers == rt.config.process.effective_jobs() as u64 {
+            break;
         }
+        if quiet_streak >= 250 {
+            break;
+        }
+        busy = false;
+        drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
+        if busy {
+            quiet_streak = 0;
+        } else {
+            quiet_streak += 1;
+        }
+        thread::sleep(Duration::from_millis(4));
     }
-
-    // Definitively drain whatever the workers still produce (incl. after an
-    // interrupt: workers finish their in-flight file, then the channel drops).
-    drain_chunk(&mut busy, true)?;
+    drain_chunk(&mut busy, true, &mut dequeue_total, &mut exited_workers)?;
     drop(recv);
     recorder.flush()?;
     Ok(completed)
@@ -285,11 +303,12 @@ fn hash_worker(
                         id: row.id, err, modified
                     })
                 };
-                out.send(res).expect("hash worker: result channel closed");
+                out.send(Some(res)).expect("hash worker: result channel closed");
             }
             Err(_) => break
         }
     }
+    out.send(None).expect("hash worker: result channel closed");
 }
 
 /// Single-pass SHA-1 and empty-page count.
@@ -312,9 +331,6 @@ fn hash_one(
     pb: Option<&ProgressBar>)
     -> Result<([u8; 20], u64)> {
     let mut file = File::open(path).map_err(|e| Error::io(path, e))?;
-    if buf.len() < IO_BUF_SIZE {
-        buf.resize_with(IO_BUF_SIZE, || 0u8);
-    }
 
     let mut hasher = Sha1::new();
     let mut zero_blocks = 0u64;
