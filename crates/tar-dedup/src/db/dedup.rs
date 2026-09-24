@@ -631,3 +631,614 @@ pub fn ingest_compare_outcome(
     tx.commit().to_panic()?;
     Ok(resolved)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema;
+    use std::path::PathBuf;
+
+    const FLAG_CHECK: i64 = 1i64 << 7;
+    const FLAG_ERROR: i64 = 1i64 << 8;
+    const FLAG_MODIFIED: i64 = 1i64 << 5;
+
+    fn open_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = Connection::open(&dir.path().join("t.sqlite")).expect("open conn");
+        schema::initialize(&conn).expect("schema init");
+        // The internal include rule: `apply_no_filter` hands out
+        // `include_reason_archive = -1`, which must satisfy the FK.
+        conn.execute(
+            "INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) \
+             VALUES (-1, 'internal', NULL, '.*')",
+            [],
+        ).expect("seed internal include rule");
+        (dir, conn)
+    }
+
+    fn seed_file(conn: &Connection, id: i64, abs_path: &str, sha1_byte: u8, size: u64) {
+        conn.execute(
+            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+             include_reason_archive, exclude_reason_archive, flags, canonical_id, dev, inode) \
+             VALUES (:id, :abs_path, '.bin', :size, 'file', 'filtered', :sha1, -1, 0, 0, NULL, NULL, NULL)",
+            named_params! {
+                ":id": id,
+                ":abs_path": abs_path,
+                ":size": size as i64,
+                ":sha1": [sha1_byte; 20].as_slice(),
+            },
+        ).expect("insert row");
+    }
+
+    fn seed_group(conn: &Connection, sha1_byte: u8, size: u64, state: &str) {
+        conn.execute(
+            "INSERT OR REPLACE INTO dedup_progress (sha1, size, state) \
+             VALUES (:sha1, :size, :state)",
+            named_params! {
+                ":sha1": [sha1_byte; 20].as_slice(),
+                ":size": size as i64,
+                ":state": state,
+            },
+        ).expect("seed group");
+    }
+
+    fn set_canonical_self(conn: &Connection, id: i64) {
+        conn.execute(
+            "UPDATE files SET canonical_id = :id WHERE id = :id",
+            named_params! { ":id": id },
+        ).expect("set self canonical");
+    }
+
+    fn set_phase(conn: &Connection, id: i64, phase: &str) {
+        conn.execute(
+            "UPDATE files SET phase = :phase WHERE id = :id",
+            named_params! { ":id": id, ":phase": phase },
+        ).expect("set phase");
+    }
+
+    fn row_phase(conn: &Connection, id: i64) -> String {
+        conn.query_row(
+            "SELECT phase FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get::<_, String>(0),
+        ).expect("read phase")
+    }
+
+    fn row_canonical(conn: &Connection, id: i64) -> Option<i64> {
+        conn.query_row(
+            "SELECT canonical_id FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get::<_, Option<i64>>(0),
+        ).expect("read canonical_id")
+    }
+
+    fn row_flags(conn: &Connection, id: i64) -> i64 {
+        conn.query_row(
+            "SELECT flags FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get(0),
+        ).expect("read flags")
+    }
+
+    fn group_state(conn: &Connection, sha1_byte: u8, size: u64) -> String {
+        conn.query_row(
+            "SELECT state FROM dedup_progress WHERE sha1 = :sha1 AND size = :size",
+            named_params! {
+                ":sha1": [sha1_byte; 20].as_slice(),
+                ":size": size as i64,
+            },
+            |row| row.get::<_, String>(0),
+        ).expect("read group state")
+    }
+
+    fn pending_ids(conn: &Connection, last: u64, limit: u64) -> Vec<(i64, i64)> {
+        list_pending_comparisons::<StrippedRecord>(conn, false, last, limit)
+            .expect("list pending")
+            .into_iter()
+            .map(|pair| (pair.0.id.0, pair.1.id.0))
+            .collect::<Vec<(i64, i64)>>()
+    }
+
+    fn inflight_count(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM dedup_inflight", [], |row| row.get(0),
+        ).expect("inflight count")
+    }
+
+    #[test]
+    fn ready_to_searching_elects_min_and_flips() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn, 7, 100, "ready");
+
+        let (elected, promoted) = ready_to_searching(&mut conn, false).expect("transition");
+
+        assert_eq!(elected, 1);
+        assert_eq!(promoted, 0);
+        assert_eq!(row_canonical(&conn, 1), Some(1));
+        assert_eq!(row_canonical(&conn, 2), None);
+        assert_eq!(row_canonical(&conn, 3), None);
+        assert_eq!(group_state(&conn, 7, 100), "searching");
+    }
+
+    #[test]
+    fn ready_to_searching_two_member_group() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_group(&conn, 7, 100, "ready");
+        // 1 is a retired self-canonical; the lone remaining member is elected
+        // then promoted out and the group closes.
+        set_canonical_self(&conn, 1);
+        set_phase(&conn, 1, "deduped");
+
+        let (elected, promoted) = ready_to_searching(&mut conn, false).expect("transition");
+
+        assert_eq!(elected, 1);
+        assert_eq!(promoted, 1);
+        assert_ne!(row_canonical(&conn, 2), None);
+        assert_eq!(row_phase(&conn, 2), "deduped");
+        assert_eq!(group_state(&conn, 7, 100), "done");
+    }
+
+    #[test]
+    fn ready_to_searching_no_electable_marks_done_unreachable_guard() {
+        // I5: the blanket ready->done flip must not close a group whose
+        // members are still in-phase (here: all errored, none electable).
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_group(&conn, 7, 100, "ready");
+        set_file_flag(&conn, FileId(1), FileFlag::ErrorWhileDedup, true).expect("flag");
+        set_file_flag(&conn, FileId(2), FileFlag::ErrorWhileDedup, true).expect("flag");
+
+        let _ = ready_to_searching(&mut conn, false).expect("transition");
+
+        assert_eq!(group_state(&conn, 7, 100), "ready");
+        assert_eq!(count_pending_dedup_groups(&conn).expect("pending"), 1);
+    }
+
+    #[test]
+    fn searching_to_finished_fires_when_all_resolved() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn, 7, 100, "searching");
+        set_canonical_self(&conn, 1);
+        set_file_flag(&conn, FileId(2), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+        set_file_flag(&conn, FileId(3), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+
+        assert_eq!(searching_to_finished(&mut conn, false).expect("transition"), 1);
+        assert_eq!(group_state(&conn, 7, 100), "finished");
+
+        // negative: one unresolved member blocks the flip
+        let (_dir2, mut conn2) = open_db();
+        create_temp_dedup_table(&conn2).expect("create temp tables");
+        seed_file(&conn2, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn2, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn2, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn2, 7, 100, "searching");
+        set_canonical_self(&conn2, 1);
+        set_file_flag(&conn2, FileId(2), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+
+        assert_eq!(searching_to_finished(&mut conn2, false).expect("transition"), 0);
+        assert_eq!(group_state(&conn2, 7, 100), "searching");
+    }
+
+    #[test]
+    fn searching_to_finished_requires_exactly_one_self_canonical() {
+        // I4: the guard is `canonical_id = id`; two self-canonicals or none
+        // must both block the transition.
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn, 7, 100, "searching");
+        set_canonical_self(&conn, 1);
+        set_canonical_self(&conn, 2);
+        set_file_flag(&conn, FileId(3), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+
+        assert_eq!(searching_to_finished(&mut conn, false).expect("transition"), 0);
+        assert_eq!(group_state(&conn, 7, 100), "searching");
+
+        let (_dir2, mut conn2) = open_db();
+        create_temp_dedup_table(&conn2).expect("create temp tables");
+        seed_file(&conn2, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn2, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn2, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn2, 7, 100, "searching");
+        set_file_flag(&conn2, FileId(1), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+        set_file_flag(&conn2, FileId(2), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+        set_file_flag(&conn2, FileId(3), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+
+        assert_eq!(searching_to_finished(&mut conn2, false).expect("transition"), 0);
+        assert_eq!(group_state(&conn2, 7, 100), "searching");
+    }
+
+    #[test]
+    fn finish_to_done_promotes_and_all_have_canonical() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn, 7, 100, "finished");
+        set_canonical_self(&conn, 1);
+        set_canonical(&conn, FileId(2), FileId(1)).expect("link 2");
+        set_canonical(&conn, FileId(3), FileId(1)).expect("link 3");
+
+        let promoted = finish_to_done(&mut conn, false).expect("transition");
+
+        // SQLite counts rows matched by the group promote, including the two
+        // candidates already linked/promoted out.
+        assert_eq!(promoted, 3);
+        assert_eq!(group_state(&conn, 7, 100), "done");
+        assert_eq!(row_phase(&conn, 1), "deduped");
+        assert_eq!(row_canonical(&conn, 1), Some(1));
+        assert_eq!(row_canonical(&conn, 2), Some(1));
+        assert_eq!(row_canonical(&conn, 3), Some(1));
+
+        // negative: an unresolved checked member blocks it
+        let (_dir2, mut conn2) = open_db();
+        create_temp_dedup_table(&conn2).expect("create temp tables");
+        seed_file(&conn2, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn2, 2, "/tmp/b.bin", 7, 100);
+        seed_group(&conn2, 7, 100, "finished");
+        set_canonical_self(&conn2, 1);
+        set_file_flag(&conn2, FileId(2), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+
+        assert_eq!(finish_to_done(&mut conn2, false).expect("transition"), 0);
+        assert_eq!(group_state(&conn2, 7, 100), "finished");
+    }
+
+    #[test]
+    fn finish_to_error_errored_with_all_errored_candidates() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn, 7, 100, "finished");
+        set_canonical_self(&conn, 1);
+        for id in [2, 3] {
+            set_file_flag(&conn, FileId(id), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+            set_file_flag(&conn, FileId(id), FileFlag::ErrorWhileDedup, true).expect("flag");
+        }
+
+        let (errored, promoted) = finish_to_error(&mut conn, false).expect("transition");
+
+        assert_eq!(errored, 1);
+        assert_eq!(promoted, 3);
+        assert_eq!(group_state(&conn, 7, 100), "errored");
+        assert_eq!(row_canonical(&conn, 2), None);
+        assert_ne!(row_flags(&conn, 2) & FLAG_ERROR, 0);
+        assert_eq!(row_flags(&conn, 2) & FLAG_CHECK, 0);
+        assert_eq!(row_phase(&conn, 2), "deduped");
+
+        // negative: a candidate without the error flag blocks it
+        let (_dir2, mut conn2) = open_db();
+        create_temp_dedup_table(&conn2).expect("create temp tables");
+        seed_file(&conn2, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn2, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn2, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn2, 7, 100, "finished");
+        set_canonical_self(&conn2, 1);
+        set_file_flag(&conn2, FileId(2), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+        set_file_flag(&conn2, FileId(2), FileFlag::ErrorWhileDedup, true).expect("flag");
+        set_file_flag(&conn2, FileId(3), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+
+        assert_eq!(finish_to_error(&mut conn2, false).expect("transition").0, 0);
+        assert_eq!(group_state(&conn2, 7, 100), "finished");
+    }
+
+    #[test]
+    fn finish_to_ready_retires_canonical_and_clears_flags() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn, 7, 100, "finished");
+        set_canonical_self(&conn, 1);
+        set_file_flag(&conn, FileId(2), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+        set_file_flag(&conn, FileId(3), FileFlag::CheckWithCanonicalCompleted, true).expect("flag");
+        set_file_flag(&conn, FileId(3), FileFlag::ErrorWhileDedup, true).expect("flag");
+
+        let promoted = finish_to_ready(&mut conn, false).expect("transition");
+
+        assert_eq!(promoted, 1);
+        assert_eq!(group_state(&conn, 7, 100), "ready");
+        assert_eq!(row_phase(&conn, 1), "deduped");
+        assert_eq!(row_phase(&conn, 2), "filtered");
+        assert_eq!(row_phase(&conn, 3), "filtered");
+        assert_eq!(row_flags(&conn, 2) & FLAG_CHECK, 0);
+        assert_eq!(row_flags(&conn, 3) & FLAG_CHECK, 0);
+        assert_ne!(row_flags(&conn, 3) & FLAG_ERROR, 0);
+
+        // negative: no checked member -> the done path, not ready
+        let (_dir2, mut conn2) = open_db();
+        create_temp_dedup_table(&conn2).expect("create temp tables");
+        seed_file(&conn2, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn2, 2, "/tmp/b.bin", 7, 100);
+        seed_group(&conn2, 7, 100, "finished");
+        set_canonical_self(&conn2, 1);
+        set_canonical(&conn2, FileId(2), FileId(1)).expect("link 2");
+
+        assert_eq!(finish_to_ready(&mut conn2, false).expect("transition"), 0);
+        assert_eq!(group_state(&conn2, 7, 100), "finished");
+    }
+
+    #[test]
+    fn fsm_roundtrip_two_member_unequal_terminates_done() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_group(&conn, 7, 100, "ready");
+
+        assert_eq!(ready_to_searching(&mut conn, false).expect("r2s").0, 1);
+        assert_eq!(group_state(&conn, 7, 100), "searching");
+
+        let mut results = Vec::<CompareOutcome>::new();
+        results.push(CompareOutcome {
+            canonical_id: FileId(1),
+            candidate_id: FileId(2),
+            equal: Ok(false),
+            canonical_modified: false,
+            candidate_modified: false,
+        });
+        assert_eq!(ingest_compare_outcome(&mut conn, &results).expect("ingest"), 0);
+        assert_eq!(searching_to_finished(&mut conn, false).expect("s2f"), 1);
+        assert_eq!(finish_to_ready(&mut conn, false).expect("f2r"), 1);
+        assert_eq!(ready_to_searching(&mut conn, false).expect("r2s"), (1, 1));
+        // lonely 2 was elected + promoted; the guarded done-flip closes it.
+        assert_eq!(group_state(&conn, 7, 100), "done");
+        assert_eq!(row_canonical(&conn, 1), Some(1));
+        assert_eq!(row_canonical(&conn, 2), Some(2));
+        assert_eq!(row_phase(&conn, 1), "deduped");
+        assert_eq!(row_phase(&conn, 2), "deduped");
+        assert_eq!(count_pending_dedup_groups(&conn).expect("pending"), 0);
+    }
+
+    #[test]
+    fn fsm_roundtrip_three_member_unequal_than_equal_terminates_done() {
+        // I1 repro at the db level: round-1 in-flight markers must be cleared
+        // by ingest, or round 2's list_pending_comparisons excludes candidate 3.
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        seed_file(&conn, 3, "/tmp/c.bin", 7, 100);
+        seed_group(&conn, 7, 100, "searching");
+        set_canonical_self(&conn, 1);
+
+        // Round 1: candidates 2 and 3 compare unequal vs 1.
+        mark_inflight(&conn, &[FileId(2), FileId(3)]).expect("mark round 1");
+        let mut round1 = Vec::<CompareOutcome>::new();
+        round1.push(CompareOutcome {
+            canonical_id: FileId(1), candidate_id: FileId(2), equal: Ok(false),
+            canonical_modified: false, candidate_modified: false,
+        });
+        round1.push(CompareOutcome {
+            canonical_id: FileId(1), candidate_id: FileId(3), equal: Ok(false),
+            canonical_modified: false, candidate_modified: false,
+        });
+        ingest_compare_outcome(&mut conn, &round1).expect("round 1 ingest");
+        assert_eq!(inflight_count(&conn), 0);
+        assert_eq!(searching_to_finished(&mut conn, false).expect("s2f"), 1);
+        assert_eq!(finish_to_ready(&mut conn, false).expect("f2r"), 1);
+
+        // Round 2 clippage: candidate 3 alone must still be listed.
+        assert_eq!(ready_to_searching(&mut conn, false).expect("r2s").0, 1);
+        assert_eq!(group_state(&conn, 7, 100), "searching");
+        let round2 = pending_ids(&conn, 0, 100);
+        assert_eq!(round2, [(3, 2)]);
+
+        // Round 2: 3 compares equal vs the new canonical 2.
+        mark_inflight(&conn, &[FileId(3)]).expect("mark round 2");
+        let mut round2_res = Vec::<CompareOutcome>::new();
+        round2_res.push(CompareOutcome {
+            canonical_id: FileId(2), candidate_id: FileId(3), equal: Ok(true),
+            canonical_modified: false, candidate_modified: false,
+        });
+        assert_eq!(ingest_compare_outcome(&mut conn, &round2_res).expect("round 2 ingest"), 1);
+        assert_eq!(inflight_count(&conn), 0);
+        assert_eq!(searching_to_finished(&mut conn, false).expect("s2f"), 1);
+        assert_eq!(finish_to_done(&mut conn, false).expect("f2d"), 3);
+
+        assert_eq!(group_state(&conn, 7, 100), "done");
+        assert_eq!(row_canonical(&conn, 1), Some(1));
+        assert_eq!(row_canonical(&conn, 2), Some(2));
+        assert_eq!(row_canonical(&conn, 3), Some(2));
+        assert_eq!(row_phase(&conn, 1), "deduped");
+        assert_eq!(row_phase(&conn, 2), "deduped");
+        assert_eq!(row_phase(&conn, 3), "deduped");
+        assert_eq!(count_pending_dedup_groups(&conn).expect("pending"), 0);
+    }
+
+    #[test]
+    fn ingest_compare_outcome_true_links_and_resolves() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        mark_inflight(&conn, &[FileId(2)]).expect("mark");
+
+        let mut results = Vec::<CompareOutcome>::new();
+        results.push(CompareOutcome {
+            canonical_id: FileId(1), candidate_id: FileId(2), equal: Ok(true),
+            canonical_modified: false, candidate_modified: false,
+        });
+        let resolved = ingest_compare_outcome(&mut conn, &results).expect("ingest");
+
+        assert_eq!(resolved, 1);
+        assert_eq!(row_canonical(&conn, 2), Some(1));
+        assert_eq!(row_phase(&conn, 2), "deduped");
+        assert_eq!(inflight_count(&conn), 0);
+    }
+
+    #[test]
+    fn ingest_compare_outcome_false_sets_check_flag() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        mark_inflight(&conn, &[FileId(2)]).expect("mark");
+
+        let mut results = Vec::<CompareOutcome>::new();
+        results.push(CompareOutcome {
+            canonical_id: FileId(1), candidate_id: FileId(2), equal: Ok(false),
+            canonical_modified: false, candidate_modified: false,
+        });
+        let resolved = ingest_compare_outcome(&mut conn, &results).expect("ingest");
+
+        assert_eq!(resolved, 0);
+        assert_ne!(row_flags(&conn, 2) & FLAG_CHECK, 0);
+        assert_eq!(row_phase(&conn, 2), "filtered");
+        assert_eq!(inflight_count(&conn), 0);
+    }
+
+    #[test]
+    fn ingest_compare_outcome_error_sets_flags_on_failed_side() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        mark_inflight(&conn, &[FileId(2)]).expect("mark");
+
+        let mut results = Vec::<CompareOutcome>::new();
+        results.push(CompareOutcome {
+            canonical_id: FileId(1),
+            candidate_id: FileId(2),
+            equal: Err((FileId(1), FileStatError::Io {
+                path: PathBuf::from("/tmp/a.bin"),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied, "denied".to_string()),
+            })),
+            canonical_modified: false,
+            candidate_modified: false,
+        });
+        let resolved = ingest_compare_outcome(&mut conn, &results).expect("ingest");
+
+        assert_eq!(resolved, 0);
+        assert_ne!(row_flags(&conn, 2) & FLAG_CHECK, 0);
+        assert_ne!(row_flags(&conn, 1) & FLAG_ERROR, 0);
+        assert_eq!(inflight_count(&conn), 0);
+    }
+
+    #[test]
+    fn ingest_compare_outcome_sets_modified_flags() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+
+        let mut results = Vec::<CompareOutcome>::new();
+        results.push(CompareOutcome {
+            canonical_id: FileId(1), candidate_id: FileId(2), equal: Ok(true),
+            canonical_modified: true, candidate_modified: true,
+        });
+        ingest_compare_outcome(&mut conn, &results).expect("ingest");
+
+        assert_ne!(row_flags(&conn, 1) & FLAG_MODIFIED, 0);
+        assert_ne!(row_flags(&conn, 2) & FLAG_MODIFIED, 0);
+    }
+
+    #[test]
+    fn list_pending_comparisons_slices_and_orders() {
+        let (_dir, conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        for (id, name) in [(1, "/tmp/a.bin"), (2, "/tmp/b.bin"), (3, "/tmp/c.bin"), (4, "/tmp/d.bin")] {
+            seed_file(&conn, id, name, 7, 100);
+        }
+        set_canonical_self(&conn, 1);
+        seed_group(&conn, 7, 100, "searching");
+
+        assert_eq!(pending_ids(&conn, 0, 2), [(2, 1), (3, 1)]);
+        assert_eq!(pending_ids(&conn, 3, 2), [(4, 1)]);
+        assert!(pending_ids(&conn, 4, 2).is_empty());
+    }
+
+    #[test]
+    fn mark_unmark_inflight_excludes_and_restores() {
+        let (_dir, conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        for (id, name) in [(1, "/tmp/a.bin"), (2, "/tmp/b.bin"), (3, "/tmp/c.bin"), (4, "/tmp/d.bin")] {
+            seed_file(&conn, id, name, 7, 100);
+        }
+        set_canonical_self(&conn, 1);
+        seed_group(&conn, 7, 100, "searching");
+
+        mark_inflight(&conn, &[FileId(2), FileId(3)]).expect("mark");
+        assert_eq!(pending_ids(&conn, 0, 100), [(4, 1)]);
+
+        unmark_inflight(&conn, &[FileId(3)]).expect("unmark");
+        assert_eq!(pending_ids(&conn, 0, 100), [(3, 1), (4, 1)]);
+
+        mark_inflight(&conn, &[FileId(2)]).expect("re-mark idempotent");
+        assert_eq!(pending_ids(&conn, 0, 100), [(3, 1), (4, 1)]);
+    }
+
+    #[test]
+    fn list_pending_comparisons_empty_while_pending_groups_exist() {
+        let (_dir, conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        set_canonical_self(&conn, 1);
+        seed_group(&conn, 7, 100, "searching");
+        mark_inflight(&conn, &[FileId(2)]).expect("mark");
+
+        assert!(pending_ids(&conn, 0, 100).is_empty());
+        assert_eq!(count_pending_dedup_groups(&conn).expect("pending"), 1);
+    }
+
+    #[test]
+    fn promote_non_ineligible_and_singleton() {
+        let (_dir, conn) = open_db();
+        seed_file(&conn, 1, "/tmp/single.bin", 1, 10);
+        seed_file(&conn, 2, "/tmp/dir.bin", 1, 20);
+        conn.execute("UPDATE files SET ftype = 'dir' WHERE id = 2", []).expect("dir ftype");
+        seed_file(&conn, 3, "/tmp/nosha.bin", 1, 30);
+        conn.execute("UPDATE files SET sha1 = NULL WHERE id = 3", []).expect("null sha");
+        seed_file(&conn, 4, "/tmp/shaerr.bin", 1, 40);
+        set_file_flag(&conn, FileId(4), FileFlag::ErrorWhileHash, true).expect("flag");
+        seed_file(&conn, 5, "/tmp/excluded.bin", 1, 50);
+        conn.execute("UPDATE files SET include_reason_archive = 0 WHERE id = 5", []).expect("excl");
+        seed_file(&conn, 6, "/tmp/g1.bin", 7, 100);
+        seed_file(&conn, 7, "/tmp/g2.bin", 7, 100);
+
+        // run() order: ineligible promotions first, then singletons
+        assert_eq!(promote_non_ineligible_entries_to_dedup(&conn, false).expect("ineligible"), 4);
+        assert_eq!(promote_singleton_filtered_to_deduped(&conn, false).expect("singleton"), 1);
+
+        assert_eq!(row_phase(&conn, 1), "deduped");
+        assert_eq!(row_phase(&conn, 2), "deduped");
+        assert_eq!(row_phase(&conn, 3), "deduped");
+        assert_eq!(row_phase(&conn, 4), "deduped");
+        assert_eq!(row_phase(&conn, 5), "deduped");
+        assert_eq!(row_phase(&conn, 6), "filtered");
+        assert_eq!(row_phase(&conn, 7), "filtered");
+    }
+
+    #[test]
+    fn count_pending_dedup_groups_tracks_states() {
+        let (_dir, conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+        seed_group(&conn, 1, 10, "ready");
+        seed_group(&conn, 2, 10, "searching");
+        seed_group(&conn, 3, 10, "finished");
+        seed_group(&conn, 4, 10, "done");
+        seed_group(&conn, 5, 10, "errored");
+
+        assert_eq!(count_pending_dedup_groups(&conn).expect("pending"), 3);
+    }
+}
