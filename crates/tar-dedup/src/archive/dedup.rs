@@ -288,7 +288,8 @@ fn run_enqueue_dequeue_loop_dedup(
         // no further drain or FSM step can change anything. (The drain above
         // applies `pending_out` unconditionally, so it is empty here.) The
         // drain tail below still joins the workers and flushes the recorder.
-        if feed_exhausted && feed_i == feed_buf.len() && dequeued_total == feed_total {
+        if feed_exhausted && feed_i == feed_buf.len()
+            && dequeued_total == (feed_total + rt.config.process.io_jobs as u64) {
             break;
         }
         if !busy {
@@ -301,16 +302,10 @@ fn run_enqueue_dequeue_loop_dedup(
     // Drain the remaining tasks scheduled to the workers are drained
     loop {
         busy = false;
-        if rt.shutdown.is_interrupted() {
-            break;
-        }
-        if dequeued_total == feed_total {
-            break;
-        }
-        if exited_threads == rt.config.process.io_jobs as u64 {
-            break;
-        }
-        if !at_least_one_running(&handles.iter().collect()) {
+        if rt.shutdown.is_interrupted()
+            || dequeued_total == feed_total
+            || exited_threads == rt.config.process.io_jobs as u64
+            || !at_least_one_running(&handles.iter().collect()) {
             break;
         }
         drain_chunk(&mut busy, &mut exited_threads, &mut dequeued_total, true)?;
@@ -347,8 +342,7 @@ fn compare_worker(
     shutdown: Shutdown,
     work: Receiver<ComparePair>,
     out: Sender<Option<CompareOutcome>>,
-    detect_hardlinks: bool,
-) {
+    detect_hardlinks: bool) {
     let mut buf_a = io_buffer();
     let mut buf_b = io_buffer();
     loop {
