@@ -1,6 +1,6 @@
 use crate::archive::ArchiveRTArgs;
 use crate::common::files::warn_if_times_changed;
-use crate::common::{IO_BUF_SIZE, io_buffer};
+use crate::common::io_buffer;
 use crate::db::Recorder;
 use crate::db::flags::ErrorFlags;
 use crate::db::hash::{HashError, HashSuccess, HashingOutcome};
