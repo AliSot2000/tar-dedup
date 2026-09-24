@@ -357,14 +357,11 @@ fn compare_worker(
     out.send(None).expect("dedup worker: result channel closed");
 }
 
-// TODO Different Error.
 /// Rerun the count_check_with_canonical_completed and return an error if the count is not 0.
 fn sanity_check_flags(db: &Database) -> Result<()> {
     let n = db.count_check_with_canonical_completed()?;
     if n != 0 {
-        return Err(Error::Config(format!(
-            "dedup sanity check failed: {n} file(s) still have CheckWithCanonicalCompleted set"
-        )));
+        panic!("dedup sanity check failed: {n} file(s) still have CheckWithCanonicalCompleted set");
     }
     Ok(())
 }
