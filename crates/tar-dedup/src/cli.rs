@@ -343,9 +343,14 @@ pub struct ArchiveArgs {
     #[arg(long = "lazy-filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub lazy_filter: bool,
 
-    /// Skip the deduplication phase.
-    #[arg(long = "no-dedup", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
-    pub no_dedup: bool,
+    /// Deduplication strategy.
+    #[arg(
+        long = "dedup-mode",
+        value_enum,
+        default_value_t = DedupMode::Regular,
+        help_heading = "Process Options"
+    )]
+    pub dedup_mode: DedupMode,
 }
 
 #[derive(Debug, Args, Default)]
@@ -894,4 +899,19 @@ pub enum HardLinkGrouping {
     Source,
     /// Hard link files across all sources.
     Global,
+}
+
+/// Deduplication strategy for the archive pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum DedupMode {
+    /// Byte-compare duplicates within `(sha1, size)` groups (default).
+    #[default]
+    Regular,
+    /// Trust the digest: `min(id)` of each `(sha1, size)` group is the
+    /// self-canonical, all other members point at it. No byte verification.
+    Hash,
+    /// No content dedup. With hardlink detection, only `(sha1, size, dev, ino)`
+    /// hard-link groups collapse; without it, every eligible file is self-canonical.
+    None,
 }
