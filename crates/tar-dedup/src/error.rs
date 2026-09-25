@@ -70,6 +70,13 @@ impl Error {
         })
     }
 
+    pub fn copy_io(path: impl Into<PathBuf>, source: &std::io::Error) -> Self {
+        if source.kind() == std::io::ErrorKind::Interrupted {
+            return Self::Interrupted;
+        }
+        Self::FileStat(FileStatError::copy_io(path.into(), source))
+    }
+
     pub fn is_interrupted(&self) -> bool {
         matches!(self, Self::Interrupted)
     }
@@ -179,6 +186,13 @@ impl FileStatError {
     pub fn io(path: &Path, source: std::io::Error) -> Self {
         Self::Io { path: path.to_path_buf(), source }
     }
+    pub fn copy_io(path: impl Into<PathBuf>, source: &std::io::Error) -> Self {
+        Self::Io {
+            path: path.into(),
+            source: std::io::Error::new(source.kind(), source.to_string())
+        }
+    }
+
     pub fn json(path: &Path, source: serde_json::Error) -> Self {
         Self::Json { path: path.to_path_buf(), source }
     }
