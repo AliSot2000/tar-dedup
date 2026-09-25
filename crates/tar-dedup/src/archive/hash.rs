@@ -405,6 +405,7 @@ fn is_all_zero(chunk: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::DedupMode;
     use crate::common::IO_BUF_SIZE;
     use crate::common::files::original_extension;
     use crate::common::start::StartPolicy;
@@ -493,7 +494,7 @@ mod tests {
                 exit_after_stage: None,
             },
             pipeline: ArchivePipelineOptions {
-                no_dedup: true,
+                dedup_mode: DedupMode::Regular,
                 write_archive_footer: false,
                 clear_archive_meta: false,
             },
