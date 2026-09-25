@@ -116,7 +116,7 @@ selected to be sparsified)
 | -     | `--fail-fast`          | n        | 0    | Exit immediately if an error occurres. (E.g. Permission denied, Path does not Exist, ...)         |       |
 | -     | `--no-errors`          | n        | 0    | Don't keep record of errors associated with a file.                                               |       |
 | -     | `--eager-filter`       | n        | 0    | Perform filtering before the hash phase (faster, less information in database)                    |       |
-| -     | `--no-dedup`           | n        | 0    | (Dangerous) Do not perform binary verification and assume (hash, file-size) match implies unique. |       |
+| -     | `--dedup-mode`         | n        | 1    | Deduplication strategy: `regular` (byte-compare; default), `hash` (trust the hash, min-id canonicals), `none` (no content dedup). |       |
 | -     | `--retry-missing-sha ` | n        | 0    | Attempt to add a file to the archive regardless if it produced errors in the previous sections.   |       |
 
 **Notes**
