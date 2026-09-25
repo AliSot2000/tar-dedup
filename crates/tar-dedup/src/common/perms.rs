@@ -604,7 +604,7 @@ mod tests {
     fn temp_map_file(contents: &str) -> (TempDir, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("map.txt");
-        std::fs::write(&path, contents).expect("write map file");
+        fs::write(&path, contents).expect("write map file");
         (dir, path)
     }
 
