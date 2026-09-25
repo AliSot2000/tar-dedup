@@ -637,11 +637,13 @@ pub fn promote_hash_mode_to_dedup(conn: &mut Connection, eager_filter: bool) -> 
     let tx = conn.transaction().to_panic()?;
     let candidates = dedup_eligible_where(eager_filter);
     let link_eligible = format!(
-        "g.ftype = 'file' AND g.sha1 IS NOT NULL
+        "g.ftype = 'file'
+         AND g.sha1 IS NOT NULL
          AND (g.flags & :error_hash) = 0
          AND {}",
         generate_archive_filter(Some("g"))
     );
+
     let elected = tx.execute(&format!(
         "UPDATE files SET canonical_id = id, phase = 'deduped'
          WHERE {candidates}
@@ -651,6 +653,7 @@ pub fn promote_hash_mode_to_dedup(conn: &mut Connection, eager_filter: bool) -> 
     ), named_params! {
         ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
     }).to_panic()?;
+
     let linked = tx.execute(&format!(
         "UPDATE files SET canonical_id = (
              SELECT MIN(id) FROM files AS g
@@ -662,6 +665,7 @@ pub fn promote_hash_mode_to_dedup(conn: &mut Connection, eager_filter: bool) -> 
     ), named_params! {
         ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
     }).to_panic()?;
+
     tx.commit().to_panic()?;
     Ok((elected + linked) as u64)
 }
@@ -687,6 +691,7 @@ pub fn promote_none_mode_to_dedup(
              AND {}",
             generate_archive_filter(Some("g"))
         );
+
         let elected = tx.execute(&format!(
             "UPDATE files SET canonical_id = id, phase = 'deduped'
              WHERE {candidates}
@@ -699,6 +704,7 @@ pub fn promote_none_mode_to_dedup(
         ), named_params! {
             ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
         }).to_panic()?;
+
         let linked = tx.execute(&format!(
             "UPDATE files SET canonical_id = (
                  SELECT MIN(id) FROM files AS g
@@ -712,6 +718,7 @@ pub fn promote_none_mode_to_dedup(
         ), named_params! {
             ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
         }).to_panic()?;
+
         // Rows with missing dev/inode cannot join a hard-link cluster: self-canonical.
         let orphaned = tx.execute(&format!(
             "UPDATE files SET canonical_id = id, phase = 'deduped'
