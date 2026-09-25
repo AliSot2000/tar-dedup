@@ -494,7 +494,6 @@ mod tests {
             },
             pipeline: ArchivePipelineOptions {
                 no_dedup: true,
-                retry_missing_sha: false,
                 write_archive_footer: false,
                 clear_archive_meta: false,
             },

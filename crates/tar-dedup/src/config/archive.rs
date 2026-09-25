@@ -72,7 +72,6 @@ pub struct SparseOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchivePipelineOptions {
     pub no_dedup: bool,
-    pub retry_missing_sha: bool,
     pub write_archive_footer: bool,
     pub clear_archive_meta: bool,
 }
@@ -313,7 +312,6 @@ impl ArchiveConfig {
             },
             pipeline: ArchivePipelineOptions {
                 no_dedup: args.no_dedup,
-                retry_missing_sha: args.retry_missing_sha,
                 write_archive_footer: true,
                 clear_archive_meta: false,
             },
@@ -450,7 +448,6 @@ const DEFAULT_CONFIG: ArchiveConfig = ArchiveConfig {
     },
     pipeline: ArchivePipelineOptions {
         no_dedup: false,
-        retry_missing_sha: false,
         write_archive_footer: true,
         clear_archive_meta: false,
     },

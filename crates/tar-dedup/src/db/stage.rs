@@ -4,12 +4,7 @@ use crate::db::common::SqlFileRow;
 use crate::db::common::generate_archive_filter;
 use crate::error::{Result, ToPanic};
 
-pub fn promote_unstageable_files(conn: &Connection, retry_missing_sha: bool) -> Result<u64> {
-    let filter_sha = if retry_missing_sha {
-        ""
-    } else {
-        "OR sha1 IS NULL"
-    };
+pub fn promote_unstageable_files(conn: &Connection) -> Result<u64> {
     let filter_rows = generate_archive_filter(None);
     let n = conn.execute(
         &format!(
@@ -21,7 +16,7 @@ pub fn promote_unstageable_files(conn: &Connection, retry_missing_sha: bool) -> 
             OR canonical_id IS NULL \
             OR canonical_id != id \
             OR NOT ({filter_rows})
-            {filter_sha}
+            OR sha1 IS NULL
         )"
         ),
         [],
@@ -29,22 +24,14 @@ pub fn promote_unstageable_files(conn: &Connection, retry_missing_sha: bool) -> 
     Ok(n as u64)
 }
 
-pub fn list_files_to_stage<R: SqlFileRow>(
-    conn: &Connection,
-    retry_missing_sha: bool,
-) -> Result<Vec<R>> {
-    let filter_sha = if retry_missing_sha {
-        ""
-    } else {
-        "AND sha1 IS NOT NULL"
-    };
+pub fn list_files_to_stage<R: SqlFileRow>(conn: &Connection) -> Result<Vec<R>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {} FROM files \
             WHERE phase = 'sparsified' \
                 AND ftype = 'file' \
                 AND canonical_id = id \
                 AND {} \
-                {filter_sha}",
+                AND sha1 IS NOT NULL",
         R::sql_columns(None),
         generate_archive_filter(None)
     )).to_panic()?;
