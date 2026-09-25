@@ -1,13 +1,19 @@
 use crate::archive::ArchiveRTArgs;
 use crate::common::files::warn_if_times_changed;
+use crate::config::PipelinePhase;
+use crate::db::flags::ErrorFlags;
 use crate::db::flags::FileFlag;
-use crate::db::types::StrippedRecord;
+use crate::db::types::{FileId, StrippedRecord};
+use crate::db::{ErrorPhase, Recorder};
+use crate::error::Error;
 use crate::error::{FileStatError, Result};
 use path_clean::PathClean;
 use std::fs;
 use std::os::unix::fs::symlink;
+use std::path::Path;
 
-// TODO const ERROR_OHASE
+const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(PipelinePhase::Stage);
+
 const EXPECTED_CANONICAL: &str = "stage: Expected only canonical files. \
                             Got wrong file type or non-canonical file";
 
@@ -28,8 +34,15 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // TODO progressbar
     // TODO batching
     // TODO logging
-    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
-    let phase = crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Stage);
+    let mut recorder = Recorder::new(db, !config.process.no_errors);
+    let mut record_error = |id: FileId, fse: &std::io::Error, target: &Path| {
+        recorder.record_file(
+            id,
+            ERROR_PHASE,
+            FileStatError::copy_io(&target, &fse),
+            ErrorFlags::default(),
+        );
+    };
     let file_vec: Vec<StrippedRecord> = db.list_files_to_stage()?;
     let total_files = file_vec.len();
     for record in file_vec {
@@ -58,26 +71,16 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             match fs::remove_file(&target) {
                 Ok(()) => (),
                 Err(e) => {
-                    recorder.record_file(
-                        record.id,
-                        phase.clone(),
-                        FileStatError::io(&target, std::io::Error::new(e.kind(), e.to_string())),
-                        crate::db::flags::ErrorFlags::default(),
-                    );
-                    return Err(crate::error::Error::io(&target, e));
+                    record_error(record.id, &e, &target);
+                    return Err(Error::io(&target, e));
                 }
             }
         }
         match symlink(&source_path, &target) {
             Ok(()) => (),
             Err(e) => {
-                recorder.record_file(
-                    record.id,
-                    phase.clone(),
-                    FileStatError::io(&target, std::io::Error::new(e.kind(), e.to_string())),
-                    crate::db::flags::ErrorFlags::default(),
-                );
-                return Err(crate::error::Error::io(&target, e));
+                record_error(record.id, &e, &target);
+                return Err(Error::io(&target, e));
             }
         }
         db.mark_file_phase(record.id, crate::db::types::FilePhase::Staged)?;
