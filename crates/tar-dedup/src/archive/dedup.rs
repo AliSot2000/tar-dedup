@@ -289,7 +289,7 @@ fn run_enqueue_dequeue_loop_dedup(
         // applies `pending_out` unconditionally, so it is empty here.) The
         // drain tail below still joins the workers and flushes the recorder.
         if feed_exhausted && feed_i == feed_buf.len()
-            && dequeued_total == (feed_total + rt.config.process.io_jobs as u64) {
+            && dequeued_total == feed_total {
             break;
         }
         if !busy {
