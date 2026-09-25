@@ -540,7 +540,7 @@ pub fn mark_self_canonical(conn: &Connection, file_id: FileId) -> Result<()> {
     Ok(())
 }
 
-pub fn promote_non_ineligible_entries_to_dedup(conn: &Connection, eager_filter: bool)
+pub fn promote_ineligible_entries_to_dedup(conn: &Connection, eager_filter: bool)
     -> Result<u64> {
     let filter_query = generate_archive_filter(None);
     // INFO: sha1 <=> err_flag

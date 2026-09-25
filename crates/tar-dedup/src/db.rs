@@ -281,8 +281,8 @@ impl Database {
         dedup::promote_singleton_filtered_to_deduped(&*self.conn(), eager_filter)
     }
 
-    pub fn promote_non_ineligible_entries_to_dedup(&self, eager_filter: bool) -> Result<u64> {
-        dedup::promote_non_ineligible_entries_to_dedup(&*self.conn(), eager_filter)
+    pub fn promote_ineligible_entries_to_dedup(&self, eager_filter: bool) -> Result<u64> {
+        dedup::promote_ineligible_entries_to_dedup(&*self.conn(), eager_filter)
     }
 
     /// Create `dedup_progress` + the per-connection `dedup_inflight` TEMP table.
