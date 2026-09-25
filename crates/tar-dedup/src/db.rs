@@ -285,6 +285,31 @@ impl Database {
         dedup::promote_ineligible_entries_to_dedup(&*self.conn(), eager_filter)
     }
 
+    /// `Hash` dedup mode: elect `min(id)` per `(sha1, size)` group as the
+    /// self-canonical, point every other member at it (no byte compare).
+    pub fn promote_hash_mode_to_dedup(&self, eager_filter: bool) -> Result<u64> {
+        dedup::promote_hash_mode_to_dedup(&mut self.conn_mut(), eager_filter)
+    }
+
+    /// `None` dedup mode: no content dedup. With hardlink detection only
+    /// `(sha1, size, dev, ino)` hard-link clusters collapse; otherwise every
+    /// eligible file becomes self-canonical.
+    pub fn promote_none_mode_to_dedup(
+        &self, eager_filter: bool, detect_hardlinks: bool) -> Result<u64> {
+        dedup::promote_none_mode_to_dedup(&mut self.conn_mut(), eager_filter, detect_hardlinks)
+    }
+
+    /// Phase-bar total for the bulk dedup modes: the eligible corpus (hashed
+    /// files with a digest and the archive filter passed), any phase.
+    pub fn count_dedup_eligible_total(&self, eager_filter: bool) -> Result<u64> {
+        dedup::count_dedup_eligible_total(&*self.conn(), eager_filter)
+    }
+
+    /// Of [`Self::count_dedup_eligible_total`], how many are already `deduped`.
+    pub fn count_dedup_eligible_position(&self, eager_filter: bool) -> Result<u64> {
+        dedup::count_dedup_eligible_position(&*self.conn(), eager_filter)
+    }
+
     /// Create `dedup_progress` + the per-connection `dedup_inflight` TEMP table.
     /// Idempotent. Call once before the dedup FSM.
     pub fn create_temp_dedup_table(&self) -> Result<()> {
