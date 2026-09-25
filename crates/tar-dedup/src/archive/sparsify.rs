@@ -100,8 +100,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     rt.db.create_sparsify_queue()?;
     rt.db.populate_sparsify_queue(rt.config.sparse.min_pages)?;
 
+    // The phase bar tracks the whole workload across sessions: `count_all` is
+    // phase-agnostic, `pending` the session "todo", and their difference the
+    // already-done position — so a resumed run still shows prior progress.
+    let workload = rt.db.count_all_sparsify_candidates(rt.config.sparse.min_pages)?;
     let pending = rt.db.count_pending_sparsify_candidates(rt.config.sparse.min_pages)?;
-    rt.progress.set_phase_total(pending);
+    rt.progress.set_phase_total(workload);
+    rt.progress.set_phase_position(workload.saturating_sub(pending));
     if pending == 0 {
         rt.db.drop_sparsify_queue()?;
         sanity_no_deduped(rt.db)?;
@@ -137,7 +142,9 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     drop(work_r);
     drop(out_s);
 
-    let (completed, errored) = run_enqueue_dequeue_loop_sparsify(&rt, work_s, out_r, thread_handles)?;
+    let (completed, errored) = run_enqueue_dequeue_loop_sparsify(
+        &rt, work_s, out_r, thread_handles
+    )?;
     rt.progress.drop_thread_bars();
 
     match rt.shutdown.is_interrupted() {
@@ -265,10 +272,8 @@ fn run_enqueue_dequeue_loop_sparsify(
 
         drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
         // Leave for dequeue loop.
-        if feed_exhausted && feed_idx == feed_buf.len() {
-            break;
-        }
-        if !at_least_one_running(&handles.iter().collect()) {
+        if feed_exhausted && feed_idx == feed_buf.len()
+            || !at_least_one_running(&handles.iter().collect()) {
             break;
         }
         if !busy {
@@ -290,13 +295,10 @@ fn run_enqueue_dequeue_loop_sparsify(
     // long enough for the in-flight file to finish or be aborted, whichever
     // comes first.
     loop {
-        if dequeue_total == feed_total {
-            break;
-        }
-        if !at_least_one_running(&handles.iter().collect()) {
-            break;
-        }
-        if exited_workers == rt.config.process.io_jobs as u64 {
+        if rt.shutdown.is_interrupted()
+            || dequeue_total == feed_total
+            || !at_least_one_running(&handles.iter().collect())
+            || exited_workers == rt.config.process.io_jobs as u64 {
             break;
         }
         drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
