@@ -416,6 +416,7 @@ fn sanity_no_deduped(db: &Database) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::DedupMode;
     use crate::common::files::original_extension;
     use crate::common::start::StartPolicy;
     use crate::config::{
@@ -492,7 +493,7 @@ mod tests {
                 exit_after_stage: None,
             },
             pipeline: ArchivePipelineOptions {
-                no_dedup: false,
+                dedup_mode: DedupMode::Regular,
                 write_archive_footer: false,
                 clear_archive_meta: false,
             },
