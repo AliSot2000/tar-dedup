@@ -488,7 +488,14 @@ impl Database {
         sparsify::drop_sparsify_queue(&*self.conn())
     }
 
-    /// Rows still awaiting a sparse rewrite (matches the feed pull).
+    /// The overall sparsify workload — all candidates regardless of phase or
+    /// progress flags (stable across sessions; see `db/sparsify.rs`).
+    pub fn count_all_sparsify_candidates(&self, min_pages: u64) -> Result<u64> {
+        sparsify::count_all_sparsify_candidates(&*self.conn(), min_pages)
+    }
+
+    /// Rows still awaiting a sparse rewrite (the session "todo"; matches the
+    /// un-limited feed pull).
     pub fn count_pending_sparsify_candidates(&self, min_pages: u64) -> Result<u64> {
         sparsify::count_pending_sparsify_candidates(&*self.conn(), min_pages)
     }
@@ -499,12 +506,12 @@ impl Database {
         sparsify::ingest_sparsify_outcome(&mut self.conn_mut(), results)
     }
 
-    pub fn promote_unstageable_files(&self, retry_missing_sha: bool) -> Result<u64> {
-        stage::promote_unstageable_files(&self.conn(), retry_missing_sha)
+    pub fn promote_unstageable_files(&self) -> Result<u64> {
+        stage::promote_unstageable_files(&self.conn())
     }
 
-    pub fn list_files_to_stage<R: SqlFileRow>(&self, retry_missing_sha: bool) -> Result<Vec<R>> {
-        stage::list_files_to_stage(&self.conn(), retry_missing_sha)
+    pub fn list_files_to_stage<R: SqlFileRow>(&self) -> Result<Vec<R>> {
+        stage::list_files_to_stage(&self.conn())
     }
 
     pub fn load_runtime_state(&self) -> Result<Option<RuntimeState>> {
@@ -612,17 +619,17 @@ impl Database {
         meta::get_extract_config(&*self.conn())
     }
 
-    pub fn sum_canonical_bytes_to_archive(&self, filter_sha: bool) -> Result<u64> {
-        tar_writer::sum_canonical_bytes_to_archive(&*self.conn(), filter_sha)
+    pub fn sum_canonical_bytes_to_archive(&self) -> Result<u64> {
+        tar_writer::sum_canonical_bytes_to_archive(&*self.conn())
     }
 
-    pub fn sum_archived_canonical_bytes(&self, filter_sha: bool) -> Result<u64> {
-        tar_writer::sum_archived_canonical_bytes(&*self.conn(), filter_sha)
+    pub fn sum_archived_canonical_bytes(&self) -> Result<u64> {
+        tar_writer::sum_archived_canonical_bytes(&*self.conn())
     }
 
     /// Staged canonical ids ordered by extension / size / id for the archive pass.
-    pub fn list_staged_canonical_ordered(&self, filter_sha: bool) -> Result<Vec<FileId>> {
-        tar_writer::list_staged_canonical_ordered(&*self.conn(), filter_sha)
+    pub fn list_staged_canonical_ordered(&self) -> Result<Vec<FileId>> {
+        tar_writer::list_staged_canonical_ordered(&*self.conn())
     }
 
     pub fn get_archive_bytes_in(&self) -> Result<u64> {
@@ -641,8 +648,8 @@ impl Database {
         tar_writer::set_archive_bytes_out(&*self.conn(), value)
     }
 
-    pub fn promote_ineligible_to_archived(&self, filter_sha: bool) -> Result<u64> {
-        tar_writer::promote_ineligible_to_archived(&*self.conn(), filter_sha)
+    pub fn promote_ineligible_to_archived(&self) -> Result<u64> {
+        tar_writer::promote_ineligible_to_archived(&*self.conn())
     }
 
     pub fn promote_remainder_to_archived(&self) -> Result<u64> {
