@@ -9,6 +9,7 @@ use std::io::Read;
 use std::mem::take;
 
 use crate::archive::ArchiveRTArgs;
+use crate::cli::DedupMode;
 use crate::common::files::warn_if_times_changed;
 use crate::common::{at_least_one_running, io_buffer};
 use crate::db::ErrorPhase;
@@ -35,17 +36,35 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     let catalog = rt.db.count_entries()?;
     // Early promote db entries we do not process in this phase.
-    let ineligible = rt.db.promote_non_ineligible_entries_to_dedup(eager_filter)?;
-    let skipped_singleton = rt.db.promote_singleton_filtered_to_deduped(eager_filter)?;
+    let ineligible = rt.db.promote_ineligible_entries_to_dedup(eager_filter)?;
     // The bulk skips above left the phase; credit the global for each of them.
     rt.progress.inc_global(ineligible);
-    rt.progress.inc_global(skipped_singleton);
 
     let prev_phase = if eager_filter {
         FilePhase::Hashed
     } else {
         FilePhase::Filtered
     };
+
+    match rt.config.pipeline.dedup_mode {
+        DedupMode::Regular => run_regular_fsm(rt, eager_filter, prev_phase, catalog, ineligible),
+        DedupMode::Hash => run_hash_mode(rt, eager_filter, prev_phase, catalog),
+        DedupMode::None => run_none_mode(rt, eager_filter, prev_phase, catalog),
+    }
+}
+
+/// Regular dedup: the byte-compare FSM over `(sha1, size)` groups (workers +
+/// `dedup_progress`/`dedup_inflight` temp tables).
+fn run_regular_fsm(
+    rt: &ArchiveRTArgs,
+    eager_filter: bool,
+    prev_phase: FilePhase,
+    catalog: u64,
+    ineligible: u64)
+    -> Result<()> {
+    // Singleton groups (unique content) need no compare round.
+    let skipped_singleton = rt.db.promote_singleton_filtered_to_deduped(eager_filter)?;
+    rt.progress.inc_global(skipped_singleton);
 
     // Group state machine tables (`dedup_inflight` is a per-connection TEMP
     // table, cleared with it; `dedup_progress` survives interrupts).
@@ -70,7 +89,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     );
 
     if rt.db.count_pending_dedup_groups()? == 0 {
-        sanity_check_flags(rt.db)?;
+        sanity_check_flags(rt.db, prev_phase)?;
         return Ok(());
     }
 
@@ -125,20 +144,68 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             Err(Error::Interrupted)
         }
         false => {
-            let leftover = rt.db.count_files_in_phase(prev_phase)?;
-            if leftover != 0 {
-                panic!(
-                    "dedup finished with {leftover} file(s) still in {} \
-                    (expected 0 after skips + rounds)",
-                    prev_phase.as_str()
-                );
-            }
-            sanity_check_flags(rt.db)?;
+            sanity_check_flags(rt.db, prev_phase)?;
             rt.db.drop_temp_dedup_table()?;
             tracing::info!("dedup complete");
             Ok(())
         }
     }
+}
+
+/// Bulk dedup modes (`Hash`/`None`): no byte compare, no temp tables, no
+/// workers. `catalog` is the pre-dedup entry count; `ineligible` promo already
+/// ran. Routes to the mode's SQL and finishes the phase like the FSM tail.
+fn run_bulk_mode(
+    rt: &ArchiveRTArgs,
+    eager_filter: bool,
+    prev_phase: FilePhase,
+    catalog: u64,
+    promote: impl FnOnce(&Database, bool) -> Result<u64>)
+    -> Result<()> {
+    let total = rt.db.count_dedup_eligible_total(eager_filter)?;
+    let done = rt.db.count_dedup_eligible_position(eager_filter)?;
+    rt.progress.set_phase_total(total);
+    rt.progress.set_phase_position(done);
+    tracing::info!(
+        catalog,
+        dedup_candidates = total,
+        already_deduped = done,
+        "dedup pass"
+    );
+
+    if total == 0 || done == total {
+        sanity_check_flags(rt.db, prev_phase)?;
+        return Ok(());
+    }
+
+    let moved = promote(rt.db, eager_filter)?;
+    rt.progress.inc_both(moved);
+    sanity_check_flags(rt.db, prev_phase)?;
+    tracing::info!("dedup complete");
+    Ok(())
+}
+
+fn run_hash_mode(
+    rt: &ArchiveRTArgs,
+    eager_filter: bool,
+    prev_phase: FilePhase,
+    catalog: u64)
+    -> Result<()> {
+    run_bulk_mode(rt, eager_filter, prev_phase, catalog, |db, eager| {
+        db.promote_hash_mode_to_dedup(eager)
+    })
+}
+
+fn run_none_mode(
+    rt: &ArchiveRTArgs,
+    eager_filter: bool,
+    prev_phase: FilePhase,
+    catalog: u64)
+    -> Result<()> {
+    let detect_hardlinks = !rt.config.indexing.no_hardlink_detection;
+    run_bulk_mode(rt, eager_filter, prev_phase, catalog, |db, eager| {
+        db.promote_none_mode_to_dedup(eager, detect_hardlinks)
+    })
 }
 
 /// Function performs the stepping of the loop. Deals with fetching data from the db,
@@ -372,10 +439,18 @@ fn compare_worker(
 }
 
 /// Rerun the count_check_with_canonical_completed and return an error if the count is not 0.
-fn sanity_check_flags(db: &Database) -> Result<()> {
+fn sanity_check_flags(db: &Database, prev_phase: FilePhase) -> Result<()> {
     let n = db.count_check_with_canonical_completed()?;
     if n != 0 {
         panic!("dedup sanity check failed: {n} file(s) still have CheckWithCanonicalCompleted set");
+    };
+    let leftover = db.count_files_in_phase(prev_phase)?;
+    if leftover != 0 {
+        panic!(
+            "dedup finished with {leftover} file(s) still in {} \
+            (expected 0 after skips + rounds)",
+            prev_phase.as_str()
+        );
     }
     Ok(())
 }
@@ -610,7 +685,7 @@ mod tests {
                 exit_after_stage: None,
             },
             pipeline: ArchivePipelineOptions {
-                no_dedup: false,
+                dedup_mode: DedupMode::Regular,
                 write_archive_footer: false,
                 clear_archive_meta: false,
             },
@@ -1185,7 +1260,7 @@ mod tests {
     /// temp group tables + populate. Lets loop-level tests reuse `run`'s state.
     fn prepare_for_loop(world: &TestWorld) {
         let eager = world.config.filter.eager_filter;
-        world.db.promote_non_ineligible_entries_to_dedup(eager).expect("ineligible");
+        world.db.promote_ineligible_entries_to_dedup(eager).expect("ineligible");
         world.db.promote_singleton_filtered_to_deduped(eager).expect("singleton");
         world.db.create_temp_dedup_table().expect("create temp");
         world.db.populate_temp_table(eager).expect("populate temp");
