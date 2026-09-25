@@ -23,6 +23,7 @@ walkdir = { workspace = true }
 nix = { workspace = true }
 fs4 = { workspace = true }
 rayon = { workspace = true }
+crossbeam-channel = { workspace = true }
 signal-hook = { workspace = true }
 num_cpus = { workspace = true }
 indicatif = { workspace = true }
