@@ -29,7 +29,6 @@ pub fn promote_non_sparsify_candidates_to_sparsified(
     conn: &Connection,
     min_pages: u64,
 ) -> Result<u64> {
-    let has_sparse = FileFlag::HasSparse.mask_i64();
     let filtered_rows = generate_archive_filter(None);
     let n = conn.execute(&format!(
         "UPDATE files SET phase = 'sparsified'
@@ -37,31 +36,29 @@ pub fn promote_non_sparsify_candidates_to_sparsified(
            AND (
              canonical_id IS NULL
              OR canonical_id != id
-             OR ftype != 'file'
-             OR sha1 IS NULL               -- technically implied by canonical_id IS NULL
-             OR sparse_count IS NULL       -- sparse_count IS NULL implied by canonical_id IS NULL
+             OR ftype != 'file'            --implied by canonical_id IS NOT NULL
+             OR sha1 IS NULL               --implied by canonical_id IS NOT NULL
+             OR sparse_count IS NULL       --implied by canonical_id IS NOT NULL
              OR sparse_count < :min_pages
-             OR (flags & :has_sparse) != 0
              OR NOT ({filtered_rows})
          )"),
         named_params! {
             ":min_pages": min_pages as i64,
-            ":has_sparse": has_sparse,
         },
     ).to_panic()?;
     Ok(n as u64)
 }
 
-/// Shared WHERE for the sparsify candidates — self-canonical deduped regular
-/// files with enough empty pages, no sparse rewrite yet, archive-filter passed.
-/// Params: `:min_pages`, `:has_sparse`.
+/// Shared WHERE for the sparsify candidates — the **overall phase workload**:
+/// self-canonical regular files with enough empty pages and the archive filter
+/// passed. Deliberately **no phase predicate**: the workload is stable across
+/// sessions, so a resume bar shows `count_all` (this) with position derived from
+/// the pending count (done = workload − todo). Params: `:min_pages`.
 fn sparsify_candidates_where() -> String {
     format!(
-        "phase = 'deduped'
-         AND canonical_id = id
+        "canonical_id = id
          AND ftype = 'file'
-         AND sparse_count >= :min_pages -- implies NOT NULL
-         AND (flags & :has_sparse) = 0
+         AND sparse_count >= :min_pages --implies NOT NULL
          AND {}",
         generate_archive_filter(None)
     )
@@ -94,7 +91,6 @@ pub fn populate_sparsify_queue(conn: &Connection, min_pages: u64) -> Result<u64>
         &sql,
         named_params! {
             ":min_pages": min_pages as i64,
-            ":has_sparse": FileFlag::HasSparse.mask_i64(),
         },
     ).to_panic()?;
     Ok(n as u64)
@@ -119,6 +115,7 @@ pub fn pull_pending_sparsify_rows<R: SqlFileRow>(
          FROM files JOIN sparsify_queue ON sparsify_queue.file_id = files.id
          WHERE sparsify_queue.id > :index
            AND files.phase = 'deduped'
+           AND (files.flags & :has_sparse) = 0
            AND (files.flags & :error_flag) = 0
          ORDER BY sparsify_queue.id
          LIMIT :limit"
@@ -128,6 +125,7 @@ pub fn pull_pending_sparsify_rows<R: SqlFileRow>(
         named_params! {
             ":index": index as i64,
             ":error_flag": FileFlag::ErrorWhileSparsify.mask_i64(),
+            ":has_sparse": FileFlag::HasSparse.mask_i64(),
             ":limit": limit,
         },
         |r: &rusqlite::Row<'_>| {
@@ -147,13 +145,36 @@ pub fn drop_sparsify_queue(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Count rows still awaiting a sparse rewrite — matches `pull_…` without the
-/// limit. Errored rows already leave `deduped` at ingest, so the extra
-/// `ErrorWhileSparsify` exclusion is belt-and-suspenders parity with `pull`.
-pub fn count_pending_sparsify_candidates(conn: &Connection, min_pages: u64) -> Result<u64> {
+/// Count the **overall sparsify workload** — all candidates regardless of phase
+/// or progress flags. Stable across sessions, so a resumed run's phase bar still
+/// reflects the full workload (mirrors `db/hash.rs::count_all_hashable_files`).
+pub fn count_all_sparsify_candidates(conn: &Connection, min_pages: u64) -> Result<u64> {
     let sql = format!(
-        "SELECT COUNT(*) AS count FROM files WHERE {} AND (flags & :error_flag) = 0",
+        "SELECT COUNT(*) AS count FROM files WHERE {}",
         sparsify_candidates_where()
+    );
+    let count: i64 = conn.query_row(
+        &sql,
+        named_params! {
+            ":min_pages": min_pages as i64,
+        },
+        |row| row.get("count"),
+    ).to_panic()?;
+    Ok(count as u64)
+}
+
+/// Count the **remaining** sparsify work — candidates still in `deduped` with
+/// neither flag ("todo", matches `pull_…` without the limit). `done` follows as
+/// `count_all − count_pending`; equivalently the errored/success rows already
+/// left `deduped` at ingest, so this extra flag parity is belt-and-suspenders.
+pub fn count_pending_sparsify_candidates(conn: &Connection, min_pages: u64) -> Result<u64> {
+    let sparsify_where = sparsify_candidates_where();
+    let sql = format!(
+        "SELECT COUNT(*) AS count FROM files
+         WHERE {sparsify_where}
+           AND phase = 'deduped'
+           AND (flags & :has_sparse) = 0
+           AND (flags & :error_flag) = 0"
     );
     let count: i64 = conn.query_row(
         &sql,
