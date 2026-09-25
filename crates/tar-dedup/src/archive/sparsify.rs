@@ -412,3 +412,832 @@ fn sanity_no_deduped(db: &Database) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::files::original_extension;
+    use crate::common::start::StartPolicy;
+    use crate::config::{
+        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, CleanupSettings, CompressionFormat,
+        CompressionSettings, FilterOptions, IndexingOptions, InputOptions, OwnerPolicy, PathLayout,
+        ProcessOptions, SparseOptions,
+    };
+    use crate::db::flags::FileFlag;
+    use crate::db::types::{FileId, FileType, NewFileRecord};
+    use crate::error::FileStatError;
+    use crate::progress::{ARCHIVE_MULTIPLIER, ProgressBarSet};
+    use chrono::{DateTime, Utc};
+    use nix::unistd::geteuid;
+    use rusqlite::named_params;
+    use std::os::unix::fs::PermissionsExt;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::path::PathBuf;
+
+    fn zeros(n: usize) -> Vec<u8> {
+        vec![0u8; n]
+    }
+
+    fn test_archive_config() -> ArchiveConfig {
+        ArchiveConfig {
+            paths: PathLayout {
+                archive_path: PathBuf::new(),
+                directory: PathBuf::new(),
+                work_dir: PathBuf::new(),
+            },
+            inputs: InputOptions {
+                input_dirs: Vec::new(),
+                files_from: Vec::new(),
+                files_from_null: false,
+            },
+            indexing: IndexingOptions {
+                no_recursion: false,
+                dereference: false,
+                one_file_system: false,
+                no_hardlink_detection: true,
+                no_strict_separation: false,
+            },
+            filter: FilterOptions {
+                exclude_patterns: Vec::new(),
+                include_patterns: Vec::new(),
+                exclude_from: Vec::new(),
+                include_from: Vec::new(),
+                anchored: false,
+                ignore_case: false,
+                eager_filter: false,
+            },
+            capture: CaptureOptions {
+                do_xattrs: false,
+                do_posix_acl: false,
+                do_selinux: false,
+                numeric_ids_only: false,
+                mode: None,
+                transform: None,
+            },
+            owner_policy: OwnerPolicy {
+                owner: None, owner_map: None, group: None, group_map: None,
+            },
+            sparse: SparseOptions { sparsify: true, page_size: 4096, min_pages: 4 },
+            compression: CompressionSettings {
+                format: CompressionFormat::None, level: 0, xz_extreme: false,
+                memlimit_compress: None,
+            },
+            process: ProcessOptions {
+                start_policy: StartPolicy::Create,
+                jobs: 4,
+                io_jobs: 1,
+                fail_fast: false,
+                no_errors: false,
+                cleanup: CleanupSettings { keep_db: false, keep_stage: false },
+                exit_after_stage: None,
+            },
+            pipeline: ArchivePipelineOptions {
+                no_dedup: false,
+                write_archive_footer: false,
+                clear_archive_meta: false,
+            },
+        }
+    }
+
+    struct TestWorld {
+        dir: tempfile::TempDir,
+        db: Database,
+        shutdown: Shutdown,
+        progress: ProgressBarSet,
+        config: ArchiveConfig,
+    }
+
+    impl TestWorld {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Database::open(&dir.path().join("test.sqlite")).expect("open db");
+            db.with_transaction(|conn| {
+                conn.execute(
+                    "INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) \
+                     VALUES (-1, 'internal', NULL, '.*')", [],
+                ).expect("seed internal include rule");
+                Ok(())
+            }).expect("seed internal include rule tx");
+            let mut config = test_archive_config();
+            config.paths.work_dir = dir.path().join("astage");
+            // `run()` creates the stage dir itself, but worker/loop-level tests
+            // drive the loop directly and still target it — make it up front.
+            fs::create_dir_all(&config.paths.work_dir).expect("create stage dir");
+            Self {
+                dir, db,
+                shutdown: Shutdown::detached(),
+                progress: ProgressBarSet::new(ARCHIVE_MULTIPLIER),
+                config,
+            }
+        }
+
+        fn rt(&self) -> ArchiveRTArgs<'_> {
+            ArchiveRTArgs {
+                config: &self.config,
+                db: &self.db,
+                shutdown: &self.shutdown,
+                progress: &self.progress,
+            }
+        }
+
+        fn rt_with<'a>(&'a self, shutdown: &'a Shutdown) -> ArchiveRTArgs<'a> {
+            ArchiveRTArgs {
+                config: &self.config,
+                db: &self.db,
+                shutdown,
+                progress: &self.progress,
+            }
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.dir.path().join(name)
+        }
+
+        fn add_file(&self, name: &str, payload: &[u8]) -> FileId {
+            let path = self.dir.path().join(name);
+            std::fs::write(&path, payload).expect("write test payload");
+            self.db.insert_file(&NewFileRecord {
+                abs_path: PathBuf::from(&path),
+                ext: original_extension(&path),
+                size: payload.len() as u64,
+                mtime: None, atime: None, ctime: None,
+                uid: None, gid: None, mode: None,
+                ftype: Some(FileType::File),
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None,
+                device_id: None, inode_id: None, major: None, minor: None,
+            }).expect("insert test file");
+            self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
+        }
+
+        fn add_file_recorded(
+            &self, name: &str, payload: &[u8],
+            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
+            -> FileId {
+            let path = self.dir.path().join(name);
+            std::fs::write(&path, payload).expect("write test payload");
+            self.db.insert_file(&NewFileRecord {
+                abs_path: PathBuf::from(&path),
+                ext: original_extension(&path),
+                size: payload.len() as u64,
+                mtime, atime, ctime,
+                uid: None, gid: None, mode: None,
+                ftype: Some(FileType::File),
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None,
+                device_id: None, inode_id: None, major: None, minor: None,
+            }).expect("insert recorded file");
+            self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
+        }
+
+        /// Apply the include-all filter, then promote the row to a deduped
+        /// self-canonical candidate with the given `sparse_count`. Sets the
+        /// filter columns directly so repeated calls don't disturb siblings.
+        fn seed_dedup_row(&self, id: FileId, sparse_count: u64) {
+            self.db.with_transaction(|conn| {
+                let n = conn.execute(
+                    "UPDATE files SET phase = 'deduped', canonical_id = :id, \
+                     sparse_count = :n, sha1 = :sha1, \
+                     include_reason_archive = -1, exclude_reason_archive = 0 \
+                     WHERE id = :id",
+                    named_params! {
+                        ":id": id.0,
+                        ":n": sparse_count as i64,
+                        ":sha1": [7u8; 20].as_slice(),
+                    },
+                ).expect("seed dedup row");
+                assert_eq!(n, 1);
+                Ok(())
+            }).expect("seed dedup row tx");
+        }
+
+        /// The `run()` preamble minus the per-worker spawn: promotions +
+        /// ordering queue. Lets loop-level tests reuse `run`'s DB state.
+        fn prepare_for_sparsify(&self) {
+            self.db.promote_non_sparsify_candidates_to_sparsified(
+                self.config.sparse.min_pages,
+            ).expect("promote non-candidates");
+            self.db.create_sparsify_queue().expect("create queue");
+            self.db.populate_sparsify_queue(self.config.sparse.min_pages).expect("populate");
+        }
+
+        fn phase(&self, id: FileId) -> FilePhase {
+            self.db.get_file_by_id::<StrippedRecord>(id)
+                .expect("get row")
+                .expect("row present")
+                .phase
+        }
+
+        fn flag(&self, id: FileId, flag: FileFlag) -> bool {
+            self.db.get_file_flag(id, flag).expect("get flag")
+        }
+
+        /// The canonical row's candidate so its `sp.{content_id}` stage file
+        /// target can be checked on disk.
+        fn record(&self, id: FileId) -> StrippedRecord {
+            self.db.get_file_by_id::<StrippedRecord>(id)
+                .expect("get row")
+                .expect("row present")
+        }
+
+        fn stage_path(&self, id: FileId) -> Option<PathBuf> {
+            let name = self.record(id).sparse_member_name();
+            name.map(|n| self.config.paths.work_dir.clone().join(n))
+        }
+    }
+
+    /// One worker + one bar, driving `run_enqueue_dequeue_loop_sparsify`
+    /// directly. Returns `(completed, errored)`.
+    fn run_loop(world: &TestWorld, bar: ProgressBar, work_cap: usize) -> (u64, u64) {
+        let (work_s, work_r) = bounded::<StrippedRecord>(work_cap);
+        let (out_s, out_r) = bounded::<Option<SparseOutcome>>(OUT_CAPACITY);
+        let sh = world.shutdown.clone();
+        let sd = world.config.paths.work_dir.clone();
+        let ps = world.config.sparse.page_size;
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        let mut handles = Vec::<thread::JoinHandle<()>>::new();
+        let worker = thread::Builder::new().name("sparsify-worker-test".into())
+            .spawn(move || sparsify_worker(bar, sd, ps, sh, wr, os))
+            .expect("spawn sparsify worker");
+        handles.push(worker);
+        drop(work_r);
+        drop(out_s);
+        let rt = world.rt();
+        run_enqueue_dequeue_loop_sparsify(&rt, work_s, out_r, handles)
+            .expect("sparsify loop")
+    }
+
+    #[test]
+    fn sparse_one_writes_sparse_destination() {
+        let world = TestWorld::new();
+        let src = world.path("src.bin");
+        let dst = world.path("dst.bin");
+        let payload = zeros(4 * 4096);
+        std::fs::write(&src, &payload).expect("write src");
+
+        let stats = sparse_one(&src, &dst, 4096, &Shutdown::detached(), None)
+            .expect("sparse_one ok");
+
+        assert_eq!(stats.size_in, payload.len() as u64);
+        assert_eq!(stats.zero_blocks, 4);
+        assert_eq!(stats.bytes_saved, 4 * 4096);
+        let meta = std::fs::metadata(&dst).expect("dst metadata");
+        assert_eq!(meta.len(), payload.len() as u64);
+    }
+
+    #[test]
+    fn sparse_one_inaccessible_returns_filestat() {
+        if geteuid().is_root() {
+            return;
+        }
+        let world = TestWorld::new();
+        let src = world.path("src.bin");
+        let dst = world.path("dst.bin");
+        std::fs::write(&src, &zeros(64 * 1024)).expect("write src");
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0)).expect("chmod 000");
+
+        let res = sparse_one(&src, &dst, 4096, &Shutdown::detached(), None);
+        assert!(matches!(res, Err(Error::FileStat(_))));
+    }
+
+    #[test]
+    fn sparse_one_force_interrupts_mid_copy() {
+        let world = TestWorld::new();
+        let src = world.path("src.bin");
+        let dst = world.path("dst.bin");
+        std::fs::write(&src, &zeros(4 * 4096)).expect("write src");
+        let force = Shutdown::detached();
+        force.request_force();
+
+        let res = sparse_one(&src, &dst, 4096, &force, None);
+        assert!(matches!(res, Err(Error::Interrupted)));
+    }
+
+    #[test]
+    fn sparsify_worker_sends_none_on_channel_close() {
+        let world = TestWorld::new();
+        let (work_s, work_r) = bounded::<StrippedRecord>(2);
+        let (out_s, out_r) = bounded::<Option<SparseOutcome>>(8);
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let bar = world.progress.thread_bar(0);
+        let sh = world.shutdown.clone();
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        let sd = world.config.paths.work_dir.clone();
+        let worker = thread::Builder::new().name("sparsify-worker-test".into())
+            .spawn(move || sparsify_worker(bar, sd, 4096, sh, wr, os))
+            .expect("spawn sparsify worker");
+        drop(work_r);
+        drop(out_s);
+        drop(work_s);   // close the work channel: worker recv -> Err -> None
+
+        assert!(matches!(out_r.recv().expect("recv terminal"), None));
+        let _ = worker.join();
+        world.progress.drop_thread_bars();
+    }
+
+    #[test]
+    fn sparsify_worker_sends_none_on_graceful_preset() {
+        let world = TestWorld::new();
+        let id = world.add_file("a.bin", &zeros(4 * 4096));
+        world.seed_dedup_row(id, 4);
+        let row = world.record(id);
+        let (work_s, work_r) = bounded::<StrippedRecord>(2);
+        let (out_s, out_r) = bounded::<Option<SparseOutcome>>(8);
+        work_s.send(row).expect("send row");
+        world.shutdown.request_graceful();
+        drop(work_s);
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let bar = world.progress.thread_bar(0);
+        let sh = world.shutdown.clone();
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        let sd = world.config.paths.work_dir.clone();
+        let worker = thread::Builder::new().name("sparsify-worker-test".into())
+            .spawn(move || sparsify_worker(bar, sd, 4096, sh, wr, os))
+            .expect("spawn sparsify worker");
+        drop(work_r);
+        drop(out_s);
+
+        // The row is pulled but graceful is pre-set: no outcome, just None.
+        assert!(matches!(out_r.recv().expect("recv terminal"), None));
+        let _ = worker.join();
+        world.progress.drop_thread_bars();
+    }
+
+    #[test]
+    fn sparsify_worker_success_outcome_and_stage_file() {
+        let world = TestWorld::new();
+        let id = world.add_file("a.bin", &zeros(4 * 4096));
+        world.seed_dedup_row(id, 4);
+        let row = world.record(id);
+        let (work_s, work_r) = bounded::<StrippedRecord>(2);
+        let (out_s, out_r) = bounded::<Option<SparseOutcome>>(8);
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let bar = world.progress.thread_bar(0);
+        let sh = world.shutdown.clone();
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        let sd = world.config.paths.work_dir.clone();
+        let worker = thread::Builder::new().name("sparsify-worker-test".into())
+            .spawn(move || sparsify_worker(bar, sd, 4096, sh, wr, os))
+            .expect("spawn sparsify worker");
+        drop(work_r);
+        drop(out_s);
+        work_s.send(row).expect("send row");
+        drop(work_s);
+
+        match out_r.recv().expect("recv outcome") {
+            Some(o) => {
+                assert_eq!(o.id, id);
+                assert_eq!(o.modified, false);
+                assert!(matches!(o.err, None));
+            }
+            None => panic!("expected an outcome, got None"),
+        }
+        assert!(matches!(out_r.recv().expect("recv terminal"), None));
+        let _ = worker.join();
+        world.progress.drop_thread_bars();
+
+        assert!(std::fs::metadata(&world.stage_path(id).expect("stage path"))
+            .is_ok(), "sparse rewrite must exist in the stage dir");
+    }
+
+    #[test]
+    fn sparsify_worker_panics_when_result_channel_closed() {
+        let world = TestWorld::new();
+        let id = world.add_file("a.bin", &zeros(4 * 4096));
+        world.seed_dedup_row(id, 4);
+        let row = world.record(id);
+        let (work_s, work_r) = bounded::<StrippedRecord>(2);
+        let (out_s, out_r) = bounded::<Option<SparseOutcome>>(8);
+        work_s.send(row).expect("send row");
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let bar = world.progress.thread_bar(0);
+        let sh = world.shutdown.clone();
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        let sd = world.config.paths.work_dir.clone();
+        let worker = thread::Builder::new().name("sparsify-worker-test".into())
+            .spawn(move || sparsify_worker(bar, sd, 4096, sh, wr, os))
+            .expect("spawn sparsify worker");
+        drop(work_r);
+        drop(work_s);
+        // Drop the only receiver: the worker's `out.send(...).expect(...)`
+        // must panic on the disconnected channel rather than swallow it.
+        drop(out_r);
+
+        let res = worker.join();
+        assert!(res.is_err(), "sparsify_worker must panic on a closed result channel");
+        world.progress.drop_thread_bars();
+    }
+
+    #[test]
+    fn loop_exit_via_dequeued_eq_feed_total() {
+        let world = TestWorld::new();
+        let sizes = [8 * 1024 * 1024, 4 * 1024 * 1024 + 1, 1024 * 1024];
+        let mut ids = Vec::<FileId>::new();
+        for (i, size) in sizes.iter().enumerate() {
+            let id = world.add_file(format!("f{i}.bin").as_str(), &zeros(*size));
+            world.seed_dedup_row(id, 4);
+            ids.push(id);
+        }
+        world.prepare_for_sparsify();
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let (completed, errored) = run_loop(&world, world.progress.thread_bar(0), 2);
+        world.progress.drop_thread_bars();
+
+        assert_eq!(completed, 3);
+        assert_eq!(errored, 0);
+        for id in ids {
+            assert_eq!(world.phase(id), FilePhase::Sparsified);
+            assert!(world.flag(id, FileFlag::HasSparse));
+        }
+    }
+
+    #[test]
+    fn loop_exit_via_graceful_preset_stops_feed() {
+        let world = TestWorld::new();
+        let id = world.add_file("a.bin", &zeros(1024 * 1024));
+        world.seed_dedup_row(id, 4);
+        world.prepare_for_sparsify();
+        world.shutdown.request_graceful();
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let (completed, errored) = run_loop(&world, world.progress.thread_bar(0), 2);
+        world.progress.drop_thread_bars();
+
+        // Graceful pre-set: the feed breaks immediately, nothing is sparsified.
+        assert_eq!(completed, 0);
+        assert_eq!(errored, 0);
+        assert_eq!(world.phase(id), FilePhase::Deduped);
+    }
+
+    #[test]
+    fn loop_applies_partial_batch_no_loss() {
+        let world = TestWorld::new();
+        let mut ids = Vec::<FileId>::new();
+        for i in 0..3 {
+            let id = world.add_file(format!("f{i}.bin").as_str(), &zeros(1024 * 1024));
+            world.seed_dedup_row(id, 4);
+            ids.push(id);
+        }
+        world.prepare_for_sparsify();
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let (completed, errored) = run_loop(&world, world.progress.thread_bar(0), 2);
+        world.progress.drop_thread_bars();
+
+        // work_cap=2 with 3 rows forces the final override drain to cover the
+        // ragged tail — no outcome is lost.
+        assert_eq!(completed, 3);
+        assert_eq!(errored, 0);
+        for id in ids {
+            assert!(world.flag(id, FileFlag::HasSparse));
+        }
+    }
+
+    #[test]
+    fn loop_panics_on_other_error_variant() {
+        let world = TestWorld::new();
+        let (work_s, _work_r) = bounded::<StrippedRecord>(2);
+        let (out_s, out_r) = bounded::<Option<SparseOutcome>>(8);
+        // A worker never produces this, but the loop's drain must panic anyway:
+        // only FileStat / Interrupted are valid outcome errors.
+        out_s.send(Some(SparseOutcome {
+            id: FileId(1),
+            modified: false,
+            err: Some(Error::Config("boom".into())),
+        })).expect("push bad outcome");
+        drop(out_s);
+        let handles = Vec::<thread::JoinHandle<()>>::new();
+        // The feed needs the ordering queue to exist (pull joins it); an empty
+        // world supplies the early feed-exhausted path into the final drain.
+        world.prepare_for_sparsify();
+
+        let res = catch_unwind(AssertUnwindSafe(|| -> Result<(u64, u64)> {
+            let rt = world.rt();
+            run_enqueue_dequeue_loop_sparsify(&rt, work_s, out_r, handles)
+        }));
+        assert!(res.is_err(), "an invalid error variant must panic the drain");
+    }
+
+    #[test]
+    fn loop_panicked_worker_gets_no_special_treatment() {
+        let world = TestWorld::new();
+        for i in 0..3 {
+            let id = world.add_file(format!("f{i}.bin").as_str(), &zeros(1024 * 1024));
+            world.seed_dedup_row(id, 4);
+        }
+        world.prepare_for_sparsify();
+
+        let (work_s, work_r) = bounded::<StrippedRecord>(2);
+        let (out_s, out_r) = bounded::<Option<SparseOutcome>>(8);
+        // A worker that dies before ever touching the channels: no outcome and
+        // no trailing None arrives — the loop must still terminate cleanly via
+        // its liveness guard and swallow the panicked join.
+        let worker = thread::Builder::new().name("sparsify-worker-test".into())
+            .spawn(move || panic!("worker crashed"))
+            .expect("spawn panicking worker");
+        let mut handles = Vec::<thread::JoinHandle<()>>::new();
+        handles.push(worker);
+        drop(work_r);
+        drop(out_s);
+
+        let rt = world.rt();
+        let done = run_enqueue_dequeue_loop_sparsify(&rt, work_s, out_r, handles);
+
+        assert!(matches!(done, Ok((0, 0))));
+        for id in [FileId(1), FileId(2), FileId(3)] {
+            assert_eq!(world.phase(id), FilePhase::Deduped);
+        }
+    }
+
+    #[test]
+    fn run_disabled_promotes_all_no_flags() {
+        let mut world = TestWorld::new();
+        let id = world.add_file("a.bin", &zeros(1024 * 1024));
+        world.seed_dedup_row(id, 4);
+        world.config.sparse.sparsify = false;
+
+        run(&world.rt()).expect("run disabled");
+
+        assert_eq!(world.phase(id), FilePhase::Sparsified);
+        assert_eq!(world.flag(id, FileFlag::HasSparse), false);
+        assert_eq!(
+            world.db.count_pending_sparsify_candidates(world.config.sparse.min_pages)
+                .expect("no pending"),
+            0
+        );
+    }
+
+    #[test]
+    fn run_errors_when_stage_uncreatable() {
+        let world = TestWorld::new();
+        let id = world.add_file("a.bin", &zeros(1024 * 1024));
+        world.seed_dedup_row(id, 4);
+        // Replace the (auto-created) stage dir with a regular file so
+        // `create_dir_all` in run() fails.
+        std::fs::remove_dir_all(&world.config.paths.work_dir).expect("remove stage dir");
+        std::fs::write(&world.config.paths.work_dir, &[0u8; 1][..]).expect("write blocker");
+
+        let res = run(&world.rt());
+        assert!(matches!(res, Err(Error::FileStat(_))));
+        if let Err(Error::FileStat(fse)) = res {
+            assert_eq!(fse.io_path(), Some(world.config.paths.work_dir.clone()));
+        }
+        assert_eq!(world.phase(id), FilePhase::Deduped);
+    }
+
+    #[test]
+    fn run_sparsifies_candidates_and_flags() {
+        let world = TestWorld::new();
+        let mut ids = Vec::<FileId>::new();
+        for i in 0..3 {
+            let id = world.add_file(format!("f{i}.bin").as_str(), &zeros(1024 * 1024));
+            world.seed_dedup_row(id, [4, 8, 1][i]);
+            ids.push(id);
+        }
+        // A dup-canonical row: not a candidate, promoted without HasSparse.
+        let dup = world.add_file("dup.bin", &zeros(1024 * 1024));
+        world.db.with_transaction(|conn| {
+            conn.execute(
+                "UPDATE files SET phase = 'deduped', canonical_id = :canon, \
+                 sparse_count = 4, sha1 = :sha1, \
+                 include_reason_archive = -1, exclude_reason_archive = 0 \
+                 WHERE id = :id",
+                named_params! {
+                    ":canon": ids[0].0,
+                    ":id": dup.0,
+                    ":sha1": [7u8; 20].as_slice(),
+                },
+            ).expect("seed dup row");
+            Ok(())
+        }).expect("seed dup tx");
+
+        run(&world.rt()).expect("run");
+
+        for (i, id) in ids.iter().enumerate() {
+            let expect_sparse = i < 2;   // sparse_count 4/8 are candidates; 1 is not
+            assert_eq!(world.phase(*id), FilePhase::Sparsified);
+            assert_eq!(world.flag(*id, FileFlag::HasSparse), expect_sparse);
+            if expect_sparse {
+                let stage = world.stage_path(*id).expect("stage path");
+                assert!(std::fs::metadata(&stage).is_ok(), "stage file must exist");
+            }
+        }
+        assert_eq!(world.phase(dup), FilePhase::Sparsified);
+        assert_eq!(world.flag(dup, FileFlag::HasSparse), false);
+        // queue is dropped and no deduped rows remain on success.
+        assert_eq!(world.db.count_files_in_phase(FilePhase::Deduped).expect("no deduped"), 0);
+    }
+
+    #[test]
+    fn run_graceful_and_force_preset_return_interrupted() {
+        for mode in [0, 1] {
+            let world = TestWorld::new();
+            let id = world.add_file("a.bin", &zeros(1024 * 1024));
+            world.seed_dedup_row(id, 4);
+            if mode == 0 {
+                world.shutdown.request_graceful();
+            } else {
+                world.shutdown.request_force();
+            }
+
+            let res = run(&world.rt());
+            assert!(matches!(res, Err(Error::Interrupted)));
+            // Nothing was applied, and the queue survives the interrupt.
+            assert_eq!(world.phase(id), FilePhase::Deduped);
+            assert_eq!(world.flag(id, FileFlag::HasSparse), false);
+            assert_ne!(
+                world.db.count_pending_sparsify_candidates(world.config.sparse.min_pages)
+                    .expect("count pending"),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn run_graceful_interrupt_mid_run_resume_completes() {
+        let world = TestWorld::new();
+        let mut ids = Vec::<FileId>::new();
+        // Non-zero payloads force real writes on the copy so the trigger has a
+        // measurable window; sparse_count is a stored column, so seeding it is
+        // all the candidate predicate needs.
+        for i in 0..4 {
+            let mut payload = Vec::<u8>::new();
+            payload.resize_with(16 * 1024 * 1024, || i as u8);
+            let id = world.add_file(format!("f{i}.bin").as_str(), &payload);
+            world.seed_dedup_row(id, 4);
+            ids.push(id);
+        }
+        world.prepare_for_sparsify();
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let bar = world.progress.thread_bar(0);
+        let sh2 = world.shutdown.clone();
+        let bar_obs = bar.clone();
+        let trigger = thread::spawn(move || {
+            // Fire while the first copy is in flight: graceful lets that file
+            // finish, then the worker stops between files.
+            for _ in 0..20_000 {
+                if bar_obs.position() > 0 {
+                    sh2.request_graceful();
+                    return;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            sh2.request_graceful();
+        });
+
+        let (completed, _errored) = run_loop(&world, bar, 2);
+        trigger.join().expect("join trigger");
+        world.progress.drop_thread_bars();
+
+        assert!(completed >= 1);
+        assert!(completed < ids.len() as u64);
+        let pending = world.db
+            .count_pending_sparsify_candidates(world.config.sparse.min_pages).expect("pending");
+        assert_eq!(pending, ids.len() as u64 - completed);
+        // queue survives the interrupt for the resume.
+        assert_ne!(
+            world.db.pull_pending_sparsify_rows::<StrippedRecord>(0, 100)
+                .expect("queue survives interrupt").len(),
+            0
+        );
+
+        // Resume with a fresh shutdown through run(): everything completes.
+        let sh3 = Shutdown::detached();
+        run(&world.rt_with(&sh3)).expect("resume run");
+        for id in ids {
+            assert_eq!(world.phase(id), FilePhase::Sparsified);
+            assert!(world.flag(id, FileFlag::HasSparse));
+        }
+        assert_eq!(world.db.count_pending_sparsify_candidates(
+            world.config.sparse.min_pages).expect("no pending"), 0);
+    }
+
+    #[test]
+    fn run_force_interrupt_mid_run_discards_in_flight() {
+        let world = TestWorld::new();
+        let mut ids = Vec::<FileId>::new();
+        for i in 0..4 {
+            let mut payload = Vec::<u8>::new();
+            payload.resize_with(8 * 1024 * 1024, || i as u8);
+            let id = world.add_file(format!("f{i}.bin").as_str(), &payload);
+            world.seed_dedup_row(id, 4);
+            ids.push(id);
+        }
+        world.prepare_for_sparsify();
+
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let bar = world.progress.thread_bar(0);
+        let sh2 = world.shutdown.clone();
+        let bar_obs = bar.clone();
+        let trigger = thread::spawn(move || {
+            for _ in 0..20_000 {
+                if bar_obs.position() > 0 {
+                    sh2.request_force();
+                    return;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            sh2.request_force();
+        });
+
+        let (completed, errored) = run_loop(&world, bar, 2);
+        trigger.join().expect("join trigger");
+        world.progress.drop_thread_bars();
+
+        // Force aborts the in-flight copy: it yields Interrupted, never an error
+        // record, and the row stays deduped for the resume.
+        assert_eq!(errored, 0);
+        assert!(completed < ids.len() as u64);
+        assert!(world.db.count_pending_sparsify_candidates(
+            world.config.sparse.min_pages).expect("pending") >= 1);
+
+        let sh3 = Shutdown::detached();
+        run(&world.rt_with(&sh3)).expect("resume run");
+        for id in ids {
+            assert_eq!(world.phase(id), FilePhase::Sparsified);
+            assert!(world.flag(id, FileFlag::HasSparse));
+        }
+    }
+
+    #[test]
+    fn unreadable_file_recorded_not_fatal() {
+        if geteuid().is_root() {
+            return;
+        }
+        let world = TestWorld::new();
+        let payload = zeros(4 * 4096);
+        let id_ok = world.add_file("ok.bin", &payload);
+        let id_bad = world.add_file("bad.bin", &payload);
+        let id_ok2 = world.add_file("ok2.bin", &payload);
+        world.seed_dedup_row(id_ok, 4);
+        world.seed_dedup_row(id_bad, 4);
+        world.seed_dedup_row(id_ok2, 4);
+        std::fs::set_permissions(&world.path("bad.bin"), std::fs::Permissions::from_mode(0))
+            .expect("chmod 000");
+
+        run(&world.rt()).expect("run tolerates an unreadable candidate");
+
+        assert_eq!(world.phase(id_bad), FilePhase::Sparsified);
+        assert!(world.flag(id_bad, FileFlag::ErrorWhileSparsify));
+        assert_eq!(world.flag(id_bad, FileFlag::HasSparse), false);
+        for id in [id_ok, id_ok2] {
+            assert_eq!(world.phase(id), FilePhase::Sparsified);
+            assert!(world.flag(id, FileFlag::HasSparse));
+        }
+        let records = world.db.get_records_by_file_id(id_bad).expect("records");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].file_id, Some(id_bad));
+        assert_eq!(records[0].phase, ErrorPhase::Pipeline(crate::config::PipelinePhase::Sparsify));
+    }
+
+    #[test]
+    fn modified_file_flagged() {
+        let world = TestWorld::new();
+        let stale = DateTime::from_timestamp(Utc::now().timestamp() - 3600, 0).expect("stale");
+        // Recorded mtime is an hour old while the on-disk mtime is now:
+        // warn_if_times_changed reports the drift.
+        let id = world.add_file_recorded("a.bin", &zeros(4 * 4096), Some(stale), None, None);
+        world.seed_dedup_row(id, 4);
+
+        world.prepare_for_sparsify();
+        world.progress.create_thread_bars(BarKind::Bytes, 1);
+        let (completed, _) = run_loop(&world, world.progress.thread_bar(0), 2);
+        world.progress.drop_thread_bars();
+
+        assert_eq!(completed, 1);
+        assert!(world.flag(id, FileFlag::Modified));
+        assert!(world.flag(id, FileFlag::HasSparse));
+    }
+
+    #[test]
+    fn record_sparsify_error_persists_filestat() {
+        let world = TestWorld::new();
+        let id = world.add_file("e.bin", &zeros(4 * 4096));
+        let mut recorder = Recorder::new(&world.db, true);
+        record_sparsify_error(&mut recorder, &SparseOutcome {
+            id,
+            modified: false,
+            err: Some(Error::FileStat(FileStatError::Io {
+                path: world.path("e.bin"),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied, "denied".to_string()),
+            })),
+        });
+        recorder.flush().expect("flush recorder");
+
+        let records = world.db.get_records_by_file_id(id).expect("records");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].file_id, Some(id));
+        assert_eq!(records[0].error_type, "Io/PermissionDenied");
+        assert_eq!(records[0].phase, ErrorPhase::Pipeline(crate::config::PipelinePhase::Sparsify));
+    }
+}
