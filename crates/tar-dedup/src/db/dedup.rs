@@ -191,6 +191,40 @@ fn dedup_workload_where(eager_filter: bool) -> String {
     )
 }
 
+/// Phase-bar total for the bulk dedup modes (`Hash`/`None`): the eligible
+/// corpus — hashed regular files with a digest and the archive filter passed —
+/// regardless of phase, so a resumed bar reflects the full workload.
+pub fn count_dedup_eligible_total(conn: &Connection, _eager_filter: bool) -> Result<u64> {
+    let n: i64 = conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM files
+             WHERE ftype = 'file' AND sha1 IS NOT NULL
+               AND (flags & :error_hash) = 0
+               AND {}",
+            generate_archive_filter(None)
+        ),
+        named_params! { ":error_hash": FileFlag::ErrorWhileHash.mask_i64() },
+        |row| row.get(0),
+    ).to_panic()?;
+    Ok(n as u64)
+}
+
+/// Of [`Self::count_dedup_eligible_total`], how many are already `deduped`.
+pub fn count_dedup_eligible_position(conn: &Connection, _eager_filter: bool) -> Result<u64> {
+    let n: i64 = conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM files
+             WHERE phase = 'deduped' AND ftype = 'file' AND sha1 IS NOT NULL
+               AND (flags & :error_hash) = 0
+               AND {}",
+            generate_archive_filter(None)
+        ),
+        named_params! { ":error_hash": FileFlag::ErrorWhileHash.mask_i64() },
+        |row| row.get(0),
+    ).to_panic()?;
+    Ok(n as u64)
+}
+
 /// `searching` -> `finished`: the active canonical is present and every other
 /// member has been resolved (checked/errored or already promoted out).
 /// Returns the number of groups transitioned.
@@ -576,6 +610,126 @@ pub fn promote_singleton_filtered_to_deduped(conn: &Connection, eager_filter: bo
         ),
         [],
     ).to_panic()?;
+    Ok(n as u64)
+}
+
+/// Eligibility fragment shared by the bulk dedup modes — the `(sha1, size)`
+/// candidate set of the regular FSM (hashed file, digest present, no hash
+/// error, archive filter passed).
+fn dedup_eligible_where(eager_filter: bool) -> String {
+    format!(
+        "phase = '{}'
+         AND ftype = 'file'
+         AND sha1 IS NOT NULL
+         AND (flags & :error_hash) = 0
+         AND {}",
+        prev_phase(eager_filter),
+        generate_archive_filter(None)
+    )
+}
+
+/// `Hash` dedup mode: elect `min(id)` per `(sha1, size)` group as the
+/// self-canonical and point every other member at it, in one transaction.
+/// Idempotent: both statements guard on `phase = <prev>`, so a (re-)run only
+/// touches rows still awaiting the transition. Singletons become their own
+/// canonical via `MIN` over a group of one.
+pub fn promote_hash_mode_to_dedup(conn: &mut Connection, eager_filter: bool) -> Result<u64> {
+    let tx = conn.transaction().to_panic()?;
+    let candidates = dedup_eligible_where(eager_filter);
+    let link_eligible = format!(
+        "g.ftype = 'file' AND g.sha1 IS NOT NULL
+         AND (g.flags & :error_hash) = 0
+         AND {}",
+        generate_archive_filter(Some("g"))
+    );
+    let elected = tx.execute(&format!(
+        "UPDATE files SET canonical_id = id, phase = 'deduped'
+         WHERE {candidates}
+           AND id IN (
+               SELECT MIN(id) FROM files WHERE {candidates} GROUP BY sha1, size
+           )"
+    ), named_params! {
+        ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
+    }).to_panic()?;
+    let linked = tx.execute(&format!(
+        "UPDATE files SET canonical_id = (
+             SELECT MIN(id) FROM files AS g
+             WHERE g.sha1 = files.sha1 AND g.size = files.size
+               AND {link_eligible}
+         ), phase = 'deduped'
+         WHERE {candidates}
+           AND canonical_id IS NULL"
+    ), named_params! {
+        ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
+    }).to_panic()?;
+    tx.commit().to_panic()?;
+    Ok((elected + linked) as u64)
+}
+
+/// `None` dedup mode: no content dedup.
+///
+/// With hardlink detection on, only genuine hard links collapse — members of a
+/// `(sha1, size, dev, ino)` group point their `canonical_id` at `min(id)`, and
+/// rows without dev/inode fall back to self-canonical. With it off, every
+/// eligible file becomes its own canonical. Idempotent like the `Hash` mode.
+pub fn promote_none_mode_to_dedup(
+    conn: &mut Connection,
+    eager_filter: bool,
+    detect_hardlinks: bool,
+) -> Result<u64> {
+    let tx = conn.transaction().to_panic()?;
+    let candidates = dedup_eligible_where(eager_filter);
+    let n = if detect_hardlinks {
+        let link_eligible = format!(
+            "g.ftype = 'file' AND g.sha1 IS NOT NULL
+             AND g.dev IS NOT NULL AND g.inode IS NOT NULL
+             AND (g.flags & :error_hash) = 0
+             AND {}",
+            generate_archive_filter(Some("g"))
+        );
+        let elected = tx.execute(&format!(
+            "UPDATE files SET canonical_id = id, phase = 'deduped'
+             WHERE {candidates}
+               AND dev IS NOT NULL AND inode IS NOT NULL
+               AND id IN (
+                   SELECT MIN(id) FROM files
+                   WHERE {candidates} AND dev IS NOT NULL AND inode IS NOT NULL
+                   GROUP BY sha1, size, dev, inode
+               )"
+        ), named_params! {
+            ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
+        }).to_panic()?;
+        let linked = tx.execute(&format!(
+            "UPDATE files SET canonical_id = (
+                 SELECT MIN(id) FROM files AS g
+                 WHERE g.sha1 = files.sha1 AND g.size = files.size
+                       AND g.dev = files.dev AND g.inode = files.inode
+                       AND {link_eligible}
+             ), phase = 'deduped'
+             WHERE {candidates}
+               AND dev IS NOT NULL AND inode IS NOT NULL
+               AND canonical_id IS NULL"
+        ), named_params! {
+            ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
+        }).to_panic()?;
+        // Rows with missing dev/inode cannot join a hard-link cluster: self-canonical.
+        let orphaned = tx.execute(&format!(
+            "UPDATE files SET canonical_id = id, phase = 'deduped'
+             WHERE {candidates}
+               AND (dev IS NULL OR inode IS NULL)"
+        ), named_params! {
+            ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
+        }).to_panic()?;
+        elected + linked + orphaned
+    } else {
+        tx.execute(&format!(
+            "UPDATE files SET canonical_id = id, phase = 'deduped'
+             WHERE {candidates}"
+        ), named_params! {
+            ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
+        }).to_panic()?
+    };
+    tx.commit().to_panic()?;
     Ok(n as u64)
 }
 
@@ -1217,7 +1371,7 @@ mod tests {
         seed_file(&conn, 7, "/tmp/g2.bin", 7, 100);
 
         // run() order: ineligible promotions first, then singletons
-        assert_eq!(promote_non_ineligible_entries_to_dedup(&conn, false).expect("ineligible"), 4);
+        assert_eq!(promote_ineligible_entries_to_dedup(&conn, false).expect("ineligible"), 4);
         assert_eq!(promote_singleton_filtered_to_deduped(&conn, false).expect("singleton"), 1);
 
         assert_eq!(row_phase(&conn, 1), "deduped");
