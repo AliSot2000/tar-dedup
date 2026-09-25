@@ -204,3 +204,336 @@ pub fn ingest_sparsify_outcome(
     tx.commit().to_panic()?;
     Ok(resolved)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema;
+    use crate::db::types::StrippedRecord;
+    use crate::error::{FileStatError, Result};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::path::PathBuf;
+
+    const MIN_PAGES: u64 = 4;
+    const FLAG_HAS_SPARSE: i64 = 1i64 << 9;
+    const FLAG_ERR_SPARSIFY: i64 = 1i64 << 10;
+    const FLAG_MODIFIED: i64 = 1i64 << 5;
+
+    fn open_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = Connection::open(&dir.path().join("t.sqlite")).expect("open conn");
+        schema::initialize(&conn).expect("schema init");
+        // The internal include rule `apply_no_filter` hands out
+        // (`include_reason_archive = -1`), which must satisfy the FK.
+        conn.execute(
+            "INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) \
+             VALUES (-1, 'internal', NULL, '.*')",
+            [],
+        ).expect("seed internal include rule");
+        (dir, conn)
+    }
+
+    /// A default sparsify candidate: self-canonical `deduped` file with a
+    /// digest, `sparse_count` empty pages and the archive filter passed.
+    fn insert_candidate(conn: &Connection, id: i64, size: u64, sparse_count: u64) {
+        conn.execute(
+            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+             sparse_count, include_reason_archive, exclude_reason_archive, flags, canonical_id) \
+             VALUES (:id, :abs_path, '.bin', :size, 'file', 'deduped', :sha1, \
+                     :sparse_count, -1, 0, 0, :id)",
+            named_params! {
+                ":id": id,
+                ":abs_path": format!("/tmp/sp-{id}.bin"),
+                ":size": size as i64,
+                ":sparse_count": sparse_count as i64,
+                ":sha1": [7u8; 20].as_slice(),
+            },
+        ).expect("insert candidate");
+    }
+
+    fn set_phase(conn: &Connection, id: i64, phase: &str) {
+        conn.execute(
+            "UPDATE files SET phase = :phase WHERE id = :id",
+            named_params! { ":id": id, ":phase": phase },
+        ).expect("set phase");
+    }
+
+    fn set_flag(conn: &Connection, id: i64, flag: FileFlag) {
+        set_file_flag(conn, FileId(id), flag, true).expect("set flag");
+    }
+
+    fn row_phase(conn: &Connection, id: i64) -> String {
+        conn.query_row(
+            "SELECT phase FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get::<_, String>(0),
+        ).expect("read phase")
+    }
+
+    fn row_flags(conn: &Connection, id: i64) -> i64 {
+        conn.query_row(
+            "SELECT flags FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get(0),
+        ).expect("read flags")
+    }
+
+    fn file_stat_err() -> Error {
+        Error::FileStat(FileStatError::Io {
+            path: PathBuf::from("/tmp/nope.bin"),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied".to_string()),
+        })
+    }
+
+    #[test]
+    fn promote_covers_every_or_disjunct_and_keeps_candidate() {
+        let (_dir, conn) = open_db();
+
+        // Row per promote OR arm (all `deduped`; the arm itself is the only
+        // failing precondition).
+        insert_candidate(&conn, 1, 1024, 8);
+        conn.execute("UPDATE files SET canonical_id = NULL WHERE id = 1", []).expect("arm canon null");
+        insert_candidate(&conn, 2, 1024, 8);
+        conn.execute(
+            "UPDATE files SET canonical_id = 1 WHERE id = 2", [],
+        ).expect("arm canon != id");
+        insert_candidate(&conn, 3, 1024, 8);
+        conn.execute("UPDATE files SET ftype = 'dir' WHERE id = 3", []).expect("arm dir");
+        insert_candidate(&conn, 4, 1024, 8);
+        conn.execute("UPDATE files SET sha1 = NULL WHERE id = 4", []).expect("arm null sha");
+        insert_candidate(&conn, 5, 1024, 8);
+        conn.execute(
+            "UPDATE files SET sparse_count = NULL WHERE id = 5", [],
+        ).expect("arm null sparse_count");
+        insert_candidate(&conn, 6, 1024, 2);   // sparse_count < :min_pages
+        insert_candidate(&conn, 7, 1024, 8);
+        conn.execute(
+            "UPDATE files SET include_reason_archive = 0 WHERE id = 7", [],
+        ).expect("arm filter fail");
+        insert_candidate(&conn, 8, 1024, 8);   // keeper: passes everything
+
+        let n = promote_non_sparsify_candidates_to_sparsified(&conn, MIN_PAGES).expect("promote");
+
+        assert_eq!(n, 7);
+        for id in 1..8 {
+            assert_eq!(row_phase(&conn, id), "sparsified");
+        }
+        assert_eq!(row_phase(&conn, 8), "deduped");
+    }
+
+    #[test]
+    fn pull_skips_promoted_and_errored_rows() {
+        let (_dir, conn) = open_db();
+        insert_candidate(&conn, 1, 1024, 8);
+        insert_candidate(&conn, 2, 1024, 8);
+        insert_candidate(&conn, 3, 1024, 8);
+        create_sparsify_queue(&conn).expect("create queue");
+        populate_sparsify_queue(&conn, MIN_PAGES).expect("populate queue");
+
+        set_phase(&conn, 2, "sparsified");                      // promoted last session
+        set_flag(&conn, 3, FileFlag::ErrorWhileSparsify);       // errored last session
+
+        let rows = pull_pending_sparsify_rows::<StrippedRecord>(&conn, 0, 100)
+            .expect("pull");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, 1);          // queue position 1
+        assert_eq!(rows[0].1.id.0, 1);     // only the pending candidate
+
+        // Slice-walk from the returned position reproduces the (now empty) tail.
+        let tail = pull_pending_sparsify_rows::<StrippedRecord>(&conn, rows[0].0, 100)
+            .expect("pull tail");
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn pull_filters_has_sparse_and_errorwhilesparse() {
+        let (_dir, conn) = open_db();
+        insert_candidate(&conn, 1, 1024, 8);
+        insert_candidate(&conn, 2, 1024, 8);
+        insert_candidate(&conn, 3, 1024, 8);
+        create_sparsify_queue(&conn).expect("create queue");
+        populate_sparsify_queue(&conn, MIN_PAGES).expect("populate queue");
+
+        set_flag(&conn, 1, FileFlag::HasSparse);          // sticky success flag
+        set_flag(&conn, 2, FileFlag::ErrorWhileSparsify); // sticky error flag
+
+        let rows = pull_pending_sparsify_rows::<StrippedRecord>(&conn, 0, 100)
+            .expect("pull");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.id.0, 3);
+    }
+
+    #[test]
+    fn count_pending_matches_pull() {
+        let (_dir, conn) = open_db();
+        insert_candidate(&conn, 1, 1024, 8);
+        insert_candidate(&conn, 2, 1024, 8);
+        insert_candidate(&conn, 3, 1024, 8);
+        set_phase(&conn, 2, "sparsified");
+        set_flag(&conn, 3, FileFlag::HasSparse);
+        create_sparsify_queue(&conn).expect("create queue");
+
+        // 4th row inserted after the queue exists: populate must catch it too.
+        insert_candidate(&conn, 4, 1024, 8);
+        set_flag(&conn, 4, FileFlag::ErrorWhileSparsify);
+        populate_sparsify_queue(&conn, MIN_PAGES).expect("populate queue");
+
+        let rows = pull_pending_sparsify_rows::<StrippedRecord>(&conn, 0, 100)
+            .expect("pull");
+        assert_eq!(rows.len() as u64, 1);   // only candidate 1 is todo
+        assert_eq!(
+            count_pending_sparsify_candidates(&conn, MIN_PAGES).expect("count pending"),
+            1
+        );
+    }
+
+    #[test]
+    fn count_all_is_workload_across_sessions() {
+        let (_dir, mut conn) = open_db();
+        insert_candidate(&conn, 1, 1024, 8);
+        insert_candidate(&conn, 2, 1024, 8);
+        insert_candidate(&conn, 3, 1024, 8);
+
+        assert_eq!(
+            count_all_sparsify_candidates(&conn, MIN_PAGES).expect("count all"),
+            3
+        );
+        assert_eq!(
+            count_pending_sparsify_candidates(&conn, MIN_PAGES).expect("count pending"),
+            3
+        );
+
+        let mut batch = Vec::<SparseOutcome>::new();
+        batch.push(SparseOutcome { id: FileId(1), modified: false, err: None });
+        assert_eq!(ingest_sparsify_outcome(&mut conn, &batch).expect("ingest"), 1);
+
+        assert_eq!(
+            count_all_sparsify_candidates(&conn, MIN_PAGES).expect("count all stable"),
+            3
+        );
+        assert_eq!(
+            count_pending_sparsify_candidates(&conn, MIN_PAGES).expect("count pending"),
+            2
+        );
+
+        let mut rest = Vec::<SparseOutcome>::new();
+        rest.push(SparseOutcome { id: FileId(2), modified: false, err: None });
+        rest.push(SparseOutcome { id: FileId(3), modified: false, err: None });
+        assert_eq!(ingest_sparsify_outcome(&mut conn, &rest).expect("ingest rest"), 2);
+
+        assert_eq!(
+            count_all_sparsify_candidates(&conn, MIN_PAGES).expect("count all still 3"),
+            3
+        );
+        assert_eq!(
+            count_pending_sparsify_candidates(&conn, MIN_PAGES).expect("count pending 0"),
+            0
+        );
+    }
+
+    #[test]
+    fn ingest_flag_and_phase_are_atomic() {
+        let (_dir, mut conn) = open_db();
+        insert_candidate(&conn, 1, 1024, 8);
+        insert_candidate(&conn, 2, 1024, 8);
+        insert_candidate(&conn, 3, 1024, 8);
+
+        let mut batch = Vec::<SparseOutcome>::new();
+        batch.push(SparseOutcome { id: FileId(1), modified: false, err: None });
+        batch.push(SparseOutcome {
+            id: FileId(2), modified: false, err: Some(file_stat_err()),
+        });
+        batch.push(SparseOutcome {
+            id: FileId(3), modified: false, err: Some(Error::Interrupted),
+        });
+
+        let resolved = ingest_sparsify_outcome(&mut conn, &batch).expect("ingest");
+
+        assert_eq!(resolved, 2);
+        // HasSparse ⟺ sparsified; ErrorWhileSparsify ⟺ sparsified.
+        assert_ne!(row_flags(&conn, 1) & FLAG_HAS_SPARSE, 0);
+        assert_eq!(row_phase(&conn, 1), "sparsified");
+        assert_eq!(row_flags(&conn, 2) & FLAG_HAS_SPARSE, 0);
+        assert_ne!(row_flags(&conn, 2) & FLAG_ERR_SPARSIFY, 0);
+        assert_eq!(row_phase(&conn, 2), "sparsified");
+        // Interrupted stays untouched, no half-applied flag.
+        assert_eq!(row_flags(&conn, 3), 0);
+        assert_eq!(row_phase(&conn, 3), "deduped");
+    }
+
+    #[test]
+    fn ingest_sets_modified_correctly() {
+        let (_dir, mut conn) = open_db();
+        insert_candidate(&conn, 1, 1024, 8);
+        insert_candidate(&conn, 2, 1024, 8);
+        insert_candidate(&conn, 3, 1024, 8);
+
+        let mut batch = Vec::<SparseOutcome>::new();
+        batch.push(SparseOutcome { id: FileId(1), modified: true, err: None });
+        batch.push(SparseOutcome {
+            id: FileId(2), modified: true, err: Some(file_stat_err()),
+        });
+        batch.push(SparseOutcome {
+            id: FileId(3), modified: false, err: Some(file_stat_err()),
+        });
+        ingest_sparsify_outcome(&mut conn, &batch).expect("ingest");
+
+        assert!(row_flags(&conn, 1) & FLAG_MODIFIED != 0);
+        assert!(row_flags(&conn, 2) & FLAG_MODIFIED != 0);
+        assert_eq!(row_flags(&conn, 3) & FLAG_MODIFIED, 0);
+    }
+
+    #[test]
+    fn ingest_panics_on_invalid_error_variants() {
+        let variants = [
+            Error::Config("invalid config".into()),
+            Error::Other(anyhow::anyhow!("boom")),
+            Error::Database(rusqlite::Error::InvalidParameterName("boom".to_string())),
+        ];
+        for variant in variants {
+            let (_dir, mut conn) = open_db();
+            insert_candidate(&conn, 1, 1024, 8);
+            let mut batch = Vec::<SparseOutcome>::new();
+            batch.push(SparseOutcome { id: FileId(1), modified: false, err: Some(variant) });
+            let res = catch_unwind(AssertUnwindSafe(|| -> Result<()> {
+                let _ = ingest_sparsify_outcome(&mut conn, &batch)?;
+                Ok(())
+            }));
+            assert!(res.is_err());
+        }
+    }
+
+    #[test]
+    fn queue_populate_orders_by_size_desc() {
+        let (_dir, conn) = open_db();
+        insert_candidate(&conn, 1, 4 * 1024 * 1024, 8);   // biggest
+        insert_candidate(&conn, 2, 4 * 1024 * 1024 + 1, 8);
+        insert_candidate(&conn, 3, 1024 * 1024, 8);
+        create_sparsify_queue(&conn).expect("create queue");
+        populate_sparsify_queue(&conn, MIN_PAGES).expect("populate queue");
+
+        let rows = pull_pending_sparsify_rows::<StrippedRecord>(&conn, 0, 100)
+            .expect("pull");
+        let got = rows
+            .into_iter()
+            .map(|pair| (pair.1.id.0, pair.0))
+            .collect::<Vec<(i64, u64)>>();
+        assert_eq!(got, [(2, 1), (1, 2), (3, 3)]);   // size DESC, positions 1..3
+    }
+
+    #[test]
+    fn populate_is_idempotent() {
+        let (_dir, conn) = open_db();
+        insert_candidate(&conn, 1, 1024, 8);
+        insert_candidate(&conn, 2, 1024, 8);
+        create_sparsify_queue(&conn).expect("create queue");
+        populate_sparsify_queue(&conn, MIN_PAGES).expect("populate 1");
+        populate_sparsify_queue(&conn, MIN_PAGES).expect("populate 2");
+
+        let rows = pull_pending_sparsify_rows::<StrippedRecord>(&conn, 0, 100)
+            .expect("pull");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[1].0, 2);
+    }
+}
