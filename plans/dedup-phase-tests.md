@@ -118,7 +118,7 @@ live in `#[cfg(test)] mod tests` at the bottom of the two source modules (privat
   Err((failed_id,error)) => set check flag on candidate (assert 1) AND set ErrorWhileDedup on failed_id (assert 1) }`;
   `tx.commit()?; Ok(resolved)`. **I1: also unmark each outcome's candidate_id from dedup_inflight in this tx.**
 
-`db.rs` facades (all present): `promote_singleton_filtered_to_deduped`, `promote_non_ineligible_entries_to_dedup`,
+`db.rs` facades (all present): `promote_singleton_filtered_to_deduped`, `promote_ineligible_entries_to_dedup`,
 `create_temp_dedup_table`, `drop_temp_dedup_table`, `populate_temp_table`, `count_pending_dedup_groups`,
 `count_dedup_phase_total`, `count_dedup_phase_position`, `searching_to_finished`, `finish_to_error`,
 `finish_to_done`, `finish_to_ready`, `ready_to_searching`, `list_pending_comparisons::<R>`,
@@ -331,7 +331,7 @@ so duplicate them in this module).
 18. `promote_non_ineligible_and_singleton`
     `phase='filtered'` rows: (a) singleton `(sha1,size)` → `promote_singleton_filtered_to_deduped`
     → `deduped`; (b) `ftype != 'file'`/`sha1 IS NULL`/`flags&ErrorWhileHash`/`include_reason_archive = 0`
-    → `promote_non_ineligible_entries_to_dedup` → `deduped`; (c) a real duplicate group member
+    → `promote_ineligible_entries_to_dedup` → `deduped`; (c) a real duplicate group member
     (correct sha1, incl=-1) stays `filtered`.
 19. `count_pending_dedup_groups_tracks_states`
     seed one each of ready/searching/finished + one done + one errored → `count_pending == 3`

@@ -35,7 +35,7 @@ This forced two design decisions (both settled below):
   `Connection`; a struct can't own both). All SQLite calls complete inside `db/`.
 - `dedup_progress` must survive for resume (regular table). Only `dedup_inflight` is a real
   SQLite TEMPORARY table (per-connection, cleared every phase automatically).
-- Keep `promote_non_ineligible_entries_to_dedup` + `promote_singleton_filtered_to_deduped`
+- Keep `promote_ineligible_entries_to_dedup` + `promote_singleton_filtered_to_deduped`
   (bulk skips before the state machine) as-is.
 
 ## Repo state / starting point
@@ -323,7 +323,7 @@ groups, advance on promote to deduped").
 
 ## Progress bar (settled)
 
-- Global as usual (`inc_global`): bulk skips — `promote_non_ineligible_entries_to_dedup` +
+- Global as usual (`inc_global`): bulk skips — `promote_ineligible_entries_to_dedup` +
   `promote_singleton_filtered_to_deduped` (before the machine).
 - Phase bar: `set_phase_total(count_dedup_phase_total(eager))` (files in duplicate groups);
   `set_phase_position(count_dedup_phase_done(eager))` on resume (already-`deduped` members of
