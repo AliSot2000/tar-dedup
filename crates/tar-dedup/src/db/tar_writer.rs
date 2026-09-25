@@ -125,19 +125,14 @@ pub fn reset_archive_state(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Result<u64> {
-    let filter = if filter_sha {
-        " AND sha1 IS NOT NULL"
-    } else {
-        ""
-    };
+pub fn sum_canonical_bytes_to_archive(conn: &Connection) -> Result<u64> {
     let total: i64 = conn.query_row(
         &format!(
             "SELECT COALESCE(SUM(size), 0) AS total
          FROM files
          WHERE canonical_id = id 
             AND phase IN ('staged', 'archived') 
-            {filter} 
+            AND sha1 IS NOT NULL
             AND ftype = 'file'
             AND {}",
             generate_archive_filter(None)
@@ -152,17 +147,12 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection, filter_sha: bool) -> Re
 /// When `filter_sha` is true, rows with `sha1 IS NULL` are omitted.
 /// TODO perhaps sort by ext, size, filename, id.
 ///  order by filename   replace(abs_path, rtrim(abs_path, replace(abs_path, '/', '')), '') ASC,
-pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Result<Vec<FileId>> {
-    let filter = if filter_sha {
-        " AND sha1 IS NOT NULL"
-    } else {
-        ""
-    };
+pub fn list_staged_canonical_ordered(conn: &Connection) -> Result<Vec<FileId>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id FROM files
          WHERE canonical_id = id 
             AND phase = 'staged' 
-            {filter} 
+            AND sha1 IS NOT NULL
             AND ftype = 'file'
             AND {}
          ORDER BY ext ASC, size ASC, id ASC",
@@ -174,19 +164,14 @@ pub fn list_staged_canonical_ordered(conn: &Connection, filter_sha: bool) -> Res
         .map_err(Into::into)
 }
 
-pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Result<u64> {
-    let filter = if filter_sha {
-        " AND sha1 IS NOT NULL"
-    } else {
-        ""
-    };
+pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
     let total: i64 = conn.query_row(
         &format!(
         "SELECT COALESCE(SUM(size), 0) AS total
          FROM files
          WHERE canonical_id = id 
             AND phase = 'archived' 
-            {filter}
+            AND sha1 IS NOT NULL
             AND ftype = 'file'
             AND {}",
             generate_archive_filter(None)
@@ -201,17 +186,14 @@ pub fn sum_archived_canonical_bytes(conn: &Connection, filter_sha: bool) -> Resu
 ///
 /// Ineligible: non-self-canonical, non-file types, and (when `filter_sha`) missing `sha1`.
 /// Does not touch outcome flags — phase is flow only.
-pub fn promote_ineligible_to_archived(conn: &Connection, filter_sha: bool) -> Result<u64> {
-    let sha_clause = if filter_sha { " OR sha1 IS NULL" } else { "" };
-    let stmt = format!(
+pub fn promote_ineligible_to_archived(conn: &Connection) -> Result<u64> {
+    let stmt =
         "UPDATE files SET phase = 'archived'
          WHERE phase = 'staged'
            AND (
                 canonical_id IS NULL OR canonical_id != id
              OR ftype != 'file'
-             {sha_clause}
-           )"
-    );
+             OR sha1 IS NULL)";
     let n = conn.execute(&stmt, {}).to_panic()?;
     Ok(n as u64)
 }

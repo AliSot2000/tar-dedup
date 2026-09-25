@@ -18,7 +18,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     fs::create_dir_all(config.paths.stage_dir())
         .map_err(|e| crate::error::Error::io(&config.paths.stage_dir(), e))?;
 
-    let promoted = db.promote_unstageable_files(config.pipeline.retry_missing_sha)?;
+    let promoted = db.promote_unstageable_files()?;
     rt.progress.inc_global(promoted);
     tracing::info!("Promoted {promoted} entries to staged which aren't eligible");
 
@@ -30,7 +30,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // TODO logging
     let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
     let phase = crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Stage);
-    let file_vec: Vec<StrippedRecord> = db.list_files_to_stage(config.pipeline.retry_missing_sha)?;
+    let file_vec: Vec<StrippedRecord> = db.list_files_to_stage()?;
     let total_files = file_vec.len();
     for record in file_vec {
         shutdown.check_between_files()?;

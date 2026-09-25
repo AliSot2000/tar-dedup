@@ -611,7 +611,6 @@ mod tests {
             },
             pipeline: ArchivePipelineOptions {
                 no_dedup: false,
-                retry_missing_sha: false,
                 write_archive_footer: false,
                 clear_archive_meta: false,
             },

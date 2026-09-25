@@ -32,13 +32,12 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let session_id = db.begin_archive_session(archive_offset)?;
 
     // Require sha1 unless retry_missing_sha asks to include unhashed files.
-    let filter_sha = !config.pipeline.retry_missing_sha;
-    let promoted = db.promote_ineligible_to_archived(filter_sha)?;
+    let promoted = db.promote_ineligible_to_archived()?;
     rt.progress.inc_global(promoted);
 
     let bytes_in_base = db.get_archive_bytes_in()?;
-    let total_bytes = db.sum_canonical_bytes_to_archive(filter_sha)?;
-    let already_archived = db.sum_archived_canonical_bytes(filter_sha)?;
+    let total_bytes = db.sum_canonical_bytes_to_archive()?;
+    let already_archived = db.sum_archived_canonical_bytes()?;
 
     // TODO update eta only when write to buff occurs.
     let progress = rt.progress;
@@ -62,7 +61,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     }
 
     // TODO add batching
-    let to_archive = db.list_staged_canonical_ordered(filter_sha)?;
+    let to_archive = db.list_staged_canonical_ordered()?;
     if to_archive.is_empty() && already_archived == 0 {
         tracing::warn!("no staged files to archive");
     }

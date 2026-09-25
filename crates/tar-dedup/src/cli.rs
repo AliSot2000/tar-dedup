@@ -346,15 +346,6 @@ pub struct ArchiveArgs {
     /// Skip the deduplication phase.
     #[arg(long = "no-dedup", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub no_dedup: bool,
-
-    /// Stage/archive files that failed to obtain a SHA-1.
-    #[arg(
-        long = "retry-missing-sha",
-        default_value_t = false,
-        action = ArgAction::SetTrue,
-        help_heading = "Process Options"
-    )]
-    pub retry_missing_sha: bool,
 }
 
 #[derive(Debug, Args, Default)]
