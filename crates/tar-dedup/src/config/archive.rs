@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::ArchiveArgs;
+use crate::cli::{ArchiveArgs, DedupMode};
 use crate::common::files::directory_roots_overlap;
 use crate::common::start::StartPolicy;
 use crate::error::{Error, Result};
@@ -71,7 +71,7 @@ pub struct SparseOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchivePipelineOptions {
-    pub no_dedup: bool,
+    pub dedup_mode: DedupMode,
     pub write_archive_footer: bool,
     pub clear_archive_meta: bool,
 }
@@ -311,7 +311,7 @@ impl ArchiveConfig {
                 exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             },
             pipeline: ArchivePipelineOptions {
-                no_dedup: args.no_dedup,
+                dedup_mode: args.dedup_mode,
                 write_archive_footer: true,
                 clear_archive_meta: false,
             },
@@ -447,7 +447,7 @@ const DEFAULT_CONFIG: ArchiveConfig = ArchiveConfig {
         exit_after_stage: None,
     },
     pipeline: ArchivePipelineOptions {
-        no_dedup: false,
+        dedup_mode: DedupMode::Regular,
         write_archive_footer: true,
         clear_archive_meta: false,
     },
