@@ -607,7 +607,7 @@ mod tests {
         CompressionSettings, FilterOptions, IndexingOptions, InputOptions, OwnerPolicy, PathLayout,
         ProcessOptions, SparseOptions,
     };
-    use crate::db::flags::FileFlag;
+    use crate::db::flags::{FileFlag, set_file_flag};
     use crate::db::types::{FileId, FileType, NewFileRecord};
     use crate::db::{Database, ErrorPhase, Recorder};
     use crate::progress::{ARCHIVE_MULTIPLIER, ProgressBarSet};
@@ -1566,5 +1566,280 @@ mod tests {
             world.db.count_check_with_canonical_completed().expect("check flags"),
             0
         );
+    }
+
+    // =========================================================================
+    // Dedup-mode corpus: the same rows are seeded for every `--dedup-mode`, so
+    // the three strategies can be compared 1:1. Distinct `(sha1, size)` keys
+    // keep the groups apart; ineligible rows (non-file / no sha / hash error /
+    // filter-excluded) must be promoted to `deduped` with canonical NULL in
+    // every mode.
+    //
+    // Groups:
+    //   singleton — unique content → its own canonical
+    //   lone      — same (sha1, size), different bytes → lone-promotion (both self)
+    //   pair      — same content → canonical + child
+    //   quad      — X,X,Y,Y (X != Y) → two canonicals (C1, C3) each with a child
+    //   errgrp    — E1==E2, E3 unreadable → canonical + child + errored member
+    //   hard      — same (sha1, size, dev, inode) hard-link pair
+    // =========================================================================
+
+    struct ModeCorpus {
+        non_file: FileId,
+        no_sha: FileId,
+        sha_err: FileId,
+        filtered: FileId,
+        singleton: FileId,
+        lone_a: FileId,
+        lone_b: FileId,
+        pair_a: FileId,
+        pair_b: FileId,
+        quad_a: FileId,
+        quad_b: FileId,
+        quad_c: FileId,
+        quad_d: FileId,
+        err_a: FileId,
+        err_b: FileId,
+        err_c: FileId,
+        hard_a: FileId,
+        hard_b: FileId,
+    }
+
+    fn all_ids(c: &ModeCorpus) -> Vec<FileId> {
+        Vec::from([
+            c.non_file, c.no_sha, c.sha_err, c.filtered,
+            c.singleton,
+            c.lone_a, c.lone_b,
+            c.pair_a, c.pair_b,
+            c.quad_a, c.quad_b, c.quad_c, c.quad_d,
+            c.err_a, c.err_b, c.err_c,
+            c.hard_a, c.hard_b,
+        ])
+    }
+
+    /// Seed the shared mode corpus. The unreadable `err_c` file is always
+    /// chmod 000; tests that byte-read it must root-skip. Whether hardlink
+    /// detection runs is the caller's `config.indexing` choice.
+    fn seed_mode_corpus(world: &TestWorld) -> ModeCorpus {
+        let x = pattern(512 * 1024, 3);       // quad content X
+        let y = pattern(512 * 1024, 4);       // quad content Y (same length)
+        let lone_p = pattern(128 * 1024, 7);  // lone_a
+        let lone_q = pattern(128 * 1024, 8);  // lone_b (same length, different bytes)
+        let pair_p = pattern(64 * 1024, 9);
+        let err_p = pattern(64 * 1024, 10);
+        let hard_p = pattern(64 * 1024, 11);
+
+        let singleton = world.add_file("singleton.bin", &pattern(1024, 1));
+        let lone_a = world.add_file("lone-a.bin", &lone_p);
+        let lone_b = world.add_file("lone-b.bin", &lone_q);
+        let pair_a = world.add_file("pair-a.bin", &pair_p);
+        let pair_b = world.add_file("pair-b.bin", &pair_p);
+        let quad_a = world.add_file("quad-a.bin", &x);
+        let quad_b = world.add_file("quad-b.bin", &x);
+        let quad_c = world.add_file("quad-c.bin", &y);
+        let quad_d = world.add_file("quad-d.bin", &y);
+        let err_a = world.add_file("err-a.bin", &err_p);
+        let err_b = world.add_file("err-b.bin", &err_p);
+        let err_c = world.add_file("err-c.bin", &err_p);
+        let hard_a = world.add_file("hard-a.bin", &hard_p);
+        let hard_b = world.add_file("hard-b.bin", &hard_p);
+        let non_file = world.add_file("non-file.bin", &pattern(1024, 2));
+        let no_sha = world.add_file("no-sha.bin", &pattern(1024, 3));
+        let sha_err = world.add_file("sha-err.bin", &pattern(1024, 4));
+        let filtered = world.add_file("filtered.bin", &pattern(1024, 5));
+
+        world.db.apply_no_filter().expect("filter");
+
+        // Eligible rows get a digest; groups share one `(sha1, size)` key.
+        world.seed_sha1(singleton, 0x11);
+        world.seed_sha1(lone_a, 0x22); world.seed_sha1(lone_b, 0x22);
+        world.seed_sha1(pair_a, 0x33); world.seed_sha1(pair_b, 0x33);
+        world.seed_sha1(quad_a, 0x44); world.seed_sha1(quad_b, 0x44);
+        world.seed_sha1(quad_c, 0x44); world.seed_sha1(quad_d, 0x44);
+        world.seed_sha1(err_a, 0x55); world.seed_sha1(err_b, 0x55);
+        world.seed_sha1(err_c, 0x55);
+        world.seed_sha1(hard_a, 0x77); world.seed_sha1(hard_b, 0x77);
+        world.seed_sha1(sha_err, 0x66);
+
+        world.db.with_transaction(|conn| {
+            // Ineligible rows.
+            conn.execute(
+                "UPDATE files SET ftype = 'dir' WHERE id = :id",
+                named_params! { ":id": non_file.0 },
+            ).expect("make non-file");
+            conn.execute(
+                "UPDATE files SET sha1 = NULL WHERE id = :id",
+                named_params! { ":id": no_sha.0 },
+            ).expect("null sha");
+conn.execute(
+                "UPDATE files SET include_reason_archive = 0 WHERE id = :id",
+                named_params! { ":id": filtered.0 },
+            ).expect("exclude from filter");
+            // ErrorWhileHash: the row never produced a usable digest.
+            assert_eq!(1, set_file_flag(conn, sha_err, FileFlag::ErrorWhileHash, true)?);
+            // Hard-link pair: same (dev, inode).
+            conn.execute(
+                "UPDATE files SET dev = 7, inode = 99 WHERE id IN (:a, :b)",
+                named_params! { ":a": hard_a.0, ":b": hard_b.0 },
+            ).expect("seed dev/inode");
+            Ok(())
+        }).expect("corpus mutations");
+
+        std::fs::set_permissions(&world.path("err-c.bin"), std::fs::Permissions::from_mode(0))
+            .expect("chmod 000 err-c");
+
+        ModeCorpus {
+            non_file, no_sha, sha_err, filtered,
+            singleton,
+            lone_a, lone_b,
+            pair_a, pair_b,
+            quad_a, quad_b, quad_c, quad_d,
+            err_a, err_b, err_c,
+            hard_a, hard_b,
+        }
+    }
+
+    fn assert_ineligible(world: &TestWorld, ids: [&FileId; 4]) {
+        for id in ids {
+            let canon = world.canonical_of(*id);
+            assert_eq!(canon, None, "ineligible rows must have no canonical");
+            assert_eq!(world.phase(*id), FilePhase::Deduped);
+        }
+    }
+
+    #[test]
+    fn mode_regular_corpus_dedupes_by_compare() {
+        if geteuid().is_root() {
+            return;
+        }
+        let mut world = TestWorld::new();
+        world.config.indexing.no_hardlink_detection = false;
+        world.config.pipeline.dedup_mode = DedupMode::Regular;
+        let c = seed_mode_corpus(&world);
+        run(&world.rt()).expect("run regular mode");
+
+        assert_ineligible(&world, [&c.non_file, &c.no_sha, &c.sha_err, &c.filtered]);
+
+        // Unique content: its own canonical (singleton promote sets id).
+        assert_eq!(world.canonical_of(c.singleton), Some(c.singleton));
+
+        // Same (sha1, size) but binary different: the canonical is retired and
+        // the lone survivor is re-elected -> both end self-canonical.
+        assert_eq!(world.canonical_of(c.lone_a), Some(c.lone_a));
+        assert_eq!(world.canonical_of(c.lone_b), Some(c.lone_b));
+
+        // Same content: canonical + child.
+        assert_eq!(world.canonical_of(c.pair_a), Some(c.pair_a));
+        assert_eq!(world.canonical_of(c.pair_b), Some(c.pair_a));
+
+        // X,X,Y,Y -> two canonicals (C1, C3), each with one child.
+        assert_eq!(world.canonical_of(c.quad_a), Some(c.quad_a));
+        assert_eq!(world.canonical_of(c.quad_b), Some(c.quad_a));
+        assert_eq!(world.canonical_of(c.quad_c), Some(c.quad_c));
+        assert_eq!(world.canonical_of(c.quad_d), Some(c.quad_c));
+
+        // canonical + child + errored member.
+        assert_eq!(world.canonical_of(c.err_a), Some(c.err_a));
+        assert_eq!(world.canonical_of(c.err_b), Some(c.err_a));
+        assert_eq!(world.canonical_of(c.err_c), None);
+        assert!(world.flag(c.err_c, FileFlag::ErrorWhileDedup));
+
+        // Same (dev, inode) hard links collapse to the min id.
+        assert_eq!(world.canonical_of(c.hard_a), Some(c.hard_a));
+        assert_eq!(world.canonical_of(c.hard_b), Some(c.hard_a));
+
+        for id in all_ids(&c) {
+            assert_eq!(world.phase(id), FilePhase::Deduped);
+        }
+        assert_eq!(world.db.count_check_with_canonical_completed().expect("check flags"), 0);
+    }
+
+    #[test]
+    fn mode_hash_corpus_trusts_digest() {
+        let mut world = TestWorld::new();
+        world.config.pipeline.dedup_mode = DedupMode::Hash;
+        let c = seed_mode_corpus(&world);
+        run(&world.rt()).expect("run hash mode");
+
+        assert_ineligible(&world, [&c.non_file, &c.no_sha, &c.sha_err, &c.filtered]);
+
+        // Each (sha1, size) group has exactly one canonical: min(id).
+        assert_eq!(world.canonical_of(c.singleton), Some(c.singleton));
+
+        assert_eq!(world.canonical_of(c.lone_a), Some(c.lone_a));
+        assert_eq!(world.canonical_of(c.lone_b), Some(c.lone_a));
+
+        assert_eq!(world.canonical_of(c.pair_a), Some(c.pair_a));
+        assert_eq!(world.canonical_of(c.pair_b), Some(c.pair_a));
+
+        assert_eq!(world.canonical_of(c.quad_a), Some(c.quad_a));
+        for id in [c.quad_b, c.quad_c, c.quad_d] {
+            assert_eq!(world.canonical_of(id), Some(c.quad_a));
+        }
+
+        assert_eq!(world.canonical_of(c.err_a), Some(c.err_a));
+        for id in [c.err_b, c.err_c] {
+            assert_eq!(world.canonical_of(id), Some(c.err_a));
+        }
+
+        assert_eq!(world.canonical_of(c.hard_a), Some(c.hard_a));
+        assert_eq!(world.canonical_of(c.hard_b), Some(c.hard_a));
+
+        for id in all_ids(&c) {
+            assert_eq!(world.phase(id), FilePhase::Deduped);
+        }
+        assert_eq!(world.db.count_check_with_canonical_completed().expect("check flags"), 0);
+    }
+
+    #[test]
+    fn mode_none_corpus_collapses_only_hardlinks() {
+        let mut world = TestWorld::new();
+        world.config.indexing.no_hardlink_detection = false;
+        world.config.pipeline.dedup_mode = DedupMode::None;
+        let c = seed_mode_corpus(&world);
+        run(&world.rt()).expect("run none mode");
+
+        assert_ineligible(&world, [&c.non_file, &c.no_sha, &c.sha_err, &c.filtered]);
+
+        // No content dedup: content-identical files with different inodes are
+        // each their own canonical...
+        for id in [c.singleton, c.lone_a, c.lone_b, c.pair_a, c.pair_b,
+                   c.quad_a, c.quad_b, c.quad_c, c.quad_d,
+                   c.err_a, c.err_b, c.err_c] {
+            assert_eq!(world.canonical_of(id), Some(id));
+        }
+        // ...the only collapsed group is the (sha1, size, dev, inode) hard link.
+        assert_eq!(world.canonical_of(c.hard_a), Some(c.hard_a));
+        assert_eq!(world.canonical_of(c.hard_b), Some(c.hard_a));
+
+        for id in all_ids(&c) {
+            assert_eq!(world.phase(id), FilePhase::Deduped);
+        }
+        assert_eq!(world.db.count_check_with_canonical_completed().expect("check flags"), 0);
+    }
+
+    #[test]
+    fn mode_none_no_hardlink_detection_all_self_canonical() {
+        let mut world = TestWorld::new();
+        world.config.indexing.no_hardlink_detection = true;
+        world.config.pipeline.dedup_mode = DedupMode::None;
+        let c = seed_mode_corpus(&world);
+        run(&world.rt()).expect("run none mode without hardlink detection");
+
+        assert_ineligible(&world, [&c.non_file, &c.no_sha, &c.sha_err, &c.filtered]);
+
+        // No grouping at all: every eligible file is self-canonical, including
+        // the hard-link pair (which now share no canonical).
+        for id in [c.singleton, c.lone_a, c.lone_b, c.pair_a, c.pair_b,
+                   c.quad_a, c.quad_b, c.quad_c, c.quad_d,
+                   c.err_a, c.err_b, c.err_c,
+                   c.hard_a, c.hard_b] {
+            assert_eq!(world.canonical_of(id), Some(id));
+        }
+
+        for id in all_ids(&c) {
+            assert_eq!(world.phase(id), FilePhase::Deduped);
+        }
+        assert_eq!(world.db.count_check_with_canonical_completed().expect("check flags"), 0);
     }
 }
