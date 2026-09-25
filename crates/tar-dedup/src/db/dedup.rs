@@ -593,11 +593,12 @@ pub fn promote_ineligible_entries_to_dedup(conn: &Connection, eager_filter: bool
     Ok(n as u64)
 }
 
-/// Unique `(sha1, size)` content: no compare round.
+/// Unique `(sha1, size)` content: no compare round. A unique-content file is
+/// its own canonical.
 pub fn promote_singleton_filtered_to_deduped(conn: &Connection, eager_filter: bool) -> Result<u64> {
     let n = conn.execute(
         &format!(
-            "UPDATE files SET phase = 'deduped'
+            "UPDATE files SET phase = 'deduped', canonical_id = id
          WHERE phase = '{}'
            AND sha1 IS NOT NULL
            AND (sha1, size) IN (
@@ -1381,7 +1382,9 @@ mod tests {
         assert_eq!(promote_ineligible_entries_to_dedup(&conn, false).expect("ineligible"), 4);
         assert_eq!(promote_singleton_filtered_to_deduped(&conn, false).expect("singleton"), 1);
 
+        // Row 1 is a unique-content singleton: it becomes its own canonical.
         assert_eq!(row_phase(&conn, 1), "deduped");
+        assert_eq!(row_canonical(&conn, 1), Some(1));
         assert_eq!(row_phase(&conn, 2), "deduped");
         assert_eq!(row_phase(&conn, 3), "deduped");
         assert_eq!(row_phase(&conn, 4), "deduped");
