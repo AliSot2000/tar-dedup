@@ -535,8 +535,13 @@ impl Database {
         stage::promote_unstageable_files(&self.conn())
     }
 
-    pub fn list_files_to_stage<R: SqlFileRow>(&self) -> Result<Vec<R>> {
-        stage::list_files_to_stage(&self.conn())
+    pub fn count_all_stage_candidates(&self) -> Result<u64> {
+        stage::count_all_stage_candidates(&self.conn())
+    }
+
+    pub fn list_files_to_stage_after<R: SqlFileRow>(
+        &self, last_id: &FileId, limit: u64) -> Result<Vec<R>> {
+        stage::list_files_to_stage_after(&self.conn(), last_id, limit)
     }
 
     pub fn load_runtime_state(&self) -> Result<Option<RuntimeState>> {
