@@ -51,11 +51,11 @@ pub const DEFAULT_AUTO_FLUSH_LIMIT: u64 = 10_000;
 /// [`process_entries`]: Once the entries are ready, hand control to "loop body" function
 /// [`batch_size`]: Determines the max size of batches from the get_entries function.
 pub fn batched_stepped_loop<ID, ENTRY, I, G, GI, P>(
+    batch_size: u64,
     mut init_id: I,
     mut get_entries: G,
     mut get_id: GI,
-    mut process_entries: P,
-    batch_size: u64)
+    mut process_entries: P)
     -> Result<()>
 where
     I: FnMut() -> ID,
