@@ -73,3 +73,93 @@ pub fn list_files_to_stage_after<R: SqlFileRow>(
     ).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
+
+// TODO fix this up, this is not correct.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema;
+    use crate::db::types::StrippedRecord;
+
+    fn open_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = Connection::open(&dir.path().join("t.sqlite")).expect("open conn");
+        schema::initialize(&conn).expect("schema init");
+        // The internal include rule `apply_no_filter` hands out
+        // (`include_reason_archive = -1`), which must satisfy the FK.
+        conn.execute(
+            "INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) \
+             VALUES (-1, 'internal', NULL, '.*')",
+            [],
+        ).expect("seed internal include rule");
+        (dir, conn)
+    }
+
+    /// A default stage candidate: self-canonical `sparsified` file with a digest.
+    fn insert_candidate(conn: &Connection, id: i64) {
+        conn.execute(
+            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+             include_reason_archive, exclude_reason_archive, flags, canonical_id) \
+             VALUES (:id, :abs_path, '.bin', 1024, 'file', 'sparsified', :sha1, \
+                     -1, 0, 0, :id)",
+            named_params! {
+                ":id": id,
+                ":abs_path": format!("/tmp/st-{id}.bin"),
+                ":sha1": [7u8; 20].as_slice(),
+            },
+        ).expect("insert candidate");
+    }
+
+    fn stage_ids(conn: &Connection, last_id: i64, limit: u64) -> Vec<i64> {
+        list_files_to_stage_after::<StrippedRecord>(conn, &FileId(last_id), limit)
+            .expect("list")
+            .into_iter()
+            .map(|r| r.id.0)
+            .collect::<Vec<i64>>()
+    }
+
+    #[test]
+    fn list_files_to_stage_after_slices_and_orders() {
+        let (_dir, conn) = open_db();
+        for id in [1, 2, 3, 4] {
+            insert_candidate(&conn, id);
+        }
+
+        assert_eq!(stage_ids(&conn, 0, 2), [1, 2]);
+        assert_eq!(stage_ids(&conn, 2, 2), [3, 4]);
+        assert!(stage_ids(&conn, 4, 2).is_empty());
+    }
+
+    #[test]
+    fn list_files_to_stage_after_excludes_promoted_errored_and_ineligible() {
+        let (_dir, conn) = open_db();
+        for id in [1, 2, 3, 4, 5, 6] {
+            insert_candidate(&conn, id);
+        }
+        conn.execute("UPDATE files SET phase = 'staged' WHERE id = 2", []).expect("staged");
+        conn.execute("UPDATE files SET canonical_id = 1 WHERE id = 3", []).expect("non-canonical");
+        conn.execute("UPDATE files SET ftype = 'dir' WHERE id = 4", []).expect("dir");
+        conn.execute("UPDATE files SET sha1 = NULL WHERE id = 5", []).expect("null sha");
+        conn.execute("UPDATE files SET include_reason_archive = 0 WHERE id = 6", []).expect("filtered");
+
+        assert_eq!(stage_ids(&conn, 0, 100), [1]);
+    }
+
+    #[test]
+    fn count_all_stage_candidates_spans_sessions() {
+        let (_dir, conn) = open_db();
+        insert_candidate(&conn, 1);   // staged in a prior session
+        insert_candidate(&conn, 2);   // todo this session
+        insert_candidate(&conn, 3);   // todo this session
+        conn.execute("UPDATE files SET phase = 'staged' WHERE id = 1", []).expect("staged");
+
+        // Ineligible rows promoted to `staged` must not inflate the workload.
+        conn.execute(
+            "INSERT INTO files (id, abs_path, ext, size, ftype, phase) \
+             VALUES (4, '/tmp/dir', '', 0, 'dir', 'staged')",
+            [],
+        ).expect("ineligible promoted row");
+
+        assert_eq!(count_all_stage_candidates(&conn).expect("count"), 3);
+    }
+}
