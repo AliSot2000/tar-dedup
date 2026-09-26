@@ -98,10 +98,12 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         let target = match std::fs::canonicalize(&source) {
             Ok(t) => t,
             Err(e) => {
-                let err = Error::io(&source, e);
+                let err = Error::copy_io(&source, &e);
                 capture_error(err, &mut recorder, file_id);
                 db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
-                // return Err(err); // TODO why was here error?
+                if config.process.fail_fast {
+                    return Err(Error::io(&source, e));
+                }
                 continue;
             }
         };
