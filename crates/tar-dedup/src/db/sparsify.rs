@@ -194,8 +194,8 @@ pub fn count_pending_sparsify_candidates(conn: &Connection, min_pages: u64) -> R
 /// resume). Returns the number of rows advanced to `sparsified`.
 pub fn ingest_sparsify_outcome(
     conn: &mut Connection,
-    results: &Vec<SparseOutcome>,
-) -> Result<u64> {
+    results: &Vec<SparseOutcome>)
+    -> Result<u64> {
     let tx = conn.transaction().to_panic()?;
     let mut resolved = 0u64;
     for outcome in results.iter() {
