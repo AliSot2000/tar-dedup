@@ -55,7 +55,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         |lid: &FileId, batch_size| rt.db.list_files_to_stage_after(lid, batch_size),
         |r: &StrippedRecord| r.id,
         |entries: Vec<StrippedRecord> | {
-            let results: Mutex<Vec<std::result::Result<FileId, (FileId, Error)>>> =
+            let results: Mutex<Vec<std::result::Result<(FileId, bool), (FileId, bool, Error)>>> =
                 Mutex::new(Vec::new());
 
             let parallel = pool.install(|| {
@@ -70,7 +70,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                     };
 
                     let tar_name = record.tar_member_name().expect(EXPECTED_CANONICAL);
-                    warn_if_times_changed(
+                    let modified = warn_if_times_changed(
                         &source,
                         record.mtime,
                         record.atime,
@@ -83,19 +83,21 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                             Ok(()) => (),
                             Err(e) => {
                                 results.lock().expect("stage results lock").push(
-                                    Err((record.id, Error::copy_io(&target, &e))));
+                                    Err((record.id, modified, Error::copy_io(&target, &e))));
                                 return Err(Error::io(&target, e));
                             }
                         }
                     }
                     match symlink(&source, &target) {
                         Ok(()) => {
-                            results.lock().expect("stage results lock").push(Ok(record.id));
+                            results.lock().expect("stage results lock").push(
+                                Ok((record.id, modified))
+                            );
                             Ok(())
                         }
                         Err(e) => {
                             results.lock().expect("stage results lock").push(
-                                Err((record.id, Error::copy_io(&target, &e))));
+                                Err((record.id, modified, Error::copy_io(&target, &e))));
                             // Short-circuit the batch: bounds wasted syscalls on a
                             // structural failure (perm / disk full / read-only FS).
                             Err(Error::io(&target, e))
@@ -107,19 +109,29 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             // Main-thread apply only; workers never touch the Database.
             for outcome in take(&mut *results.lock().expect("stage results lock")) {
                 match outcome {
-                    Ok(id) => {
+                    Ok((id, modified)) => {
                         rt.db.mark_file_phase(id, FilePhase::Staged)?;
+                        if modified { rt.db.set_file_flag(id, FileFlag::Modified, true)?; }
                         staged += 1;
                         rt.progress.inc_both(1);
                     }
-                    Err((_, Error::Interrupted)) => (),
-                    Err((id, Error::FileStat(fse))) => {
-                        recorder.record_file(id, ERROR_PHASE, fse, ErrorFlags::default());
+                    Err((id, modified, err)) => {
+                        if modified { rt.db.set_file_flag(id, FileFlag::Modified, true)?; }
+                        match err {
+                            Error::Interrupted => (),
+                            Error::FileStat(fse) => {
+                                let cp_err = fse.recreate();
+                                recorder.record_file(
+                                    id, ERROR_PHASE, fse, ErrorFlags::default(),
+                                );
+                                return Err(Error::FileStat(cp_err));
+                            }
+                            other => panic!(
+                                "INVARIANT FAILED: stage worker may only return \
+                                FileStat/Interrupted. Got: {other} on file {id:?}"
+                            ),
+                        }
                     }
-                    Err((id, other)) => panic!(
-                        "INVARIANT FAILED: stage worker may only return FileStat/Interrupted. \
-                    Got: {other} on file {id:?}"
-                    ),
                 }
             }
 
