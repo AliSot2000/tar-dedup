@@ -171,6 +171,7 @@ mod tests {
     use crate::db::flags::FileFlag;
     use crate::db::types::{FileId, FileType, NewFileRecord};
     use crate::progress::{ARCHIVE_MULTIPLIER, ProgressBarSet};
+    use crate::shutdown::Shutdown;
     use chrono::{DateTime, Utc};
     use nix::unistd::geteuid;
     use rusqlite::named_params;
