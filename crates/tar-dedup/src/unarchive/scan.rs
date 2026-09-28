@@ -549,8 +549,8 @@ fn store_progress_in_db(db: &mut Option<Database>, scan: &ExtractScanState) -> R
 fn captured_extract_database<R: Read>(
     dst: &Path,
     entry: &mut R,
-    recorder: &mut Recorder,
-) -> Result<()> {
+    recorder: &mut Recorder)
+    -> Result<()> {
     match fs::File::create(dst) {
         Ok(mut out) => match io::copy(entry, &mut out) {
             Ok(_) => {
