@@ -129,6 +129,29 @@ CREATE INDEX IF NOT EXISTS idx_errors_time ON errors(error_datetime);
 CREATE INDEX IF NOT EXISTS idx_errors_file_id ON errors(file_id) WHERE file_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_errors_out_tree_id ON errors(out_tree_id) WHERE out_tree_id IS NOT NULL;
 
+-- New tables (currently not implemented)
+CREATE TABLE IF NOT EXISTS shards (
+    id INTEGER PRIMARY KEY CHECK (id > 0),
+    sha1 BLOB NOT NULL,
+    size INTEGER DEFAULT NOT NULL (size >= 0),
+    source INTEGER NOT NULL REFERENCES files(id),
+);
+CREATE INDEX IF NOT EXISTS idx_shard_id ON shards(id);
+CREATE INDEX IF NOT EXISTS idx_shard_sha ON shards(sha1);
+
+CREATE TABLE IF NOT EXISTS file_shards (
+    file_id INTEGER NOT NULL REFERENCES files(id),
+    file_idx INTEGER NOT NULL DEFAULT 0,
+    sha1 BLOB NOT NULL,
+    offset INTEGER NOT NULL CHECK (offset >= 0),
+    size INTEGER NOT NULL CHECK (size >= 0),
+    flags INTEGER DEFAULT 0,
+    shard_id INTEGER NOT NULL, REFERENCES shards(id),
+    UNIQUE (file_id, file_idx)
+);
+CREATE INDEX IF NOT EXISTS idx_file_shards_id_idx ON file_shards(file_id, file_idx);
+CREATE INDEX IF NOT EXISTS idx_file_shards_id_idx ON file_shards(file_id, file_idx);
+CREATE INDEX IF NOT EXISTS idx_file_shards_shard_id ON file_shards(shard_id);
 
 -- finalized:
 -- 0 = open/interrupted,
