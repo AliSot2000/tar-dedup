@@ -129,12 +129,12 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection) -> Result<u64> {
     let total: i64 = conn.query_row(
         &format!(
             "SELECT COALESCE(SUM(size), 0) AS total
-         FROM files
-         WHERE canonical_id = id 
-            AND phase IN ('staged', 'archived') 
-            AND sha1 IS NOT NULL
-            AND ftype = 'file'
-            AND {}",
+            FROM files
+            WHERE canonical_id = id 
+                AND phase IN ('staged', 'archived') 
+                AND sha1 IS NOT NULL
+                AND ftype = 'file'
+                AND {}",
             generate_archive_filter(None)
         ),
         [],
@@ -158,7 +158,9 @@ pub fn list_staged_canonical_ordered(conn: &Connection) -> Result<Vec<FileId>> {
          ORDER BY ext ASC, size ASC, id ASC",
         generate_archive_filter(None)
     )).to_panic()?;
-    let rows = stmt.query_map([], |row| row.get::<_, i64>(0).map(FileId)).to_panic()?;
+    let rows = stmt.query_map(
+        [],
+        |row| row.get::<_, i64>(0).map(FileId)).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .to_panic()
         .map_err(Into::into)
