@@ -97,7 +97,7 @@ pipelines reuse them:
 - `ingest_filters` / `handle_filter` / `handle_query` — parameterized over which
   `add_include_pattern` / `add_exclude_pattern` closure and which `ErrorPhase` they target
   (archive `PipelinePhase::Filter` vs extract `ExtractPipelinePhase::Filter`).
-- `fast_filter` batch loop — parameterized over `get_rows_to_filter` + `apply_filter_result`
+- `fast_filter` batch loop — parameterized over `get_rows_to_filter_archive` + `apply_filter_result_archive`
   so extract can reuse it against the extract columns.
 
 `archive/filter.rs` and the new `unarchive/filter.rs` become thin wrappers.
@@ -116,7 +116,7 @@ Phase body:
    (reuse `common::filter::ingest_filters`), applying `--anchored` / `--ignore-case`.
 4. Batched regex match over `files.abs_path` writing `include_reason_extract` /
    `exclude_reason_extract` (reuse `fast_filter`).
-5. Empty rule set → promote-all (analogous to `apply_no_filter`).
+5. Empty rule set → promote-all (analogous to `apply_no_filter_archive`).
 
 ### Schema migration (none)
 
