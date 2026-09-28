@@ -9,7 +9,6 @@ use crate::db::flags::{ErrorFlags, FileFlag, OutTreeFlag};
 use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
-use crate::progress::ProgressBarSet;
 use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
 use nix::NixPath;
@@ -30,14 +29,11 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Place)
 //  Progress
 //  Rethink when we are pub and when private
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
-    let config = rt.config;
-    let db = rt.db;
-    let shutdown = rt.shutdown;
-    debug_assert!(db.placement_prologue_done()?,
+    debug_assert!(rt.db.placement_prologue_done()?,
                   "PRECONDITION FAILED: PlacementPrologue must complete before place");
-    let mut recorder = Recorder::new(db, !config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
     let progress = rt.progress;
-    progress.set_phase_total(db.count_out_tree_rows()?);
+    progress.set_phase_total(rt.db.count_out_tree_rows()?);
     let capture_error = |rec: &mut Recorder, path: &PathBuf, iof: fn(&Path)
         -> io::Result<()>| {
         match iof(&path) {
@@ -54,35 +50,35 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     };
 
     // Step 1.1 empty out source root prior to starting extraction.
-    if config.placement.clean_target && config.placement.one_top_level.is_some() {
-        assert!(!config.placement.no_create_dir,
+    if rt.config.placement.clean_target && rt.config.placement.one_top_level.is_some() {
+        assert!(!rt.config.placement.no_create_dir,
                 "INVARIANT ERROR: clean_target => no_create_dir is false");
-        let root = config.paths.extraction_root();
+        let root = rt.config.paths.extraction_root();
         capture_error(&mut recorder, &root.to_path_buf(), |p| fs::remove_dir_all(p))?;
         capture_error(&mut recorder, &root.to_path_buf(), |p| fs::create_dir_all(p))?;
     }
     // Step 1.2 Create directoris if required
-    if !config.placement.no_create_dir && !db.dir_tree_is_built()? {
-        prepare_extraction_dir(&db, &config, shutdown, &mut recorder, progress)?;
+    if !rt.config.placement.no_create_dir && !rt.db.dir_tree_is_built()? {
+        prepare_extraction_dir(&rt, &mut recorder)?;
     }
 
     // Step 2, move the canonical files into place for link_tree
-    if config.placement.link_tree {
+    if rt.config.placement.link_tree {
         tracing::info!("Moving canonical file in place for link tree...");
-        copy_canonicals_to_source(&config, &db, &shutdown, &mut recorder, progress)?;
+        copy_canonicals_to_source(rt, &mut recorder)?;
         // INFO: For linking, we ignore the canonical_id
-        link_into_place(&config, &db, &shutdown, &mut recorder, progress)?;
+        link_into_place(rt, &mut recorder)?;
     } else {
         // Step 2, first copy files, then hardlink, then create other types
         // (symlinks, char-dev, block-dev, FIFO). Canonical election ran in
         // the PlacementPrologue phase.
         let (_ac, _mc, _ah, _mh, _ao, _mo) = status_message_rebuilding(rt)?;
-        materialize_files(&config, &db, &shutdown, &mut recorder, progress)?;
-        materialize_hardlinks(&config, &db, &shutdown, &mut recorder, progress)?;
-        materialize_others(&config, &db, &shutdown, &mut recorder, progress)?;
+        materialize_files(rt, &mut recorder)?;
+        materialize_hardlinks(rt, &mut recorder)?;
+        materialize_others(rt, &mut recorder)?;
     }
     recorder.flush()?;
-    let (placed, ref_linked, conflict, removed, errored, skipped) = db.apply_flags_to_files()?;
+    let (placed, ref_linked, conflict, removed, errored, skipped) = rt.db.apply_flags_to_files()?;
     tracing::info!(
         "Updated File Table:
         {placed} of entries placed,
@@ -92,9 +88,10 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         {conflict} of entries encountered a conflict
         {removed} of entries that attempted to remove before placeing the extracted file."
     );
+
     // TODO push the files records to the next phase
-    if !config.process.cleanup.keep_stage {
-        let cache_dir = config.paths.extract_cache_dir();
+    if !rt.config.process.cleanup.keep_stage {
+        let cache_dir = rt.config.paths.extract_cache_dir();
         match capture_error(
             &mut recorder,
             &cache_dir.to_path_buf(), |p| fs::remove_dir_all(p)) {
@@ -120,51 +117,43 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 /// exist, path es created.
 /// PRECONDITION: no_create_dir is false.
 pub fn prepare_extraction_dir(
-    db: &Database,
-    config: &ExtractConfig,
-    shutdown: &Shutdown,
-    recorder: &mut Recorder,
-    progress: &ProgressBarSet,
-) -> Result<()> {
-    // TODO info that this process cannot be gracefully interrupted.
-    debug_assert!(config.paths.extraction_root().is_absolute(),
+    rt: &ExtractRTArgs,
+    recorder: &mut Recorder) -> Result<()> {
+    debug_assert!(rt.config.paths.extraction_root().is_absolute(),
                   "INVARIANT ERROR: extraction root is not absolute");
-    debug_assert!(db.out_tree_is_built().expect("out_tree meta"),
+    debug_assert!(rt.db.out_tree_is_built().expect("out_tree meta"),
                   "PRECONDITION FAILED: OutTree must be built to run this function");
-    debug_assert!(!db.dir_tree_is_built().expect("dir_tree meta"),
+    debug_assert!(!rt.db.dir_tree_is_built().expect("dir_tree meta"),
                   "PRECONDITION FAILED: Only run if the dir tree is not built yet");
+    tracing::warn!("Building the Directory tree cannot be gracefully interrupted!");
 
     let mut last_id = OutTreeId(0);
-    let mut already_checked = config.paths.extraction_root().to_path_buf();
+    let mut already_checked = rt.config.paths.extraction_root().to_path_buf();
     loop {
-        let dirs = db.list_out_tree(last_id, BATCH_SIZE, None, Some(true))?;
+        rt.shutdown.check_in_flight()?;
+        let dirs = rt.db.list_out_tree(last_id, BATCH_SIZE, None, Some(true))?;
         if dirs.is_empty() { break }
         last_id = dirs.last().expect("PRECONDITION FAILED: Expected at least one entry").id;
         let n = dirs.len() as u64;
 
         for dir in dirs {
-            shutdown.check_in_flight()?;
-            build_path(&config, &mut already_checked, &dir.abs_path, dir.id, recorder)?;
+            rt.shutdown.check_in_flight()?;
+            build_path(&rt.config, &mut already_checked, &dir.abs_path, dir.id, recorder)?;
         }
-        progress.inc_both(n);
+        rt.progress.inc_both(n);
     }
-    db.set_dir_tree_built()?;
+    rt.db.set_dir_tree_built()?;
     Ok(())
 }
 
 /// Function copies all extracted canonical files to the extraction destination and
-pub fn copy_canonicals_to_source(
-    config: &ExtractConfig,
-    db: &Database,
-    shutdown: &Shutdown,
-    recorder: &mut Recorder,
-    progress: &ProgressBarSet,
-) -> Result<()> {
-    let dir_name = match &config.placement.link_source {
+pub fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
+    -> Result<()> {
+    let dir_name = match &rt.config.placement.link_source {
         None => PathBuf::from(".sources"),
         Some(v) => v.to_path_buf(),
     };
-    let base_dir = config.paths.extraction_root().join(dir_name);
+    let base_dir = rt.config.paths.extraction_root().join(dir_name);
     let mk_res = fs::create_dir_all(&base_dir);
     match mk_res {
         Ok(_) => (),
@@ -183,13 +172,19 @@ pub fn copy_canonicals_to_source(
         Mutex::new(Vec::new());
     let mut last_id = FileId(0);
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.io_jobs)
+        .num_threads(rt.config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
+    // External copy
+    let extract_dir = rt.config.paths.extract_cache_dir();
+    let no_keep_stage = !rt.config.process.cleanup.keep_stage;
+    let shutdown = rt.shutdown.clone();
+    let no_ref_link = rt.config.placement.no_reflink;
+
     loop {
-        shutdown.check_in_flight()?;
-        let to_copy: Vec<StrippedRecord> = db.list_canonical_files_for_move(
+        rt.shutdown.check_in_flight()?;
+        let to_copy: Vec<StrippedRecord> = rt.db.list_canonical_files_for_move(
             true, last_id, BATCH_SIZE)?;
         if to_copy.is_empty() { break }
         last_id = to_copy.last().expect("PRECONDITION FAILED: Not Empty").id;
@@ -199,12 +194,12 @@ pub fn copy_canonicals_to_source(
         let parallel = pool.install(|| {
             to_copy.par_iter().try_for_each(|record| -> Result<()> {
                 let cid = record.content_id().expect("Content id existed, when extracting.");
-                let src = config.paths.extract_cache_dir().join(&cid.0);
+                let src = extract_dir.join(&cid.0);
                 let dst = base_dir.join(&cid.0);
                 let res = copy_single_file(
-                    record.id, &src, &dst, &shutdown, config.placement.no_reflink
+                    record.id, &src, &dst, &shutdown, no_ref_link
                 );
-                if !config.process.cleanup.keep_stage {
+                if no_keep_stage {
                     let _ = fs::remove_file(dst);
                 }
                 results.lock().expect("Canonial File Copy Lock poisoned").push(res);
@@ -228,19 +223,19 @@ pub fn copy_canonicals_to_source(
                 Err((_, Error::Interrupted)) => (),
                 Err((id, Error::FileStat(e))) => {
                     recorder.record_file(id, ERROR_PHASE, e, ErrorFlags::default());
-                    db.set_file_flag(id, FileFlag::ErrorWhilePlacing, true)?;
+                   rt.db.set_file_flag(id, FileFlag::ErrorWhilePlacing, true)?;
                 }
                 Err((_id, other)) => panic!(
                     "INVARIANT FAILED: Return type violates contract. Encountered error {other}"
                 ),
                 Ok((id, is_copy)) => {
-                    db.set_file_flag(id, FileFlag::AtLinkSource, true)?;
-                    db.set_file_flag(id, FileFlag::UsedRefLink, !is_copy)?;
+                    rt.db.set_file_flag(id, FileFlag::AtLinkSource, true)?;
+                    rt.db.set_file_flag(id, FileFlag::UsedRefLink, !is_copy)?;
                 }
             }
         }
         recorder.flush()?;
-        progress.inc_both(n);
+        rt.progress.inc_both(n);
     }
     Ok(())
 }
@@ -249,24 +244,21 @@ pub fn copy_canonicals_to_source(
 /// the tree.
 /// Files are linked to the link source and all others links, fifo, char dev, block dev are created,
 /// sockets noted but cannot be created
-pub fn link_into_place(
-    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder,
-    progress: &ProgressBarSet,
-) -> Result<()> {
-    let dir_name = match &config.placement.link_source {
+pub fn link_into_place(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
+    let dir_name = match &rt.config.placement.link_source {
         None => PathBuf::from(".sources"),
         Some(v) => v.to_path_buf(),
     };
-    let base_dir = config.paths.extraction_root().join(&dir_name);
+    let base_dir = rt.config.paths.extraction_root().join(&dir_name);
     let results = Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.io_jobs)
+        .num_threads(rt.config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
-    let shutdown = shutdown.clone();
+    let shutdown = rt.shutdown.clone();
     loop {
         shutdown.check_between_files()?;
-        let entries: Vec<(FileRecord, OutTreeRecord)> = db.list_out_tree_for_linking(
+        let entries: Vec<(FileRecord, OutTreeRecord)> = rt.db.list_out_tree_for_linking(
             BATCH_SIZE, true
         )?;
         if entries.is_empty() { break }
@@ -283,11 +275,11 @@ pub fn link_into_place(
                             .0;
                         // Compute the target for link
                         let link_target =
-                            if config.placement.absolute_links || config.placement.use_hard_links {
+                            if rt.config.placement.absolute_links || rt.config.placement.use_hard_links {
                                 base_dir.join(content_id)
                             } else {
                                 let up = relative_pardirs_to_dir(
-                                    config.paths.extraction_root(),
+                                    rt.config.paths.extraction_root(),
                                     &out.abs_path,
                                 );
                                 up.join(&dir_name).join(content_id)
@@ -299,10 +291,9 @@ pub fn link_into_place(
                         }
 
                         // Actually build the link
-                        let base_res = if config.placement.use_hard_links {
+                        let base_res = if rt.config.placement.use_hard_links {
                             fs::hard_link(link_target, &out.abs_path)
                         } else {
-                            // TODO verify that this works
                             #[cfg(unix)]
                             {
                                 std::os::unix::fs::symlink(link_target, &out.abs_path)
@@ -319,7 +310,7 @@ pub fn link_into_place(
                             }),
                         }
                     } else {
-                        build_other(&canonical, &out, config.placement.recreate_none_file_entries)
+                        build_other(&canonical, &out, rt.config.placement.recreate_none_file_entries)
                     };
                     results
                         .lock()
@@ -343,11 +334,9 @@ pub fn link_into_place(
         // Apply results to db
         for (id, err) in linked {
             match err {
-                None => {
-                    let _ = db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?;
-                }
+                None => { let _ = rt.db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?; }
                 Some(FileStatError::Io { path: p, source: e }) => {
-                    let _ = db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
+                    let _ = rt.db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
                     tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
                     recorder.record_out_tree(
                         id,
@@ -360,7 +349,7 @@ pub fn link_into_place(
                     );
                 }
                 Some(FileStatError::Nix { path: p, source: e }) => {
-                    let _ = db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
+                    let _ = rt.db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
                     tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
                     recorder.record_out_tree(
                         id,
@@ -374,7 +363,7 @@ pub fn link_into_place(
             }
         }
         recorder.flush()?;
-        progress.inc_both(n);
+        rt.progress.inc_both(n);
     }
     Ok(())
 }
@@ -383,26 +372,23 @@ pub fn link_into_place(
 /// PRECONDITION: This function should ouly be called with link_tree == false
 /// Iterate through the out_tree and reflink / copy all files into placed which are marked as
 /// (hardlink) canonicals. (out_tree.canonical_id = id)
-pub fn materialize_files(
-    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder,
-    progress: &ProgressBarSet,
-) -> Result<()> {
+pub fn materialize_files(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
-    let cache_dir = config.paths.extract_cache_dir();
-    let shutdown = shutdown.clone();
-    let no_reflink = config.placement.no_reflink;
+    let cache_dir = rt.config.paths.extract_cache_dir();
+    let shutdown = rt.shutdown.clone();
+    let no_reflink = rt.config.placement.no_reflink;
 
     let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.io_jobs)
+        .num_threads(rt.config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
     loop {
         shutdown.check_between_files()?;
-        let entries: Vec<(StrippedRecord, OutTreeRecord)> = db.list_out_tree_for_materialization(
+        let entries: Vec<(StrippedRecord, OutTreeRecord)> = rt.db.list_out_tree_for_materialization(
             &last_id, BATCH_SIZE
         )?;
         if entries.is_empty() { break }
@@ -420,7 +406,9 @@ pub fn materialize_files(
                         .expect("PRECONDITION FAILED: Enqueued files must have a content_id");
                     let src = cache_dir.join(id.0);
 
-                    let res = match check_path(&config, &src, &canonical) {
+                    let res = match check_path(
+                        &rt.config.clone(), &src, &canonical) {
+
                         Err(e) => Err((target.id, Error::FileStat(e))),
                         Ok((false, conflict, removed)) => Ok(MaterializeResult {
                             id: target.id.clone(),
@@ -453,35 +441,31 @@ pub fn materialize_files(
         let new_res = Vec::new();
         let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
 
-        process_results(copied, recorder, &db, false, true)?;
+        process_results(copied, recorder, &rt.db, false, true)?;
         recorder.flush()?;
-        progress.inc_both(n);
+        rt.progress.inc_both(n);
     }
     Ok(())
 }
 
 /// Create all the hardlinks after the copy stage.
 /// PRECONDITION: Function must be called after the [`materialize_files`]
-pub fn materialize_hardlinks(
-    config: &ExtractConfig, db: &Database, shutdown: &Shutdown, recorder: &mut Recorder,
-    progress: &ProgressBarSet,
-) -> Result<()> {
+pub fn materialize_hardlinks(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
-    let shutdown = shutdown.clone();
+    let shutdown = rt.shutdown.clone();
 
     let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.io_jobs)
+        .num_threads(rt.config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
     loop {
         shutdown.check_between_files()?;
-        let entries: Vec<(StrippedRecord, OutTreeRecord, OutTreeRecord)> = db.list_out_tree_for_hardlinks(
-            &last_id, BATCH_SIZE
-        )?;
+        let entries: Vec<(StrippedRecord, OutTreeRecord, OutTreeRecord)> =
+            rt.db.list_out_tree_for_hardlinks(&last_id, BATCH_SIZE)?;
         if entries.is_empty() { break }
         last_id = entries
             .last()
@@ -497,7 +481,8 @@ pub fn materialize_hardlinks(
                     let src = &out_canonical.abs_path;
                     let dst = &target.abs_path;
 
-                    let res = match check_path(&config, &dst, &stripped) {
+                    let res = match check_path(
+                        &rt.config.clone(), &dst, &stripped) {
                         Err(e) => Err((target.id, Error::FileStat(e))),
                         Ok((false, conflict, removed)) => Ok(MaterializeResult {
                             id: target.id.clone(),
@@ -526,33 +511,30 @@ pub fn materialize_hardlinks(
         let new_res = Vec::new();
         let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
 
-        process_results(copied, recorder, &db, true, false)?;
+        process_results(copied, recorder, &rt.db, true, false)?;
         recorder.flush()?;
-        progress.inc_both(n);
+        rt.progress.inc_both(n);
     }
     Ok(())
 }
 
 /// Final step, pass through all the remaining entries which could be materialized:
 /// (symlink, fifo, character device, block device, socket)
-pub fn materialize_others(
-    config: &ExtractConfig, db: &Database, shutdown: &Shutdown,
-    recorder: &mut Recorder, progress: &ProgressBarSet,
-) -> Result<()> {
+pub fn materialize_others(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
     let mut last_id = OutTreeId(0);
 
-    let shutdown = shutdown.clone();
+    let shutdown = rt.shutdown.clone();
 
     let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.io_jobs)
+        .num_threads(rt.config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
     loop {
         shutdown.check_between_files()?;
-        let entries: Vec<(FileRecord, OutTreeRecord)> = db.list_out_tree_others(
+        let entries: Vec<(FileRecord, OutTreeRecord)> = rt.db.list_out_tree_others(
             &last_id, BATCH_SIZE
         )?;
         if entries.is_empty() { break }
@@ -566,7 +548,7 @@ pub fn materialize_others(
                     shutdown.check_between_files()?;
 
                     let res = match check_path(
-                        &config, &target.abs_path, &canonical.to_stripped()) {
+                        &rt.config.clone(), &target.abs_path, &canonical.to_stripped()) {
                         Err(e) => Err((target.id, Error::FileStat(e))),
                         Ok((false, conflict, removed)) => Ok(MaterializeResult {
                             id: target.id,
@@ -575,7 +557,7 @@ pub fn materialize_others(
                         Ok((true, conflict, removed)) => match build_other(
                             &canonical,
                             &target,
-                            config.placement.recreate_none_file_entries) {
+                            rt.config.placement.recreate_none_file_entries.clone()) {
 
                             Err(e) => Err((target.id, Error::FileStat(e))),
                             Ok(()) => Ok(MaterializeResult {
@@ -599,9 +581,9 @@ pub fn materialize_others(
         let new_res = Vec::new();
         let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
 
-        process_results(copied, recorder, &db, false, false)?;
+        process_results(copied, recorder, &rt.db, false, false)?;
         recorder.flush()?;
-        progress.inc_both(n);
+        rt.progress.inc_both(n);
     }
     Ok(())
 }
