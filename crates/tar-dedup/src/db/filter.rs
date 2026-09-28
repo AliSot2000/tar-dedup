@@ -112,34 +112,28 @@ pub fn apply_no_filter_extract(conn: &Connection) -> Result<u64> {
 
 // TODO Rename
 pub fn get_rows_to_filter<R: SqlFileRow>(
-    conn: &Connection, last_id: Option<FileId>, eager_filter: bool, batch_size: u64)
+    conn: &Connection, last_id: &FileId, eager_filter: bool, batch_size: u64)
     -> Result<Vec<R>> {
     let last_phase = if eager_filter {
         "'inventoried'"
     } else {
         "'hashed'"
     };
-    let last_id_filter = if let Some(_) = last_id {
-        " AND id > :last_id "
-    } else {
-        ""
-    };
     let mut stmt = conn.prepare(&format!(
-        "SELECT {} FROM files \
-                      WHERE phase = {last_phase} {last_id_filter} \
-                      ORDER BY id \
+        "SELECT {} FROM files 
+                      WHERE phase = {last_phase} 
+                          AND id > :last_id  
+                      ORDER BY id 
                       LIMIT :batch_size",
         R::sql_columns(None)
     )).to_panic()?;
 
     let row_mapper = |r: &rusqlite::Row<'_>| -> rusqlite::Result<R> { R::from_row(r, None) };
-    let rows = match last_id {
-        None => stmt.query_map(named_params! {":batch_size": batch_size}, row_mapper).to_panic()?,
-        Some(lid) => stmt.query_map(
-            named_params! {":batch_size": batch_size, ":last_id": lid.0},
+    let rows = 
+        stmt.query_map(
+            named_params! {":batch_size": batch_size, ":last_id": last_id.0},
             row_mapper,
-        ).to_panic()?,
-    };
+        ).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .to_panic()
         .map_err(Into::into)
@@ -149,30 +143,23 @@ pub fn get_rows_to_filter<R: SqlFileRow>(
 /// pass. Extract rows are already archived, so there is no eager/lazy distinction.
 pub fn get_rows_to_filter_extract<R: SqlFileRow>(
     conn: &Connection,
-    last_id: Option<FileId>,
+    last_id: FileId,
     batch_size: u64,
 ) -> Result<Vec<R>> {
-    let last_id_filter = if let Some(_) = last_id {
-        " AND id > :last_id "
-    } else {
-        ""
-    };
+    debug_assert!(last_id.0 >= 0, "Unexpected last id");
     let mut stmt = conn.prepare(&format!(
         "SELECT {} FROM files \
-                      WHERE 1 = 1 {last_id_filter} \
+                      WHERE id > :last_id \
                       ORDER BY id \
                       LIMIT :batch_size",
         R::sql_columns(None)
     )).to_panic()?;
 
     let row_mapper = |r: &rusqlite::Row<'_>| -> rusqlite::Result<R> { R::from_row(r, None) };
-    let rows = match last_id {
-        None => stmt.query_map(named_params! {":batch_size": batch_size}, row_mapper).to_panic()?,
-        Some(lid) => stmt.query_map(
-            named_params! {":batch_size": batch_size, ":last_id": lid.0},
-            row_mapper,
-        ).to_panic()?,
-    };
+    let rows = stmt.query_map(
+        named_params! {":batch_size": batch_size, ":last_id": last_id.0},
+        row_mapper
+    ).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .to_panic()
         .map_err(Into::into)
