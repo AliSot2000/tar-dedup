@@ -113,18 +113,15 @@ impl TarWriter {
         })
     }
 
-    pub fn append_path(
-        &mut self,
-        path: &Path,
-        tar_name: &str,
-        shutdown: &Shutdown,
-        mut on_input_bytes: impl FnMut(u64),
-    ) -> Result<()> {
-        shutdown.check_in_flight()?;
+    pub fn append_path(&mut self, path: &Path, tar_name: &str, mut on_input_bytes: impl FnMut(u64))
+        -> Result<()> {
         let meta = std::fs::metadata(path).map_err(|e| Error::io(path, e))?;
         let len = meta.len();
 
-        let builder = self.builder.as_mut().expect("tar builder active");
+        let builder = self.builder
+            .as_mut()
+            .expect("tar builder active");
+        
         // Builder writes through TarSink → buffer → xz; progress is approximate by size.
         builder
             .append_path_with_name(path, tar_name)
@@ -136,9 +133,8 @@ impl TarWriter {
     }
 
     /// Graceful session end: flush tar (no EOF), finish compression stream.
-    pub fn finalize_session(mut self, shutdown: &Shutdown) -> Result<(u64, u64)> {
-        shutdown.check_in_flight()?;
-
+    pub fn finalize_session(mut self) -> Result<(u64, u64)> {
+        
         let bytes_in = self.bytes_in;
         let archive_path = self.archive_path.clone();
         let error_factory = |e| Error::io(&archive_path, e);
@@ -162,8 +158,7 @@ impl TarWriter {
     }
 
     /// Final archive close: emit tar EOF, then finish compression.
-    pub fn finalize_archive(mut self, shutdown: &Shutdown) -> Result<(u64, u64)> {
-        shutdown.check_in_flight()?;
+    pub fn finalize_archive(mut self) -> Result<(u64, u64)> {
 
         let bytes_in = self.bytes_in;
         let archive_path = self.archive_path.clone();
