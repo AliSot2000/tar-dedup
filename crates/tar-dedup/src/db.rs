@@ -416,25 +416,25 @@ impl Database {
         filter::add_exclude_pattern(&*self.conn(), from, line, query)
     }
 
-    pub fn count_filters(&self, exclude: Option<bool>) -> Result<u64> {
+    pub fn count_filters_archive(&self, exclude: Option<bool>) -> Result<u64> {
         filter::count_filters(&*self.conn(), exclude)
     }
 
-    pub fn get_filters(&self, exclude: bool) -> Result<Vec<FilterExpression>> {
+    pub fn get_filters_archive(&self, exclude: bool) -> Result<Vec<FilterExpression>> {
         filter::get_filters(&*self.conn(), exclude)
     }
 
-    pub fn apply_no_filter(&self) -> Result<u64> {
+    pub fn apply_no_filter_archive(&self) -> Result<u64> {
         filter::apply_no_filter(&*self.conn())
     }
 
-    pub fn get_rows_to_filter<R: SqlFileRow>(
-        &self, last_id: Option<FileId>, eager_filter: bool, batch_size: u64)
+    pub fn get_rows_to_filter_archive<R: SqlFileRow>(
+        &self, last_id: &FileId, eager_filter: bool, batch_size: u64)
         -> Result<Vec<R>> {
         filter::get_rows_to_filter(&*self.conn(), last_id, eager_filter, batch_size)
     }
 
-    pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(
+    pub fn apply_filter_result_archive<I: Iterator<Item = (FileId, i64, i64)>>(
         &self,
         results: I,
     ) -> Result<u64> {
@@ -468,7 +468,7 @@ impl Database {
     }
 
     pub fn get_rows_to_filter_extract<R: SqlFileRow>(
-        &self, last_id: Option<FileId>, batch_size: u64)
+        &self, last_id: FileId, batch_size: u64)
         -> Result<Vec<R>> {
         filter::get_rows_to_filter_extract(&*self.conn(), last_id, batch_size)
     }

@@ -438,7 +438,7 @@ so duplicate them in this module).
   db-side tests (single active statement per connection; pull/apply sequentially).
 - `dedup_inflight` is a TEMP table — recreated per connection; db tests that exercise
   inflight must `create_temp_dedup_table` on the same `Connection` they list with.
-- Seeding `files` for the archive `run` tests: `insert_file` → `apply_no_filter` (idempotent;
+- Seeding `files` for the archive `run` tests: `insert_file` → `apply_no_filter_archive` (idempotent;
   sets `include_reason_archive=-1`, `phase='filtered'`) → raw sha1 UPDATE. Order matters:
   apply_no_filter sets phase, then sha1, before `run`.
 - Non-eager dedup's prev phase is `filtered`; eager is `hashed` — `prev_phase(eager)`.

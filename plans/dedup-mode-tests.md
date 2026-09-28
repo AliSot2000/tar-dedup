@@ -30,7 +30,7 @@ Ineligible (→ `deduped`, `canonical_id = NULL` in every mode):
 - `non_file` — `ftype = 'dir'`
 - `no_sha` — sha1 NULL
 - `sha_err` — `ErrorWhileHash` flag set
-- `filtered` — `include_reason_archive = 0` (after `apply_no_filter`)
+- `filtered` — `include_reason_archive = 0` (after `apply_no_filter_archive`)
 
 Eligible (distinct `(sha1, size)` per group so groups never merge):
 - `singleton` — unique sha, 1 file
