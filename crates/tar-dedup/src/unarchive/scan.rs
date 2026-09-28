@@ -581,6 +581,8 @@ fn open_initial_database(
     shutdown: &Shutdown,
     progress: &ProgressBarSet)
     -> Result<Database> {
+
+    // INFO: Will move the database into the correct place.
     Database::install_initial_manifest(temp, target)?;
     let opened = Database::open(target)?;
     opened.init_extract_runtime_state()?;
