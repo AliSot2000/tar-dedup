@@ -24,30 +24,28 @@ const BATCH_SIZE: u64 = 10_000;
 
 /// Run the pure-DB placement preparation once (idempotent via meta flag).
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
-    let config = rt.config;
-    let db = rt.db;
     // Resume display: the out_tree already exists, show its real size.
-    rt.progress.set_phase_total(db.count_out_tree_rows()?);
-    if db.placement_prologue_done()? {
+    rt.progress.set_phase_total(rt.db.count_out_tree_rows()?);
+    if rt.db.placement_prologue_done()? {
         return Ok(());
     }
     let transform = resolve_transform(rt)?;
     // Use the renamed member when a transform or strip is active; otherwise build
     // the out_tree from `abs_path` as before.
-    let use_new_name = transform.is_some() || config.strip_components > 0;
+    let use_new_name = transform.is_some() || rt.config.strip_components > 0;
     if use_new_name {
         populate_new_names(rt, transform.as_ref())?;
     }
-    if !db.out_tree_is_built()? {
+    if !rt.db.out_tree_is_built()? {
         populate_out_tree(rt, use_new_name)?;
     }
-    rt.progress.set_phase_total(db.count_out_tree_rows()?);
+    rt.progress.set_phase_total(rt.db.count_out_tree_rows()?);
     // Canonical election is DB-only however meaningless in `--link-tree` mode
     // (same branch as the pre-refactor `place::run`).
     if !rt.config.placement.link_tree {
         prepare_hardlink_canonicals(rt)?;
     }
-    db.set_placement_prologue_done()?;
+    rt.db.set_placement_prologue_done()?;
     Ok(())
 }
 
@@ -147,7 +145,8 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
 /// If multiple files map to the same directory, the tool will not complain and simply the first
 /// entry to extract to it, will own the path.
 pub fn populate_out_tree(
-    rt: &ExtractRTArgs, use_new_name: bool) -> Result<()> {
+    rt: &ExtractRTArgs, use_new_name: bool)
+    -> Result<()> {
     let config = rt.config;
     let db = rt.db;
     debug_assert!(config.paths.extraction_root().is_absolute(),
@@ -258,8 +257,8 @@ fn populate_out_tree_abs(
 /// initially) and their subtree is then materialized at its relative target.
 fn populate_out_tree_rel(
     rt: &ExtractRTArgs,
-    use_new_name: bool,
-) -> Result<()> {
+    use_new_name: bool)
+    -> Result<()> {
     let config = rt.config;
     let db = rt.db;
     let shutdown = rt.shutdown;
