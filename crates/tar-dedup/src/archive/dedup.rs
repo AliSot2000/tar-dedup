@@ -1272,7 +1272,7 @@ mod tests {
         let payload = pattern(512 * 1024, 3);
         let id_canon = world.add_file("c.bin", &payload);
         let id_cand = world.add_file("d.bin", &payload);
-        world.db.apply_no_filter().expect("filter");
+        world.db.apply_no_filter_archive().expect("filter");
         seed_rows(&world, Vec::from([(id_canon, 7), (id_cand, 7)]));
         prepare_for_loop(&world);
 
@@ -1291,7 +1291,7 @@ mod tests {
         let world = TestWorld::new();
         let id_canon = world.add_file("c.bin", &pattern(512 * 1024, 3));
         let id_cand = world.add_file("d.bin", &pattern(512 * 1024, 3));
-        world.db.apply_no_filter().expect("filter");
+        world.db.apply_no_filter_archive().expect("filter");
         seed_rows(&world, Vec::from([(id_canon, 7), (id_cand, 7)]));
         world.shutdown.request_graceful();
 
@@ -1310,7 +1310,7 @@ mod tests {
         let world = TestWorld::new();
         let id_a = world.add_file("a.bin", &pattern(1024 * 1024, 1));
         let id_b = world.add_file("b.bin", &pattern(1024 * 1024, 2));
-        world.db.apply_no_filter().expect("filter");
+        world.db.apply_no_filter_archive().expect("filter");
         seed_rows(&world, Vec::from([(id_a, 3), (id_b, 4)]));
 
         run(&world.rt()).expect("run");
@@ -1330,7 +1330,7 @@ mod tests {
         let e3 = world.add_file("e3.bin", payload);
         let u1 = world.add_file("u1.bin", &pattern(payload.len(), alt));
         let u2 = world.add_file("u2.bin", &pattern(payload.len(), alt + 1));
-        world.db.apply_no_filter().expect("filter");
+        world.db.apply_no_filter_archive().expect("filter");
         seed_rows(&world, Vec::from([
             (e1, 7), (e2, 7), (e3, 7),
             (u1, 8), (u2, 8),
@@ -1371,7 +1371,7 @@ mod tests {
         let id_a = world.add_file("a.bin", &a_alt);
         let id_b = world.add_file("b.bin", &bc);
         let id_c = world.add_file("c.bin", &bc);
-        world.db.apply_no_filter().expect("filter");
+        world.db.apply_no_filter_archive().expect("filter");
         seed_rows(&world, Vec::from([(id_a, 42), (id_b, 42), (id_c, 42)]));
 
         run(&world.rt()).expect("run");
@@ -1398,7 +1398,7 @@ mod tests {
             let world = TestWorld::new();
             let id_a = world.add_file("a.bin", &payload);
             let id_b = world.add_file("b.bin", &payload);
-            world.db.apply_no_filter().expect("filter");
+            world.db.apply_no_filter_archive().expect("filter");
             seed_rows(&world, Vec::from([(id_a, 7), (id_b, 7)]));
             std::fs::set_permissions(&world.path("b.bin"), std::fs::Permissions::from_mode(0))
                 .expect("chmod 000");
@@ -1428,7 +1428,7 @@ mod tests {
         let id_b2 = world.add_file("big2.bin", &big);
         let id_s1 = world.add_file("s1.bin", &mid);
         let id_s2 = world.add_file("s2.bin", &mid);
-        world.db.apply_no_filter().expect("filter");
+        world.db.apply_no_filter_archive().expect("filter");
         seed_rows(&world, Vec::from([
             (id_b1, 1), (id_b2, 1),
             (id_s1, 2), (id_s2, 2),
@@ -1532,7 +1532,7 @@ mod tests {
         let payload = pattern(512 * 1024, 3);
         world.add_file("a.bin", &payload);
         world.add_file("b.bin", &payload);
-        world.db.apply_no_filter().expect("filter");
+        world.db.apply_no_filter_archive().expect("filter");
         seed_rows(&world, Vec::from([(FileId(1), 7), (FileId(2), 7)]));
         world.shutdown.request_graceful();
 
@@ -1648,7 +1648,7 @@ mod tests {
         let sha_err = world.add_file("sha-err.bin", &pattern(1024, 4));
         let filtered = world.add_file("filtered.bin", &pattern(1024, 5));
 
-        world.db.apply_no_filter().expect("filter");
+        world.db.apply_no_filter_archive().expect("filter");
 
         // Eligible rows get a digest; groups share one `(sha1, size)` key.
         world.seed_sha1(singleton, 0x11);
