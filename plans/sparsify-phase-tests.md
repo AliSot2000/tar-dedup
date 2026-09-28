@@ -103,7 +103,7 @@ Helpers: `add_zeros(name, n)` (write real file + `insert_file`), `phase(id)`, `f
 sha1=[7;20]`), `stage_exists(id)` (sp.{content_id} under work dir), `prepare_for_sparsify()`
 (`promote_non_sparsify_candidates_to_sparsified` + `create/populate_sparsify_queue`),
 `run_loop(world, bar, work_cap)` spawning one worker + calling
-`run_enqueue_dequeue_loop_sparsify` directly. `apply_no_filter` + `filter_reason -1` seed.
+`run_enqueue_dequeue_loop_sparsify` directly. `apply_no_filter_archive` + `filter_reason -1` seed.
 
 `sparse_one`:
 1. `sparse_one_inaccessible_returns_filestat` — chmod 000 source (root-skip) →

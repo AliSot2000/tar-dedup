@@ -57,7 +57,7 @@ needs a phase; `resume` only allows overriding `--jobs` / `--exit-after-stage`.
 
 1. `inventory.rs` — walk `-i` / `-T` sources, record `source` + `files` rows with metadata (absolute paths).
 2. `hash.rs` — content SHA-1 (+ zero-page scan) via rayon; updates digests in `files`.
-3. `filter.rs` — apply include/exclude regexes; `ingest_filters` populates `filter_reason`; `apply_no_filter` catch-all.
+3. `filter.rs` — apply include/exclude regexes; `ingest_filters` populates `filter_reason`; `apply_no_filter_archive` catch-all.
 4. `dedup.rs` — group by `(sha1, size)`; elect canonical (self-link); dupes point `canonical_id` at it.
 5. `sparsify.rs` — `sparse-cp` materializes hole-y files into the work dir when `--sparsify`.
 6. `stage.rs` — symlink canonical work-dir payloads under the stage root.
