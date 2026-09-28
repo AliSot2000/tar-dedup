@@ -682,10 +682,6 @@ impl Database {
         tar_writer::promote_ineligible_to_archived(&*self.conn())
     }
 
-    pub fn promote_remainder_to_archived(&self) -> Result<u64> {
-        tar_writer::promote_remainder_to_archived(&*self.conn())
-    }
-
     pub fn checkpoint(&self) -> Result<()> {
         common::checkpoint(&*self.conn())
     }

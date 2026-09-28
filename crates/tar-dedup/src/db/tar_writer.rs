@@ -7,6 +7,10 @@ use crate::db::meta;
 use crate::db::types::{ArchiveSession, FileId};
 use crate::error::{Result, ToPanic};
 
+// -------------------------------------------------------------------------------------------------
+// Session Logic
+// -------------------------------------------------------------------------------------------------
+
 /// `archive_sessions.finalized` values.
 pub mod session_status {
     /// Open or interrupted (force abort / crash); cleanup happens at next startup.
@@ -16,6 +20,23 @@ pub mod session_status {
     /// Startup recovery truncated the incomplete stream; kept for audit.
     pub const ABORTED: i64 = 2;
 }
+
+pub fn get_archive_bytes_in(conn: &Connection) -> Result<u64> {
+    Ok(meta::get_tar_writer_bytes_in(conn)?.unwrap_or(0))
+}
+
+pub fn get_archive_bytes_out(conn: &Connection) -> Result<Option<u64>> {
+    meta::get_tar_writer_bytes_out(conn)
+}
+
+pub fn set_archive_bytes_in(conn: &Connection, value: u64) -> Result<()> {
+    meta::set_tar_writer_bytes_in(conn, value)
+}
+
+pub fn set_archive_bytes_out(conn: &Connection, value: u64) -> Result<()> {
+    meta::set_tar_writer_bytes_out(conn, value)
+}
+
 
 pub fn begin_session(conn: &Connection, archive_offset: u64) -> Result<i64> {
     conn.execute(
@@ -111,6 +132,10 @@ pub fn abort_incomplete_session(conn: &Connection, session: &ArchiveSession) -> 
     Ok(())
 }
 
+// -------------------------------------------------------------------------------------------------
+// File queries
+// -------------------------------------------------------------------------------------------------
+
 /// Nuclear reset: every archived canonical → staged, wipe all sessions.
 pub fn reset_archive_state(conn: &Connection) -> Result<()> {
     let pending = FileFlag::AppendedPath.mask_i64();
@@ -130,8 +155,26 @@ pub fn sum_canonical_bytes_to_archive(conn: &Connection) -> Result<u64> {
         &format!(
             "SELECT COALESCE(SUM(size), 0) AS total
             FROM files
-            WHERE canonical_id = id 
-                AND phase IN ('staged', 'archived') 
+            WHERE canonical_id = id
+                AND phase IN ('staged', 'archived')
+                AND sha1 IS NOT NULL
+                AND ftype = 'file'
+                AND {}",
+            generate_archive_filter(None)
+        ),
+        [],
+        |row| row.get("total"),
+    ).to_panic()?;
+    Ok(total as u64)
+}
+
+pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
+    let total: i64 = conn.query_row(
+        &format!(
+            "SELECT COALESCE(SUM(size), 0) AS total
+            FROM files
+            WHERE canonical_id = id
+                AND phase = 'archived'
                 AND sha1 IS NOT NULL
                 AND ftype = 'file'
                 AND {}",
@@ -166,24 +209,6 @@ pub fn list_staged_canonical_ordered(conn: &Connection) -> Result<Vec<FileId>> {
         .map_err(Into::into)
 }
 
-pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
-    let total: i64 = conn.query_row(
-        &format!(
-        "SELECT COALESCE(SUM(size), 0) AS total
-         FROM files
-         WHERE canonical_id = id 
-            AND phase = 'archived' 
-            AND sha1 IS NOT NULL
-            AND ftype = 'file'
-            AND {}",
-            generate_archive_filter(None)
-        ),
-        [],
-        |row| row.get("total"),
-    ).to_panic()?;
-    Ok(total as u64)
-}
-
 /// Move staged rows that will never be tar payloads to `archived`.
 ///
 /// Ineligible: non-self-canonical, non-file types, and (when `filter_sha`) missing `sha1`.
@@ -191,22 +216,12 @@ pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
 pub fn promote_ineligible_to_archived(conn: &Connection) -> Result<u64> {
     let stmt =
         "UPDATE files SET phase = 'archived'
-         WHERE phase = 'staged'
-           AND (
-                canonical_id IS NULL OR canonical_id != id
-             OR ftype != 'file'
-             OR sha1 IS NULL)";
+        WHERE phase = 'staged'
+            AND (canonical_id IS NULL
+                OR canonical_id != id
+                OR ftype != 'file'
+                OR sha1 IS NULL)";
     let n = conn.execute(&stmt, {}).to_panic()?;
-    Ok(n as u64)
-}
-
-/// After every eligible file has been considered (written or flagged error), advance
-/// remaining flow to `archived`. Does not clear or set outcome flags.
-pub fn promote_remainder_to_archived(conn: &Connection) -> Result<u64> {
-    let n = conn.execute(
-        "UPDATE files SET phase = 'archived' WHERE phase != 'archived'",
-        [],
-    ).to_panic()?;
     Ok(n as u64)
 }
 
@@ -250,20 +265,4 @@ pub fn clear_archive_session_pending(conn: &Connection) -> Result<u64> {
         named_params! { ":bit": bit },
     ).to_panic()?;
     Ok(n as u64)
-}
-
-pub fn get_archive_bytes_in(conn: &Connection) -> Result<u64> {
-    Ok(meta::get_tar_writer_bytes_in(conn)?.unwrap_or(0))
-}
-
-pub fn get_archive_bytes_out(conn: &Connection) -> Result<Option<u64>> {
-    meta::get_tar_writer_bytes_out(conn)
-}
-
-pub fn set_archive_bytes_in(conn: &Connection, value: u64) -> Result<()> {
-    meta::set_tar_writer_bytes_in(conn, value)
-}
-
-pub fn set_archive_bytes_out(conn: &Connection, value: u64) -> Result<()> {
-    meta::set_tar_writer_bytes_out(conn, value)
 }
