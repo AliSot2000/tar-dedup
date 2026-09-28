@@ -105,7 +105,7 @@ pub fn insert_materialized(db: &Database, abs_path: &str, ftype: FileType, size:
         minor: None,
     })
     .expect("insert file");
-    db.apply_no_filter().expect("include all");
+    db.apply_no_filter_archive().expect("include all");
     db.file_id_by_abs_path(&path)
         .expect("lookup")
         .expect("inserted file")
