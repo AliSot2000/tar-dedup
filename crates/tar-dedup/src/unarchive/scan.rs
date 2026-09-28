@@ -50,9 +50,9 @@ fn record_file_scan_error(recorder: &mut Recorder, file_id: FileId, error: FileS
 fn io_error_with_session_scan_error(
     archive_path: &Path,
     recorder: &mut Recorder,
-    e: io::Error,
-) -> Error {
-    let file_stat = FileStatError::io(archive_path, io::Error::new(e.kind(), e.to_string()));
+    e: io::Error)
+    -> Error {
+    let file_stat = FileStatError::copy_io(archive_path, &e);
     record_session_error(recorder, file_stat);
     Error::io(archive_path, e)
 }
