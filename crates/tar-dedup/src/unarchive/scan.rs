@@ -117,9 +117,6 @@ pub fn run(
     let opt_db = read_footer(&config.paths.archive_path, &config.paths.temp_db());
     let footer_this_pass = !resume_db && opt_db.is_ok();
 
-    // TODO fix, you need to move the db from temp_db to db_path, once we have confirmed that it is
-    //  valid.
-
     let mut db: Option<Database> = if resume_db {
         let opened = Database::open(db_path)?;
         opened.init_extract_runtime_state()?;
