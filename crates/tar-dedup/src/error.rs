@@ -77,10 +77,6 @@ impl Error {
         Self::FileStat(FileStatError::copy_io(path.into(), source))
     }
 
-    pub fn is_interrupted(&self) -> bool {
-        matches!(self, Self::Interrupted)
-    }
-
     /// The path an erring filesystem operation was about, when `FileStat`.
     pub fn io_path(&self) -> Option<PathBuf> {
         match self {
