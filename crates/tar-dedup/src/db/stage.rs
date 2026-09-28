@@ -162,4 +162,41 @@ mod tests {
 
         assert_eq!(count_all_stage_candidates(&conn).expect("count"), 3);
     }
+
+    #[test]
+    fn promote_unstageable_files_promotes_ineligible_arms() {
+        let (_dir, conn) = open_db();
+        // Row 1 is the only valid candidate (stays sparsified).
+        insert_candidate(&conn, 1);
+        // One row per promote OR arm.
+        insert_candidate(&conn, 2);
+        conn.execute("UPDATE files SET ftype = 'dir' WHERE id = 2", []).expect("arm dir");
+        insert_candidate(&conn, 3);
+        conn.execute("UPDATE files SET canonical_id = NULL WHERE id = 3", []).expect("arm canon null");
+        insert_candidate(&conn, 4);
+        conn.execute("UPDATE files SET canonical_id = 1 WHERE id = 4", []).expect("arm canon != id");
+        insert_candidate(&conn, 5);
+        conn.execute("UPDATE files SET sha1 = NULL WHERE id = 5", []).expect("arm null sha");
+        insert_candidate(&conn, 6);
+        conn.execute(
+            "UPDATE files SET include_reason_archive = 0 WHERE id = 6", [],
+        ).expect("arm filter fail");
+
+        let promoted = promote_unstageable_files(&conn).expect("promote");
+
+        assert_eq!(promoted, 5);
+        for id in 2..7 {
+            assert_eq!(row_phase(&conn, id), "staged");
+        }
+        assert_eq!(row_phase(&conn, 1), "sparsified");
+        assert_eq!(count_all_stage_candidates(&conn).expect("count"), 1);
+    }
+
+    fn row_phase(conn: &Connection, id: i64) -> String {
+        conn.query_row(
+            "SELECT phase FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get::<_, String>(0),
+        ).expect("read phase")
+    }
 }
