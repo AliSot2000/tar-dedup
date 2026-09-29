@@ -54,10 +54,7 @@ fn record_file_scan_error(recorder: &mut Recorder, file_id: FileId, error: FileS
 
 /// Convert a tar-stream io error into the crate `Error`, buffering a session-scoped
 /// scan error first (best-effort; a failed record is ignored, the stream error wins).
-fn io_error_with_session_scan_error(
-    archive_path: &Path,
-    recorder: &mut Recorder,
-    e: io::Error)
+fn io_error_with_session_scan_error(archive_path: &Path, recorder: &mut Recorder, e: io::Error)
     -> Error {
     let file_stat = FileStatError::copy_io(archive_path, &e);
     record_session_error(recorder, file_stat);
@@ -182,6 +179,7 @@ pub fn run(
 
         // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
         if member_index < resume_from {
+            // TODO LLM: Can I also drop this wrapped entry here and not check if it errored out
             wrapped_entry.map_err(|e| {
                 io_error_with_session_scan_error(&config.paths.archive_path, recorder, e)
             })?;
@@ -261,7 +259,7 @@ pub fn run(
         }
     }
     // PRECONDITION: Archive contained at least one element and at least a database and we
-    //   fully consumed teh archive.
+    //   fully consumed the archive.
     validate_result(&scan, resume_db)?;
 
     let sdb = db.expect(OPT_DB_ERROR);
@@ -329,6 +327,7 @@ fn process_entry(
         // INFO: No truncated case where initial db is not first element.
         //  So unconditionally rejected.
         (SNAPSHOT_INIT_TAR_NAME, true) => {
+            // TODO different error!
             return Err(Error::Config(
                 "Found manifest.sqlite not at the beginning of the archive".to_string(),
             ));
@@ -413,7 +412,7 @@ fn process_entry(
     Ok(())
 }
 
-/// Check if the returned state at the end of scanning the archive matches our exectations and add
+/// Check if the returned state at the end of scanning the archive matches our expectations and add
 /// associated errors if something is unexpected.
 fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
     match (
@@ -427,6 +426,7 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
         }
         // INFO: DB present from restart!
         (false, false, false, true) => {
+            // TODO Technically impossible.
             tracing::warn!(
                 "resumed extract over a work DB that has no recorded manifest, \
                  snapshot or footer provenance"
