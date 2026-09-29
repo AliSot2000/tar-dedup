@@ -10,33 +10,38 @@ use rusqlite::{Connection, named_params};
 use std::fs;
 use std::path::Path;
 
-// TODO probably should not live here but in the scan.rs file of unarchive/
-// INFO: This function ensures we capture files we might have extracted before and then the archive
-//  was truncated. Extremely unlikely but easier best effort.
-/// Mark every content-id named payload sitting in the extract cache as extracted.
-/// Catches members that were unpacked but not flagged (interrupt between the two).
-/// Promotion stays with snapshot confirmation / [`promote_extracted_to_unarchived`].
-pub fn flush_cached_payloads(conn: &Connection, cache_dir: &Path) -> Result<u64> {
-    let mut marked = 0u64;
-    if cache_dir.is_dir() {
-        for entry in fs::read_dir(cache_dir).map_err(|e| Error::io(cache_dir, e))? {
-            let entry = entry.map_err(|e| Error::io(cache_dir, e))?;
-            let ft = entry.file_type().map_err(|e| Error::io(&entry.path(), e))?;
-            if !ft.is_file() {
-                continue;
+/// Iterate over the extraction dir twice to check for files we missed and for files that are missing
+pub fn check_cached_payloads(conn: &mut Connection, cache_dir: &Path) -> Result<(u64, u64)> {
+    let result = if cache_dir.is_dir() {
+        with_transaction(conn, |int_conn| {
+            let mut new = 0u64;
+            let mut present = 0u64;
+            for entry in fs::read_dir(cache_dir).map_err(|e| Error::io(cache_dir, e))? {
+                let entry = entry.map_err(|e| Error::io(cache_dir, e))?;
+                let ft = entry.file_type().map_err(|e| Error::io(&entry.path(), e))?;
+                if !ft.is_file() {
+                    continue;
+                }
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
+                let Ok((_, _, file_id, _)) = parse_content_id(name) else {
+                    continue;
+                };
+                if flags::get_file_flag(int_conn, file_id, FileFlag::FileExtracted)? {
+                    present += 1;
+                } else {
+                    flags::set_file_flag(int_conn, file_id, FileFlag::FileExtracted, true)?;
+                    new += 1;
+                }
             }
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            let Ok((_, _, file_id, _)) = parse_content_id(name) else {
-                continue;
-            };
-            flags::set_file_flag(conn, file_id, FileFlag::FileExtracted, true)?;
-            marked += 1;
-        }
-    }
-    Ok(marked)
+            Ok((present, new))
+        })?
+    } else {
+        (0, 0)
+    };
+    Ok(result)
 }
 
 /// End-of-scan salvage: promote every `FileExtracted` canonical (and dependents)
