@@ -605,12 +605,9 @@ fn captured_extract_database<R: Read> (
 
 /// Install catalog from `temp` into `target`, normalize, and init extract runtime state.
 fn open_initial_database(
-    temp: &Path, 
-    target: &Path, 
-    fb: &mut Option<ParseFilterBuffer>,
-    config: &ExtractConfig, 
-    shutdown: &Shutdown,
-    progress: &ProgressBarSet)
+    rt: &ScanRTState,
+    target: &Path,
+    fb: &mut Option<ParseFilterBuffer>)
     -> Result<Database> {
 
     // INFO: Will move the database into the correct place.
@@ -630,18 +627,14 @@ fn open_initial_database(
 
 /// Function deals with initial installation of the database (being aware of the footer)
 fn install_database(
+    rt: &mut ScanRTState,
     db_path: &Path,
-    snapshot_tmp: &Path,
-    db: &mut Option<Database>,
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
-    scan: &mut ExtractScanState,
+    from_footer: bool,
     recorder: &mut Recorder,
-    fb: &mut Option<ParseFilterBuffer>,
-    config: &ExtractConfig,
-    shutdown: &Shutdown,
-    progress: &ProgressBarSet)
- -> Result<()> {
-    if scan.from_footer {
+    fb: &mut Option<ParseFilterBuffer>)
+    -> Result<()> {
+    if from_footer {
         match io::copy(entry, &mut io::sink()) {
             Ok(_) => (),
             Err(e) => {
