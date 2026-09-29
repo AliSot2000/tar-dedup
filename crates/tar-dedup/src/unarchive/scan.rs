@@ -109,6 +109,20 @@ pub fn run(
     filter_buffer: &mut Option<ParseFilterBuffer>,
     progress: &ProgressBarSet)
     -> Result<Database> {
+
+    let rt = ScanRTState {config, db: None, shutdown, progress};
+    run_inner(rt, db_path, recorder, filter_buffer)
+}
+
+
+fn run_inner(
+    outer_rt: ScanRTState,
+    db_path: &Path,
+    recorder: &mut Recorder,
+    filter_buffer: &mut Option<ParseFilterBuffer>) -> Result<Database>  {
+
+    let mut rt = outer_rt;
+
     // INFO: Noop if dir exists!
     // INFO: If we can't create an extract stage, we can only abort.
     fs::create_dir_all(config.paths.extract_cache_dir())
