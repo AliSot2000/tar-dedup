@@ -387,7 +387,7 @@ fn check_archive_bytes_out(db: &Database, archive_len: u64) -> Result<()> {
     let Some(expected) = db.get_archive_bytes_out()? else {
         return Ok(());
     };
-    assert_ne!(archive_len, expected,
+    assert_eq!(archive_len, expected,
         "archive file length {archive_len} does not match recorded archive_bytes_out {expected} \
          (file truncated or modified externally)"
     );
