@@ -346,3 +346,233 @@ pub fn clear_archive_session_pending(conn: &Connection) -> Result<u64> {
     ).to_panic()?;
     Ok(n as u64)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema;
+    use crate::db::types::StrippedRecord;
+
+    /// A default staged canonical: self-canonical `staged` file with a digest
+    /// and the archive filter passed.
+    fn insert_archive_candidate(conn: &Connection, id: i64, qid: i64, name: &str, size: u64) {
+        conn.execute(
+            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+             include_reason_archive, exclude_reason_archive, flags, canonical_id) \
+             VALUES (:id, :abs_path, :ext, :size, 'file', 'staged', :sha1, -1, 0, 0, :id)",
+            named_params! {
+                ":id": id,
+                ":abs_path": format!("/tmp/{name}-{qid}.dat"),
+                ":ext": format!(".{name}"),
+                ":size": size as i64,
+                ":sha1": [7u8; 20].as_slice(),
+            },
+        ).expect("insert candidate");
+    }
+
+    fn set_phase(conn: &Connection, id: i64, phase: &str) {
+        conn.execute(
+            "UPDATE files SET phase = :phase WHERE id = :id",
+            named_params! { ":id": id, ":phase": phase },
+        ).expect("set phase");
+    }
+
+    fn set_flag(conn: &Connection, id: i64, flag: FileFlag) {
+        crate::db::flags::set_file_flag(conn, FileId(id), flag, true).expect("set flag");
+    }
+
+    fn row_phase(conn: &Connection, id: i64) -> String {
+        conn.query_row(
+            "SELECT phase FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get::<_, String>(0),
+        ).expect("read phase")
+    }
+
+    fn row_flag(conn: &Connection, id: i64, flag: FileFlag) -> bool {
+        conn.query_row(
+            "SELECT flags FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get::<_, i64>(0),
+        ).expect("read flags")
+            & flag.mask_i64() != 0
+    }
+
+    fn open_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = Connection::open(&dir.path().join("t.sqlite")).expect("open conn");
+        schema::initialize(&conn).expect("schema init");
+        // The internal include rule (`apply_no_filter` hands out
+        // `include_reason_archive = -1`), which must satisfy the FK.
+        conn.execute(
+            "INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) \
+             VALUES (-1, 'internal', NULL, '.*')",
+            [],
+        ).expect("seed internal include rule");
+        (dir, conn)
+    }
+
+    /// Seed the `files` matrix used by the abort/clear tests: (a) pending
+    /// non-archived, (b) pending + archived, (c) plain staged, (d) plain archived.
+    fn seed_pending_matrix(conn: &Connection) {
+        insert_archive_candidate(conn, 1, 1, "a", 10);
+        insert_archive_candidate(conn, 2, 2, "b", 20);
+        insert_archive_candidate(conn, 3, 3, "c", 30);
+        insert_archive_candidate(conn, 4, 4, "d", 40);
+        set_flag(conn, 1, FileFlag::AppendedPath);   // (a) pending non-archived
+        set_flag(conn, 2, FileFlag::AppendedPath);
+        set_phase(conn, 2, "archived");              // (b) pending + archived
+        set_phase(conn, 4, "archived");              // (d) plain archived
+    }
+
+    #[test]
+    fn abort_incomplete_session_resets_only_pending_non_archived() {
+        let (_dir, conn) = open_db();
+        seed_pending_matrix(&conn);
+        conn.execute(
+            "INSERT INTO archive_sessions (id, archive_offset, started_at, finalized) \
+             VALUES (1, 100, '2026-01-01T00:00:00Z', 0)",
+            [],
+        ).expect("insert open session");
+
+        abort_incomplete_session(&conn, &ArchiveSession { id: 1, archive_offset: 100 })
+            .expect("abort session");
+
+        // (a) reset to staged + flag cleared; (c) untouched; (d) untouched.
+        assert_eq!(row_phase(&conn, 1), "staged");
+        assert!(!row_flag(&conn, 1, FileFlag::AppendedPath));
+        // (b) already archived: flag kept, phase kept.
+        assert_eq!(row_phase(&conn, 2), "archived");
+        assert!(row_flag(&conn, 2, FileFlag::AppendedPath));
+        // (c)/(d) untouched.
+        assert_eq!(row_phase(&conn, 3), "staged");
+        assert_eq!(row_phase(&conn, 4), "archived");
+        // Session marked aborted.
+        let finalized: i64 = conn.query_row(
+            "SELECT finalized FROM archive_sessions WHERE id = 1",
+            [],
+            |row| row.get(0),
+        ).expect("read session finalized");
+        assert_eq!(finalized, session_status::ABORTED);
+    }
+
+    #[test]
+    fn clear_archive_session_pending_only_resets_non_archived() {
+        let (_dir, conn) = open_db();
+        seed_pending_matrix(&conn);
+
+        let n = clear_archive_session_pending(&conn).expect("clear pending");
+
+        assert_eq!(n, 1);
+        assert_eq!(row_phase(&conn, 1), "staged");
+        assert!(!row_flag(&conn, 1, FileFlag::AppendedPath));
+        assert!(row_flag(&conn, 2, FileFlag::AppendedPath));   // archived rows keep flag
+        assert_eq!(row_phase(&conn, 2), "archived");
+    }
+
+    #[test]
+    fn reset_archive_state_returns_to_staged_and_wipes_sessions() {
+        let (_dir, conn) = open_db();
+        seed_pending_matrix(&conn);
+        conn.execute(
+            "INSERT INTO archive_sessions (id, archive_offset, started_at, finalized) \
+             VALUES (1, 100, '2026-01-01T00:00:00Z', 0)",
+            [],
+        ).expect("insert open session");
+
+        reset_archive_state(&conn).expect("reset state");
+
+        for id in 1..=4 {
+            assert_eq!(row_phase(&conn, id), "staged");
+            assert!(!row_flag(&conn, id, FileFlag::AppendedPath));
+        }
+        let n_sessions: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM archive_sessions",
+            [], |row| row.get(0),
+        ).expect("count sessions");
+        assert_eq!(n_sessions, 0);
+    }
+
+    #[test]
+    fn queue_slices_and_skips_outcome_rows() {
+        let (_dir, conn) = open_db();
+        // Sizes set so the size ordering places 3 before 1 regardless of qid.
+        insert_archive_candidate(&conn, 1, 1, "x", 300);
+        insert_archive_candidate(&conn, 2, 2, "x", 100);
+        insert_archive_candidate(&conn, 3, 3, "x", 200);
+        create_archive_queue(&conn).expect("create queue");
+        populate_archive_queue(&conn, false).expect("populate queue");
+
+        // 2 already appended last session; 3 errored.
+        set_phase(&conn, 2, "archived");
+        set_flag(&conn, 3, FileFlag::ErrorWhileArchive);
+
+        let mut all: Vec<(u64, StrippedRecord)> = Vec::new();
+        let mut pos = 0u64;
+        loop {
+            let batch = pull_pending_archive_rows::<StrippedRecord>(&conn, pos, 2).expect("pull");
+            if batch.is_empty() { break }
+            pos = batch.last().expect("nonempty").0;
+            all.extend(batch);
+        }
+
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].1.id, FileId(1));
+        // Filtered rows: queued non-staged (2) and errored (3) never surface.
+    }
+
+    #[test]
+    fn queue_orders_by_ext_size_then_id() {
+        let (_dir, conn) = open_db();
+        insert_archive_candidate(&conn, 1, 3, "z", 100);   // ext .z
+        insert_archive_candidate(&conn, 2, 1, "a", 300);   // ext .a, size 300
+        insert_archive_candidate(&conn, 3, 2, "a", 100);   // ext .a, size 100
+        create_archive_queue(&conn).expect("create queue");
+        populate_archive_queue(&conn, false).expect("populate queue");
+
+        let rows = pull_pending_archive_rows::<StrippedRecord>(&conn, 0, 100).expect("pull");
+        let ids: Vec<FileId> = rows.iter().map(|(_p, r)| r.id).collect();
+        assert_eq!(ids, vec![FileId(3), FileId(2), FileId(1)]);
+    }
+
+    #[test]
+    fn queue_orders_by_basename_when_sorted_by_name() {
+        let (_dir, conn) = open_db();
+        insert_archive_candidate(&conn, 1, 1, "z", 100);   // basename z-1.dat
+        insert_archive_candidate(&conn, 2, 2, "a", 300);   // basename a-2.dat
+        insert_archive_candidate(&conn, 3, 3, "m", 100);   // basename m-3.dat
+        create_archive_queue(&conn).expect("create queue");
+        populate_archive_queue(&conn, true).expect("populate queue");
+
+        let rows = pull_pending_archive_rows::<StrippedRecord>(&conn, 0, 100).expect("pull");
+        let ids: Vec<FileId> = rows.iter().map(|(_p, r)| r.id).collect();
+        assert_eq!(ids, vec![FileId(2), FileId(3), FileId(1)]);
+    }
+
+    #[test]
+    fn populate_archive_queue_is_idempotent() {
+        let (_dir, conn) = open_db();
+        insert_archive_candidate(&conn, 1, 1, "x", 100);
+        insert_archive_candidate(&conn, 2, 2, "x", 200);
+        create_archive_queue(&conn).expect("create queue");
+        populate_archive_queue(&conn, false).expect("first populate");
+        let second_run = populate_archive_queue(&conn, false).expect("second populate");
+
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM archive_queue",
+            [], |row| row.get(0),
+        ).expect("count queue");
+        assert_eq!(n, 2);
+        assert_eq!(second_run, 0);   // nothing new inserted
+    }
+
+    #[test]
+    fn drop_archive_queue_is_idempotent() {
+        let (_dir, conn) = open_db();
+        create_archive_queue(&conn).expect("create queue");
+        drop_archive_queue(&conn).expect("first drop");
+        drop_archive_queue(&conn).expect("second drop");
+        // Dropping an absent table does not error; re-creating works after.
+        create_archive_queue(&conn).expect("recreate queue");
+    }
+}
