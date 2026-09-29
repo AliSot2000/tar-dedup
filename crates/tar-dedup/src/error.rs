@@ -57,6 +57,9 @@ pub enum Error {
 
     #[error("{0}")]
     Other(#[from] anyhow::Error),
+
+   // #[error("{0}")]
+   // Malformatted(String),
 }
 
 impl Error {
