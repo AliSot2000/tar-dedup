@@ -35,6 +35,7 @@ pub fn joint_filter_phase(
     pv: FilePhase,
     db: &Database,
     pg: &ProgressBarSet,
+    // Closures to stand in for the db
     count_filters: impl Fn(Option<bool>) -> Result<u64>,
     get_filters: impl Fn(bool) -> Result<Vec<FilterExpression>>,
     apply_no_filter: impl Fn() -> Result<u64>,
@@ -85,6 +86,7 @@ pub fn step_filters(
     pv: &FilePhase,
     db: &Database,
     pg: &ProgressBarSet,
+    // Closures to stand in for the db
     get_rows_to_filter: impl Fn(&FileId, u64) -> Result<Vec<StrippedRecord>>,
     apply_results: impl Fn(Vec<(FileId, i64, i64)>) -> Result<u64>)
     -> Result<()> {
