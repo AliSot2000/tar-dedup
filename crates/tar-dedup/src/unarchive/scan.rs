@@ -577,7 +577,7 @@ fn captured_remove_temp_db(recorder: &mut Recorder, temp_db: &PathBuf) -> () {
 
 /// Copy the database out of the archive to `dst`, capturing an io failure in the
 /// persistent error log (best-effort; a failed record is ignored) before re-raising.
-fn captured_extract_database<R: Read>(
+fn captured_extract_database<R: Read> (
     dst: &Path,
     entry: &mut R,
     recorder: &mut Recorder)
