@@ -340,10 +340,14 @@ fn process_entry(
     fb: &mut Option<ParseFilterBuffer>,
     progress: &ProgressBarSet
 ) -> Result<()> {
+    let mut install_db = |rts: &mut ScanRTState| {
+        install_database(rts, db_path, entry, scan.from_footer, recorder, fb)
+    };
     match (name, scan.saw_any_members) {
         // Spec conform: No db, initial snapshot is first.
         (SNAPSHOT_INIT_TAR_NAME, false) => {
-            install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown, progress)?;
+            //     if scan.from_footer
+            install_db(rt)?;
             scan.saw_manifest_db = true;
         }
         // Not Spec: Abort
@@ -363,7 +367,7 @@ fn process_entry(
                          attempt to bypass with --force-scan"
                 )));
             } else {
-                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown, progress)?;
+                install_db(rt)?;
             }
             let ref_db = rt.db.as_ref().expect(OPT_DB_ERROR);
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
