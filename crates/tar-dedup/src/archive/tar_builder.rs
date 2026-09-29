@@ -4,6 +4,7 @@ use std::{fs, io};
 
 use crate::archive::ArchiveRTArgs;
 use crate::archive_footer;
+use crate::common::batched_stepped_loop;
 use crate::common::files::warn_if_times_changed;
 use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::db::ErrorPhase;
@@ -14,6 +15,8 @@ use crate::error::{Error, FileStatError, Result};
 use crate::tar_writer::TarWriter;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive);
+
+const BATCH_SIZE: u64 = 10_000;
 
 // INFO - Archival works as follows:
 //  Ineligible files are promoted first.
@@ -59,9 +62,12 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         append_snapshot(&mut writer, rt, true, &mut recorder)?;
     }
 
-    // TODO add batching
-    let to_archive = rt.db.list_staged_canonical_ordered()?;
-    if to_archive.is_empty() && already_archived == 0 {
+    // Batched queue of staged canonicals in packing order; the ordering table
+    // survives interrupts so a resume repopulate is a no-op for queued rows.
+    rt.db.create_archive_queue()?;
+    rt.db.populate_archive_queue(false)?; // sort_by_name hard-coded false for now
+    let to_archive = rt.db.count_files_in_phase(FilePhase::Staged)?;
+    if to_archive == 0 && already_archived == 0 {
         tracing::warn!("no staged files to archive");
     }
 
@@ -77,62 +83,89 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let mut stopped = false;
     let mut final_archive = true;
 
-    for file_id in to_archive {
-        if rt.shutdown.is_graceful() {
-            stopped = true;
-            final_archive = false;
-            break;
-        }
-
-        let record = rt.db.get_file_by_id::<StrippedRecord>(file_id)?.expect(
-            "File was present in db for listing; missing row means SQL/list bug or DB corruption",
-        );
-        let tar_name = record.tar_member_name().expect(
-            "INVARIANT ERROR: Members to be encoded must have a symlink in the \
-            staging directory.",
-        );
-        let source = rt.config.paths.stage_dir().join(&tar_name);
-
-        // Stage path is a symlink; compare inventory times against the real target.
-        let target = match fs::canonicalize(&source) {
-            Ok(t) => t,
-            Err(e) => {
-                capture_error(Error::copy_io(&source, &e), &mut recorder, file_id);
-                rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
-                if rt.config.process.fail_fast {
-                    return Err(Error::io(&source, e));
+    // Process the queue in batches. `pull_pending_archive_rows` advances the read
+    // cursor by the last queue position of each batch; already-appended /
+    // errored rows exit the pull until the next session.
+    match batched_stepped_loop(
+        BATCH_SIZE,
+        || 0u64,
+        |index: &u64, batch_size| {
+            rt.db.pull_pending_archive_rows::<StrippedRecord>(*index, batch_size)
+        },
+        |(pos, _rec): &(u64, StrippedRecord)| *pos,
+        |batch: Vec<(u64, StrippedRecord)>| {
+            for (_pos, record) in batch {
+                // Break on any interrupt: graceful finalizes the session, force
+                // abandons the stream (see below).
+                if rt.shutdown.is_interrupted() {
+                    stopped = true;
+                    final_archive = false;
+                    return Err(Error::Interrupted);
                 }
-                continue;
-            }
-        };
-        let modified = warn_if_times_changed(
-            &target, record.mtime, record.atime, record.ctime
-        );
 
-        progress.set_phase_file("archive", &record.abs_path);
-        match writer.append_path(
-            &source, &tar_name, |n| progress.inc_phase(n)) {
-            Ok(()) => {
-                rt.db.set_file_flag(record.id, FileFlag::AppendedPath, true)?;
-                if modified {
-                    rt.db.set_file_flag(record.id, FileFlag::Modified, true)?;
-                }
-                progress.inc_global(1);
-            }
-            Err(e @ Error::FileStat(_)) => {
-                tracing::error!(
-                    path = %record.abs_path.display(),
-                    error = %e,
-                    "archive append_path failed; marking ErrorWhileArchive and continuing"
+                let tar_name = record.tar_member_name().expect(
+                    "INVARIANT ERROR: Members to be encoded must have a symlink in the \
+                    staging directory.",
                 );
-                capture_error(e, &mut recorder, file_id);
-                rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
-                // Do not set AppendedPath — member was not successfully written.
+                let source = rt.config.paths.stage_dir().join(&tar_name);
+
+                // Stage path is a symlink; compare inventory times against the real target.
+                let target = match fs::canonicalize(&source) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        capture_error(Error::copy_io(&source, &e), &mut recorder, record.id);
+                        rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
+                        rt.db.promote_to_archived(&record.id)?;
+                        if rt.config.process.fail_fast {
+                            return Err(Error::io(&source, e));
+                        }
+                        continue;
+                    }
+                };
+                let modified = warn_if_times_changed(
+                    &target, record.mtime, record.atime, record.ctime
+                );
+
+                progress.set_phase_file("archive", &record.abs_path);
+                match writer.append_path(
+                    &source, &tar_name, |n| progress.inc_phase(n)) {
+                    Ok(()) => {
+                        rt.db.set_file_flag(record.id, FileFlag::AppendedPath, true)?;
+                        if modified {
+                            rt.db.set_file_flag(record.id, FileFlag::Modified, true)?;
+                        }
+                        progress.inc_global(1);
+                    }
+                    Err(e @ Error::FileStat(_)) => {
+                        tracing::error!(
+                            path = %record.abs_path.display(),
+                            error = %e,
+                            "archive append_path failed; marking ErrorWhileArchive and continuing"
+                        );
+                        capture_error(e, &mut recorder, record.id);
+                        rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
+                        rt.db.promote_to_archived(&record.id)?;
+                        // Do not set AppendedPath — member was not successfully written.
+                    }
+                    Err(Error::Interrupted) => {
+                        // Force abort surfaced mid-member; stop the batch loop now.
+                        stopped = true;
+                        final_archive = false;
+                        return Err(Error::Interrupted);
+                    }
+                    Err(e) => {
+                        panic!("Unexpected return type {e}, only FileStatError Expected");
+                    }
+                }
             }
-            Err(e) => {
-                panic!("Unexpected return type {e}, only FileStatError Expected");
-            }
-        }
+            Ok(())
+        },
+    ) {
+        Ok(()) => (),
+        // Control-flow for an interrupt detected above; the `stopped` flags
+        // decide graceful vs force in the post-loop section.
+        Err(Error::Interrupted) => (),
+        Err(e) => return Err(e),
     }
 
     // Fast exit on force - abort now.
@@ -156,6 +189,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         return Err(Error::Interrupted);
     }
 
+    rt.db.drop_archive_queue()?;
     recorder.flush()?;
     Ok(())
 }
