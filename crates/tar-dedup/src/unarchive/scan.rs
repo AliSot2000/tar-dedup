@@ -24,6 +24,13 @@ use tar::Entry;
 const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(crate::config::ExtractPipelinePhase::ScanTar);
 
+struct ScanRTState <'a> {
+    pub db: Option<Database>,
+    pub config: &'a ExtractConfig,
+    pub shutdown: &'a  Shutdown,
+    pub progress: &'a  ProgressBarSet,
+}
+
 // INFO: State Model for a File and its associated canonical row in the db:
 //    0. File seen in the stream
 //    1. File finished extracting successfully => FileExtracted = True
