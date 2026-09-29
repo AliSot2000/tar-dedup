@@ -394,7 +394,7 @@ fn process_entry(
         (cid, saw_first) if let Ok((_, _, fid, _)) = parse_content_id(cid) => {
             if !rt.config.scan.force_scan && !saw_first {
                 return Err(Error::Config(format!(
-                    "first tar member is canonical file {content_id} not manifest.sqlite; \
+                    "first tar member is canonical file {cid} not manifest.sqlite; \
                      bypass available with --force-scan"
                 )));
             }
@@ -409,9 +409,8 @@ fn process_entry(
             match entry.unpack(&entry_dst) {
                 Ok(_) => (),
                 Err(e) => {
-                    let err = Error::io(&entry_dst, e);
-                    record_file_scan_error(recorder, fid, err.to_file_stat(Some(&entry_dst)));
-                    return Err(err);
+                    record_file_scan_error(recorder, fid, FileStatError::copy_io(&entry_dst, &e));
+                    return Err(Error::io(&entry_dst, e));
                 }
             };
 
