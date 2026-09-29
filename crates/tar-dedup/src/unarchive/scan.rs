@@ -539,23 +539,6 @@ fn report_scan_completeness(db: &Database, from_footer: bool, force_scan: bool) 
     Ok(())
 }
 
-/// Remove temp database and handle errors. If database does not exist, now error is emitted.
-fn remove_temp_db(recorder: &mut Recorder, temp_db: &PathBuf) -> () {
-    if !temp_db.exists() {
-        return ();
-    }
-
-    let res = fs::remove_file(temp_db);
-    if res.is_err() {
-        let err = res.err().expect("MUST BE ERROR HERE");
-        tracing::warn!("Failed to remove temp database with error: {err}");
-        record_session_error(
-            recorder,
-            FileStatError::io(temp_db, io::Error::new(err.kind(), err.to_string())),
-        );
-    }
-}
-
 /// Store progress in db
 fn store_progress_in_db(rt: &ScanRTState, scan: &ExtractScanState) -> Result<()> {
     if let Some(d) = rt.db.as_ref() {
@@ -571,6 +554,25 @@ fn store_progress_in_db(rt: &ScanRTState, scan: &ExtractScanState) -> Result<()>
         d.checkpoint()?;
     }
     Ok(())
+}
+
+/// Remove temp database and handle errors. If database does not exist, now error is emitted.
+fn captured_remove_temp_db(recorder: &mut Recorder, temp_db: &PathBuf) -> () {
+    if !temp_db.exists() {
+        return ();
+    }
+
+    let res = fs::remove_file(temp_db);
+    match res {
+        Ok(_) => (),
+        Err(e) => {
+            tracing::warn!("Failed to remove temp database with error: {e}");
+            record_session_error(
+                recorder,
+                FileStatError::copy_io(temp_db, &e),
+            );
+        }
+    }
 }
 
 /// Copy the database out of the archive to `dst`, capturing an io failure in the
