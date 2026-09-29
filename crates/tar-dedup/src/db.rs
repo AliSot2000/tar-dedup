@@ -1182,6 +1182,8 @@ impl<'a> Recorder<'a> {
         self.flush()
     }
 
+    // TODO: Can we assume that try_flush is called and if this function is called, all messages
+    //  are emitted to std::out at i.g. info ot err to be able to suppress this.
     /// Flush buffered drafts in a single transaction. Clears the buffer on
     /// success and retains it on failure (so a retry can persist the same rows).
     /// Without an attached database, buffered drafts are kept and the failure to
