@@ -178,20 +178,19 @@ fn run_inner(
     )?;
 
     // FEATURE: Switch to seek for tar
-    for (member_index, wrapped_entry) in archive
+    for (m_idx, wrapped_entry) in archive
         .entries()
         .map_err(|e| {
             io_error_with_session_scan_error(&rt.config.paths.archive_path, recorder, e)
         })?
-        .enumerate()
-    {
-        let member_index = member_index as u64;
-        if shutdown.check_between_files().is_err() {
+        .enumerate() {
+        if rt.shutdown.is_interrupted() {
             stopped = true;
             break;
         }
 
         // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
+        let member_index = m_idx as u64;
         if member_index < resume_from {
             // TODO LLM: Can I also drop this wrapped entry here and not check if it errored out
             wrapped_entry.map_err(|e| {
@@ -272,10 +271,8 @@ fn run_inner(
     //   fully consumed the archive.
     validate_result(&scan, resume_db)?;
 
-    let trust_catalog = scan.from_footer || config.scan.force_scan;
-    // Mark any cache payloads that were missed during the stream.
-    sdb.flush_cached_payloads(&config.paths.extract_cache_dir())?;
     let sdb = rt.db.expect(OPT_DB_ERROR);
+    let trust_catalog = scan.from_footer || scan.saw_manifest_db || rt.config.scan.force_scan;
 
     if trust_catalog {
         let n = sdb.promote_extracted_to_unarchived()?;
@@ -356,9 +353,9 @@ fn process_entry(
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
         }
         (SNAPSHOT_TAR_NAME, true) => {
-                install_database(db_path, &config.paths.temp_db(), db, entry, scan, recorder, fb, &config, shutdown, progress)?;
-                let ref_db = db.as_ref().expect(OPT_DB_ERROR);
             if rt.config.scan.force_scan && rt.db.is_none() {
+                install_db(rt)?;
+                let ref_db = rt.db.as_ref().expect(OPT_DB_ERROR);
                 scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
 
                 if let Some(buf) = force_buffer.as_mut() {
@@ -378,7 +375,7 @@ fn process_entry(
                 scan.snapshots_ingested = ldb.record_snapshot_ingested()?;
             }
         }
-        (content_id, saw_first) if let Ok((_, _, fid, _)) = parse_content_id(content_id) => {
+        (cid, saw_first) if let Ok((_, _, fid, _)) = parse_content_id(cid) => {
             if !rt.config.scan.force_scan && !saw_first {
                 return Err(Error::Config(format!(
                     "first tar member is canonical file {content_id} not manifest.sqlite; \
@@ -545,7 +542,7 @@ fn remove_temp_db(recorder: &mut Recorder, temp_db: &PathBuf) -> () {
 }
 
 /// Store progress in db
-fn store_progress_in_db(db: &mut Option<Database>, scan: &ExtractScanState) -> Result<()> {
+fn store_progress_in_db(rt: &ScanRTState, scan: &ExtractScanState) -> Result<()> {
     if let Some(d) = rt.db.as_ref() {
         let mut persisted = d.load_extract_scan_state()?;
         persisted.saw_manifest_db |= scan.saw_manifest_db;
