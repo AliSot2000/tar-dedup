@@ -327,12 +327,9 @@ fn run_inner(
 /// Fully process an entry from the tar archive.
 /// Precondition: Index is valid (i.e. not extracted yet)
 fn process_entry(
-    config: &ExtractConfig,
-    shutdown: &Shutdown,
+    rt: &mut ScanRTState,
     db_path: &Path,
-    local_dst: &Path,
     name: &str,
-    db: &mut Option<Database>,
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
     force_buffer: &mut Option<Vec<FileId>>,
     scan: &mut ExtractScanState,
