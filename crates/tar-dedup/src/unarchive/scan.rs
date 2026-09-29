@@ -337,9 +337,8 @@ fn process_entry(
     force_buffer: &mut Option<Vec<FileId>>,
     scan: &mut ExtractScanState,
     recorder: &mut Recorder,
-    fb: &mut Option<ParseFilterBuffer>,
-    progress: &ProgressBarSet
-) -> Result<()> {
+    fb: &mut Option<ParseFilterBuffer>)
+    -> Result<()> {
     let mut install_db = |rts: &mut ScanRTState| {
         install_database(rts, db_path, entry, scan.from_footer, recorder, fb)
     };
