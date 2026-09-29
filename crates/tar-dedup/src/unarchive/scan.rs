@@ -222,6 +222,15 @@ fn run_inner(
         };
 
         tracing::info!("Index: {} Path: {}", member_index, path.display());
+        process_entry(
+            &mut rt,
+            db_path,
+            &name,
+            &mut entry,
+            &mut force_buffer,
+            &mut scan,
+            recorder,
+            filter_buffer)?;
 
         rt.progress.inc_both(1);
         scan.saw_any_members = true;
