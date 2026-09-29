@@ -1,7 +1,7 @@
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, named_params};
 
-use crate::db::common::generate_archive_filter;
+use crate::db::common::{SqlFileRow, generate_archive_filter};
 use crate::db::flags::FileFlag;
 use crate::db::meta;
 use crate::db::types::{ArchiveSession, FileId};
@@ -186,27 +186,107 @@ pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
     Ok(total as u64)
 }
 
-/// Staged self-canonical file ids, ordered for packing: extension, size, id.
-/// When `filter_sha` is true, rows with `sha1 IS NULL` are omitted.
-/// TODO perhaps sort by ext, size, filename, id.
-///  order by filename   replace(abs_path, rtrim(abs_path, replace(abs_path, '/', '')), '') ASC,
-pub fn list_staged_canonical_ordered(conn: &Connection) -> Result<Vec<FileId>> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT id FROM files
-         WHERE canonical_id = id 
-            AND phase = 'staged' 
-            AND sha1 IS NOT NULL
-            AND ftype = 'file'
-            AND {}
-         ORDER BY ext ASC, size ASC, id ASC",
+pub fn promote_to_archived(conn: &Connection, id: &FileId) -> Result<u64> {
+    let tot = conn.execute(
+            "UPDATE files SET phase = 'archived' WHERE id = :id",
+            named_params! { ":id" : id.0 },
+    ).to_panic()?;
+    Ok(tot as u64)
+}
+
+/// Shared WHERE for the archive-quened payloads: self-canonical staged regular
+/// files that pass the archive filter.
+fn archive_queue_where() -> String {
+    format!(
+        "canonical_id = id
+         AND phase = 'staged'
+         AND sha1 IS NOT NULL
+         AND ftype = 'file'
+         AND {}",
         generate_archive_filter(None)
-    )).to_panic()?;
-    let rows = stmt.query_map(
+    )
+}
+
+/// Create the `archive_queue` ordering table. Idempotent.
+pub fn create_archive_queue(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS archive_queue (
+             id      INTEGER PRIMARY KEY,
+             file_id INTEGER NOT NULL UNIQUE REFERENCES files(id)
+         )",
         [],
-        |row| row.get::<_, i64>(0).map(FileId)).to_panic()?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .to_panic()
-        .map_err(Into::into)
+    ).to_panic()?;
+    Ok(())
+}
+
+/// Populate `archive_queue` with the full, stable set of staged canonicals in
+/// `ext, size, id` order (or by basename when `sort_by_name` is true) — position
+/// = `row_number()`. Idempotent: `INSERT OR IGNORE` (via `UNIQUE(file_id)`) keeps
+/// rows from an earlier populate (e.g. a resume) and adds only missing ones.
+pub fn populate_archive_queue(conn: &Connection, sort_by_name: bool) -> Result<u64> {
+    let order = if sort_by_name {
+        "ext ASC, replace(abs_path, rtrim(abs_path, replace(abs_path, '/', '')), '') ASC, \
+         size ASC, id ASC"
+    } else {
+        "ext ASC, size ASC, id ASC"
+    };
+    let sql = format!(
+        "INSERT OR IGNORE INTO archive_queue (id, file_id)
+         SELECT row_number() OVER (ORDER BY {order}), id
+         FROM files WHERE {}",
+        archive_queue_where()
+    );
+    let n = conn.execute(&sql, []).to_panic()?;
+    Ok(n as u64)
+}
+
+/// Next slice of still-pending archive rows, in `archive_queue` order.
+///
+/// Joins the queue against `files`, returning only rows still needing a tar
+/// payload (`phase = 'staged'`, no AppendedPath, no ErrorWhileArchive), so a
+/// resume skips already-appended members; the queue supplies the ordering. The
+/// returned `u64` is the queue position of each row, letting the caller advance
+/// the read `index` across slices. Same cursor contract as the sparsify queue;
+/// see `db/sparsify.rs`.
+pub fn pull_pending_archive_rows<R: SqlFileRow>(
+    conn: &Connection,
+    index: u64,
+    limit: u64,
+) -> Result<Vec<(u64, R)>> {
+    let cols = R::sql_columns(Some("files"));
+    let sql = format!(
+        "SELECT archive_queue.id AS pos, {cols}
+         FROM files JOIN archive_queue ON archive_queue.file_id = files.id
+         WHERE archive_queue.id > :index
+           AND files.phase = 'staged'
+           AND (files.flags & :appended) = 0
+           AND (files.flags & :error_flag) = 0
+         ORDER BY archive_queue.id
+         LIMIT :limit"
+    );
+    let mut stmt = conn.prepare(&sql).to_panic()?;
+    let rows = stmt.query_map(
+        named_params! {
+            ":index": index as i64,
+            ":appended": FileFlag::AppendedPath.mask_i64(),
+            ":error_flag": FileFlag::ErrorWhileArchive.mask_i64(),
+            ":limit": limit,
+        },
+        |r: &rusqlite::Row<'_>| {
+            let pos = r.get::<_, i64>("pos")? as u64;
+            let record = R::from_row(r, Some("files"))?;
+            Ok((pos, record))
+        },
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
+}
+
+/// Drop the `archive_queue` ordering table. Idempotent. Call on the phase-success
+/// path only; leave it in place across interrupts/resumes so a repopulate is a
+/// no-op for already-queued rows.
+pub fn drop_archive_queue(conn: &Connection) -> Result<()> {
+    conn.execute("DROP TABLE IF EXISTS archive_queue", []).to_panic()?;
+    Ok(())
 }
 
 /// Move staged rows that will never be tar payloads to `archived`.

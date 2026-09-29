@@ -657,9 +657,31 @@ impl Database {
         tar_writer::sum_archived_canonical_bytes(&*self.conn())
     }
 
-    /// Staged canonical ids ordered by extension / size / id for the archive pass.
-    pub fn list_staged_canonical_ordered(&self) -> Result<Vec<FileId>> {
-        tar_writer::list_staged_canonical_ordered(&*self.conn())
+    pub fn promote_to_archived(&self, id: &FileId) -> Result<u64> {
+        tar_writer::promote_to_archived(&self.conn(), id)
+    }
+
+    /// Create the `archive_queue` ordering table (idempotent).
+    pub fn create_archive_queue(&self) -> Result<()> {
+        tar_writer::create_archive_queue(&*self.conn())
+    }
+
+    /// Populate `archive_queue` with staged canonicals in `ext, size, id` order
+    /// (by basename when `sort_by_name`); idempotent (see `db/tar_writer.rs`).
+    pub fn populate_archive_queue(&self, sort_by_name: bool) -> Result<u64> {
+        tar_writer::populate_archive_queue(&*self.conn(), sort_by_name)
+    }
+
+    /// Next slice of still-pending archive rows, in `archive_queue` order, as
+    /// `(queue_position, record)` pairs.
+    pub fn pull_pending_archive_rows<R: SqlFileRow>(&self, index: u64, limit: u64)
+        -> Result<Vec<(u64, R)>> {
+        tar_writer::pull_pending_archive_rows(&*self.conn(), index, limit)
+    }
+
+    /// Drop the `archive_queue` ordering table (idempotent). Success-path only.
+    pub fn drop_archive_queue(&self) -> Result<()> {
+        tar_writer::drop_archive_queue(&*self.conn())
     }
 
     pub fn get_archive_bytes_in(&self) -> Result<u64> {
