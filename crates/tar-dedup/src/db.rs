@@ -1084,19 +1084,20 @@ impl<'a> Recorder<'a> {
         out_tree_id: Option<OutTreeId>,
         phase: ErrorPhase,
         error: crate::error::FileStatError,
-        flags: flags::ErrorFlags,
-    ) {
+        flags: flags::ErrorFlags) {
+
         if !self.enabled {
             return;
         }
-        self.buf.push(RecordDraft {
+
+        // INFO: auto_flush in push!
+        self.push(RecordDraft {
             file_id,
             out_tree_id,
             phase,
             error,
             flags,
         });
-        self.try_auto_flush();
     }
 
     /// Session-scoped error: neither a file nor an out_tree row.
@@ -1106,8 +1107,8 @@ impl<'a> Recorder<'a> {
         &mut self,
         phase: ErrorPhase,
         error: crate::error::FileStatError,
-        flags: flags::ErrorFlags,
-    ) {
+        flags: flags::ErrorFlags) {
+
         self.record(
             None,
             None,
