@@ -368,14 +368,14 @@ fn truncate_archive_at(path: &Path, offset: u64) -> io::Result<()> {
     if offset == 0 {
         // Empty archive file: remove so next session starts clean.
         drop(file);
-        std::fs::remove_file(path)?;
+        fs::remove_file(path)?;
     }
     Ok(())
 }
 
 /// Get file len of archive, default to 0 even if file does not exist.
 fn archive_file_len(path: &Path) -> u64 {
-    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
 /// After recovery: if a prior session finalized cleanly, archive length must match meta.
