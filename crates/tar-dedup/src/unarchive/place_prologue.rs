@@ -40,7 +40,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         populate_out_tree(rt, use_new_name)?;
     }
     rt.progress.set_phase_total(rt.db.count_out_tree_rows()?);
-    // Canonical election is DB-only however meaningless in `--link-tree` mode
+    // Canonical election is DB-only. It is meaningless `--link-tree` mode
     // (same branch as the pre-refactor `place::run`).
     if !rt.config.placement.link_tree {
         prepare_hardlink_canonicals(rt)?;
@@ -75,21 +75,17 @@ fn resolve_transform(rt: &ExtractRTArgs) -> Result<Option<TransformExpr>> {
 fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
     -> Result<()> {
 
-    let config = rt.config;
-    let db = rt.db;
-    let shutdown = rt.shutdown;
-    let strip = config.strip_components;
-    if config.placement.absolute_names {
+    if rt.config.placement.absolute_names {
         let mut last_id = FileId(0);
         loop {
-            shutdown.check_in_flight()?;
-            let entries: Vec<StrippedRecord> = db.list_materialized_entries(
+            rt.shutdown.check_in_flight()?;
+            let entries: Vec<StrippedRecord> = rt.db.list_materialized_entries(
                 last_id, BATCH_SIZE, None, None, false
             )?;
             if entries.is_empty() { break }
             last_id = entries.last().expect("non-empty batch").id;
 
-            apply_renames(db, &entries, strip, transform, |abs: &Path| {
+            apply_renames(rt, &entries, transform, |abs: &Path| {
                 debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
                 debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
                 abs.strip_prefix("/").expect("abs path starts with /").to_path_buf()
@@ -98,7 +94,7 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
     } else {
         let mut last_source_id = 0i64;
         loop {
-            let sources = db.list_sources(None, last_source_id, BATCH_SIZE)?;
+            let sources = rt.db.list_sources(None, last_source_id, BATCH_SIZE)?;
             if sources.is_empty() { break; }
             last_source_id = sources.last().expect("non-empty batch").id;
 
@@ -107,14 +103,14 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
                 let mut last_id = FileId(0);
 
                 loop {
-                    shutdown.check_in_flight()?;
-                    let entries: Vec<StrippedRecord> = db.list_materialized_entries(
+                    rt.shutdown.check_in_flight()?;
+                    let entries: Vec<StrippedRecord> = rt.db.list_materialized_entries(
                         last_id, BATCH_SIZE, Some(source.id), None, false,
                     )?;
                     if entries.is_empty() { break; }
                     last_id = entries.last().expect("non-empty batch").id;
 
-                    apply_renames(db, &entries, strip, transform, |abs: &Path| {
+                    apply_renames(rt, &entries, transform, |abs: &Path| {
                         abs.strip_prefix(&source_abs)
                             .expect("entry must start within source root")
                             .to_path_buf()
@@ -147,34 +143,30 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
 pub fn populate_out_tree(
     rt: &ExtractRTArgs, use_new_name: bool)
     -> Result<()> {
-    let config = rt.config;
-    let db = rt.db;
-    debug_assert!(config.paths.extraction_root().is_absolute(),
+    debug_assert!(rt.config.paths.extraction_root().is_absolute(),
                   "INVARIANT ERROR: extraction root is not absolute");
-    debug_assert!(!db.out_tree_is_built()?, "PRECONDITION FAILED: out tree built");
-    if config.placement.absolute_names {
+    debug_assert!(!rt.db.out_tree_is_built()?, "PRECONDITION FAILED: out tree built");
+    if rt.config.placement.absolute_names {
         populate_out_tree_abs(rt, use_new_name)?;
     } else {
         populate_out_tree_rel(rt, use_new_name)?;
     }
 
-    ensure_parent(db, rt.progress)?;
-    db.set_out_tree_built()?;
+    ensure_parent(rt.db, rt.progress)?;
+    rt.db.set_out_tree_built()?;
     Ok(())
 }
 
 /// Elect hard-link canonicals in the out_tree (mark_canonical family of updates).
 fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
-    let config = rt.config;
-    let db = rt.db;
-    let updates: u64 = match config.placement.hard_link_grouping {
-        HardLinkGrouping::None => db.mark_all_canonical()?,
-        HardLinkGrouping::Global => db.mark_global_canonical()?,
+    let updates: u64 = match rt.config.placement.hard_link_grouping {
+        HardLinkGrouping::None => rt.db.mark_all_canonical()?,
+        HardLinkGrouping::Global => rt.db.mark_global_canonical()?,
         HardLinkGrouping::Source => {
             let mut last_id = 0i64;
             let mut sum = 0u64;
             loop {
-                let sources = db.list_sources(None, last_id, BATCH_SIZE)?;
+                let sources = rt.db.list_sources(None, last_id, BATCH_SIZE)?;
                 if sources.is_empty() { break; }
                 last_id = sources
                     .last()
@@ -182,7 +174,7 @@ fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
                     .id;
 
                 for source in sources {
-                    sum += db.mark_source_canonical(source.id)?;
+                    sum += rt.db.mark_source_canonical(source.id)?;
                 }
             }
             sum
@@ -198,9 +190,8 @@ fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
 
 // INFO: Not tested or reasoned through. Trusted the output of an LLM here.
 fn apply_renames(
-    db: &Database,
+    rt: &ExtractRTArgs,
     entries: &[StrippedRecord],
-    strip: u32,
     transform: Option<&TransformExpr>,
     member_of: impl Fn(&Path) -> PathBuf)
     -> Result<()> {
@@ -211,10 +202,10 @@ fn apply_renames(
             name = t.apply(&name);
         }
         // Strip after transform (GNU order); `strip == 0` leaves the name as-is.
-        let name = strip_relative_member(&name, strip);
+        let name = strip_relative_member(&name, rt.config.strip_components);
         // In new-name mode every row gets a (possibly identity) member; `""`
         // marks the empty-name skip sentinel consumed by the out_tree filter.
-        db.set_file_new_name(entry.id, Some(&name))?;
+        rt.db.set_file_new_name(entry.id, Some(&name))?;
     }
     Ok(())
 }
