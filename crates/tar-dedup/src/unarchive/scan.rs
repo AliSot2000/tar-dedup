@@ -283,6 +283,15 @@ fn run_inner(
     let sdb = rt.db.expect(OPT_DB_ERROR);
     let trust_catalog = scan.from_footer || scan.saw_manifest_db || rt.config.scan.force_scan;
 
+    // Check for any payloads that were extracted but somehow not recorded
+    // TODO should this be a panic?
+    let (present, new) = sdb.check_cached_payloads(&rt.config.paths.extract_cache_dir())?;
+    tracing::info!("Successfully extracted {present} files to the cache directory");
+    if new > 0 {
+        tracing::warn!("Found {new} archive payload(s) which were not recorded as extracted.");
+    }
+
+    report_scan_completeness(&sdb, scan.from_footer, rt.config.scan.force_scan)?;
     if trust_catalog {
         let n = sdb.promote_extracted_to_unarchived()?;
         if n > 0 {
@@ -292,8 +301,6 @@ fn run_inner(
             );
         }
     }
-
-    report_scan_completeness(&sdb, scan.from_footer, config.scan.force_scan)?;
 
     let paths = sdb.count_files_in_phase(FilePhase::Unarchived)?;
     let source = if scan.from_footer {
