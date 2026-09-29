@@ -726,8 +726,8 @@ impl Database {
         scan::promote_extracted_to_unarchived(&*self.conn())
     }
 
-    pub fn flush_cached_payloads(&self, cache_dir: &Path) -> Result<u64> {
-        scan::flush_cached_payloads(&*self.conn(), cache_dir)
+    pub fn check_cached_payloads(&self, cache_dir: &Path) -> Result<(u64, u64)> {
+        scan::check_cached_payloads(&mut *self.conn_mut(), cache_dir)
     }
 
     pub fn count_missing_payloads(&self) -> Result<u64> {
