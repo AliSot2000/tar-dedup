@@ -19,6 +19,9 @@ pub struct ParseFilterBuffer {
     exclude_filters: Vec<(String, Option<u64>, String)>,
 }
 
+/// When extracting, it is not guaranteed that a database is present. This buffer captures the
+/// parsed filter results and stores it until it is written to the db. This allows for validation
+/// at invocation time rather when the database becomes available.
 impl ParseFilterBuffer {
     pub fn add_include(&mut self, from: &str, line: Option<u64>, query: &str) -> Result<u64> {
         self.include_filters.push((from.to_string(), line, query.to_string()));
