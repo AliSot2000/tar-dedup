@@ -20,10 +20,18 @@ const BATCH_SIZE: u64 = 10_000;
 
 // INFO - Archival works as follows:
 //  Ineligible files are promoted first.
+//  Then, the eligible files are appended to the archive one by one.
+//  If it fails, the ErrorWhileArchive is set
+//  If it succeeds the AppendedPath is set
+//  If a session is force aborted, the stream is abandoned and the database committed
+//  If a session is exiting gracefully or was not interrupted, the set the phase of the files with
+//  the ArchivedPath to 'archived'. Then we append a snapshot of the database into the stream prior
+//  to finalizing and closing the stream.
+//  (??? Files with ErrorWhileArchive need to be promoted to 'archived')
 
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
-    // Crash / force leftover: truncate incomplete stream C, keep finished A..B.
+    // Crash / force leftover: truncate incomplete stream C, keep finished A.B.
     recover_incomplete_session(rt, &mut recorder)?;
 
     let archive_offset = archive_file_len(&rt.config.paths.archive_path);
