@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 
 // TODO Seek capabilities for regular tar stream
 /// Decompressed byte stream for a tar-dedup archive (handles concatenated xz/gzip streams).
-pub fn open_decompressed(path: &Path, format: CompressionFormat) -> Result<Box<dyn Read>> {
+pub fn open_decompressed(path: &Path, format: &CompressionFormat) -> Result<Box<dyn Read>> {
     let file = File::open(path).map_err(|e| Error::io(path, e))?;
     let reader: Box<dyn Read> = match format {
         CompressionFormat::Xz => Box::new(XzDecoder::new(file)),
@@ -26,7 +26,7 @@ pub fn open_decompressed(path: &Path, format: CompressionFormat) -> Result<Box<d
     Ok(reader)
 }
 
-pub fn open_tar_archive(path: &Path, format: CompressionFormat)
+pub fn open_tar_archive(path: &Path, format: &CompressionFormat)
     -> Result<tar::Archive<BufReader<Box<dyn Read>>>> {
     let raw = open_decompressed(path, format)?;
     Ok(tar::Archive::new(BufReader::with_capacity(4 * 1024 * 1024, raw)))
