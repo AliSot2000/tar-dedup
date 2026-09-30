@@ -150,6 +150,10 @@ impl Database {
         common::list_files_in_phase(&*self.conn(), phase)
     }
 
+    pub fn global_mark_phase(&self, phase: FilePhase) -> Result<u64> {
+        common::global_mark_phase(&self.conn(), phase)
+    }
+
     pub fn mark_file_phase(&self, file_id: FileId, phase: FilePhase) -> Result<()> {
         common::mark_phase(&*self.conn(), file_id, phase)
     }

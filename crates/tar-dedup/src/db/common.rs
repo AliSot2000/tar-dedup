@@ -453,6 +453,16 @@ pub fn list_files_in_phase<R: SqlFileRow>(conn: &Connection, phase: FilePhase) -
         .map_err(Into::into)
 }
 
+pub fn global_mark_phase(conn: &Connection, phase: FilePhase) -> Result<u64> {
+    let res = conn.execute(
+        "UPDATE files SET phase = :phase",
+        named_params! {
+            ":phase": phase.as_str(),
+        },
+    ).to_panic()?;
+    Ok(res as u64)
+}
+
 pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
     conn.execute(
         "UPDATE files SET phase = :phase WHERE id = :id",
