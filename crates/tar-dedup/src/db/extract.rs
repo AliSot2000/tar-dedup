@@ -35,6 +35,7 @@ pub fn load_extract_runtime_state(conn: &Connection) -> Result<Option<ExtractRun
         return Ok(None);
     };
     let snapshots_ingested = meta::get_extract_snapshots_ingested(conn)?.unwrap_or(0);
+    
     Ok(Some(ExtractRuntimeState {
         phase,
         snapshots_ingested,
