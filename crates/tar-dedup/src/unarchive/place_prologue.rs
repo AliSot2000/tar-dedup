@@ -13,10 +13,11 @@ use std::path::{Component, Path, PathBuf};
 use path_clean::PathClean;
 
 use crate::cli::HardLinkGrouping;
+use crate::common::batched_stepped_loop;
 use crate::common::transform::{TransformExpr, TransformSource, parse_transform_expr};
 use crate::db::Database;
 use crate::db::flags::{OutTreeFlag, OutTreeFlags};
-use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, StrippedRecord};
+use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, SourceRecord, StrippedRecord};
 use crate::error::Result;
 use crate::unarchive::ExtractRTArgs;
 
@@ -76,50 +77,50 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
     -> Result<()> {
 
     if rt.config.placement.absolute_names {
-        let mut last_id = FileId(0);
-        loop {
-            rt.shutdown.check_in_flight()?;
-            let entries: Vec<StrippedRecord> = rt.db.list_materialized_entries(
-                last_id, BATCH_SIZE, None, None, false
-            )?;
-            if entries.is_empty() { break }
-            last_id = entries.last().expect("non-empty batch").id;
-
-            apply_renames(rt, &entries, transform, |abs: &Path| {
-                debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
-                debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
-                abs.strip_prefix("/").expect("abs path starts with /").to_path_buf()
-            })?;
-        }
-    } else {
-        let mut last_source_id = 0i64;
-        loop {
-            let sources = rt.db.list_sources(None, last_source_id, BATCH_SIZE)?;
-            if sources.is_empty() { break; }
-            last_source_id = sources.last().expect("non-empty batch").id;
-
-            for source in sources {
-                let source_abs = source.abs_path;
-                let mut last_id = FileId(0);
-
-                loop {
-                    rt.shutdown.check_in_flight()?;
-                    let entries: Vec<StrippedRecord> = rt.db.list_materialized_entries(
-                        last_id, BATCH_SIZE, Some(source.id), None, false,
-                    )?;
-                    if entries.is_empty() { break; }
-                    last_id = entries.last().expect("non-empty batch").id;
-
-                    apply_renames(rt, &entries, transform, |abs: &Path| {
-                        abs.strip_prefix(&source_abs)
-                            .expect("entry must start within source root")
-                            .to_path_buf()
-                    })?;
-                }
+        batched_stepped_loop(
+            BATCH_SIZE,
+            || FileId(0),
+            |lid, bs| rt.db.list_materialized_entries(
+                *lid, bs, None, None, false
+            ),
+            |r: &StrippedRecord| r.id,
+            |entries| {
+                apply_renames(rt, &entries, transform, |abs: &Path| {
+                    debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
+                    debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
+                    abs.strip_prefix("/").expect("abs path starts with /").to_path_buf()
+                })
             }
-        }
+        )
+    } else {
+        batched_stepped_loop(
+            BATCH_SIZE,
+            || 0i64,
+            |lid, bs| rt.db.list_sources(None, *lid, bs),
+            |src: &SourceRecord| src.id,
+            |sources| {
+                for source in sources {
+                    let source_abs = source.abs_path;
+                    batched_stepped_loop(
+                        BATCH_SIZE,
+                        || FileId(0),
+                        |lid, bs| rt.db.list_materialized_entries(
+                            *lid, bs, Some(source.id), None, false,
+                        ),
+                        |rec: &StrippedRecord|  rec.id,
+                        |entries| {
+                            apply_renames(rt, &entries, transform, |abs: &Path| {
+                                abs.strip_prefix(&source_abs)
+                                    .expect("entry must start within source root")
+                                    .to_path_buf()
+                            })
+                        }
+                    )?;
+                }
+                Ok(())
+            }
+        )
     }
-    Ok(())
 }
 
 /// Placement contract:
@@ -145,7 +146,9 @@ pub fn populate_out_tree(
     -> Result<()> {
     debug_assert!(rt.config.paths.extraction_root().is_absolute(),
                   "INVARIANT ERROR: extraction root is not absolute");
-    debug_assert!(!rt.db.out_tree_is_built()?, "PRECONDITION FAILED: out tree built");
+    debug_assert!(!rt.db.out_tree_is_built()?,
+                  "PRECONDITION FAILED: out tree built");
+
     if rt.config.placement.absolute_names {
         populate_out_tree_abs(rt, use_new_name)?;
     } else {
@@ -213,32 +216,28 @@ fn apply_renames(
 /// Build the out_tree table, if the user selected absolute names for the materialization method.
 fn populate_out_tree_abs(
     rt: &ExtractRTArgs, use_new_name: bool) -> Result<()> {
-    let config = rt.config;
-    let db = rt.db;
-    let shutdown = rt.shutdown;
-    debug_assert!(config.placement.absolute_names,
+    debug_assert!(rt.config.placement.absolute_names,
                   "PRECONDITION FAILED: Function builds absolute names");
-    let root = config.paths.extraction_root();
-    let mut last_id = FileId(0);
 
-    loop {
-        shutdown.check_in_flight()?;
-        let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-            last_id, BATCH_SIZE, None, None, use_new_name
-        )?;
-        if entries.is_empty() { break; }
-        last_id = entries.last().expect("non-empty batch").id;
+    batched_stepped_loop(
+        BATCH_SIZE,
+        || FileId(0),
+        |lid, bs| rt.db.list_materialized_entries(
+            *lid, bs, None, None, use_new_name
+        ),
+        |rec: &StrippedRecord| rec.id,
+        |entries| {
+            // Process the entries
+            let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
+                &entries, &rt.config.paths.extraction_root(), None, use_new_name
+            );
 
-        // Process the entries
-        let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-            &entries, &root, None, use_new_name
-        );
-
-        db.insert_out_tree_rows(&processed)?;
-        rt.progress.inc_both(processed.len() as u64);
-        // INFO ref table is left empty since we are working with abs_paths
-    }
-    Ok(())
+            rt.db.insert_out_tree_rows(&processed)?;
+            rt.progress.inc_both(processed.len() as u64);
+            // INFO ref table is left empty since we are working with abs_paths
+            Ok(())
+        }
+    )
 }
 
 /// Build the out_tree table, if the user selected no absolute names for the materialization method.
@@ -250,63 +249,60 @@ fn populate_out_tree_rel(
     rt: &ExtractRTArgs,
     use_new_name: bool)
     -> Result<()> {
-    let config = rt.config;
-    let db = rt.db;
-    let shutdown = rt.shutdown;
-    let root = config.paths.extraction_root();
-    let mut last_source_id = 0i64;
+    let new_name = use_new_name;
 
-    loop {
-        let sources = db.list_sources(None, last_source_id, BATCH_SIZE)?;
-        if sources.is_empty() {
-            break;
-        }
-        last_source_id = sources.last().expect("non-empty batch").id;
+    let root = rt.config.paths.extraction_root();
+    batched_stepped_loop(
+        BATCH_SIZE,
+        || 0i64,
+        |lid, bs| rt.db.list_sources(None, *lid, bs),
+        |src| src.id,
+        |sources| {
+            for source in sources {
+                let san_org_path = source.original_path.clean();
 
-        for source in sources {
-            let san_org_path = source.original_path.clean();
-
-            let extraction_base: PathBuf = if san_org_path.is_absolute() {
-                // Got root dir, simply return the extract root
-                if san_org_path == PathBuf::from("/") {
-                    root.to_path_buf()
+                let extraction_base: PathBuf = if san_org_path.is_absolute() {
+                    // Got root dir, simply return the extract root
+                    if san_org_path == PathBuf::from("/") {
+                        root.to_path_buf()
+                    } else {
+                        let stripped = san_org_path
+                            .strip_prefix("/")
+                            .expect("Absolute expects / at the beginning");
+                        root.join(stripped)
+                    }
                 } else {
-                    let stripped = san_org_path
-                        .strip_prefix("/")
-                        .expect("Absolute expects / at the beginning");
-                    root.join(stripped)
-                }
-            } else {
-                let (cut, _) = strip_leading_up(&san_org_path);
-                debug_assert!(!cut.starts_with("/"), "Relative does not expect a / at begin");
-                root.join(cut)
-            };
+                    let (cut, _) = strip_leading_up(&san_org_path);
+                    debug_assert!(!cut.starts_with("/"), "Relative does not expect a / at begin");
+                    root.join(cut)
+                };
 
-            // File Loop
-            let mut last_id = FileId(0);
-            loop {
-                shutdown.check_in_flight()?;
-                let entries: Vec<StrippedRecord> = db.list_materialized_entries(
-                    last_id, BATCH_SIZE, Some(source.id), Some(false), use_new_name,
+                batched_stepped_loop(
+                    BATCH_SIZE,
+                    || FileId(0),
+                    |lid, bs| rt.db.list_materialized_entries(
+                        *lid, bs, Some(source.id), None, new_name,
+                    ),
+                    |rec: &StrippedRecord| rec.id,
+                    |entries| {
+                        let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
+                            &entries, &root, Some((&source.abs_path, &extraction_base)), new_name
+                        );
+
+                        let out_ids = rt.db.insert_out_tree_rows(&processed)?;
+                        let ref_pairs: Vec<(OutTreeId, i64)> = out_ids
+                            .iter()
+                            .map(|id| { (id.clone(), source.id) })
+                            .collect();
+                        rt.db.insert_ref_out_rows(&ref_pairs)?;
+                        rt.progress.inc_both(processed.len() as u64);
+                        Ok(())
+                    }
                 )?;
-                if entries.is_empty() { break; }
-                last_id = entries.last().expect("non-empty batch").id;
-
-                let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-                    &entries, &root, Some((&source.abs_path, &extraction_base)), use_new_name
-                );
-
-                let out_ids = db.insert_out_tree_rows(&processed)?;
-                let ref_pairs: Vec<(OutTreeId, i64)> = out_ids
-                    .iter()
-                    .map(|id| { (id.clone(), source.id) })
-                    .collect();
-                db.insert_ref_out_rows(&ref_pairs)?;
-                rt.progress.inc_both(processed.len() as u64);
             }
+            Ok(())
         }
-    }
-    Ok(())
+    )
 }
 
 /// Ensures parent exists for all non-directory rows inside the out_tree. This is needed in case
@@ -316,37 +312,39 @@ fn populate_out_tree_rel(
 fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet) -> Result<()> {
     let mut current_parents: HashSet<PathBuf> = HashSet::new();
     let mut parent_rows: Vec<NewOutTreeRow> = Vec::new();
-    let mut last_id = OutTreeId(0);
     let mut flags = OutTreeFlags::default();
     flags.set(OutTreeFlag::IsDirectory, true);
     let cref_flags = &flags;
 
-    loop {
-        let entries = db.list_out_tree(
-            last_id, BATCH_SIZE, None, Some(false))?;
-        if entries.is_empty() { break }
-        last_id = entries.last().expect("PRECONDITION FAILED: Must have at least one").id;
+    batched_stepped_loop(
+        BATCH_SIZE,
+        || OutTreeId(0),
+        |lid, bs| db.list_out_tree(
+            *lid, bs, None, Some(false)
+        ),
+        |o_rec| o_rec.id,
+        |entries | {
+            for entry in entries {
+                let par = entry.abs_path.parent().expect("File NEEDs Parent");
+                current_parents.insert(par.to_path_buf());
+            }
 
-        for entry in entries {
-            let par = entry.abs_path.parent().expect("File NEEDs Parent");
-            current_parents.insert(par.to_path_buf());
+            for parent in &current_parents {
+                parent_rows.push(NewOutTreeRow {
+                    abs_path: parent.clone(),
+                    file_id: None,
+                    flags: cref_flags.clone(),
+                })
+            }
+            progress.inc_both(parent_rows.len() as u64);
+            db.insert_out_tree_rows(&parent_rows)?;
+            // Clear the accumulators before the next run to avoid huge structures in ram.
+            current_parents.clear();
+            parent_rows.clear();
+
+            Ok(())
         }
-
-        for parent in &current_parents {
-            parent_rows.push(NewOutTreeRow {
-                abs_path: parent.clone(),
-                file_id: None,
-                flags: cref_flags.clone(),
-            })
-        }
-        progress.inc_both(parent_rows.len() as u64);
-        db.insert_out_tree_rows(&parent_rows)?;
-        // Clear the accumulators before the next run to avoid huge structures in ram.
-        current_parents.clear();
-        parent_rows.clear();
-    }
-
-    Ok(())
+    )
 }
 
 /// Given a vectors of StrippedRecords compute the new OutTreeRows. In new-name
