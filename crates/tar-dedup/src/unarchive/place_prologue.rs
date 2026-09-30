@@ -22,6 +22,7 @@ use crate::error::Result;
 use crate::unarchive::ExtractRTArgs;
 
 const BATCH_SIZE: u64 = 10_000;
+// TODO: Add the proper progress bars.
 
 /// Run the pure-DB placement preparation once (idempotent via meta flag).
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
