@@ -243,6 +243,8 @@ pub enum FilePhase {
     // Extract pipeline — restore everything to rel_path inside the archive
     /// Ready to restore (payload may already be in extract cache).
     Unarchived,
+    /// Filtered
+    ExtractFiltered,
     /// An optional check to make sure there was no file corruption on the way.
     Rehashed,
     /// Any DirEntry successfully restored at destination.
@@ -263,6 +265,7 @@ impl FilePhase {
             Self::Archived => "archived",
 
             Self::Unarchived => "unarchived",
+            Self::ExtractFiltered => "extract_filtered",
             Self::Rehashed => "rehashed",
             Self::AtDestination => "at_destination",
             Self::PermissionsRestored => "permissions_restored",
@@ -280,6 +283,7 @@ impl FilePhase {
             "archived" => Ok(Self::Archived),
 
             "unarchived" => Ok(Self::Unarchived),
+            "extract_filtered" => Ok(Self::ExtractFiltered),
             "rehashed" => Ok(Self::Rehashed),
             "at_destination" => Ok(Self::AtDestination),
             "permissions_restored" => Ok(Self::PermissionsRestored),
