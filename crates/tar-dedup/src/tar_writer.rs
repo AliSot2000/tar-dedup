@@ -133,6 +133,7 @@ impl TarWriter {
     }
 
     /// Graceful session end: flush tar (no EOF), finish compression stream.
+    /// INFO: Errors are io and config
     pub fn finalize_session(mut self) -> Result<(u64, u64)> {
         
         let bytes_in = self.bytes_in;
@@ -158,6 +159,7 @@ impl TarWriter {
     }
 
     /// Final archive close: emit tar EOF, then finish compression.
+    /// INFO: Errors are io and config
     pub fn finalize_archive(mut self) -> Result<(u64, u64)> {
 
         let bytes_in = self.bytes_in;
@@ -211,6 +213,7 @@ impl TarWriter {
         let mut builder = self
             .builder
             .take()
+            // TODO different error kind.
             .ok_or_else(|| Error::Config("tar builder already consumed".into()))?;
 
         builder.get_mut().allow_tar_eof = allow_tar_eof;
