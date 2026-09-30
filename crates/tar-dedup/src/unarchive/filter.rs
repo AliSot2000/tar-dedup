@@ -4,6 +4,7 @@
 use crate::common::filter::ingest_filters as internal_ingest_filter;
 use crate::common::filter::{FilterSink, joint_filter_phase};
 use crate::config::ExtractConfig;
+use crate::db::types::FilePhase;
 use crate::db::types::FilePhase::Unarchived;
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::Result;
@@ -55,7 +56,7 @@ impl ParseFilterBuffer {
 // INFO: When no manifest DB was found (truncated / non-conform archive), the extract
 //  filter pass is a deliberate no-op: there is nothing to match against, and filters
 //  stay in `ExtractConfig`. Verified via the row count.
-pub fn run(rt: &ExtractRTArgs) -> Result<()> {
+pub fn run(rt: &ExtractRTArgs, set_phase: bool) -> Result<()> {
     joint_filter_phase(
         false,
         rt.config.filter.anchored,
@@ -71,7 +72,12 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
             *lid, batch_size
         ),
         |results| rt.db.apply_filter_result_extract(results.into_iter())
-    )
+    )?;
+    if set_phase {
+        let updated = rt.db.global_mark_phase(FilePhase::ExtractFiltered)?;
+        tracing::info!("Promoted {updated} entries to ExtractFiltered");
+    }
+    Ok(())
 }
 
 pub fn ingest_filters(config: &ExtractConfig, recorder: &mut Recorder) -> Result<ParseFilterBuffer> {
