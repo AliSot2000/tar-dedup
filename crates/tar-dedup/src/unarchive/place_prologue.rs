@@ -36,15 +36,18 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     // the out_tree from `abs_path` as before.
     let use_new_name = transform.is_some() || rt.config.strip_components > 0;
     if use_new_name {
+        tracing::info!("Apply name transformation");
         populate_new_names(rt, transform.as_ref())?;
     }
     if !rt.db.out_tree_is_built()? {
+        tracing::info!("Populating out tree");
         populate_out_tree(rt, use_new_name)?;
     }
     rt.progress.set_phase_total(rt.db.count_out_tree_rows()?);
     // Canonical election is DB-only. It is meaningless `--link-tree` mode
     // (same branch as the pre-refactor `place::run`).
     if !rt.config.placement.link_tree {
+        tracing::info!("Determining hardlink canonicals");
         prepare_hardlink_canonicals(rt)?;
     }
     rt.db.set_placement_prologue_done()?;
