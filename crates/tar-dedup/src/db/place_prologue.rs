@@ -46,30 +46,35 @@ pub fn list_materialized_entries<R: SqlFileRow>(
     } else {
         ""
     };
+
     let sql = match source_id {
-        Some(_) => &format!(
-            "SELECT {columns}
-            FROM files f
-            WHERE f.id > :last_id
-              AND {}
-              AND f.id IN (SELECT file_id FROM ref WHERE source_id = :source_id)
-              {filter_dir}
-              {filter_new_name}
-            ORDER BY f.id
-            LIMIT :batch_size",
-            generate_archive_and_extract_filter(Some("f"))
-        ),
-        None => &format!(
-            "SELECT {columns}
-            FROM files f
-            WHERE f.id > :last_id
-              AND {}
-              {filter_dir}
-              {filter_new_name}
-            ORDER BY f.id
-            LIMIT :batch_size",
-            generate_archive_and_extract_filter(Some("f"))
-        ),
+        Some(_) => {
+            let filter_included_exclude = generate_archive_and_extract_filter(Some("f"));
+            &format!("
+                SELECT {columns}
+                FROM files f
+                WHERE f.id > :last_id
+                    AND {filter_included_exclude}
+                    AND f.id IN (SELECT file_id FROM ref WHERE source_id = :source_id)
+                    {filter_dir}
+                    {filter_new_name}
+                ORDER BY f.id
+                LIMIT :batch_size"
+            )
+        },
+        None => {
+            let filter_include_exclude = generate_archive_and_extract_filter(Some("f"));
+            &format!("
+                SELECT {columns}
+                FROM files f
+                WHERE f.id > :last_id
+                    AND {filter_include_exclude}
+                    {filter_dir}
+                    {filter_new_name}
+                ORDER BY f.id
+                LIMIT :batch_size"
+            )
+        },
     };
     let mut stmt = conn.prepare(sql).to_panic()?;
     let params = match source_id {
@@ -83,7 +88,9 @@ pub fn list_materialized_entries<R: SqlFileRow>(
             ":batch_size": batch_size,
         },
     };
-    let rows = stmt.query_map(params, |r| R::from_row(r, Some("f"))).to_panic()?;
+    let rows = stmt.query_map(
+        params,
+        |r| R::from_row(r, Some("f"))).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
@@ -107,10 +114,10 @@ pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result
     if rows.is_empty() {
         return Ok(Vec::new());
     }
-    let mut insert = conn.prepare(
-        "INSERT OR IGNORE INTO out_tree (abs_path, file_id, flags)
-         VALUES (:abs_path, :file_id, :flags)",
-    ).to_panic()?;
+    let mut insert = conn.prepare("
+        INSERT OR IGNORE INTO out_tree (abs_path, file_id, flags)
+        VALUES (:abs_path, :file_id, :flags)").to_panic()?;
+
     for row in rows {
         insert.execute(named_params! {
             ":abs_path": row.abs_path.to_string_lossy().as_ref(),
@@ -119,6 +126,7 @@ pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result
         }).to_panic()?;
     }
     let mut ids = Vec::with_capacity(rows.len());
+    // get the newly inserted ids.
     for row in rows {
         let id: i64 = conn.query_row(
             "SELECT id FROM out_tree WHERE abs_path = :abs_path",
