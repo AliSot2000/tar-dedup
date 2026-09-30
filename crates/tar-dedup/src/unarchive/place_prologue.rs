@@ -166,20 +166,19 @@ fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
         HardLinkGrouping::None => rt.db.mark_all_canonical()?,
         HardLinkGrouping::Global => rt.db.mark_global_canonical()?,
         HardLinkGrouping::Source => {
-            let mut last_id = 0i64;
             let mut sum = 0u64;
-            loop {
-                let sources = rt.db.list_sources(None, last_id, BATCH_SIZE)?;
-                if sources.is_empty() { break; }
-                last_id = sources
-                    .last()
-                    .expect("PRECONDITION FAILED: At least one element expected")
-                    .id;
-
-                for source in sources {
-                    sum += rt.db.mark_source_canonical(source.id)?;
+            batched_stepped_loop(
+                BATCH_SIZE,
+                || 0i64,
+                |lid, bs| rt.db.list_sources(None, *lid, bs),
+                |src| src.id,
+                |sources| {
+                    for source in sources {
+                        sum += rt.db.mark_source_canonical(source.id)?;
+                    }
+                Ok(())
                 }
-            }
+            )?;
             sum
         }
     };
