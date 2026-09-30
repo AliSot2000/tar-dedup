@@ -345,10 +345,7 @@ fn end_session(
             }
             Ok(())
         }
-        Err(Error::Interrupted) if rt.shutdown.is_force() => {
-            panic!("Interrupt should not be raised here.")
-        }
-        Err(e) => Err(e),
+        Err(e) => Err(e), // (Expected to be Io, Config, DB)
     }
 }
 
