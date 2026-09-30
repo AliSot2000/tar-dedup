@@ -29,25 +29,21 @@ enum RehashOutcome {
 }
 
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
-    let config = rt.config;
-    let db = rt.db;
-    let shutdown = rt.shutdown;
-    let progress = rt.progress;
     // TODO promote all files that aren't elected to rehash
     // TODO also filer for sha.
-    let pending: Vec<StrippedRecord> = db.files_in_phase(FilePhase::Unarchived)?; // TODO that's wrong
+    let pending: Vec<StrippedRecord> = rt.db.files_in_phase(FilePhase::Unarchived)?; // TODO that's wrong
     let total = pending.len() as u64;
 
-    let do_skip = if config.scan.rehash { "" } else { "skip " };
+    let do_skip = if rt.config.scan.rehash { "" } else { "skip " };
     tracing::info!(
         files = pending.len(),
-        jobs = config.process.effective_jobs(),
+        jobs = rt.config.process.effective_jobs(),
         "{do_skip}rehash pass"
     );
 
-    if !config.scan.rehash {
-        let n = db.skip_rehash()?;
-        progress.inc_global(n);
+    if !rt.config.scan.rehash {
+        let n = rt.db.skip_rehash()?;
+        rt.progress.inc_global(n);
         tracing::info!(promoted = n, "rehash skipped; unarchived → rehashed");
         return Ok(());
     }
@@ -57,15 +53,15 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     }
 
     let pool = ThreadPoolBuilder::new()
-        .num_threads(config.process.effective_jobs())
+        .num_threads(rt.config.process.effective_jobs())
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
-    let stage_dir = config.paths.stage_dir();
-    let shutdown = shutdown.clone();
+    let stage_dir = rt.config.paths.stage_dir();
+    let shutdown = rt.shutdown.clone();
     let results = Mutex::new(Vec::<RehashOutcome>::new());
 
-    progress.set_phase_total(total);
+    rt.progress.set_phase_total(total);
 
     let parallel = pool.install(|| {
         pending.par_iter().try_for_each(|record| -> Result<()> {
@@ -73,14 +69,14 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 
             let outcome = rehash_one(&stage_dir, record, &shutdown);
             results.lock().expect("rehash results lock").push(outcome);
-            progress.inc_both(1);
+            rt.progress.inc_both(1);
             Ok(())
         })
     });
 
     let outcomes = results.lock().expect("rehash results lock").clone();
-    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
-    let counts = stat_and_apply_outcomes(db, &mut recorder, &outcomes)?;
+    let mut recorder = crate::db::Recorder::new(rt.db, !rt.config.process.no_errors);
+    let counts = stat_and_apply_outcomes(rt.db, &mut recorder, &outcomes)?;
     recorder.flush()?;
 
     let force = shutdown.is_force();
@@ -89,7 +85,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
             let (matches, mismatches, errors) = counts;
             tracing::info!(matches, mismatches, errors, "rehash complete");
             if mismatches > 0 {
-                if config.force {
+                if rt.config.force {
                     tracing::warn!(mismatches, "rehash digest mismatch(es) recorded");
                 } else {
                     return Err(Error::Config(format!(
