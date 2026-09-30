@@ -12,12 +12,13 @@ use std::path::Path;
 
 /// Iterate over the extraction dir twice to check for files we missed and for files that are missing
 pub fn check_cached_payloads(conn: &mut Connection, cache_dir: &Path) -> Result<(u64, u64)> {
+    let err_cap = |e| Error::io(cache_dir, e);
     let result = if cache_dir.is_dir() {
         with_transaction(conn, |int_conn| {
             let mut new = 0u64;
             let mut present = 0u64;
-            for entry in fs::read_dir(cache_dir).map_err(|e| Error::io(cache_dir, e))? {
-                let entry = entry.map_err(|e| Error::io(cache_dir, e))?;
+            for entry in fs::read_dir(cache_dir).map_err(err_cap)? {
+                let entry = entry.map_err(err_cap)?;
                 let ft = entry.file_type().map_err(|e| Error::io(&entry.path(), e))?;
                 if !ft.is_file() {
                     continue;
@@ -67,11 +68,13 @@ pub fn record_snapshot_ingested(conn: &mut Connection) -> Result<u32> {
     let mut scan = load_extract_scan_state(conn)?;
     scan.snapshots_ingested = scan.snapshots_ingested.saturating_add(1);
     save_extract_scan_state(conn, &scan)?;
+
     // Keep ExtractRuntimeState in sync when present.
     if let Some(mut runtime) = load_extract_runtime_state(conn)? {
         runtime.snapshots_ingested = scan.snapshots_ingested;
         save_extract_runtime_state(conn, &runtime)?;
     }
+
     Ok(scan.snapshots_ingested)
 }
 
