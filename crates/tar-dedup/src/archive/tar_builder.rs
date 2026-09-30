@@ -167,8 +167,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                 }
             }
             Ok(())
-        },
-    ) {
+        }) {
         Ok(()) => (),
         // Control-flow for an interrupt detected above; the `stopped` flags
         // decide graceful vs force in the post-loop section.
