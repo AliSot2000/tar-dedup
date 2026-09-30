@@ -4,6 +4,35 @@ use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Wrap a `Result`-returning free fn so `Err` is constrained to `$allowed`
+/// (an or-pattern). Debug builds panic on disallowed variants; the assert
+/// wrapper is compiled out entirely on release.
+macro_rules! error_guarded {
+    (
+        $vis:vis fn $name:ident($($arg:ident : $ty:ty),*) -> $ret:ty $body:block,
+        allowed: $allowed:pat
+    ) => {
+        #[cfg(not(debug_assertions))]
+        $vis fn $name($($arg: $ty),*) -> $ret { $body }
+
+        #[cfg(debug_assertions)]
+        $vis fn $name($($arg: $ty),*) -> $ret {
+            fn __guarded_impl($($arg: $ty),*) -> $ret { $body }
+            let __result = __guarded_impl($($arg),*);
+            debug_assert!(
+                match &__result {
+                    Ok(_) => true,
+                    Err(e) => matches!(e, $allowed),
+                },
+                "{} returned a disallowed error variant: {:?}",
+                stringify!($name),
+                __result.as_ref().err()
+            );
+            __result
+        }
+    };
+}
+
 /// Panic-on-error extension for any `Result<T, E>` whose error is displayable.
 ///
 /// Use it opt-in at the call site where an error *is* a process-abort reason:
