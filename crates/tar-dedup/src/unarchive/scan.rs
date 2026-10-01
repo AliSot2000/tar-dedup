@@ -303,11 +303,7 @@ fn run_inner(
     }
 
     let paths = sdb.count_files_in_phase(FilePhase::Unarchived)?;
-    let source = if scan.from_footer {
-        "footer"
-    } else {
-        "stream manifest"
-    };
+    let source = if scan.from_footer { "footer" } else { "stream manifest" };
 
     // TODO Promote all
 
