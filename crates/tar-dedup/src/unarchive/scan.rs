@@ -786,7 +786,7 @@ mod tests {
         assert!(state.saw_manifest_db);
         assert!(state.saw_any_members);
         assert!(state.scan_complete);
-        assert_eq!(state.last_member_index, Some(2));
+        assert_eq!(state.last_member_index, 2);
         assert_eq!(state.snapshots_ingested, 1);
         assert!(!state.from_footer);
     }
@@ -819,11 +819,11 @@ mod tests {
         let db = Database::open(&db_path).expect("open");
         let mut state = db.load_extract_scan_state().expect("state");
         assert!(!state.scan_complete);
-        assert_eq!(state.last_member_index, Some(2));
+        assert_eq!(state.last_member_index, 2);
 
         // Pretend the interrupt happened right after the leading manifest and roll
         // the catalog back, so the resumed pass has to redo members 1 and 2.
-        state.last_member_index = Some(0);
+        state.last_member_index = 0;
         db.save_extract_scan_state(&state).expect("save");
         db.normalize_installed_catalog().expect("rollback");
         db.checkpoint().expect("checkpoint");
@@ -842,7 +842,7 @@ mod tests {
         );
         let state = db.load_extract_scan_state().expect("state");
         assert!(state.scan_complete);
-        assert_eq!(state.last_member_index, Some(2));
+        assert_eq!(state.last_member_index, 2);
         // One from the first pass, one from the resumed pass; the interrupt added none.
         assert_eq!(state.snapshots_ingested, 2);
     }

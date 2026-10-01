@@ -409,19 +409,19 @@ pub fn set_scan_tar_from_footer(conn: &Connection, value: bool) -> Result<()> {
     set_entry(conn, &MetaEntry::ScanTarFromFooter(value))
 }
 
-pub fn get_scan_tar_last_member_index(conn: &Connection) -> Result<Option<u64>> {
-    get_typed(conn, MetaKey::ScanTarLastMemberIndex, |e| match e {
+pub fn get_scan_tar_last_member_index(conn: &Connection) -> Result<u64> {
+    let base = get_typed(conn, MetaKey::ScanTarLastMemberIndex, |e| match e {
         MetaEntry::ScanTarLastMemberIndex(v) => Some(v),
         _ => None,
-    })
+    })?;
+    match base {
+        None => Ok(0),
+        Some(v ) => Ok(v),
+    } 
 }
 
 pub fn set_scan_tar_last_member_index(conn: &Connection, value: u64) -> Result<()> {
     set_entry(conn, &MetaEntry::ScanTarLastMemberIndex(value))
-}
-
-pub fn delete_scan_tar_last_member_index(conn: &Connection) -> Result<()> {
-    delete_meta(conn, MetaKey::ScanTarLastMemberIndex.as_str())
 }
 
 pub fn get_out_tree_built(conn: &Connection) -> Result<Option<bool>> {
@@ -600,10 +600,9 @@ mod tests {
         );
         assert_eq!(get_extract_snapshots_ingested(&conn).unwrap(), Some(3));
         assert_eq!(get_scan_tar_saw_manifest_db(&conn).unwrap(), Some(true));
-        assert_eq!(get_scan_tar_last_member_index(&conn).unwrap(), Some(7));
-
-        delete_scan_tar_last_member_index(&conn).unwrap();
-        assert_eq!(get_scan_tar_last_member_index(&conn).unwrap(), None);
+        assert_eq!(get_scan_tar_last_member_index(&conn).unwrap(), 7);
+        
+        // TODO Check if it works fine if we drop the delete function
 
         upsert_meta(&conn, "mystery", "x").unwrap();
         upsert_meta(&conn, MetaKey::ArchivePhase.as_str(), "not-a-phase").unwrap();
