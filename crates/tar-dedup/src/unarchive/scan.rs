@@ -18,7 +18,7 @@ use path_clean::PathClean;
 use std::fs;
 use std::io;
 use std::io::{BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tar::Entry;
 
 const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";
@@ -542,7 +542,7 @@ fn store_progress_in_db(rt: &ScanRTState, scan: &ExtractScanState) -> Result<()>
 }
 
 /// Remove temp database and handle errors. If database does not exist, now error is emitted.
-fn captured_remove_temp_db(recorder: &mut Recorder, temp_db: &PathBuf) -> () {
+fn captured_remove_temp_db(recorder: &mut Recorder, temp_db: &Path) -> () {
     if !temp_db.exists() {
         return ();
     }
