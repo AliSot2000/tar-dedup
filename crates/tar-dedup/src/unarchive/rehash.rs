@@ -154,8 +154,8 @@ fn rehash_one(stage_dir: &Path, record: &StrippedRecord, shutdown: &Shutdown) ->
 fn stat_and_apply_outcomes(
     db: &Database,
     recorder: &mut crate::db::Recorder,
-    outcomes: &[RehashOutcome],
-) -> Result<(u64, u64, u64)> {
+    outcomes: &[RehashOutcome])
+    -> Result<(u64, u64, u64)> {
     let mut matches = 0u64;
     let mut mismatches = 0u64;
     let mut errors = 0u64;
