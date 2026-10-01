@@ -146,6 +146,10 @@ fn run_inner(
         None
     };
 
+    if let Some(edb) = rt.db.as_ref() {
+        rt.progress.set_phase_total(edb.count_entries()?);
+    }
+
     let mut force_buffer: Option<Vec<FileId>> = if rt.config.scan.force_scan {
         Some(Vec::new())
     } else {
