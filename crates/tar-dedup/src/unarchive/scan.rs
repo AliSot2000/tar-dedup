@@ -323,7 +323,11 @@ fn process_entry(
     -> Result<()> {
 
     let mut install_db = |rts: &mut ScanRTState| {
-        install_database(rts, db_path, entry, scan.from_footer, recorder, fb)
+        if scan.from_footer {
+            install_database(rts, db_path, entry, recorder, fb)
+        } else {
+            Ok(())
+        }
     };
 
     match (name, scan.saw_any_members) {
@@ -604,30 +608,21 @@ fn install_database(
     rt: &mut ScanRTState,
     db_path: &Path,
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
-    from_footer: bool,
     recorder: &mut Recorder,
     fb: &mut Option<ParseFilterBuffer>)
     -> Result<()> {
-    if from_footer {
-        match io::copy(entry, &mut io::sink()) {
-            Ok(_) => (),
-            Err(e) => {
-                let err = Error::io(db_path, e);
-                record_session_error(recorder, err.to_file_stat(Some(db_path)));
-                return Err(err);
-            }
-        }
-    } else {
-        captured_extract_database(&rt.config.paths.temp_db(), entry, recorder)?;
-        match open_initial_database(rt, db_path, fb) {
-            Ok(opened) => rt.db = Some(opened),
-            Err(e) => {
-                record_session_error(recorder, e.to_file_stat(Some(db_path)));
-                return Err(e);
-            }
+
+    captured_extract_database(&rt.config.paths.temp_db(), entry, recorder)?;
+    match open_initial_database(rt, db_path, fb) {
+        Ok(opened) => {
+            rt.db = Some(opened);
+            Ok(())
+        },
+        Err(e) => {
+            record_session_error(recorder, e.to_file_stat(Some(db_path)));
+            Err(e)
         }
     }
-    Ok(())
 }
 
 /// Install catalog from `temp` into `target`, normalize, and init extract runtime state.
