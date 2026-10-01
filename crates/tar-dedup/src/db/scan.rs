@@ -280,12 +280,16 @@ pub fn init_extract_runtime_state(conn: &mut Connection) -> Result<()> {
 /// nt_snapshot_before = snapshots_ingested
 /// nt_stopped = false
 pub fn load_extract_scan_state(conn: &Connection) -> Result<ExtractScanState> {
+    let snapshot_ingested = meta::get_extract_snapshots_ingested(conn)?.unwrap_or(0);
     Ok(ExtractScanState {
         saw_manifest_db: meta::get_scan_tar_saw_manifest_db(conn)?.unwrap_or(false),
         saw_any_members: meta::get_scan_tar_saw_any_members(conn)?.unwrap_or(false),
         scan_complete: meta::get_scan_tar_complete(conn)?.unwrap_or(false),
         last_member_index: meta::get_scan_tar_last_member_index(conn)?,
         from_footer: meta::get_scan_tar_from_footer(conn)?.unwrap_or(false),
-        snapshots_ingested: meta::get_extract_snapshots_ingested(conn)?.unwrap_or(0),
+        snapshots_ingested: snapshot_ingested,
+
+        nt_snapshot_before: snapshot_ingested,
+        nt_stopped: false,
     })
 }
