@@ -159,6 +159,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 /// Map a phase to its global-bar anchor and swap in the matching phase bar.
 fn enter_phase(progress: &ProgressBarSet, phase: ExtractPipelinePhase) {
     let (name, kind) = match phase {
+        // TODO: Perhaps the thing should be COUNTER or COUNT depending on if we have --force or not
         ExtractPipelinePhase::ScanTar => ("scan", BarKind::Counter),
         ExtractPipelinePhase::Filter => ("filter", BarKind::Counter),
         ExtractPipelinePhase::Rehash => ("rehash", BarKind::Count),
