@@ -332,13 +332,14 @@ fn process_entry(
     recorder: &mut Recorder,
     fb: &mut Option<ParseFilterBuffer>)
     -> Result<()> {
+
     let mut install_db = |rts: &mut ScanRTState| {
         install_database(rts, db_path, entry, scan.from_footer, recorder, fb)
     };
+
     match (name, scan.saw_any_members) {
         // Spec conform: No db, initial snapshot is first.
         (SNAPSHOT_INIT_TAR_NAME, false) => {
-            //     if scan.from_footer
             install_db(rt)?;
             scan.saw_manifest_db = true;
         }
