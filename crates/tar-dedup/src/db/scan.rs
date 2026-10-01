@@ -228,10 +228,7 @@ pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState)
         meta::set_scan_tar_saw_manifest_db(conn, state.saw_manifest_db)?;
         meta::set_scan_tar_saw_any_members(conn, state.saw_any_members)?;
         meta::set_scan_tar_complete(conn, state.scan_complete)?;
-        match state.last_member_index {
-            Some(index) => meta::set_scan_tar_last_member_index(conn, index)?,
-            None => meta::delete_scan_tar_last_member_index(conn)?,
-        }
+        meta::set_scan_tar_last_member_index(conn, state.last_member_index)?;
         meta::set_scan_tar_from_footer(conn, state.from_footer)?;
         meta::set_extract_snapshots_ingested(conn, state.snapshots_ingested)?;
         Ok(())
