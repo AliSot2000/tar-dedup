@@ -136,10 +136,7 @@ fn run_inner(
     let footer_this_pass = !resume_db && opt_db.is_ok();
 
     rt.db = if resume_db {
-        let opened = Database::open(db_path)?;
-        opened.init_extract_runtime_state()?;
-        captured_remove_temp_db(recorder, &rt.config.paths.temp_db());
-        Some(opened)
+        open_resume_database(&db_path, &rt.config.paths.temp_db(), recorder)?
     } else if footer_this_pass {
         Some(open_initial_database(&rt, db_path, filter_buffer)?)
     } else {
@@ -592,26 +589,14 @@ fn captured_extract_database<R: Read> (
     }
 }
 
-/// Install catalog from `temp` into `target`, normalize, and init extract runtime state.
-fn open_initial_database(
-    rt: &ScanRTState,
-    target: &Path,
-    fb: &mut Option<ParseFilterBuffer>)
-    -> Result<Database> {
+fn open_resume_database(db_path: &Path, temp_db: &Path, recorder: &mut Recorder)
+    -> Result<Option<Database>> {
 
-    // INFO: Will move the database into the correct place.
-    Database::install_initial_manifest(&rt.config.paths.temp_db(), target)?;
-    let opened = Database::open(target)?;
+    let opened = Database::open(db_path)?;
     opened.init_extract_runtime_state()?;
-    opened.normalize_installed_catalog()?;
-    let rt = ExtractRTArgs {
-        config: rt.config,
-        db: &opened,
-        shutdown: rt.shutdown,
-        progress: rt.progress,
-    };
-    store_filter_buffer(fb, &rt)?;
-    Ok(opened)
+    captured_remove_temp_db(recorder, temp_db);
+
+    Ok(Some(opened))
 }
 
 /// Function deals with initial installation of the database (being aware of the footer)
@@ -643,6 +628,25 @@ fn install_database(
         }
     }
     Ok(())
+}
+
+/// Install catalog from `temp` into `target`, normalize, and init extract runtime state.
+fn open_initial_database(
+    rt: &ScanRTState,
+    target: &Path,
+    fb: &mut Option<ParseFilterBuffer>)
+    -> Result<Database> {
+
+    // INFO: Will move the database into the correct place.
+    Database::install_initial_manifest(&rt.config.paths.temp_db(), target)?;
+    let opened = Database::open(target)?;
+    opened.init_extract_runtime_state()?;
+    opened.normalize_installed_catalog()?;
+    let rt = ExtractRTArgs {
+        config: rt.config, db: &opened, shutdown: rt.shutdown, progress: rt.progress
+    };
+    store_filter_buffer(fb, &rt)?;
+    Ok(opened)
 }
 
 /// Extract and sanitize the entry basename from a tar member path.
