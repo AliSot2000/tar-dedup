@@ -222,35 +222,6 @@ pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool
     Ok(res > 0)
 }
 
-pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState)
-    -> Result<()> {
-    with_transaction(conn, |conn| {
-        meta::set_scan_tar_saw_manifest_db(conn, state.saw_manifest_db)?;
-        meta::set_scan_tar_saw_any_members(conn, state.saw_any_members)?;
-        meta::set_scan_tar_complete(conn, state.scan_complete)?;
-        meta::set_scan_tar_last_member_index(conn, state.last_member_index)?;
-        meta::set_scan_tar_from_footer(conn, state.from_footer)?;
-        meta::set_extract_snapshots_ingested(conn, state.snapshots_ingested)?;
-        Ok(())
-    })
-}
-
-/// Copy an embedded catalog into the extract work DB.
-pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<()> {
-    if db_path.is_file() {
-        fs::remove_file(db_path).map_err(|e| Error::io(db_path, e))?;
-    }
-    fs::copy(snapshot_path, db_path).map_err(|e| Error::io(db_path, e))?;
-    Ok(())
-}
-
-pub fn init_extract_runtime_state(conn: &mut Connection) -> Result<()> {
-    if load_extract_runtime_state(conn)?.is_none() {
-        save_extract_runtime_state(conn, &ExtractRuntimeState::new())?;
-    }
-    Ok(())
-}
-
 // TODO this should not technically be necessary. The we should be able to run the integrity checks
 //  when extracting
 /// Normalize a freshly installed catalog so stream handling is provenance-agnostic.
@@ -276,6 +247,38 @@ pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Copy an embedded catalog into the extract work DB.
+pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<()> {
+    if db_path.is_file() {
+        fs::remove_file(db_path).map_err(|e| Error::io(db_path, e))?;
+    }
+    fs::copy(snapshot_path, db_path).map_err(|e| Error::io(db_path, e))?;
+    Ok(())
+}
+
+pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState)
+    -> Result<()> {
+    with_transaction(conn, |conn| {
+        meta::set_scan_tar_saw_manifest_db(conn, state.saw_manifest_db)?;
+        meta::set_scan_tar_saw_any_members(conn, state.saw_any_members)?;
+        meta::set_scan_tar_complete(conn, state.scan_complete)?;
+        meta::set_scan_tar_last_member_index(conn, state.last_member_index)?;
+        meta::set_scan_tar_from_footer(conn, state.from_footer)?;
+        meta::set_extract_snapshots_ingested(conn, state.snapshots_ingested)?;
+        Ok(())
+    })
+}
+
+pub fn init_extract_runtime_state(conn: &mut Connection) -> Result<()> {
+    if load_extract_runtime_state(conn)?.is_none() {
+        save_extract_runtime_state(conn, &ExtractRuntimeState::new())?;
+    }
+    Ok(())
+}
+
+/// The two nt variables are populated for the run as follows:
+/// nt_snapshot_before = snapshots_ingested
+/// nt_stopped = false
 pub fn load_extract_scan_state(conn: &Connection) -> Result<ExtractScanState> {
     Ok(ExtractScanState {
         saw_manifest_db: meta::get_scan_tar_saw_manifest_db(conn)?.unwrap_or(false),
