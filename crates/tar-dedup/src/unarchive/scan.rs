@@ -159,20 +159,8 @@ fn run_inner(
         None => ExtractScanState::default(),
     };
     scan.from_footer |= footer_this_pass;
-    // Completion describes *this* pass; only exhausting the iterator sets it.
-    scan.scan_complete = false;
+    scan.scan_complete = false; // Set when archive iterator is empty.
 
-    // Snapshots seen in this pass are derived from the cumulative total, so there is
-    // no second counter that can drift away from the database.
-    let snapshots_before = scan.snapshots_ingested;
-    let should_skip = resume_db && scan.last_member_index.is_some();
-    let resume_from = if should_skip {
-        scan.last_member_index.expect("Should be defined here")
-    } else {
-        0
-    };
-
-    let mut stopped = false;
     let mut archive = open_tar_archive(
         &rt.config.paths.archive_path, &rt.config.decompression
     )?;
@@ -185,13 +173,13 @@ fn run_inner(
         })?
         .enumerate() {
         if rt.shutdown.is_interrupted() {
-            stopped = true;
+            scan.nt_stopped = true;
             break;
         }
 
         // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
         let member_index = m_idx as u64;
-        if member_index < resume_from {
+        if member_index < scan.last_member_index {
             // TODO LLM: Can I also drop this wrapped entry here and not check if it errored out
             wrapped_entry.map_err(|e| {
                 io_error_with_session_scan_error(&rt.config.paths.archive_path, recorder, e)
@@ -234,17 +222,17 @@ fn run_inner(
 
         rt.progress.inc_both(1);
         scan.saw_any_members = true;
-        scan.last_member_index = Some(member_index);
+        scan.last_member_index = member_index;
     }
 
-    if !stopped {
+    if !scan.nt_stopped {
         scan.scan_complete = true;
     }
 
     // Persist observations before any early return / interrupt propagation.
     store_progress_in_db(&rt, &scan)?;
 
-    if stopped {
+    if scan.nt_stopped {
         // Best-effort persist whatever was buffered against the pass's database.
         flush_scan_recorder(recorder, rt.db.as_ref())?;
         return Err(Error::Interrupted);
@@ -310,7 +298,7 @@ fn run_inner(
     tracing::info!(
         unarchived = paths,
         last_member_index = ?scan.last_member_index,
-        snapshots_this_pass = scan.snapshots_ingested - snapshots_before,
+        snapshots_this_pass = scan.snapshots_ingested - scan.nt_snapshot_before,
         snapshots_ingested = scan.snapshots_ingested,
         "extract: catalog from {source}, {paths} path(s) unarchived"
     );

@@ -5,6 +5,8 @@ use crate::db::common::{SqlFileRow, with_transaction};
 use crate::db::meta;
 use crate::error::{Result, ToPanic};
 
+/// INFO: nt -> not tracked i.e. runtime variables that are set with each run which do not make
+///  sense saving
 /// Cumulative + per-pass extract scan observations persisted in `meta`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExtractScanState {
@@ -18,6 +20,11 @@ pub struct ExtractScanState {
     pub from_footer: bool,
     /// Cumulative `snapshot.sqlite` members ingested (persisted).
     pub snapshots_ingested: u32,
+
+    /// To keep track of how many snapshots were ingested in this run
+    pub nt_snapshot_before: u32,
+    /// Mark, if the run was interrupted rather than finished consuming the iterator.
+    pub nt_stopped: bool,
 }
 
 pub fn list_files_to_restore<R: SqlFileRow>(conn: &Connection) -> Result<Vec<R>> {
