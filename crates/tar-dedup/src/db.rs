@@ -994,6 +994,13 @@ impl Database {
         permissions::apply_permissions_flags_to_files(&self.conn())
     }
 
+    pub fn ingest_apply_permission_out_tree_results(&self, res: &Vec<(OutTreeId, bool)>) -> Result<u64> {
+        permissions::ingest_apply_permission_out_tree_results(&mut self.conn_mut(), res)
+    }
+
+    pub fn ingest_apply_permission_file_results(&self, res: &Vec<(FileId, bool)>) -> Result<u64> {
+        permissions::ingest_apply_permission_file_results(&mut self.conn_mut(), res)
+    }
     // --- errors (persistent error log) ---
 
     pub fn insert_errors(&self, drafts: &[RecordDraft]) -> Result<u64> {

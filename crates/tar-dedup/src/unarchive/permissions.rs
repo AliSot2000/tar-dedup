@@ -8,14 +8,15 @@
 //! only the canonical row is touched. With `--overwrite-dir`, directory metadata is
 //! applied as well.
 
+use crate::common::batched_loop;
 use crate::common::perms::{
     ModeSource, OwnerGroupPolicy, OwnerGroupSource, parse_mode_changes, resolve_owner_group,
 };
 use crate::common::xattr::{set_file_acl, set_file_selinux_data, set_file_xattrs};
 use crate::config::ExtractConfig;
 use crate::config::ExtractPipelinePhase;
-use crate::db::flags::{ErrorFlags, FileFlag, OutTreeFlag};
-use crate::db::types::{FileRecord, FileType, OutTreeRecord};
+use crate::db::flags::{ErrorFlags, FileFlag};
+use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::unarchive::ExtractRTArgs;
@@ -51,7 +52,10 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         mp: mode_changes,
     };
 
+    // TODO set the phase progress info
+
     if rt.config.placement.link_tree {
+        // TODO fix progress here.
         apply_permissions_link_sources(&rt, &mut recorder, &ps)?;
     } else {
         // Files (and non-directory entries) first.
@@ -122,52 +126,93 @@ fn resolve_mode(rt: &ExtractRTArgs) -> Result<Option<file_mode::Mode>> {
 
 fn process_batches(rt: &ExtractRTArgs, recorder: &mut Recorder, ps: &OwnerGroupMode, dirs: bool)
     -> Result<()> {
-    loop {
-        rt.shutdown.check_between_files()?;
-        let batch: Vec<(Option<FileRecord>, OutTreeRecord)> = if dirs {
-            rt.db.list_out_tree_for_permissions_dirs::<FileRecord>(BATCH_SIZE)?
-        } else {
-            rt.db.list_out_tree_for_permissions_non_dir::<FileRecord>(BATCH_SIZE)?
-                .into_iter()
-                .map(|(r, o)| (Some(r), o))
-                .collect()
-        };
-        if batch.is_empty() { break }
-        let n = batch.len() as u64;
-
-        for (record, out) in batch {
-            rt.shutdown.check_between_files()?;
-
-            // Ancestor-only directory rows (`ensure_parent`) have no catalog row;
-            // there is no metadata to apply, and the directory itself already exists.
-            let errors = match record {
-                None => Vec::<FileStatError>::new(),
-                Some(r) => apply_one(rt.config, &r, &out.abs_path, &ps),
-            };
-            if errors.is_empty() {
-                rt.db.set_out_tree_flag(out.id, OutTreeFlag::AppliedMetadata, true)?;
-            } else {
-                // Record per-error in the persistent error log.
-                for error in errors {
-                    recorder.record(
-                        out.file_id,
-                        Some(out.id),
-                        ERROR_PHASE,
-                        error,
-                        ErrorFlags::default(),
-                    );
-                }
-                rt.db.set_out_tree_flag(out.id, OutTreeFlag::ErrorWhileApplyingMetadata, true)?;
-                if rt.config.process.fail_fast {
-                    return Err(Error::Other(anyhow::anyhow!(
-                        "metadata restore failed for {}",
-                        out.abs_path.display()
-                    )));
-                }
-            }
-        }
-        rt.progress.inc_both(n);
+    let mut add_err = |fid, oid, err| {
+        recorder.record(
+            fid,
+            Some(oid),
+            ERROR_PHASE,
+            err,
+            ErrorFlags::default(),
+        );
+    };
+    if dirs {
+        process_batches_dirs(&rt, &mut add_err, ps)
+    } else {
+        process_batched_files(&rt, &mut add_err, ps)
     }
+}
+
+fn process_batched_files(
+    rt: &ExtractRTArgs,
+    capture_err: &mut impl FnMut(Option<FileId>, OutTreeId, FileStatError) -> (),
+    ps: &OwnerGroupMode)
+    -> Result<()> {
+    batched_loop(
+        |bs| rt.db.list_out_tree_for_permissions_non_dir::<FileRecord>(bs),
+        BATCH_SIZE,
+        |entries| {
+            let mut results: Vec<(OutTreeId, bool)> = Vec::with_capacity(entries.len());
+            for (record, out) in entries
+                .into_iter()
+                .map(|(r, o)| (Some(r), o)) {
+                rt.shutdown.check_between_files()?;
+                inner_apply_permissions(rt, &record, out, ps, capture_err, &mut results)?;
+            }
+            rt.db.ingest_apply_permission_out_tree_results(&results)?;
+            Ok(())
+        }
+    )
+}
+
+fn process_batches_dirs(
+    rt: &ExtractRTArgs,
+    capture_err: &mut impl FnMut(Option<FileId>, OutTreeId, FileStatError) -> (),
+    ps: &OwnerGroupMode)
+    -> Result<()> {
+    batched_loop(
+        |bs| rt.db.list_out_tree_for_permissions_dirs::<FileRecord>(bs),
+        BATCH_SIZE,
+        |entries| {
+            let mut results: Vec<(OutTreeId, bool)> = Vec::with_capacity(entries.len());
+            for (record, out) in entries {
+                rt.shutdown.check_between_files()?;
+                inner_apply_permissions(rt, &record, out, ps, capture_err, &mut results)?;
+            }
+            rt.db.ingest_apply_permission_out_tree_results(&results)?;
+        Ok(())
+        }
+    )
+}
+
+fn inner_apply_permissions(
+    rt: &ExtractRTArgs,
+    record: &Option<FileRecord>,
+    out: OutTreeRecord,
+    ps: &OwnerGroupMode,
+    capture_err: &mut impl FnMut(Option<FileId>, OutTreeId, FileStatError) -> (),
+    results: &mut  Vec<(OutTreeId, bool)>)
+    -> Result<()> {
+
+    // Ancestor-only directory rows (`ensure_parent`) have no catalog row;
+    // there is no metadata to apply, and the directory itself already exists.
+    let errors = match record {
+        None => Vec::<FileStatError>::new(),
+        Some(r) => apply_one(rt.config, &r, &out.abs_path, &ps),
+    };
+
+    let error_empty = errors.is_empty();
+    results.push((out.id, error_empty));
+
+    for error in errors {
+        capture_err(out.file_id, out.id, error);
+    }
+    if rt.config.process.fail_fast && error_empty {
+        return Err(Error::Other(anyhow::anyhow!(
+                    "metadata restore failed for {}",
+                    out.abs_path.display()
+                )));
+    }
+    rt.progress.inc_both(1);
     Ok(())
 }
 
@@ -180,29 +225,26 @@ pub fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps
         Some(v) => v.to_path_buf(),
     };
     let base_dir = rt.config.paths.extraction_root().join(dir_name);
-    loop {
-        rt.shutdown.check_between_files()?;
-
-        let files: Vec<FileRecord> = rt.db.list_canonical_files_for_permissions(BATCH_SIZE)?;
-        let n = files.len() as u64;
-        if files.is_empty() { break }
-        for file in files {
-            let id = file.content_id().expect("Copied requires content_id to exist");
-            let tgt_path = base_dir.join(id.0);
-            let errs = apply_one(&rt.config, &file, &tgt_path, &ps);
-
-            if errs.is_empty() {
-                rt.db.set_file_flag(file.id, FileFlag::AppliedMetadata, true)?;
-            } else {
+    batched_loop(
+        |bs| rt.db.list_canonical_files_for_permissions(bs),
+        BATCH_SIZE,
+        |files: Vec<FileRecord>| {
+            let mut results: Vec<(FileId, bool)> = Vec::with_capacity(files.len());
+            for file in files {
+                let id = file
+                    .content_id()
+                    .expect("Copied requires content_id to exist");
+                let tgt_path = base_dir.join(id.0);
+                let errs = apply_one(&rt.config, &file, &tgt_path, &ps);
+                results.push((file.id, errs.is_empty()));
                 for err in errs {
                     rec.record_file(file.id, ERROR_PHASE, err, ErrorFlags::default());
-                    rt.db.set_file_flag(file.id, FileFlag::ErrorWhileApplyingMetadata, true)?;
                 }
             }
+            rt.db.ingest_apply_permission_file_results(&results)?;
+            Ok(())
         }
-        rt.progress.inc_both(n);
-    }
-    Ok(())
+    )
 }
 
 /// Apply metadata for a single canonical `Placed` row. Errors are collected and
