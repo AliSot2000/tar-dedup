@@ -29,7 +29,7 @@ pub mod meta;
 mod permissions;
 pub mod place;
 mod place_prologue;
-mod rehash;
+pub(crate) mod rehash;
 mod scan;
 mod schema;
 mod source;
@@ -42,6 +42,7 @@ pub use extract::ExtractScanState;
 pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
 use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
+use crate::db::rehash::RehashOutcome;
 use crate::db::sparsify::SparseOutcome;
 
 pub struct Database {
@@ -782,10 +783,56 @@ impl Database {
         extract::list_files_to_restore(&*self.conn())
     }
 
-    pub fn list_files_to_rehash<R: SqlFileRow>(&self, batch_size: u64) -> Result<Vec<R>> {
-        rehash::list_files_to_rehash(&self.conn(), batch_size)
+    /// Count the **overall rehash workload** — elected rows regardless of phase.
+    /// Stable across sessions, so a resumed run's phase bar still reflects the
+    /// full workload (see `db/rehash.rs`).
+    pub fn count_files_to_rehash(&self) -> Result<u64> {
+        rehash::count_files_to_rehash(&*self.conn())
     }
 
+    /// Of [`Self::count_files_to_rehash`], how many are already `rehashed` — the
+    /// resume position on the phase bar.
+    pub fn count_rehashed_files(&self) -> Result<u64> {
+        rehash::count_rehashed_files(&*self.conn())
+    }
+
+    /// Advance non-elected `extract_filtered` rows straight to `rehashed`
+    /// (dupes, non-files, filter-excluded, sha-less).
+    pub fn promote_unrehashable_files(&self) -> Result<u64> {
+        rehash::promote_unrehashable_files(&*self.conn())
+    }
+
+    /// Create the `rehash_queue` ordering table (idempotent).
+    pub fn create_rehash_queue(&self) -> Result<()> {
+        rehash::create_rehash_queue(&*self.conn())
+    }
+
+    /// Populate `rehash_queue` with the full, stable set of elected rows in
+    /// `size DESC` order (idempotent; see `db/rehash.rs`).
+    pub fn populate_rehash_queue(&self) -> Result<u64> {
+        rehash::populate_rehash_queue(&*self.conn())
+    }
+
+    /// Next slice of still-pending rehash rows, in `rehash_queue` (size-DESC)
+    /// order, as `(queue_position, record)` pairs.
+    pub fn pull_pending_rehash_rows<R: SqlFileRow>(&self, index: u64, limit: u64)
+        -> Result<Vec<(u64, R)>> {
+        rehash::pull_pending_rehash_rows(&*self.conn(), index, limit)
+    }
+
+    /// Drop the `rehash_queue` ordering table (idempotent). Success-path only.
+    pub fn drop_rehash_queue(&self) -> Result<()> {
+        rehash::drop_rehash_queue(&*self.conn())
+    }
+
+    /// Apply one batch of rehash outcomes (flags + `rehashed` promotion) in a
+    /// single transaction.
+    pub fn ingest_rehash_outcome(&self, results: &Vec<RehashOutcome>) -> Result<u64> {
+        rehash::ingest_rehash_outcome(&mut self.conn_mut(), results)
+    }
+
+    /// Promote every `extract_filtered` row to `rehashed` without verifying
+    /// payloads (the `--no-rehash` path).
     pub fn skip_rehash(&self) -> Result<u64> {
         rehash::skip_rehash(&*self.conn())
     }
