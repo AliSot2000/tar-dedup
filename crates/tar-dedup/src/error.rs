@@ -262,6 +262,8 @@ impl FileStatError {
     /// Recreate an owned [`FileStatError`] from a reference. `Io` errors
     /// round-trip through the raw OS code (see [`rebuilt`]); nothing is lost
     /// that the persistent error log stores (kind + message).
+    /// General is recreated as is,
+    /// Any other error is converted to a GeneralError
     pub fn recreate(&self) -> FileStatError {
         match self {
             Self::Io { path, source } => Self::Io {
@@ -283,15 +285,7 @@ impl FileStatError {
     /// error, e.g. `"Io/PermissionDenied"` or `"Nix/EACCES"` — stored as `error_type`.
     pub fn kind(&self) -> String {
         match self {
-            Self::Io { source, .. } => match source.kind() {
-                std::io::ErrorKind::Other => "Io/Other".to_string(),
-                std::io::ErrorKind::PermissionDenied => "Io/PermissionDenied".to_string(),
-                std::io::ErrorKind::NotFound => "Io/NotFound".to_string(),
-                std::io::ErrorKind::AlreadyExists => "Io/AlreadyExists".to_string(),
-                std::io::ErrorKind::InvalidInput => "Io/InvalidInput".to_string(),
-                std::io::ErrorKind::Unsupported => "Io/Unsupported".to_string(),
-                other => format!("Io/{}", other),
-            },
+            Self::Io { source, .. } => format!("Io/{:?}", source.kind()),
             Self::Json { .. } => "Json".to_string(),
             Self::Xattrs { .. } => "Xattrs".to_string(),
             Self::PosixAcl { .. } => "PosixAcl".to_string(),
