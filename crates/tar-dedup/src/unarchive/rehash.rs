@@ -328,7 +328,7 @@ fn rehash_worker(
                     Some(outcome) => {
                         out.send(Some(outcome)).expect("rehash worker: result channel closed");
                     }
-                    None => ()
+                    None => break // Interrupted internally.
                 }
             }
             Err(_) => break
@@ -348,16 +348,15 @@ fn rehash_one(
     pb: Option<&ProgressBar>)
     -> Option<RehashOutcome> {
 
-    // Duplicates share the canonical cache payload; nothing to hash for this row.
-    let Some(member) = record.tar_member_name() else {
-        return Some(RehashOutcome::Match(record.id));
-    };
+    let member = record
+        .tar_member_name()
+        .expect("Archived files need to have a tar_member_name");
 
     let path = stage_dir.join(&member);
     let digest = match hash_file(&path, buf, shutdown, pb) {
         Ok(d) => d,
         // Force abort landed inside the read loop: keep the row pending.
-        Err(Error::Interrupted) if shutdown.is_force() => return None,
+        Err(Error::Interrupted) => return None,
         Err(e @ Error::FileStat(_)) => {
             tracing::warn!(
                 file_id = record.id.0,
