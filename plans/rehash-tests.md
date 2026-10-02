@@ -1,11 +1,11 @@
 # Plan: Rehash-phase tests (unarchive/rehash.rs + db/rehash.rs)
 
-Status: **agreed, ON HOLD** (2026-10-02). Do not implement yet. Sequencing decision:
-the user wants a **generic send/receive drain loop** (closures parameterized over the
-feed/apply/worker-outcome types) built and tested **first**, so this loop's interrupt
-semantics get tested once and rehash can reuse that abstraction instead of duplicating
-the tests. This plan pins the *behavioral contracts* rehash must keep through that
-refactor, plus the rehash-specific tests that remain regardless.
+Status: **agreed, moved to Stage 2** (2026-10-03). Do not implement yet. Sequencing: the
+**generic send/receive drain loop** (`plans/unified-send-receive-loop.md`, Stage 1) is built
+and tested first; rehash adopts it, then this rehash test suite is written against it. The
+loop-mechanics tests below that overlap the generic suite (G1–G10 in the unified plan) are
+**dropped**; the rest stand. This plan pins the *behavioral contracts* rehash must keep
+through that refactor, plus the rehash-specific tests that remain regardless.
 
 Scope: tests only, **plus exactly one** production-code change (join the workers inside
 the drain loop before `drop(recv)`; see §Decisions). No rehash refactors beyond that.
