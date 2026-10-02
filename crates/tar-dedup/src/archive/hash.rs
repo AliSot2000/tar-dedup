@@ -30,15 +30,13 @@ const FEED_CHUNK: usize = 1_024;      // rows pulled from the DB cursor per roun
 const DRAIN_CHUNK: usize = BATCH_SIZE as usize / 2;  // outcomes committed per transaction
 
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
-    let db = rt.db;
-    let shutdown = rt.shutdown;
     debug_assert!(rt.config.sparse.page_size > 0, "page_size == 0");
     let detect_hardlinks = !rt.config.indexing.no_hardlink_detection;
     let eager_filter = rt.config.filter.eager_filter;
 
-    let total_entries = db.count_entries()?;
-    let hash_needed = db.count_all_hashable_files(eager_filter, detect_hardlinks)?;
-    let pending = db.count_pending_hashable_files(eager_filter, detect_hardlinks)?;
+    let total_entries = rt.db.count_entries()?;
+    let hash_needed = rt.db.count_all_hashable_files(eager_filter, detect_hardlinks)?;
+    let pending = rt.db.count_pending_hashable_files(eager_filter, detect_hardlinks)?;
     let already_hashed = hash_needed.saturating_sub(pending);
     tracing::info!(
         total_entries,
@@ -51,7 +49,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     rt.progress.set_phase_total(hash_needed);
     rt.progress.set_phase_position(already_hashed);
-    let promoted_entries = db.promote_unhasheable_files(eager_filter, detect_hardlinks)?;
+    let promoted_entries = rt.db.promote_unhasheable_files(eager_filter, detect_hardlinks)?;
     tracing::info!("Promoted {promoted_entries} entries which cannot be hashed.");
     rt.progress.inc_global(total_entries - hash_needed);
 
@@ -66,8 +64,8 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // Ordering table: encodes size-DESC order (position column) so the feed
     // can pull pending rows in that order without a long-lived SQL cursor.
     // Populate is idempotent (INSERT OR IGNORE); dropped only on success.
-    db.create_hash_queue()?;
-    db.populate_hash_queue(eager_filter, detect_hardlinks)?;
+    rt.db.create_hash_queue()?;
+    rt.db.populate_hash_queue(eager_filter, detect_hardlinks)?;
 
     // One bar per worker, materialized now so each worker can take its bar by
     // value; workers never touch `ProgressBarSet`.
@@ -85,7 +83,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         let bar = bars[i].clone();
         let wr = work_r.clone();
         let os = out_s.clone();
-        let sh = shutdown.clone();
+        let sh = rt.shutdown.clone();
         let ps = page_size;
         let res = thread::Builder::new()
             .name(format!("hash-worker-{i}").into())
@@ -103,15 +101,15 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let completed = handle_send_receive_loop(&rt, work_s, out_r, is_running)?;
     progress.drop_thread_bars();
 
-    let double_canonical = db.count_double_canonical_dev_inode_group()?;
+    let double_canonical = rt.db.count_double_canonical_dev_inode_group()?;
     if double_canonical > 0 {
         panic!("Encountered {double_canonical} Hard Link files. \
             which have two different hashes. Assuming files modified while hashing.");
     }
 
-    match shutdown.is_interrupted() {
+    match rt.shutdown.is_interrupted() {
         true => {
-            let msg = if shutdown.is_force() {
+            let msg = if rt.shutdown.is_force() {
                 "hashing force-aborted; in-flight progress discarded"
             } else {
                 "hashing stopped; completed files saved"
@@ -120,7 +118,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             Err(Error::Interrupted)
         }
         false => {
-            db.drop_hash_queue()?;
+            rt.db.drop_hash_queue()?;
             Ok(())
         }
     }
