@@ -7,9 +7,9 @@
 
 use rusqlite::{Connection, named_params};
 
-use crate::db::common::SqlFileRow;
-use crate::db::flags::{FileFlag, OutTreeFlag};
-use crate::db::types::OutTreeRecord;
+use crate::db::common::{SqlFileRow, with_transaction};
+use crate::db::flags::{FileFlag, OutTreeFlag, set_file_flag, set_out_tree_flag};
+use crate::db::types::{FileId, OutTreeId, OutTreeRecord};
 use crate::error::{Result, ToPanic};
 
 /// Depth of an `out_tree` row in the extraction tree (number of path components).
@@ -193,4 +193,36 @@ pub fn list_canonical_files_for_permissions<R: SqlFileRow>(conn: &Connection, ba
         |row| R::from_row(row, None)
     ).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
+}
+
+/// bool refers to `is_empty()` true -> empty, >0 errors false
+pub fn ingest_apply_permission_out_tree_results(conn: &mut Connection, res: &Vec<(OutTreeId, bool)>)
+                                                -> Result<u64> {
+    with_transaction(conn, |i_conn| {
+        for (id, is_empty) in res {
+            if *is_empty {
+                set_out_tree_flag(i_conn, *id, OutTreeFlag::AppliedMetadata, true)?;
+            } else {
+                set_out_tree_flag(i_conn, *id, OutTreeFlag::ErrorWhileApplyingMetadata, true)?;
+            }
+        }
+        Ok(())
+    }).to_panic()?;
+    Ok(res.len() as u64)
+}
+
+/// bool refers to `is_empty()` true -> empty, >0 errors false
+pub fn ingest_apply_permission_file_results(conn: &mut Connection, res: &Vec<(FileId, bool)>)
+                                                -> Result<u64> {
+    with_transaction(conn, |i_conn| {
+        for (id, is_empty) in res {
+            if *is_empty {
+                set_file_flag(i_conn, *id, FileFlag::AppliedMetadata, true)?;
+            } else {
+                set_file_flag(i_conn, *id, FileFlag::ErrorWhileApplyingMetadata, true)?;
+            }
+        }
+        Ok(())
+    }).to_panic()?;
+    Ok(res.len() as u64)
 }
