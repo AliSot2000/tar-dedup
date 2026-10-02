@@ -14,13 +14,10 @@ use crate::common::perms::{
 use crate::common::xattr::{set_file_acl, set_file_selinux_data, set_file_xattrs};
 use crate::config::ExtractConfig;
 use crate::config::ExtractPipelinePhase;
-use crate::db::Database;
 use crate::db::flags::{ErrorFlags, FileFlag, OutTreeFlag};
 use crate::db::types::{FileRecord, FileType, OutTreeRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
-use crate::progress::ProgressBarSet;
-use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
 use chrono::{DateTime, Utc};
 use filetime::{FileTime, set_file_atime, set_file_mtime, set_file_times};
@@ -39,12 +36,9 @@ pub struct OwnerGroupMode {
 }
 
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
-    let config = rt.config;
-    let db = rt.db;
-    let shutdown = rt.shutdown;
     // Errors encountered while applying metadata are recorded per-file; the recorder
     // flushes them in a single txn at the end (unless `--no-errors`).
-    let mut recorder = Recorder::new(db, !config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
     // Resolve the owner/group policy: stored in the archive or provided on the CLI.
     let policy: Option<OwnerGroupPolicy> = resolve_owner_group_policy(rt)?;
 
@@ -57,24 +51,23 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         mp: mode_changes,
     };
 
-    let progress = rt.progress;
-    if config.placement.link_tree {
-        apply_permissions_link_sources(&config, &db, &mut recorder, &shutdown, &ps, progress)?;
+    if rt.config.placement.link_tree {
+        apply_permissions_link_sources(&rt, &mut recorder, &ps)?;
     } else {
         // Files (and non-directory entries) first.
-        process_batches(&mut recorder, config, db, shutdown, &ps, false, progress)?;
+        process_batches(&rt, &mut recorder, &ps, false)?;
     }
 
     // Directories, only when `--overwrite-dir` is requested.
-    if config.attributes.force_overwrite_dir {
-        process_batches(&mut recorder, config, db, shutdown, &ps, true, progress)?;
+    if rt.config.attributes.force_overwrite_dir {
+        process_batches(&rt, &mut recorder, &ps, true)?;
     }
 
     recorder.flush()?;
 
     // Propagate out_tree metadata flags up to the files table:
     // AppliedPermissions iff ALL rows applied; ErrorWhileApplyingPermissions iff ANY errored.
-    let (applied, errored) = db.apply_permissions_flags_to_files()?;
+    let (applied, errored) = rt.db.apply_permissions_flags_to_files()?;
     tracing::info!(
         applied_files = applied,
         errored_files = errored,
@@ -89,21 +82,19 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 /// from the database.
 fn resolve_owner_group_policy(rt: &ExtractRTArgs)
     -> Result<Option<OwnerGroupPolicy>> {
-    let config = rt.config;
-    let db = rt.db;
-    let policy = match &config.owner_policy {
+    let policy = match &rt.config.owner_policy {
         OwnerGroupSource::None => None,
         OwnerGroupSource::Cli(p) => Some(p.clone()),
         OwnerGroupSource::Stored => {
-            match db.get_archive_owner_policy()? {
+            match rt.db.get_archive_owner_policy()? {
                 None => None,
                 Some(p) => {
                     let mut out_policy = OwnerGroupPolicy::default();
-                    if config.owner_group.apply_owner {
+                    if rt.config.owner_group.apply_owner {
                         out_policy.owner_map = p.owner_map;
                         out_policy.owner_override = p.owner_override;
                     }
-                    if config.owner_group.apply_group {
+                    if rt.config.owner_group.apply_group {
                         out_policy.group_map = p.group_map;
                         out_policy.group_override = p.group_override;
                     }
@@ -118,12 +109,10 @@ fn resolve_owner_group_policy(rt: &ExtractRTArgs)
 /// Resolve the symbolic mode changes based on the cli flags and the presence of an mode change
 /// string in the database.
 fn resolve_mode(rt: &ExtractRTArgs) -> Result<Option<file_mode::Mode>> {
-    let config = rt.config;
-    let db = rt.db;
-    let res = match &config.mode_policy {
+    let res = match &rt.config.mode_policy {
         ModeSource::None => None,
         ModeSource::Cli(changes) => Some(parse_mode_changes(changes)?),
-        ModeSource::Stored => match db.get_archive_mode_changes()? {
+        ModeSource::Stored => match rt.db.get_archive_mode_changes()? {
             Some(changes) => Some(parse_mode_changes(&changes)?),
             None => None,
         },
@@ -131,21 +120,14 @@ fn resolve_mode(rt: &ExtractRTArgs) -> Result<Option<file_mode::Mode>> {
     Ok(res)
 }
 
-fn process_batches(
-    recorder: &mut Recorder,
-    config: &ExtractConfig,
-    db: &Database,
-    shutdown: &Shutdown,
-    ps: &OwnerGroupMode,
-    dirs: bool,
-    progress: &ProgressBarSet,
-) -> Result<()> {
+fn process_batches(rt: &ExtractRTArgs, recorder: &mut Recorder, ps: &OwnerGroupMode, dirs: bool)
+    -> Result<()> {
     loop {
-        shutdown.check_between_files()?;
+        rt.shutdown.check_between_files()?;
         let batch: Vec<(Option<FileRecord>, OutTreeRecord)> = if dirs {
-            db.list_out_tree_for_permissions_dirs::<FileRecord>(BATCH_SIZE)?
+            rt.db.list_out_tree_for_permissions_dirs::<FileRecord>(BATCH_SIZE)?
         } else {
-            db.list_out_tree_for_permissions_non_dir::<FileRecord>(BATCH_SIZE)?
+            rt.db.list_out_tree_for_permissions_non_dir::<FileRecord>(BATCH_SIZE)?
                 .into_iter()
                 .map(|(r, o)| (Some(r), o))
                 .collect()
@@ -154,16 +136,16 @@ fn process_batches(
         let n = batch.len() as u64;
 
         for (record, out) in batch {
-            shutdown.check_between_files()?;
+            rt.shutdown.check_between_files()?;
 
             // Ancestor-only directory rows (`ensure_parent`) have no catalog row;
             // there is no metadata to apply, and the directory itself already exists.
             let errors = match record {
                 None => Vec::<FileStatError>::new(),
-                Some(r) => apply_one(config, &r, &out.abs_path, &ps),
+                Some(r) => apply_one(rt.config, &r, &out.abs_path, &ps),
             };
             if errors.is_empty() {
-                db.set_out_tree_flag(out.id, OutTreeFlag::AppliedMetadata, true)?;
+                rt.db.set_out_tree_flag(out.id, OutTreeFlag::AppliedMetadata, true)?;
             } else {
                 // Record per-error in the persistent error log.
                 for error in errors {
@@ -175,8 +157,8 @@ fn process_batches(
                         ErrorFlags::default(),
                     );
                 }
-                db.set_out_tree_flag(out.id, OutTreeFlag::ErrorWhileApplyingMetadata, true)?;
-                if config.process.fail_fast {
+                rt.db.set_out_tree_flag(out.id, OutTreeFlag::ErrorWhileApplyingMetadata, true)?;
+                if rt.config.process.fail_fast {
                     return Err(Error::Other(anyhow::anyhow!(
                         "metadata restore failed for {}",
                         out.abs_path.display()
@@ -184,47 +166,41 @@ fn process_batches(
                 }
             }
         }
-        progress.inc_both(n);
+        rt.progress.inc_both(n);
     }
     Ok(())
 }
 
 /// Apply the metadata to the files which were copied to the link source which are used as targets
 /// for the links in link_tree
-pub fn apply_permissions_link_sources(
-    config: &ExtractConfig,
-    db: &Database,
-    rec: &mut Recorder,
-    shutdown: &Shutdown,
-    ps: &OwnerGroupMode,
-    progress: &ProgressBarSet)
+pub fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps: &OwnerGroupMode)
     -> Result<()> {
-    let dir_name = match &config.placement.link_source {
+    let dir_name = match &rt.config.placement.link_source {
         None => PathBuf::from(".sources"),
         Some(v) => v.to_path_buf(),
     };
-    let base_dir = config.paths.extraction_root().join(dir_name);
+    let base_dir = rt.config.paths.extraction_root().join(dir_name);
     loop {
-        shutdown.check_between_files()?;
+        rt.shutdown.check_between_files()?;
 
-        let files: Vec<FileRecord> = db.list_canonical_files_for_permissions(BATCH_SIZE)?;
+        let files: Vec<FileRecord> = rt.db.list_canonical_files_for_permissions(BATCH_SIZE)?;
         let n = files.len() as u64;
         if files.is_empty() { break }
         for file in files {
             let id = file.content_id().expect("Copied requires content_id to exist");
             let tgt_path = base_dir.join(id.0);
-            let errs = apply_one(&config, &file, &tgt_path, &ps);
+            let errs = apply_one(&rt.config, &file, &tgt_path, &ps);
 
             if errs.is_empty() {
-                db.set_file_flag(file.id, FileFlag::AppliedMetadata, true)?;
+                rt.db.set_file_flag(file.id, FileFlag::AppliedMetadata, true)?;
             } else {
                 for err in errs {
                     rec.record_file(file.id, ERROR_PHASE, err, ErrorFlags::default());
-                    db.set_file_flag(file.id, FileFlag::ErrorWhileApplyingMetadata, true)?;
+                    rt.db.set_file_flag(file.id, FileFlag::ErrorWhileApplyingMetadata, true)?;
                 }
             }
         }
-        progress.inc_both(n);
+        rt.progress.inc_both(n);
     }
     Ok(())
 }
@@ -235,8 +211,8 @@ fn apply_one(
     config: &ExtractConfig,
     record: &FileRecord,
     tgt_path: &Path,
-    ps: &OwnerGroupMode,
-) -> Vec<FileStatError> {
+    ps: &OwnerGroupMode)
+    -> Vec<FileStatError> {
     let mut errors: Vec<FileStatError> = Vec::new();
 
     // Owner/group via policy resolution.
