@@ -703,16 +703,14 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
 /// Get the number of files, hardlinks and others. Also produce
 pub fn status_message_rebuilding(rt: &ExtractRTArgs)
     -> Result<(u64, u64, u64, u64, u64, u64)> {
-    let config = rt.config;
-    let db = rt.db;
-    let all_canonicals = db.count_out_tree_canonicals(None)?;
-    let all_hardlinks = db.count_out_tree_hardlinks(None)?;
-    let all_other = db.count_out_tree_others(None)?;
-    let materialized_canonicals = db.count_out_tree_canonicals(Some(false))?;
-    let materialized_hardlinks = db.count_out_tree_hardlinks(Some(false))?;
-    let materialized_other = db.count_out_tree_others(Some(false))?;
+    let all_canonicals = rt.db.count_out_tree_canonicals(None)?;
+    let all_hardlinks = rt.db.count_out_tree_hardlinks(None)?;
+    let all_other = rt.db.count_out_tree_others(None)?;
+    let materialized_canonicals = rt.db.count_out_tree_canonicals(Some(false))?;
+    let materialized_hardlinks = rt.db.count_out_tree_hardlinks(Some(false))?;
+    let materialized_other = rt.db.count_out_tree_others(Some(false))?;
 
-    let other_msg = if config.placement.recreate_none_file_entries {
+    let other_msg = if rt.config.placement.recreate_none_file_entries {
         &format!("{materialized_other} of other entries, {} remaining",
                  all_other - materialized_other)
     } else {
@@ -845,9 +843,10 @@ fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no
     }
 
     // Failed, perform sparse copy
-    let spc_res = sparse_cp::sparse_copy_with_progress(src, dst, 4096, |_, _, _| -> Result<()> {
-        shutdown.check_in_flight()
-    });
+    let spc_res = sparse_cp::sparse_copy_with_progress(
+        src, dst, 4096,
+        |_, _, _| -> Result<()> { shutdown.check_in_flight() }
+    );
 
     // Handle result; sparse-cp converts io errors via `From<io::Error>` with an
     // empty path, so re-attach the destination on the way out.
