@@ -2,9 +2,17 @@ use rusqlite::{Connection, named_params};
 
 use crate::db::common::{SqlFileRow, with_transaction};
 use crate::db::flags::{FileFlag, OutTreeFlag, set_out_tree_flag};
-use crate::db::meta;
 use crate::db::types::{FileId, OutTreeId, OutTreeRecord};
-use crate::error::{FileStatError, Result, ToPanic};
+use crate::db::meta;
+use crate::error::{Error, FileStatError, Result, ToPanic};
+
+pub struct MaterializeResult {
+    pub id: OutTreeId,
+    pub placed: bool,
+    pub conflict: bool,
+    pub removed: bool,
+    pub used_copy: bool,
+}
 
 /// Function inserts the out_tref rows into the out_ref table
 pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Result<()> {
@@ -519,4 +527,57 @@ pub fn ingest_results_link_tree(conn: &mut Connection, results: &Vec<(OutTreeId,
         Ok(())
     }).to_panic()?;
     Ok(results.len() as u64)
+}
+
+#[cfg(debug_assertions)]
+fn validate_materialize_result(m: &MaterializeResult) -> () {
+    match (m.placed, m.conflict, m.removed, m.used_copy) {
+        // No conflict
+        (true, false, false, _) => (),
+        // Conflict, skip
+        (false, true, false, false) => (),
+        // Conflict, place
+        (true, true, _, _) => (),
+        _ => panic!("INVARIANT FAILED: Impossible flag constellation returned from placement "),
+    }
+}
+
+/// Ingest a batch of MaterializeResults into the db within a single transaction
+pub fn ingest_materialize_results(
+    conn: &mut Connection,
+    results: &Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>,
+    is_hardlink: bool,
+    set_reflink: bool)
+    -> Result<()> {
+    with_transaction(conn, |i_conn| {
+        for result in results {
+            match result {
+                Err((_id, Error::Interrupted)) => (),
+                Err((id, Error::FileStat(_))) => {
+                    set_out_tree_flag(i_conn, *id, OutTreeFlag::ErrorWhilePlace, true)?;
+                },
+                Err((_id, other)) => {
+                    panic!("INVARIANT FAILED: Only Io and Interrupted errors expected, got {}",
+                           other
+                    );
+                }
+                Ok(suc) => {
+                    if cfg!(debug_assertions) {
+                        validate_materialize_result(&suc);
+                    }
+                    set_out_tree_flag(i_conn, suc.id, OutTreeFlag::Placed, suc.placed)?;
+                    set_out_tree_flag(i_conn, suc.id, OutTreeFlag::RemovedPrevious, !suc.removed)?;
+                    set_out_tree_flag(i_conn, suc.id, OutTreeFlag::Conflict, suc.conflict)?;
+                    if is_hardlink {
+                        set_out_tree_flag(i_conn, suc.id, OutTreeFlag::IsHardlink, true)?;
+                    }
+                    if set_reflink {
+                        set_out_tree_flag(i_conn, suc.id, OutTreeFlag::UsedRefLink, !suc.used_copy)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }).to_panic()?;
+    Ok(())
 }
