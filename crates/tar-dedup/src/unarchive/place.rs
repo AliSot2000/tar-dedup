@@ -2,9 +2,11 @@
 
 use crate::cli::ConflictPolicy;
 use crate::common::files;
+use crate::common::{batched_loop, batched_stepped_loop};
 use crate::config::{ExtractConfig, ExtractPipelinePhase};
 use crate::db::Database;
 use crate::db::flags::{ErrorFlags, FileFlag, OutTreeFlag};
+use crate::db::place::MaterializeResult;
 #[warn(unused_imports)] // LinkType needed for linking back on windows.
 use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::db::{ErrorPhase, Recorder};
@@ -67,7 +69,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         tracing::info!("Moving canonical file in place for link tree...");
         copy_canonicals_to_source(rt, &mut recorder)?;
         // INFO: For linking, we ignore the canonical_id
-        link_into_place(rt, &mut recorder)?;
+        materialize_link_tree(rt, &mut recorder)?;
     } else {
         // Step 2, first copy files, then hardlink, then create other types
         // (symlinks, char-dev, block-dev, FIFO). Canonical election ran in
@@ -244,7 +246,7 @@ pub fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
 /// the tree.
 /// Files are linked to the link source and all others links, fifo, char dev, block dev are created,
 /// sockets noted but cannot be created
-pub fn link_into_place(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
+pub fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
     let dir_name = match &rt.config.placement.link_source {
         None => PathBuf::from(".sources"),
         Some(v) => v.to_path_buf(),
