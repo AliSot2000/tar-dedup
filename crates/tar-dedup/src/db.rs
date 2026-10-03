@@ -9,7 +9,7 @@ use crate::db::types::{
     ArchiveSession, FileId, FilePhase, FilterExpression, NewFileRecord, NewOutTreeRow,
     OutTreeId, OutTreeRecord, SourceRecord,
 };
-use crate::error::{Result, ToPanic};
+use crate::error::{FileStatError, Result, ToPanic};
 
 pub mod flags;
 pub mod types;
@@ -964,6 +964,12 @@ impl Database {
     pub fn apply_flags_to_files(&self) -> Result<(u64, u64, u64, u64, u64, u64)> {
         place::apply_flags_to_files(&self.conn())
     }
+
+    pub fn ingest_results_link_tree(&self, results: &Vec<(OutTreeId, Option<FileStatError>)>)
+                                    -> Result<u64> {
+        place::ingest_results_link_tree(&mut self.conn_mut(), results)
+    }
+
 
     // --- permissions (metadata restore) ---
 

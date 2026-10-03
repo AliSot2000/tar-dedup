@@ -1,10 +1,10 @@
 use rusqlite::{Connection, named_params};
 
-use crate::db::common::SqlFileRow;
-use crate::db::flags::{FileFlag, OutTreeFlag};
+use crate::db::common::{SqlFileRow, with_transaction};
+use crate::db::flags::{FileFlag, OutTreeFlag, set_out_tree_flag};
 use crate::db::meta;
 use crate::db::types::{FileId, OutTreeId, OutTreeRecord};
-use crate::error::{Result, ToPanic};
+use crate::error::{FileStatError, Result, ToPanic};
 
 /// Function inserts the out_tref rows into the out_ref table
 pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Result<()> {
@@ -504,4 +504,19 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u6
         removed_previous as u64,
         errored as u64,
         skipped_elements as u64))
+}
+
+/// TAke a batch of link tree results and ingest themn into the database within a single transaction
+pub fn ingest_results_link_tree(conn: &mut Connection, results: &Vec<(OutTreeId, Option<FileStatError>)>)
+                                -> Result<u64> {
+    with_transaction(conn, |i_conn| {
+        for (id, err) in results {
+            match err {
+                None => { set_out_tree_flag(i_conn, *id, OutTreeFlag::Placed, true)?; }
+                Some(_e) => { set_out_tree_flag(i_conn, *id, OutTreeFlag::ErrorWhilePlace, true)?; }
+            }
+        }
+        Ok(())
+    }).to_panic()?;
+    Ok(results.len() as u64)
 }
