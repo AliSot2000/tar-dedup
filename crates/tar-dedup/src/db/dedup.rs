@@ -532,6 +532,9 @@ pub fn list_pending_comparisons<R: SqlFileRow>(
 /// Mark candidates as in-flight (handed to a worker, outcome not yet applied).
 /// Idempotent. Callers wrap batches in a transaction.
 pub fn mark_inflight(conn: &Connection, ids: &[FileId]) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
     let mut stmt = conn
         .prepare("INSERT OR IGNORE INTO dedup_inflight (candidate_id) VALUES (:id)")
         .to_panic()?;
