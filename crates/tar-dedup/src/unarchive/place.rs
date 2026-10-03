@@ -370,7 +370,7 @@ pub fn materialize_files(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<
     let shutdown = rt.shutdown.clone();
     let no_reflink = rt.config.placement.no_reflink;
 
-    let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
+    let results: Mutex<Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(rt.config.process.io_jobs)
@@ -446,7 +446,7 @@ pub fn materialize_hardlinks(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Res
 
     let shutdown = rt.shutdown.clone();
 
-    let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
+    let results: Mutex<Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(rt.config.process.io_jobs)
@@ -516,7 +516,7 @@ pub fn materialize_others(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result
 
     let shutdown = rt.shutdown.clone();
 
-    let results: Mutex<Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>> =
+    let results: Mutex<Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>> =
         Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(rt.config.process.io_jobs)
@@ -725,7 +725,7 @@ pub fn status_message_rebuilding(rt: &ExtractRTArgs)
 }
 
 fn process_results(
-    results: Vec<std::result::Result<MaterializeResult<OutTreeId>, (OutTreeId, Error)>>,
+    results: Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>,
     recorder: &mut Recorder,
     db: &Database,
     is_hardlink: bool,
