@@ -9,7 +9,7 @@ use crate::db::types::{
     ArchiveSession, FileId, FilePhase, FilterExpression, NewFileRecord, NewOutTreeRow,
     OutTreeId, OutTreeRecord, SourceRecord,
 };
-use crate::error::{FileStatError, Result, ToPanic};
+use crate::error::{Error, FileStatError, Result, ToPanic};
 
 pub mod flags;
 pub mod types;
@@ -42,6 +42,7 @@ pub use extract::ExtractScanState;
 pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
 use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
+use crate::db::place::MaterializeResult;
 use crate::db::rehash::RehashOutcome;
 use crate::db::sparsify::SparseOutcome;
 
@@ -970,7 +971,14 @@ impl Database {
         place::ingest_results_link_tree(&mut self.conn_mut(), results)
     }
 
-
+    pub fn ingest_materialize_results(
+        &self,
+        results: &Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>,
+        is_hardlink: bool,
+        set_reflink: bool)
+        -> Result<()> {
+        place::ingest_materialize_results(&mut self.conn_mut(), results, is_hardlink, set_reflink)
+    }
     // --- permissions (metadata restore) ---
 
     pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(&self, batch_size: u64)
