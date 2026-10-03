@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS files (
     sparse_count   INTEGER DEFAULT 0,
     include_reason_archive   INTEGER REFERENCES filter_reason_archive(id) DEFAULT 0 CHECK (include_reason_archive <= 0),
     exclude_reason_archive   INTEGER REFERENCES filter_reason_archive(id) DEFAULT 0 CHECK (exclude_reason_archive >= 0),
-    include_reason_extract   INTEGER REFERENCES filter_reason_extract(id) DEFAULT 0 CHECK (include_reason_extract >= 0),
+    include_reason_extract   INTEGER REFERENCES filter_reason_extract(id) DEFAULT 0 CHECK (include_reason_extract <= 0),
     exclude_reason_extract   INTEGER REFERENCES filter_reason_extract(id) DEFAULT 0 CHECK (exclude_reason_extract >= 0),
     canonical_id   INTEGER REFERENCES files(id),
     phase          TEXT NOT NULL DEFAULT 'inventoried',
