@@ -179,12 +179,6 @@ pub fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
 
-    // External copy
-    let extract_dir = rt.config.paths.extract_cache_dir();
-    let no_keep_stage = !rt.config.process.cleanup.keep_stage;
-    let shutdown = rt.shutdown.clone();
-    let no_ref_link = rt.config.placement.no_reflink;
-
     loop {
         rt.shutdown.check_in_flight()?;
         let to_copy: Vec<StrippedRecord> = rt.db.list_canonical_files_for_move(
@@ -197,12 +191,12 @@ pub fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
         let parallel = pool.install(|| {
             to_copy.par_iter().try_for_each(|record| -> Result<()> {
                 let cid = record.content_id().expect("Content id existed, when extracting.");
-                let src = extract_dir.join(&cid.0);
+                let src = rt.config.paths.extract_cache_dir().join(&cid.0);
                 let dst = base_dir.join(&cid.0);
                 let res = copy_single_file(
-                    record.id, &src, &dst, &shutdown, no_ref_link
+                    record.id, &src, &dst, &rt.shutdown.clone(), rt.config.placement.no_reflink
                 );
-                if no_keep_stage {
+                if !rt.config.process.cleanup.keep_stage {
                     let _ = fs::remove_file(dst);
                 }
                 results.lock().expect("Canonial File Copy Lock poisoned").push(res);
