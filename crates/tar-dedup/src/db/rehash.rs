@@ -212,3 +212,210 @@ pub fn ingest_rehash_outcome(
     tx.commit().to_panic()?;
     Ok(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::schema;
+    use crate::db::types::StrippedRecord;
+    use crate::error::FileStatError;
+    use std::path::PathBuf;
+
+    fn open_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = Connection::open(&dir.path().join("t.sqlite")).expect("open conn");
+        schema::initialize(&conn).expect("schema init");
+        // The joint archive+extract include rule sits at id -1 in *both* tables
+        // (see generate_archive_and_extract_filter); without it rows fail the
+        // filter and `promote_unrehashable_files` sweeps them unread. An id-5
+        // exclude rule lets a test break the filter without tripping the FK.
+        for table in ["archive", "extract"] {
+            conn.execute(
+                &format!(
+                    "INSERT OR IGNORE INTO filter_reason_{table} (id, source, line, expression) \
+                     VALUES (-1, 'internal', NULL, '.*')"
+                ),
+                [],
+            ).expect("seed internal include rule");
+            conn.execute(
+                &format!(
+                    "INSERT OR IGNORE INTO filter_reason_{table} (id, source, line, expression) \
+                     VALUES (5, 'internal', NULL, 'exclude-test')"
+                ),
+                [],
+            ).expect("seed internal exclude rule");
+        }
+        (dir, conn)
+    }
+
+    /// A `files` row in `extract_filtered` with the joint filter passed; the
+    /// boolean knobs toggle exactly one failing `promote_unrehashable_files` arm.
+    fn insert_row(
+        conn: &Connection, id: i64, size: u64, ftype: &str,
+        sha1: Option<[u8; 20]>, canonical: Option<i64>,
+        extracted_flag: bool, filter_ok: bool) {
+        let sha_bind = sha1.map(|s| s.to_vec());
+        conn.execute(
+            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+             include_reason_archive, exclude_reason_archive, \
+             include_reason_extract, exclude_reason_extract, flags, canonical_id) \
+             VALUES (:id, :abs_path, '.bin', :size, :ftype, 'extract_filtered', :sha1, \
+                     :inc_a, :exc_a, :inc_e, :exc_e, :flags, :canon)",
+            named_params! {
+                ":id": id,
+                ":abs_path": format!("/tmp/re-{id}.bin"),
+                ":size": size as i64,
+                ":ftype": ftype,
+                ":sha1": sha_bind.as_deref(),
+                ":inc_a": -1,
+                ":exc_a": 0,
+                ":inc_e": -1,
+                ":exc_e": if filter_ok { 0 } else { 5 },
+                ":flags": if extracted_flag { FileFlag::FileExtracted.mask_i64() } else { 0 },
+                ":canon": canonical,
+            },
+        ).expect("insert row");
+    }
+
+    fn row_phase(conn: &Connection, id: i64) -> String {
+        conn.query_row(
+            "SELECT phase FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get::<_, String>(0),
+        ).expect("read phase")
+    }
+
+    fn row_flags(conn: &Connection, id: i64) -> i64 {
+        conn.query_row(
+            "SELECT flags FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get(0),
+        ).expect("read flags")
+    }
+
+    #[test]
+    fn counts_stable_across_phase() {
+        let (_dir, conn) = open_db();
+        insert_row(&conn, 1, 1024, "file", Some([1u8; 20]), Some(1), true, true);
+        insert_row(&conn, 2, 2048, "file", Some([2u8; 20]), Some(2), true, true);
+
+        assert_eq!(count_files_to_rehash(&conn).expect("count"), 2);
+        assert_eq!(count_rehashed_files(&conn).expect("done"), 0);
+
+        mark_phase(&conn, FileId(1), FilePhase::Rehashed).expect("mark");
+
+        assert_eq!(count_files_to_rehash(&conn).expect("stable"), 2);
+        assert_eq!(count_rehashed_files(&conn).expect("done"), 1);
+    }
+
+    #[test]
+    fn promote_covers_every_or_arm() {
+        let (_dir, conn) = open_db();
+        insert_row(&conn, 1, 1024, "file", Some([1u8; 20]), Some(1), true, true);   // keeper
+        insert_row(&conn, 2, 1024, "file", Some([1u8; 20]), None, true, true);      // canonical NULL
+        insert_row(&conn, 3, 1024, "file", Some([1u8; 20]), Some(1), true, true);   // canonical != id
+        insert_row(&conn, 4, 1024, "dir", Some([1u8; 20]), Some(4), true, true);    // ftype != file
+        insert_row(&conn, 5, 1024, "file", None, Some(5), true, true);              // sha1 NULL
+        insert_row(&conn, 6, 1024, "file", Some([1u8; 20]), Some(6), false, true);  // extracted flag unset
+        insert_row(&conn, 7, 1024, "file", Some([1u8; 20]), Some(7), true, false);  // filter fail
+
+        let n = promote_unrehashable_files(&conn).expect("promote");
+
+        assert_eq!(n, 6);
+        assert_eq!(row_phase(&conn, 1), "extract_filtered");
+        for id in 2..=7 {
+            assert_eq!(row_phase(&conn, id), "rehashed", "id {id} should be promoted");
+        }
+    }
+
+    #[test]
+    fn queue_populate_orders_size_desc() {
+        let (_dir, conn) = open_db();
+        insert_row(&conn, 1, 4 * 1024 * 1024, "file", Some([1u8; 20]), Some(1), true, true);
+        insert_row(&conn, 2, 4 * 1024 * 1024 + 1, "file", Some([2u8; 20]), Some(2), true, true);
+        insert_row(&conn, 3, 1024 * 1024, "file", Some([3u8; 20]), Some(3), true, true);
+
+        create_rehash_queue(&conn).expect("create queue");
+        populate_rehash_queue(&conn).expect("populate 1");
+        populate_rehash_queue(&conn).expect("populate 2");   // idempotent
+
+        let got = pull_pending_rehash_rows::<StrippedRecord>(&conn, 0, 100)
+            .expect("pull")
+            .into_iter()
+            .map(|(pos, row)| (row.id.0, pos))
+            .collect::<Vec<(i64, u64)>>();
+        assert_eq!(got, [(2, 1), (1, 2), (3, 3)]);
+    }
+
+    #[test]
+    fn pull_skips_rehashed_rows() {
+        let (_dir, conn) = open_db();
+        // id2 is the biggest → queue position 1; once rehashed the pull skips it.
+        insert_row(&conn, 1, 1024 * 1024, "file", Some([1u8; 20]), Some(1), true, true);
+        insert_row(&conn, 2, 8 * 1024 * 1024, "file", Some([2u8; 20]), Some(2), true, true);
+        insert_row(&conn, 3, 2 * 1024 * 1024, "file", Some([3u8; 20]), Some(3), true, true);
+        create_rehash_queue(&conn).expect("create queue");
+        populate_rehash_queue(&conn).expect("populate queue");
+        mark_phase(&conn, FileId(2), FilePhase::Rehashed).expect("mark rehashed");
+
+        let got = pull_pending_rehash_rows::<StrippedRecord>(&conn, 0, 100)
+            .expect("pull")
+            .into_iter()
+            .map(|(pos, row)| (row.id.0, pos))
+            .collect::<Vec<(i64, u64)>>();
+        assert_eq!(got, [(3, 2), (1, 3)]);
+
+        // slice-walk from the last returned position reproduces the empty tail
+        let tail = pull_pending_rehash_rows::<StrippedRecord>(&conn, 3, 100)
+            .expect("tail pull").len();
+        assert_eq!(tail, 0);
+    }
+
+    #[test]
+    fn ingest_flags_and_phase() {
+        let (_dir, mut conn) = open_db();
+        for id in 1..=3 {
+            insert_row(&conn, id, 1024, "file", Some([id as u8; 20]), Some(id), true, true);
+        }
+        let err = FileStatError::Io {
+            path: PathBuf::from("/tmp/re-3.bin"),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope"),
+        };
+        ingest_rehash_outcome(&mut conn, &vec![
+            RehashOutcome::Match(FileId(1)),
+            RehashOutcome::Mismatch(FileId(2)),
+            RehashOutcome::Errored(FileId(3), err),
+        ]).expect("ingest");
+
+        for id in 1..=3 {
+            assert_eq!(row_phase(&conn, id), "rehashed");
+        }
+        let flags = FileFlag::RehashMismatch.mask_i64();
+        let err_flag = FileFlag::ErrorWhileRehashing.mask_i64();
+        assert_eq!(row_flags(&conn, 1) & (flags | err_flag), 0);
+        assert_ne!(row_flags(&conn, 2) & flags, 0);
+        assert_eq!(row_flags(&conn, 2) & err_flag, 0);
+        assert_eq!(row_flags(&conn, 3) & flags, 0);
+        assert_ne!(row_flags(&conn, 3) & err_flag, 0);
+    }
+
+    #[test]
+    fn skip_rehash_promotes_extract_filtered_only() {
+        let (_dir, conn) = open_db();
+        insert_row(&conn, 1, 1024, "file", Some([1u8; 20]), Some(1), true, true);
+        insert_row(&conn, 2, 1024, "file", Some([2u8; 20]), Some(2), true, true);
+        insert_row(&conn, 3, 1024, "file", Some([3u8; 20]), Some(3), true, true);
+        conn.execute(
+            "UPDATE files SET phase = 'unarchived' WHERE id = 2",
+            [],
+        ).expect("phase unarchived");
+        mark_phase(&conn, FileId(3), FilePhase::Rehashed).expect("already rehashed");
+
+        let n = skip_rehash(&conn).expect("skip");
+
+        assert_eq!(n, 1);
+        assert_eq!(row_phase(&conn, 1), "rehashed");
+        assert_eq!(row_phase(&conn, 2), "unarchived");
+        assert_eq!(row_phase(&conn, 3), "rehashed");
+    }
+}
