@@ -732,35 +732,13 @@ fn process_results(
     set_reflink: bool)
     -> Result<()> {
 
+    db.ingest_materialize_results(&results, is_hardlink, set_reflink)?;
     for result in results {
         match result {
-            Err((id, err)) => {
-                match err {
-                    Error::Interrupted => (), // Finish consuming and exit after.
-                    Error::FileStat(e) => {
-                        // Record the copy failure against the out_tree row and keep the flag.
-                        recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default());
-                        db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true)?;
-                    }
-                    other => panic!("INVARIANT FAILED: Only Io and Interrupted errors \
-                                    expected, got {}",
-                                    other),
-                }
+            Err((id, Error::FileStat(e))) => {
+                recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default())
             }
-            Ok(suc) => {
-                if cfg!(debug_assertions) {
-                    validate_materialize_result(&suc);
-                }
-                db.set_out_tree_flag(suc.id, OutTreeFlag::Placed, suc.placed)?;
-                db.set_out_tree_flag(suc.id, OutTreeFlag::RemovedPrevious, !suc.removed)?;
-                db.set_out_tree_flag(suc.id, OutTreeFlag::Conflict, suc.conflict)?;
-                if is_hardlink {
-                    db.set_out_tree_flag(suc.id, OutTreeFlag::IsHardlink, true)?;
-                }
-                if set_reflink {
-                    db.set_out_tree_flag(suc.id, OutTreeFlag::UsedRefLink, !suc.used_copy)?;
-                }
-            }
+            _ => ()
         }
     }
     Ok(())
@@ -769,14 +747,6 @@ fn process_results(
 // -------------------------------------------------------------------------------------------------
 // Util
 // -------------------------------------------------------------------------------------------------
-
-struct MaterializeResult<I> {
-    id: I,
-    placed: bool,
-    conflict: bool,
-    removed: bool,
-    used_copy: bool,
-}
 
 /// Relative path of `..` components from `file`'s parent directory back to `dir`.
 ///
@@ -1097,19 +1067,6 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         }
     } else {
         Ok((true, true, false))
-    }
-}
-
-#[cfg(debug_assertions)]
-fn validate_materialize_result<I>(m: &MaterializeResult<I>) -> () {
-    match (m.placed, m.conflict, m.removed, m.used_copy) {
-        // No conflict
-        (true, false, false, _) => (),
-        // Conflict, skip
-        (false, true, false, false) => (),
-        // Conflict, place
-        (true, true, _, _) => (),
-        _ => panic!("INVARIANT FAILED: Impossible flag constellation returned from placement "),
     }
 }
 
