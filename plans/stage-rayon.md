@@ -45,7 +45,7 @@ missing (almost) everything.
   returning a non-Interrupted error preserves the work dir for a resumed run
   and never writes an empty archive.
 - Precedent for rayon + fail-fast + `Mutex<Vec<Result>>` drain:
-  `unarchive/place.rs` (`copy_canonicals_to_source`, `link_into_place`,
+  `unarchive/place.rs` (`copy_canonicals_to_source`, `materialize_link_tree`,
   `build_file_tree`, …) and `unarchive/rehash.rs`:
   `ThreadPoolBuilder::new().num_threads(config.process.io_jobs)`,
   `par_iter().try_for_each(|..| -> Result<()>)`, push into a

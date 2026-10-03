@@ -1,10 +1,14 @@
 # Plan: Unified `send_receive_loop` → `crates/tar-dedup/src/common.rs`
 
-Status: **agreed, ready to implement** (2026-10-03). Supersedes the four per-phase loop
-copies. Staging (user-confirmed): **Stage 1** = build the unified loop + generic tests +
-adopt into hash/dedup/sparsify/rehash; **Stage 2** = rehash tests (`plans/rehash-tests.md`,
-minus the superseded loop-mechanics items); **Stage 3** = rework the extract place
-("materialize") loops to adopt it (out of scope here, recorded as a follow-up).
+Status: **implemented + green** (2026-10-03). All Stage-1 changes landed, `cargo build`
+(excluding 6 pre-existing warnings in files outside this plan) and the G-suite pass; the
+lib suite is `244 passed / 4 failed`, the 4 failures being the pre-existing
+`db::inventory` + `unarchive::scan` WIP-test failures (untouched by this plan — see
+AGENTS.md's test disclaimer). Supersedes the four per-phase loop copies. Staging
+(user-confirmed): **Stage 1** = build the unified loop + generic tests + adopt into
+hash/dedup/sparsify/rehash; **Stage 2** = rehash tests (`plans/rehash-tests.md`, minus the
+superseded loop-mechanics items); **Stage 3** = rework the extract place ("materialize")
+loops to adopt it (out of scope here, recorded as a follow-up).
 
 ## Goal
 
@@ -235,4 +239,49 @@ capture into local `Vec`s (pull count, on_sent items, applied slices, tick calls
   against the shared loop.
 - hash's force `> DRAIN_CHUNK` loss and the no-join race are fixed for all phases by this
   plan (drain-to-empty + join) — no separate follow-up needed.
-- "As built" section to be filled at implementation time (bugs flushed out + fixes).
+
+## As built (2026-10-03)
+
+Bugs flushed out during implementation + adjustments vs the sketch:
+
+1. **Refill must happen even after `feed_exhausted`** (fixes the original sketch). The
+   sketch's `if feed_idx == feed_buf.len() && !feed_exhausted` guard was carried over from
+   rehash's old code and **broke dedup's multi-round FSM**: `run_multiround_group_completes`
+   failed because round-2 candidates produced by `ready_to_searching` after a first empty
+   pull were never fed again. The loop now re-pulls every time the feed buffer drains and
+   resets `feed_exhausted` from the pull result. This is exactly-once for all four phases:
+   hash/sparsify/rehash advance a positional queue cursor past handed-but-unapplied rows
+   (`hash_queue.id > :index`), and dedup's `dedup_inflight` TEMP excludes sent candidates.
+2. **Phase-1 break requires `dequeue_total == feed_total`** for the batch phases too
+   (the sketch only gated it implicitly for dedup). Without it the hash drain tail ran in
+   phase 2 without the `tick`, which is fine for the no-op ticks but the unified loop
+   applies `apply_on_partial=false` medians there — the explicit dequeue==feed check makes
+   phase 1 commit everything while the workers are still authoritative and phase 2/3 only
+   finish the exit-marker bookkeeping.
+3. **`feed_chunk` needs no loop parameter** — dropped from the signature; every phase's
+   `pull` closure already knows its chunk size (original plan sketch had a redundant arg).
+4. **hash's `run_loop` test harness was deleted** (not just adapted): after dropping the
+   six superseded loop tests no user of the harness remained, so it was dead code. dedup's
+   and sparsify's harnesses are kept — their interrupt/resume tests (`run_graceful_...`,
+   `run_force_...`, `modified_file_flagged`) still drive the shared loop through them.
+5. **hash + rehash now actually join their workers** before `drop(recv)` (they previously
+   had no join at all; the shared loop's phase 3 gives them dedup/sparsify's race-free shape).
+6. `Result::` closures at the final apply sites: the `mut` on `let mut pull/apply/tick/...`
+   bindings was removed (`unused_mut` — they are moved into `send_receive_loop`).
+7. **`on_sent` is called every feed round, even with `[]`** (no caller-side
+   `if !sent.is_empty()` guard): an empty handed batch is a *valid input* and the callee
+   owns the no-op. `dedup::mark_inflight(&[])` iterates nothing (a statement prepare per
+   empty round — negligible on the 10ms/4ms poll), matching the `apply` contract. Encodes
+   the principle that empty-vs-full discrimination is the closure's job, not the loop's.
+8. Unrelated but required to unblock build/test: **`db/place.rs::ingest_results_link_tree`
+   (user's Stage-3 WIP) had a missing-`;` compile error**; completed the `match` arms with
+   `{ ...; }` blocks and `Ok(())` tail, nothing else touched in that file — flagged for the
+   user to review.
+9. `Duration` imports moved into the dedup/sparsify `mod tests` (the loop no longer sleeps
+   in those files; the imports are now test-only).
+
+Real-phase smoke now exercising the shared loop: `run_hashes_and_stores_digests`,
+`run_sparsifies_candidates_and_flags`, `mode_regular_corpus_dedupes_by_compare`,
+`run_multiround_group_completes`, the graceful/force `run_*_interrupt_*` tests (kept),
+and `loop_panics_on_other_error_variant` (the invalid-outcome panic fires in the loop's
+phase-3 final drain with an empty worker pool) — all pass.
