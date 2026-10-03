@@ -213,7 +213,12 @@ pub fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
 
         // Get the results
         let new_res = Vec::new();
-        let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
+        let copied = std::mem::replace(
+            &mut *results
+                .lock()
+                .expect("hash results lock"),
+            new_res
+        );
 
         for result in copied {
             match result {
