@@ -1,6 +1,5 @@
 use std::path::Path;
 use std::thread;
-use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, bounded};
 use indicatif::ProgressBar;
@@ -11,7 +10,7 @@ use std::mem::take;
 use crate::archive::ArchiveRTArgs;
 use crate::cli::DedupMode;
 use crate::common::files::warn_if_times_changed;
-use crate::common::{at_least_one_running, io_buffer};
+use crate::common::{io_buffer, send_receive_loop};
 use crate::db::ErrorPhase;
 use crate::db::dedup::{CompareOutcome, ComparePair, compare_pair};
 use crate::db::flags::ErrorFlags;
@@ -210,95 +209,40 @@ fn run_none_mode(
 
 /// Function performs the stepping of the loop. Deals with fetching data from the db,
 /// enqueueing the data in the queue, retrieving the results from the queue and stepping the state
-/// of the db.
+/// of the db. Owns the worker handles: the shared loop joins them before the final drain.
 fn run_enqueue_dequeue_loop_dedup(
     rt: &ArchiveRTArgs,
     send: Sender<ComparePair>,
     recv: Receiver<Option<CompareOutcome>>,
-    mut handles: Vec<thread::JoinHandle<()>>)
+    thread_handles: Vec<thread::JoinHandle<()>>)
     -> Result<(bool, u64)> {
 
-    // Feed cursor over the candidate space. `dedup_inflight` (TEMP) marks pairs
-    // handed out but not yet applied, so the scan can restart at id 0 any time
-    // without re-comparing an in-flight pair.
     let eager_filter = rt.config.filter.eager_filter;
     let fail_fast = rt.config.process.fail_fast;
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
-
-    // Feeder running variables
-    let mut feed_buf = Vec::<(StrippedRecord, StrippedRecord)>::new();
-    let mut feed_i = 0usize;
-
-    // Loop runtime state
-    let mut feed_total = 0u64;
-    let mut exited_threads = 0u64;
-    let mut dequeued_total = 0u64;
-    let mut completed = 0u64;
     let mut fail_fast_hit = false;
-    let mut pending_out = Vec::<CompareOutcome>::new();
-    #[warn(unused_assignments)]
-    let mut busy = false;
 
-    let mut apply_chunk = |pending: &mut Vec<CompareOutcome>|
-        -> Result<(u64, u64)> {
-        let items = take(pending);
-        if items.is_empty() {
-            return Ok((0, 0));
-        }
-        let n = items.len() as u64;
-        let resolved = rt.db.ingest_compare_outcome(&items)?;
-
-        // Apply results
-        for item in items.iter() {
-            record_dedup_error(&mut recorder, &item);
-        }
-        Ok((n, resolved))
+    // Pull: a fresh scan of the candidate space from the top on every refill.
+    // `dedup_inflight` (TEMP) makes the pull exactly-once (see
+    // `list_pending_comparisons`), so restarting at id 0 is safe and lets
+    // freshly transitioned rounds (and their re-eligible candidates) be picked
+    // up. The empty-pull only means every remaining candidate is in flight or
+    // none exists.
+    let pull = || {
+        let pairs = rt.db.list_pending_comparisons::<StrippedRecord>(
+            eager_filter, 0, FEED_CHUNK as u64)?;
+        Ok(pairs.into_iter().map(|(candidate, canonical)| {
+            compare_pair(&canonical, &candidate)
+        }).collect::<Vec<_>>())
     };
-
-    let mut drain_chunk = |
-        is_busy: &mut  bool, exited: &mut u64, dequeue: &mut u64, override_drain: bool|
-        -> Result<()> {
-        // 1) Drain finished outcomes into a small batch.
-        while pending_out.len() < DRAIN_CHUNK {
-            match recv.try_recv() {
-                Ok(Some(outcome)) => {
-                    pending_out.push(outcome);
-                    *is_busy = true;
-                    *dequeue += 1;
-                }
-                Ok(None) => *exited += 1,
-                Err(_) => break
-            }
-        }
-        if pending_out.len() >= DRAIN_CHUNK || override_drain {
-            let (n, resolved) = apply_chunk(&mut pending_out)?;
-            completed += n;
-            if resolved > 0 {
-                rt.progress.inc_both(resolved);
-            }
-            *is_busy = true;
-        }
-        Ok(())
+    // on_sent: the pairs actually handed to a worker become `dedup_inflight`.
+    let on_sent = |sent: &[ComparePair]| -> Result<()> {
+        let ids = sent.iter().map(|p| p.candidate_id).collect::<Vec<FileId>>();
+        rt.db.mark_inflight(&ids)
     };
-
-    // Run the send receive loop. Each iteration drains the outcome channel
-    // (override: a ragged tail applies immediately, so a small run's final
-    // batch still advances the FSM in-loop), steps the per-group FSM, then
-    // feeds the next candidate slice. The candidate scan restarts at id 0 on
-    // every refill: `dedup_inflight` (TEMP) already makes the pull exactly-once
-    // (see `list_pending_comparisons`), and a monotonic `last_candidate` cursor
-    // would wrongly skip candidates re-elected across rounds.
-    let mut feed_exhausted = false;
-    loop {
-        busy = false;
-        if rt.shutdown.is_interrupted() {
-            break;
-        }
-        // Handle dequeu side.
-        drain_chunk(&mut busy, &mut exited_threads, &mut dequeued_total, true)?;
-
-        // 2) Per-group FSM — advanced every iteration: guarded SQL flips only
-        //    complete groups, so a slow 50 GiB group never stalls the rest.
+    // tick: per-group FSM, advanced every iteration — guarded SQL flips only
+    // complete groups, so a slow 50 GiB group never stalls the rest.
+    let tick = || -> Result<bool> {
         rt.db.searching_to_finished(eager_filter)?;
         let (errored, promoted) = rt.db.finish_to_error(eager_filter)?;
         if promoted > 0 {
@@ -310,92 +254,39 @@ fn run_enqueue_dequeue_loop_dedup(
                 "dedup fail-fast: group(s) could not elect a canonical (compare error(s) recorded)"
             );
             fail_fast_hit = true;
-            break;
+            return Ok(false);
         }
         let promoted1 = rt.db.finish_to_done(eager_filter)?;
         let promoted2 = rt.db.finish_to_ready(eager_filter)?;
         let (_, promoted3) = rt.db.ready_to_searching(eager_filter)?;
-        if promoted1 + promoted2 + promoted3  > 0 {
+        if promoted1 + promoted2 + promoted3 > 0 {
             rt.progress.inc_both(promoted);
         }
         if rt.db.count_pending_dedup_groups()? == 0 {
-            break;
+            return Ok(false);
         }
-        // 3) Feed the pipeline. A fresh pull from the top on every refill lets
-        //    freshly transitioned rounds (and their re-eligible candidates) be
-        //    picked up; the empty-pull below only means every remaining
-        //    candidate is in flight or none exists.
-        if feed_i == feed_buf.len() {
-            feed_buf = rt.db.list_pending_comparisons::<StrippedRecord>(
-                eager_filter, 0, FEED_CHUNK as u64
-            )?;
-            feed_i = 0;
-            feed_exhausted = feed_buf.is_empty();
+        Ok(true)
+    };
+    let apply = |pending: &mut Vec<CompareOutcome>| -> Result<()> {
+        let items = take(pending);
+        if items.is_empty() {
+            return Ok(());
         }
-        if !feed_exhausted {
-            let mut sent = Vec::<FileId>::new();
-            while feed_i < feed_buf.len() {
-                let candidate = &feed_buf[feed_i].0;
-                let canonical = &feed_buf[feed_i].1;
-                match send.try_send(compare_pair(canonical, candidate)) {
-                    Ok(_) => {
-                        sent.push(candidate.id);
-                        busy = true;
-                        feed_i += 1;
-                        feed_total += 1;
-                    }
-                    Err(_) => break
-                }
-            }
-            if !sent.is_empty() {
-                rt.db.mark_inflight(&sent)?;
-            }
+        let resolved = rt.db.ingest_compare_outcome(&items)?;
+        for item in items.iter() {
+            record_dedup_error(&mut recorder, &item);
         }
-        // Nothing left to feed and every handed-out outcome is back in hand:
-        // no further drain or FSM step can change anything. (The drain above
-        // applies `pending_out` unconditionally, so it is empty here.) The
-        // drain tail below still joins the workers and flushes the recorder.
-        if feed_exhausted && feed_i == feed_buf.len()
-            && dequeued_total == feed_total {
-            break;
+        if resolved > 0 {
+            rt.progress.inc_both(resolved);
         }
-        if !busy {
-            thread::sleep(Duration::from_millis(1));
-        }
-    }
-    // Cut the feed side; idle workers end their receive loop.
-    drop(send);
+        Ok(())
+    };
 
-    // Drain the remaining tasks scheduled to the workers are drained
-    loop {
-        busy = false;
-        if rt.shutdown.is_interrupted()
-            || dequeued_total == feed_total
-            || exited_threads == rt.config.process.io_jobs as u64
-            || !at_least_one_running(&handles.iter().collect()) {
-            break;
-        }
-        drain_chunk(&mut busy, &mut exited_threads, &mut dequeued_total, true)?;
-        if !busy {
-            thread::sleep(Duration::from_millis(1));
-        }
-    }
-
-    // Close out the worker threads before dropping the channel: each worker
-    // sends its last outcome/None *before* it returns, so joining every handle
-    // guarantees no `out.send` can hit a dropped receiver (panics on "result
-    // channel closed"). `join` also honours "finish in-flight" on a graceful
-    // stop (workers exit after their current pair resolves).
-    for handle in take(&mut handles) {
-        let _ = handle.join();
-    }
-
-    // Definitively drain whatever the workers still produce (incl. after an
-    // interrupt: workers finish their in-flight pair, then the channel drops).
-    drain_chunk(&mut busy, &mut exited_threads, &mut dequeued_total, true)?;
+    let completed = send_receive_loop(
+        rt.shutdown, send, recv, thread_handles,
+        DRAIN_CHUNK, true,
+        pull, on_sent, tick, apply)?;
     recorder.flush()?;
-    drop(recv);
-
     Ok((fail_fast_hit, completed))
 }
 
@@ -617,6 +508,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     fn pattern(n: usize, seed: u8) -> Vec<u8> {
         (0..n).map(|i| ((i % 251) as u8) ^ seed).collect()
@@ -1264,45 +1156,6 @@ mod tests {
         world.db.promote_singleton_filtered_to_deduped(eager).expect("singleton");
         world.db.create_temp_dedup_table().expect("create temp");
         world.db.populate_temp_table(eager).expect("populate temp");
-    }
-
-    #[test]
-    fn loop_exit_via_dequeued_eq_feed_total() {
-        let world = TestWorld::new();
-        let payload = pattern(512 * 1024, 3);
-        let id_canon = world.add_file("c.bin", &payload);
-        let id_cand = world.add_file("d.bin", &payload);
-        world.db.apply_no_filter_archive().expect("filter");
-        seed_rows(&world, Vec::from([(id_canon, 7), (id_cand, 7)]));
-        prepare_for_loop(&world);
-
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let (fail_fast, completed) = run_loop(&world, world.progress.thread_bar(0), 2);
-        world.progress.drop_thread_bars();
-
-        assert_eq!(fail_fast, false);
-        assert_eq!(completed, 1);
-        assert_eq!(world.canonical_of(id_cand), Some(id_canon));
-        assert_eq!(world.phase(id_cand), FilePhase::Deduped);
-    }
-
-    #[test]
-    fn loop_exit_via_exited_threads_and_one_running() {
-        let world = TestWorld::new();
-        let id_canon = world.add_file("c.bin", &pattern(512 * 1024, 3));
-        let id_cand = world.add_file("d.bin", &pattern(512 * 1024, 3));
-        world.db.apply_no_filter_archive().expect("filter");
-        seed_rows(&world, Vec::from([(id_canon, 7), (id_cand, 7)]));
-        world.shutdown.request_graceful();
-
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let (fail_fast, completed) = run_loop(&world, world.progress.thread_bar(0), 2);
-        world.progress.drop_thread_bars();
-
-        // Graceful pre-set: the loop breaks immediately, the worker exits with
-        // None, and the drain tail still terminates via exited/joint handles.
-        assert_eq!(fail_fast, false);
-        assert_eq!(completed, 0);
     }
 
     #[test]

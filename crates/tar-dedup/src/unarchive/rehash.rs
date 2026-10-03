@@ -1,6 +1,7 @@
 //! Rehash: verify extract-cache payloads against catalog SHA-1 digests.
 
-use crate::common::{at_least_one_running, io_buffer};
+use crate::common::io_buffer;
+use crate::common::send_receive_loop;
 use crate::config::ExtractPipelinePhase;
 use crate::db::flags::ErrorFlags;
 use crate::db::rehash::RehashOutcome;
@@ -18,7 +19,6 @@ use std::io::Read;
 use std::mem::take;
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
 
 // TODO via args
 const BATCH_SIZE: u64 = 10_000;
@@ -106,11 +106,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     drop(work_r);
     drop(out_s);
 
-    let is_running = || {
-        at_least_one_running(&thread_handles.iter().collect())
-    };
-
-    let counts = handle_send_receive_loop(rt, work_s, out_r, is_running)?;
+    let counts = handle_send_receive_loop(rt, work_s, out_r, thread_handles)?;
     rt.progress.drop_thread_bars();
 
     match rt.shutdown.is_interrupted() {
@@ -164,34 +160,31 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 /// Perform the full enqueue / dequeue loop in batches to improve performance.
 /// The state machine for the enqueue / dequeue process is quite involved and
 /// pollutes the name space of the function, which is why it is moved to a
-/// separate function.
+/// separate function. Owns the worker handles: the shared loop joins them
+/// before the final drain so a trailing `None` can never race `drop(recv)`.
 fn handle_send_receive_loop(
     rt: &ExtractRTArgs,
     send: Sender<StrippedRecord>,
     recv: Receiver<Option<RehashOutcome>>,
-    one_running: impl Fn() -> bool)
+    thread_handles: Vec<thread::JoinHandle<()>>)
     -> Result<RehashCounts> {
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut counts = RehashCounts { matches: 0, mismatches: 0, errors: 0 };
+
     // Feed cursor over `rehash_queue`: `queue_index` is the last consumed queue
     // position. The pull filters to still-pending rows (phase predicate), so a
     // file already handed to a worker (or rehashed on a previous run) is never
     // re-pulled.
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
-
     let mut queue_index = 0u64;
-    let mut feed_buf = Vec::<(u64, StrippedRecord)>::new();
-    let mut feed_idx = 0usize;
-    let mut feed_exhausted = false;
-    #[warn(unused_assignments)]
-    let mut busy = false;
-
-    let mut dequeue_total = 0u64;
-    let mut exited_workers = 0u64;
-    let mut feed_total = 0u64;
-    let mut counts = RehashCounts { matches: 0, mismatches: 0, errors: 0 };
-    let mut pending_out = Vec::<RehashOutcome>::new();
-
-    let mut apply_chunk = |pending: &mut Vec<RehashOutcome>|
-        -> Result<()> {
+    let pull = || {
+        let rows = rt.db.pull_pending_rehash_rows::<StrippedRecord>(
+            queue_index, FEED_CHUNK as u64)?;
+        if !rows.is_empty() {
+            queue_index = rows[rows.len() - 1].0;
+        }
+        Ok(rows.into_iter().map(|(_q, row)| row).collect::<Vec<_>>())
+    };
+    let apply = |pending: &mut Vec<RehashOutcome>| -> Result<()> {
         let items = take(pending);
         if items.is_empty() {
             return Ok(());
@@ -217,88 +210,10 @@ fn handle_send_receive_loop(
         Ok(())
     };
 
-    let mut drain_chunk = |
-        is_busy: &mut bool, drain_override: bool,
-        dequeue: &mut u64, exit: &mut u64|
-        -> Result<()> {
-        // Drain finished outcomes into a small batch.
-        while pending_out.len() < DRAIN_CHUNK {
-            match recv.try_recv() {
-                Ok(Some(outcome)) => {
-                    pending_out.push(outcome);
-                    *is_busy = true;
-                    *dequeue += 1;
-                }
-                Ok(None) => *exit += 1,
-                Err(_) => break
-            }
-        }
-        if pending_out.len() >= DRAIN_CHUNK || drain_override {
-            apply_chunk(&mut pending_out)?;
-            *is_busy = true;
-        }
-        Ok(())
-    };
-
-    loop {
-        // Any pending shutdown (graceful *or* force) stops the feed: workers
-        // observe it between files / in-flight and either finish or abort, so
-        // keeping the feed open would only pile up rows nobody consumes (and
-        // on force could wedge the loop in a full-channel retry).
-        if rt.shutdown.is_interrupted() { break; }
-        busy = false;
-        if feed_idx == feed_buf.len() && !feed_exhausted {
-            feed_buf = rt.db.pull_pending_rehash_rows::<StrippedRecord>(
-                queue_index, FEED_CHUNK as u64
-            )?;
-            feed_idx = 0;
-            if feed_buf.is_empty() {
-                feed_exhausted = true;
-            } else {
-                queue_index = feed_buf[feed_buf.len() - 1].0;
-            }
-        }
-        while feed_idx < feed_buf.len() {
-            match send.try_send(feed_buf[feed_idx].1.clone()) {
-                Ok(_) => { feed_total += 1; busy = true; feed_idx += 1 }
-                Err(_) => break
-            }
-        }
-
-        drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
-        // Leave for dequeue loop.
-        if feed_exhausted && feed_idx == feed_buf.len()
-            || !one_running() {
-            break;
-        }
-        if !busy { thread::sleep(Duration::from_millis(10)); }
-    }
-
-    // Cut the feed side; idle workers end their receive loop.
-    drop(send);
-
-    // Drain to completion. A row handed to a worker becomes durable only once
-    // its outcome is applied here, so the channel must stay open until every
-    // fed row is accounted for — dropping it earlier turns the last `out.send`
-    // into a Disconnected panic and loses the outcome. Steady state ends the
-    // instant `feed_total` outcomes are pulled. An interrupt may drop rows (a
-    // worker stopped between files produces no outcome for it), so that case
-    // falls back to a short quiet window after the last received outcome —
-    // long enough for the in-flight file to finish or be aborted, whichever
-    // comes first.
-    loop {
-        busy = false;
-        if rt.shutdown.is_interrupted()
-            || dequeue_total == feed_total
-            || !one_running()
-            || exited_workers == rt.config.process.effective_jobs() as u64 {
-            break;
-        }
-        drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
-        if !busy { thread::sleep(Duration::from_millis(10)); }
-    }
-    drain_chunk(&mut busy, true, &mut dequeue_total, &mut exited_workers)?;
-    drop(recv);
+    let _ = send_receive_loop(
+        rt.shutdown, send, recv, thread_handles,
+        DRAIN_CHUNK, false,
+        pull, |_| Ok(()), || Ok(true), apply)?;
     recorder.flush()?;
     Ok(counts)
 }
