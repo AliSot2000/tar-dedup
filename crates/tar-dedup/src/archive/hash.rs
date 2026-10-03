@@ -1,6 +1,7 @@
 use crate::archive::ArchiveRTArgs;
 use crate::common::files::warn_if_times_changed;
-use crate::common::{at_least_one_running, io_buffer};
+use crate::common::io_buffer;
+use crate::common::send_receive_loop;
 use crate::db::Recorder;
 use crate::db::flags::ErrorFlags;
 use crate::db::hash::{HashError, HashSuccess, HashingOutcome};
@@ -16,7 +17,6 @@ use std::io::Read;
 use std::mem::take;
 use std::path::Path;
 use std::thread;
-use std::time::Duration;
 
 // TODO via args
 const BATCH_SIZE: u64 = 10_000;
@@ -94,11 +94,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     drop(work_r);
     drop(out_s);
 
-    let is_running = || {
-        at_least_one_running(&thread_handles.iter().collect())
-    };
-
-    let completed = handle_send_receive_loop(&rt, work_s, out_r, is_running)?;
+    let completed = handle_send_receive_loop(&rt, work_s, out_r, thread_handles)?;
     progress.drop_thread_bars();
 
     let double_canonical = rt.db.count_double_canonical_dev_inode_group()?;
@@ -126,35 +122,32 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
 /// Perform the full enqueue / dequeue loop in batches to improve performance.
 /// The state machine for the enqueue / dequeue process is quite involved and pollutes the name
-/// space of the function, which is why it is moved to a separate function.
-pub fn handle_send_receive_loop(
+/// space of the function, which is why it is moved to a separate function. Owns the worker
+/// handles: the shared loop joins them before the final drain (a trailing `None` can never race
+/// `drop(recv)`).
+fn handle_send_receive_loop(
     rt: &ArchiveRTArgs,
     send: Sender<StrippedRecord>,
     recv: Receiver<Option<HashingOutcome>>,
-    one_running: impl Fn() -> bool)
+    thread_handles: Vec<thread::JoinHandle<()>>)
     -> Result<u64> {
     // Feed cursor over `hash_queue`: `queue_index` is the last consumed queue
     // position. The pull filters to still-pending rows, so a file already
     // handed to a worker (or hashed on a previous run) is never re-pulled.
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
-
     let mut queue_index = 0u64;
-    let mut feed_buf = Vec::<(u64, StrippedRecord)>::new();
-    let mut feed_idx = 0usize;
-    let mut feed_exhausted = false;
-    #[warn(unused_assignments)]
-    let mut busy = false;
 
-    let mut dequeue_total = 0u64;
-    let mut exited_workers = 0u64;
-    let mut feed_total = 0u64;
-    let mut completed = 0u64;
-    let mut pending_out = Vec::<HashingOutcome>::new();
-
-    let mut apply_chunk = |pending: &mut Vec<HashingOutcome>| -> Result<u64> {
+    let pull = || {
+        let rows = rt.db.pull_pending_hash_rows::<StrippedRecord>(queue_index, FEED_CHUNK as u64)?;
+        if !rows.is_empty() {
+            queue_index = rows[rows.len() - 1].0;
+        }
+        Ok(rows.into_iter().map(|(_q, row)| row).collect::<Vec<_>>())
+    };
+    let apply = |pending: &mut Vec<HashingOutcome>| -> Result<()> {
         let items = take(pending);
         if items.is_empty() {
-            return Ok(0);
+            return Ok(());
         }
         let n = items.len() as u64;
         rt.db.ingest_hash_outcome(&items, !rt.config.indexing.no_hardlink_detection)?;
@@ -171,94 +164,13 @@ pub fn handle_send_receive_loop(
             }
         }
         rt.progress.inc_both(n);
-        Ok(n)
-    };
-
-    let mut drain_chunk = |
-        is_busy: &mut bool, drain_override: bool,
-        dequeue: &mut u64, exit: &mut u64|
-        -> Result<()> {
-        // Drain finished outcomes into a small batch.
-        while pending_out.len() < DRAIN_CHUNK {
-            match recv.try_recv() {
-                Ok(Some(res)) => {
-                    pending_out.push(res);
-                    *is_busy = true;
-                    *dequeue += 1;
-                }
-                Ok(None) => *exit += 1,
-                Err(_) => break
-            }
-        }
-        if pending_out.len() >= DRAIN_CHUNK || drain_override {
-            completed += apply_chunk(&mut pending_out)?;
-            *is_busy = true;
-        }
         Ok(())
     };
 
-    loop {
-        // Any pending shutdown (graceful *or* force) stops the feed: workers
-        // observe it between files / in-flight and either finish or abort, so
-        // keeping the feed open would only pile up rows nobody consumes (and
-        // on force could wedge the loop in a full-channel retry).
-        if rt.shutdown.is_interrupted() { break; }
-        busy = false;
-        if feed_idx == feed_buf.len() {
-            feed_buf = rt.db.pull_pending_hash_rows::<StrippedRecord>(
-                queue_index, FEED_CHUNK as u64)?;
-            feed_idx = 0;
-            if feed_buf.is_empty() {
-                feed_exhausted = true;
-            } else {
-                queue_index = feed_buf[feed_buf.len() - 1].0;
-            }
-        }
-        while feed_idx < feed_buf.len() {
-            match send.try_send(feed_buf[feed_idx].1.clone()) {
-                Ok(_) => { feed_total += 1; busy = true; feed_idx += 1 }
-                Err(_) => break
-            }
-        }
-
-        drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
-        // Leave for dequeue loop.
-        if feed_exhausted && feed_idx == feed_buf.len()
-            || !one_running() {
-            break;
-        }
-        if !busy {
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    // Cut the feed side; idle workers end their receive loop.
-    drop(send);
-
-    // Drain to completion. A row handed to a worker becomes durable only once
-    // its outcome is applied here, so the channel must stay open until every
-    // fed row is accounted for — dropping it earlier turns the last `out.send`
-    // into a Disconnected panic and loses the outcome. Steady state ends the
-    // instant `feed_total` outcomes are pulled. An interrupt may drop rows (a
-    // worker stopped between files produces no outcome for it), so that case
-    // falls back to a short quiet window after the last received outcome —
-    // long enough for the in-flight file to finish or be aborted, whichever
-    // comes first.
-    loop {
-        busy = false;
-        if rt.shutdown.is_interrupted()
-            || dequeue_total == feed_total
-            || !one_running()
-            || exited_workers == rt.config.process.effective_jobs() as u64 {
-            break;
-        }
-        drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
-        if !busy {
-            thread::sleep(Duration::from_millis(4));
-        }
-    }
-    drain_chunk(&mut busy, true, &mut dequeue_total, &mut exited_workers)?;
-    drop(recv);
+    let completed = send_receive_loop(
+        rt.shutdown, send, recv, thread_handles,
+        DRAIN_CHUNK, false,
+        pull, |_| Ok(()), || Ok(true), apply)?;
     recorder.flush()?;
     Ok(completed)
 }
@@ -584,29 +496,6 @@ mod tests {
         }
     }
 
-    /// One worker + one bar, driving `handle_send_receive_loop` to completion.
-    fn run_loop(
-        db: &Database, shutdown: &Shutdown, progress: &ProgressBarSet, config: &ArchiveConfig,
-        bar: ProgressBar, work_cap: usize) -> u64 {
-        let (work_s, work_r) = bounded::<StrippedRecord>(work_cap);
-        let (out_s, out_r) = bounded::<Option<HashingOutcome>>(OUT_CAPACITY);
-        let ps = config.sparse.page_size;
-        let sh = shutdown.clone();
-        let wr = work_r.clone();
-        let os = out_s.clone();
-        let mut handles = Vec::new();
-
-        let thread = thread::Builder::new().name("hash-worker-test".into())
-            .spawn(move || hash_worker(bar, ps, sh, wr, os))
-            .expect("spawn hash worker");
-        handles.push(&thread);
-        drop(work_r);
-        drop(out_s);
-        let one_running = || { at_least_one_running(&handles) };
-        let rt = ArchiveRTArgs { config, db, shutdown, progress };
-        handle_send_receive_loop(&rt, work_s, out_r, one_running).expect("hash send/receive loop")
-    }
-
     #[test]
     fn run_hashes_and_stores_digests() {
         let world = TestWorld::new();
@@ -793,261 +682,6 @@ mod tests {
         assert_eq!(records[0].phase, ErrorPhase::Pipeline(PipelinePhase::Hash));
     }
 
-    #[test]
-    fn final_drain_applies_partial_batch_no_loss() {
-        let world = TestWorld::new();
-        let mut expected = Vec::<(FileId, [u8; 20])>::new();
-        for i in 0..3 {
-            let payload = pattern(1024 * 1024 + i, i as u8);
-            let name = format!("f{i}.bin");
-            let id = world.add_file(name.as_str(), &payload);
-            expected.push((id, sha1_of(&payload)));
-        }
-        world.db.create_hash_queue().expect("create queue");
-        world.db.populate_hash_queue(false, false).expect("populate queue");
-
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let completed = run_loop(
-            &world.db, &world.shutdown, &world.progress, &world.config,
-            world.progress.thread_bar(0), 2);
-        world.progress.drop_thread_bars();
-
-        assert_eq!(completed, 3);
-        for (id, digest) in expected {
-            assert_eq!(world.hashed_digest(id), Some(digest));
-        }
-    }
-
-    #[test]
-    fn interrupt_mid_feed_pauses_and_resume_completes() {
-        let world = TestWorld::new();
-        let mut expected = Vec::<(FileId, [u8; 20])>::new();
-        for i in 0..8 {
-            let payload = pattern(8 * 1024 * 1024 + i, i as u8);
-            let name = format!("f{i}.bin");
-            let id = world.add_file(name.as_str(), &payload);
-            expected.push((id, sha1_of(&payload)));
-        }
-        world.db.create_hash_queue().expect("create queue");
-        world.db.populate_hash_queue(false, false).expect("populate queue");
-
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let bar = world.progress.thread_bar(0);
-        let sh2 = world.shutdown.clone();
-        let bar_obs = bar.clone();
-        let trigger = thread::spawn(move || {
-            // Fire once the worker completed a whole file (position went > 0
-            // and reset to 0 between files) — at least one outcome is already
-            // in-hand, and the worker is never mid-file when the loop sees us.
-            let mut started = false;
-            for _ in 0..20_000 {
-                if started && bar_obs.position() == 0 {
-                    sh2.request_graceful();
-                    return;
-                }
-                if bar_obs.position() > 0 {
-                    started = true;
-                }
-                thread::sleep(Duration::from_millis(1));
-            }
-            sh2.request_graceful();
-        });
-
-        let completed = run_loop(
-            &world.db, &world.shutdown, &world.progress, &world.config, bar, 2);
-        trigger.join().expect("join trigger");
-        world.progress.drop_thread_bars();
-
-        assert!(completed >= 1);
-        assert!(completed < 8);
-        let pending_remaining = world.db
-            .count_pending_hashable_files(false, false).expect("pending");
-        assert_eq!(pending_remaining, 8 - completed);
-        // interrupt/resume keeps the ordering table (drop happens on success only)
-        let queue_alive = world.db.pull_pending_hash_rows::<StrippedRecord>(0, 100)
-            .expect("queue survives interrupt");
-        assert_ne!(queue_alive.len(), 0);
-
-        // Resume with a fresh shutdown: everything still pending is hashed.
-        let sh3 = Shutdown::detached();
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let completed2 = run_loop(
-            &world.db, &sh3, &world.progress, &world.config,
-            world.progress.thread_bar(0), 2);
-        world.progress.drop_thread_bars();
-
-        assert_eq!(completed + completed2, 8);
-        for (id, digest) in expected {
-            assert_eq!(world.hashed_digest(id), Some(digest));
-        }
-    }
-
-    #[test]
-    fn interrupt_dequeue_only_finishes_in_flight() {
-        let world = TestWorld::new();
-        for i in 0..3 {
-            let payload = pattern(16 * 1024 * 1024 + i, i as u8);
-            let name = format!("g{i}.bin");
-            world.add_file(name.as_str(), &payload);
-        }
-        world.db.create_hash_queue().expect("create queue");
-        world.db.populate_hash_queue(false, false).expect("populate queue");
-
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let bar = world.progress.thread_bar(0);
-        let (work_s, work_r) = bounded::<StrippedRecord>(2);
-        let (out_s, out_r) = bounded::<Option<HashingOutcome>>(OUT_CAPACITY);
-        let sh = world.shutdown.clone();
-        let ps = world.config.sparse.page_size;
-        let wbar = bar.clone();
-        let wr = work_r.clone();
-        let os = out_s.clone();
-        thread::Builder::new().name("hash-worker-test".into())
-            .spawn(move || hash_worker(wbar, ps, sh, wr, os))
-            .expect("spawn hash worker");
-        drop(work_r);
-        drop(out_s);
-
-        let sh2 = world.shutdown.clone();
-        let bar_obs = bar.clone();
-        let trigger = thread::spawn(move || {
-            // All fed rows are already in the worker's hands (the cap-2 channel
-            // drained into the worker) and one full file completed: graceful
-            // must finish the in-flight file but drop anything not started yet.
-            let mut started = false;
-            for _ in 0..20_000 {
-                if started && bar_obs.position() == 0 {
-                    sh2.request_graceful();
-                    return;
-                }
-                if bar_obs.position() > 0 {
-                    started = true;
-                }
-                thread::sleep(Duration::from_millis(1));
-            }
-            sh2.request_graceful();
-        });
-        let handles = Vec::from([&trigger]);
-
-        let one_running = || at_least_one_running(&handles);
-        let completed = handle_send_receive_loop(
-            &world.rt(), work_s, out_r, one_running).expect("hash send/receive loop");
-        trigger.join().expect("join trigger");
-        world.progress.drop_thread_bars();
-
-        // Graceful stop: at least the completed file's outcome survived.
-        assert!(completed >= 1);
-        let pending_remaining = world.db
-            .count_pending_hashable_files(false, false).expect("pending");
-        assert_eq!(pending_remaining, 3 - completed);
-
-        let sh3 = Shutdown::detached();
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let completed2 = run_loop(
-            &world.db, &sh3, &world.progress, &world.config,
-            world.progress.thread_bar(0), 2);
-        world.progress.drop_thread_bars();
-        assert_eq!(completed + completed2, 3);
-        assert_eq!(
-            world.db.count_pending_hashable_files(false, false).expect("pending"),
-            0
-        );
-    }
-
-    #[test]
-    fn triple_interrupt_force_discards_in_flight() {
-        let world = TestWorld::new();
-        let payload = pattern(32 * 1024 * 1024, 11);
-        let id = world.add_file("huge.bin", &payload);
-        world.db.create_hash_queue().expect("create queue");
-        world.db.populate_hash_queue(false, false).expect("populate queue");
-
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let bar = world.progress.thread_bar(0);
-        let (work_s, work_r) = bounded::<StrippedRecord>(2);
-        let (out_s, out_r) = bounded::<Option<HashingOutcome>>(OUT_CAPACITY);
-        let sh = world.shutdown.clone();
-        let ps = world.config.sparse.page_size;
-        let wbar = bar.clone();
-        let wr = work_r.clone();
-        let os = out_s.clone();
-        thread::Builder::new().name("hash-worker-test".into())
-            .spawn(move || hash_worker(wbar, ps, sh, wr, os))
-            .expect("spawn hash worker");
-        drop(work_r);
-        drop(out_s);
-
-        let sh2 = world.shutdown.clone();
-        let bar_obs = bar.clone();
-        let trigger = thread::spawn(move || {
-            // Fire mid-read: the worker aborts at the next in-flight check.
-            for _ in 0..20_000 {
-                if bar_obs.position() > 0 {
-                    sh2.request_force();
-                    return;
-                }
-                thread::sleep(Duration::from_millis(1));
-            }
-            sh2.request_force();
-        });
-        let handles = Vec::from([&trigger]);
-
-        let completed = handle_send_receive_loop(
-            &world.rt(), work_s, out_r,
-            || at_least_one_running(&handles)).expect("hash send/receive loop");
-        trigger.join().expect("join trigger");
-        world.progress.drop_thread_bars();
-
-        // The interrupted outcome was processed (counted) but must not persist
-        // anything: no digest, no error flag, no error log row. (`completed`
-        // can be 0 if the abort landed on a between-files check instead of
-        // inside the read; both states still discard the in-flight file.)
-        assert!(completed <= 1);
-        if let Some(_) = world.hashed_digest(id) {
-            panic!("force-aborted hash must not commit a digest");
-        }
-        assert_eq!(
-            world.db.get_file_flag(id, FileFlag::ErrorWhileHash).expect("flag"),
-            false
-        );
-        assert_eq!(
-            world.db.get_records_by_file_id(id).expect("records").len(),
-            0
-        );
-        // the row is still pending and the queue survives for the resume
-        assert_eq!(
-            world.db.count_pending_hashable_files(false, false).expect("pending"),
-            1
-        );
-        let sh3 = Shutdown::detached();
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let completed2 = run_loop(
-            &world.db, &sh3, &world.progress, &world.config,
-            world.progress.thread_bar(0), 2);
-        world.progress.drop_thread_bars();
-        assert_eq!(completed2, 1);
-        assert_eq!(world.hashed_digest(id), Some(sha1_of(&payload)));
-    }
-
-    #[test]
-    fn run_force_before_start_returns_interrupted() {
-        let world = TestWorld::new();
-        let payload = pattern(1024 * 1024, 1);
-        let id = world.add_file("a.bin", &payload);
-        world.shutdown.request_force();
-
-        let res = run(&world.rt());
-
-        assert!(matches!(res, Err(Error::Interrupted)));
-        if let Some(_) = world.hashed_digest(id) {
-            panic!("force-aborted hash run must not commit a digest");
-        }
-        // the ordering table survives for the resume
-        let _ = world.db.pull_pending_hash_rows::<StrippedRecord>(0, 100)
-            .expect("queue survives");
-    }
-
-    #[test]
     #[ignore]
     fn batch_size_parity_stub() {
         // TODO(batch_size): once a `--batch_size` knob exists, slice the same
