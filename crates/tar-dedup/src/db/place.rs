@@ -2,8 +2,8 @@ use rusqlite::{Connection, named_params};
 
 use crate::db::common::{SqlFileRow, with_transaction};
 use crate::db::flags::{FileFlag, OutTreeFlag, set_out_tree_flag};
-use crate::db::types::{FileId, OutTreeId, OutTreeRecord};
 use crate::db::meta;
+use crate::db::types::{FileId, OutTreeId, OutTreeRecord};
 use crate::error::{Error, FileStatError, Result, ToPanic};
 
 pub struct MaterializeResult {
@@ -514,7 +514,7 @@ pub fn apply_flags_to_files(conn: &Connection) -> Result<(u64, u64, u64, u64, u6
         skipped_elements as u64))
 }
 
-/// TAke a batch of link tree results and ingest themn into the database within a single transaction
+/// Take a batch of link tree results and ingest themn into the database within a single transaction
 pub fn ingest_results_link_tree(conn: &mut Connection, results: &Vec<(OutTreeId, Option<FileStatError>)>)
                                 -> Result<u64> {
     with_transaction(conn, |i_conn| {
