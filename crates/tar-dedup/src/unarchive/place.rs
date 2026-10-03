@@ -129,21 +129,22 @@ pub fn prepare_extraction_dir(
                   "PRECONDITION FAILED: Only run if the dir tree is not built yet");
     tracing::warn!("Building the Directory tree cannot be gracefully interrupted!");
 
-    let mut last_id = OutTreeId(0);
     let mut already_checked = rt.config.paths.extraction_root().to_path_buf();
-    loop {
-        rt.shutdown.check_in_flight()?;
-        let dirs = rt.db.list_out_tree(last_id, BATCH_SIZE, None, Some(true))?;
-        if dirs.is_empty() { break }
-        last_id = dirs.last().expect("PRECONDITION FAILED: Expected at least one entry").id;
-        let n = dirs.len() as u64;
 
-        for dir in dirs {
-            rt.shutdown.check_in_flight()?;
-            build_path(&rt.config, &mut already_checked, &dir.abs_path, dir.id, recorder)?;
+    batched_stepped_loop(
+        BATCH_SIZE,
+        || OutTreeId(0),
+        |lid, bs| rt.db.list_out_tree(*lid, bs, None, Some(true)),
+        |rec| rec.id,
+        |dirs| {
+            for dir in dirs {
+                rt.shutdown.check_in_flight()?;
+                build_path(&rt.config, &mut already_checked, &dir.abs_path, dir.id, recorder)?;
+                rt.progress.inc_both(1);
+            }
+            Ok(())
         }
-        rt.progress.inc_both(n);
-    }
+    )?;
     rt.db.set_dir_tree_built()?;
     Ok(())
 }
