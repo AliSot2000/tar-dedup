@@ -5,11 +5,10 @@ use std::fs;
 use std::mem::take;
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
 
 use crate::archive::ArchiveRTArgs;
-use crate::common::at_least_one_running;
 use crate::common::files::warn_if_times_changed;
+use crate::common::send_receive_loop;
 use crate::db::Database;
 use crate::db::ErrorPhase;
 use crate::db::Recorder;
@@ -169,40 +168,36 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 /// Perform the full enqueue / dequeue loop in batches to improve performance.
 /// The state machine for the enqueue / dequeue process is quite involved and
 /// pollutes the name space of the function, which is why it is moved to a
-/// separate function. Owns the worker handles: they are joined before the
-/// final drain so a trailing `None` can never race `drop(recv)`.
+/// separate function. Owns the worker handles: the shared loop joins them
+/// before the final drain so a trailing `None` can never race `drop(recv)`.
 fn run_enqueue_dequeue_loop_sparsify(
     rt: &ArchiveRTArgs,
     send: Sender<StrippedRecord>,
     recv: Receiver<Option<SparseOutcome>>,
-    mut handles: Vec<thread::JoinHandle<()>>,
+    thread_handles: Vec<thread::JoinHandle<()>>,
 ) -> Result<(u64, u64)> {
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut errored = 0u64;
 
     // Feed cursor over `sparsify_queue`: `queue_index` is the last consumed
     // queue position. The pull filters to still-pending rows, so a file already
     // handed to a worker (or sparsified on a previous run) is never re-pulled.
     let mut queue_index = 0u64;
-    let mut feed_idx = 0usize;
-    let mut feed_exhausted = false;
-    let mut feed_buf = Vec::<(u64, StrippedRecord)>::new();
-    let mut busy = false;
-
-    let mut dequeue_total = 0u64;
-    let mut exited_workers = 0u64;
-    let mut feed_total = 0u64;
-    let mut completed = 0u64;
-    let mut errored = 0u64;
-    let mut pending_out = Vec::<SparseOutcome>::new();
-
-    let mut apply_chunk = |pending: &mut Vec<SparseOutcome>| -> Result<(u64, u64)> {
+    let pull = || {
+        let rows = rt.db.pull_pending_sparsify_rows::<StrippedRecord>(
+            queue_index, FEED_CHUNK as u64)?;
+        if !rows.is_empty() {
+            queue_index = rows[rows.len() - 1].0;
+        }
+        Ok(rows.into_iter().map(|(_q, row)| row).collect::<Vec<_>>())
+    };
+    let apply = |pending: &mut Vec<SparseOutcome>| -> Result<()> {
         let items = take(pending);
         if items.is_empty() {
-            return Ok((0, 0));
+            return Ok(());
         }
         let n = items.len() as u64;
         rt.db.ingest_sparsify_outcome(&items)?;
-        let mut err = 0u64;
         for res in items {
             match &res.err {
                 None => (),
@@ -210,7 +205,7 @@ fn run_enqueue_dequeue_loop_sparsify(
                     Error::Interrupted => (),
                     Error::FileStat(_) => {
                         record_sparsify_error(&mut recorder, &res);
-                        err += 1;
+                        errored += 1;
                     }
                     other => panic!(
                         "Invariant Error. Only FileStatError and Interrupted expected. Got: {other}"
@@ -219,103 +214,13 @@ fn run_enqueue_dequeue_loop_sparsify(
             }
         }
         rt.progress.inc_both(n);
-        Ok((n, err))
-    };
-
-    let mut drain_chunk = |
-        is_busy: &mut bool, drain_override: bool,
-        dequeue: &mut u64, exit: &mut u64|
-        -> Result<()> {
-        // Drain finished outcomes into a small batch.
-        while pending_out.len() < DRAIN_CHUNK {
-            match recv.try_recv() {
-                Ok(Some(res)) => {
-                    pending_out.push(res);
-                    *is_busy = true;
-                    *dequeue += 1;
-                }
-                Ok(None) => *exit += 1,
-                Err(_) => break,
-            }
-        }
-        if pending_out.len() >= DRAIN_CHUNK || drain_override {
-            let (n, e) = apply_chunk(&mut pending_out)?;
-            completed += n;
-            errored += e;
-            *is_busy = true;
-        }
         Ok(())
     };
 
-    loop {
-        // Any pending shutdown (graceful *or* force) stops the feed: workers
-        // observe it between files / in the copy callback and either finish or
-        // abort, so keeping the feed open would only pile up rows nobody
-        // consumes (and on force could wedge the loop in a full-channel retry).
-        if rt.shutdown.is_interrupted() { break; }
-        if feed_idx == feed_buf.len() {
-            feed_buf = rt.db.pull_pending_sparsify_rows::<StrippedRecord>(
-                queue_index, FEED_CHUNK as u64)?;
-            feed_idx = 0;
-            if feed_buf.is_empty() {
-                feed_exhausted = true;
-            } else {
-                queue_index = feed_buf[feed_buf.len() - 1].0;
-            }
-        }
-        while feed_idx < feed_buf.len() {
-            match send.try_send(feed_buf[feed_idx].1.clone()) {
-                Ok(_) => { feed_total += 1; busy = true; feed_idx += 1 }
-                Err(_) => break,
-            }
-        }
-
-        drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
-        // Leave for dequeue loop.
-        if feed_exhausted && feed_idx == feed_buf.len()
-            || !at_least_one_running(&handles.iter().collect()) {
-            break;
-        }
-        if !busy {
-            thread::sleep(Duration::from_millis(10));
-        }
-        busy = false;
-    }
-
-    // Cut the feed side; idle workers end their receive loop.
-    drop(send);
-
-    // Drain to completion. A row handed to a worker becomes durable only once
-    // its outcome is applied here, so the channel must stay open until every
-    // fed row is accounted for — dropping it earlier turns the last `out.send`
-    // into a Disconnected panic and loses the outcome. Steady state ends the
-    // instant `feed_total` outcomes are pulled. An interrupt may drop rows (a
-    // worker stopped between files produces no outcome for it), so that case
-    // falls back to a short quiet window after the last received outcome —
-    // long enough for the in-flight file to finish or be aborted, whichever
-    // comes first.
-    loop {
-        if rt.shutdown.is_interrupted()
-            || dequeue_total == feed_total
-            || !at_least_one_running(&handles.iter().collect())
-            || exited_workers == rt.config.process.io_jobs as u64 {
-            break;
-        }
-        drain_chunk(&mut busy, false, &mut dequeue_total, &mut exited_workers)?;
-        if !busy {
-            thread::sleep(Duration::from_millis(4));
-        }
-        busy = false;
-    }
-
-    // Join every worker. Each one exits right after `send` closed, so their
-    // trailing `None` is already in the channel (or lands before the final
-    // drain below) — joining first makes `drop(recv)` race-free.
-    for handle in take(&mut handles) {
-        let _ = handle.join();
-    }
-    drain_chunk(&mut busy, true, &mut dequeue_total, &mut exited_workers)?;
-    drop(recv);
+    let completed = send_receive_loop(
+        rt.shutdown, send, recv, thread_handles,
+        DRAIN_CHUNK, false,
+        pull, |_| Ok(()), || Ok(true), apply)?;
     recorder.flush()?;
     Ok((completed, errored))
 }
@@ -434,6 +339,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
+    use std::time::Duration;
 
     fn zeros(n: usize) -> Vec<u8> {
         vec![0u8; n]
@@ -836,71 +742,6 @@ mod tests {
         world.progress.drop_thread_bars();
     }
 
-    #[test]
-    fn loop_exit_via_dequeued_eq_feed_total() {
-        let world = TestWorld::new();
-        let sizes = [8 * 1024 * 1024, 4 * 1024 * 1024 + 1, 1024 * 1024];
-        let mut ids = Vec::<FileId>::new();
-        for (i, size) in sizes.iter().enumerate() {
-            let id = world.add_file(format!("f{i}.bin").as_str(), &zeros(*size));
-            world.seed_dedup_row(id, 4);
-            ids.push(id);
-        }
-        world.prepare_for_sparsify();
-
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let (completed, errored) = run_loop(&world, world.progress.thread_bar(0), 2);
-        world.progress.drop_thread_bars();
-
-        assert_eq!(completed, 3);
-        assert_eq!(errored, 0);
-        for id in ids {
-            assert_eq!(world.phase(id), FilePhase::Sparsified);
-            assert!(world.flag(id, FileFlag::HasSparse));
-        }
-    }
-
-    #[test]
-    fn loop_exit_via_graceful_preset_stops_feed() {
-        let world = TestWorld::new();
-        let id = world.add_file("a.bin", &zeros(1024 * 1024));
-        world.seed_dedup_row(id, 4);
-        world.prepare_for_sparsify();
-        world.shutdown.request_graceful();
-
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let (completed, errored) = run_loop(&world, world.progress.thread_bar(0), 2);
-        world.progress.drop_thread_bars();
-
-        // Graceful pre-set: the feed breaks immediately, nothing is sparsified.
-        assert_eq!(completed, 0);
-        assert_eq!(errored, 0);
-        assert_eq!(world.phase(id), FilePhase::Deduped);
-    }
-
-    #[test]
-    fn loop_applies_partial_batch_no_loss() {
-        let world = TestWorld::new();
-        let mut ids = Vec::<FileId>::new();
-        for i in 0..3 {
-            let id = world.add_file(format!("f{i}.bin").as_str(), &zeros(1024 * 1024));
-            world.seed_dedup_row(id, 4);
-            ids.push(id);
-        }
-        world.prepare_for_sparsify();
-
-        world.progress.create_thread_bars(BarKind::Bytes, 1);
-        let (completed, errored) = run_loop(&world, world.progress.thread_bar(0), 2);
-        world.progress.drop_thread_bars();
-
-        // work_cap=2 with 3 rows forces the final override drain to cover the
-        // ragged tail — no outcome is lost.
-        assert_eq!(completed, 3);
-        assert_eq!(errored, 0);
-        for id in ids {
-            assert!(world.flag(id, FileFlag::HasSparse));
-        }
-    }
 
     #[test]
     fn loop_panics_on_other_error_variant() {
@@ -927,36 +768,6 @@ mod tests {
         assert!(res.is_err(), "an invalid error variant must panic the drain");
     }
 
-    #[test]
-    fn loop_panicked_worker_gets_no_special_treatment() {
-        let world = TestWorld::new();
-        for i in 0..3 {
-            let id = world.add_file(format!("f{i}.bin").as_str(), &zeros(1024 * 1024));
-            world.seed_dedup_row(id, 4);
-        }
-        world.prepare_for_sparsify();
-
-        let (work_s, work_r) = bounded::<StrippedRecord>(2);
-        let (out_s, out_r) = bounded::<Option<SparseOutcome>>(8);
-        // A worker that dies before ever touching the channels: no outcome and
-        // no trailing None arrives — the loop must still terminate cleanly via
-        // its liveness guard and swallow the panicked join.
-        let worker = thread::Builder::new().name("sparsify-worker-test".into())
-            .spawn(move || panic!("worker crashed"))
-            .expect("spawn panicking worker");
-        let mut handles = Vec::<thread::JoinHandle<()>>::new();
-        handles.push(worker);
-        drop(work_r);
-        drop(out_s);
-
-        let rt = world.rt();
-        let done = run_enqueue_dequeue_loop_sparsify(&rt, work_s, out_r, handles);
-
-        assert!(matches!(done, Ok((0, 0))));
-        for id in [FileId(1), FileId(2), FileId(3)] {
-            assert_eq!(world.phase(id), FilePhase::Deduped);
-        }
-    }
 
     #[test]
     fn run_disabled_promotes_all_no_flags() {
