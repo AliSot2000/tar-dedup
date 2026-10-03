@@ -251,122 +251,111 @@ pub fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Res
         None => PathBuf::from(".sources"),
         Some(v) => v.to_path_buf(),
     };
+    let shutdown = rt.shutdown.clone();
     let base_dir = rt.config.paths.extraction_root().join(&dir_name);
     let results = Mutex::new(Vec::new());
     let pool = ThreadPoolBuilder::new()
         .num_threads(rt.config.process.io_jobs)
         .build()
         .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
-    let shutdown = rt.shutdown.clone();
-    loop {
+
+    let inner_process = |canonical: &FileRecord, out: &OutTreeRecord| -> Result<()> {
         shutdown.check_between_files()?;
-        let entries: Vec<(FileRecord, OutTreeRecord)> = rt.db.list_out_tree_for_linking(
-            BATCH_SIZE, true
-        )?;
-        if entries.is_empty() { break }
-        let n = entries.len() as u64;
-
-        let parallel = pool.install(|| {
-            entries.par_iter().try_for_each(
-                |(canonical, out)| -> Result<()> {
-                    shutdown.check_between_files()?;
-                    let result = if matches!(canonical.ftype, FileType::File) {
-                        let content_id = canonical
-                            .content_id()
-                            .expect("PRECONDITION: Moved successfully, content_id must exist")
-                            .0;
-                        // Compute the target for link
-                        let link_target =
-                            if rt.config.placement.absolute_links || rt.config.placement.use_hard_links {
-                                base_dir.join(content_id)
-                            } else {
-                                let up = relative_pardirs_to_dir(
-                                    rt.config.paths.extraction_root(),
-                                    &out.abs_path,
-                                );
-                                up.join(&dir_name).join(content_id)
-                            };
-                        if out.abs_path.exists() {
-                            return Err(Error::Config(format!(
-                                "Found existing path {}. Link Tree must be empty.",
-                                out.abs_path.display())));
-                        }
-
-                        // Actually build the link
-                        let base_res = if rt.config.placement.use_hard_links {
-                            fs::hard_link(link_target, &out.abs_path)
-                        } else {
-                            #[cfg(unix)]
-                            {
-                                std::os::unix::fs::symlink(link_target, &out.abs_path)
-                            }
-                            #[cfg(windows)]
-                            {
-                                std::os::windows::fs::symlink_file(link_target, &out.abs_path)
-                            }
-                        };
-                        match base_res {
-                            Ok(_) => Ok(()),
-                            Err(e) => Err(FileStatError::Io {
-                                path: out.abs_path.to_path_buf(), source: e,
-                            }),
-                        }
-                    } else {
-                        build_other(&canonical, &out, rt.config.placement.recreate_none_file_entries)
-                    };
-                    results
-                        .lock()
-                        .expect("Result lock for link in place poisoned")
-                        .push((out.id, result.err()));
-                    Ok(())
-                })
-        });
-
-        // Check Pool Result
-        match parallel {
-            Ok(()) => (),
-            Err(Error::Interrupted) => (), // Exit
-            Err(e) => return Err(e),
-        }
-
-        // Get the results
-        let new_res = Vec::new();
-        let linked = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
-
-        // Apply results to db
-        for (id, err) in linked {
-            match err {
-                None => { let _ = rt.db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?; }
-                Some(FileStatError::Io { path: p, source: e }) => {
-                    let _ = rt.db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
-                    tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
-                    recorder.record_out_tree(
-                        id,
-                        ERROR_PHASE,
-                        FileStatError::Io {
-                            path: p.clone(),
-                            source: io::Error::new(e.kind(), e.to_string()),
-                        },
-                        ErrorFlags::default(),
+        let result = if matches!(canonical.ftype, FileType::File) {
+            let content_id = canonical
+                .content_id()
+                .expect("PRECONDITION: Moved successfully, content_id must exist")
+                .0;
+            // Compute the target for link
+            let link_target =
+                if rt.config.placement.absolute_links || rt.config.placement.use_hard_links {
+                    base_dir.join(content_id)
+                } else {
+                    let up = relative_pardirs_to_dir(
+                        rt.config.paths.extraction_root(),
+                        &out.abs_path,
                     );
-                }
-                Some(FileStatError::Nix { path: p, source: e }) => {
-                    let _ = rt.db.set_out_tree_flag(id, OutTreeFlag::ErrorWhilePlace, true);
-                    tracing::error!("Failed to create link: {} with error: {}", p.display(), e);
-                    recorder.record_out_tree(
-                        id,
-                        ERROR_PHASE,
-                        FileStatError::Nix { path: p.clone(), source: e },
-                        ErrorFlags::default(),
-                    );
-                }
-                _ => panic!(
-                    "INVARIANT FAILED: link_into_place should only produce Io and Nix Errors.")
+                    up.join(&dir_name).join(content_id)
+                };
+            if out.abs_path.exists() {
+                return Err(Error::Config(format!(
+                    "Found existing path {}. Link Tree must be empty.",
+                    out.abs_path.display())));
             }
+
+            // Actually build the link
+            let base_res = if rt.config.placement.use_hard_links {
+                fs::hard_link(link_target, &out.abs_path)
+            } else {
+                #[cfg(unix)]
+                {
+                    std::os::unix::fs::symlink(link_target, &out.abs_path)
+                }
+                #[cfg(windows)]
+                {
+                    std::os::windows::fs::symlink_file(link_target, &out.abs_path)
+                }
+            };
+            match base_res {
+                Ok(_) => Ok(()),
+                Err(e) => Err(FileStatError::Io {
+                    path: out.abs_path.to_path_buf(), source: e,
+                }),
+            }
+        } else {
+            assert!(!matches!(canonical.ftype, FileType::Unknown), "'unknown' not permitted!");
+            assert!(!matches!(canonical.ftype, FileType::Directory), "'Directory' not permitted!");
+            build_other(&canonical, &out, rt.config.placement.recreate_none_file_entries)
+        };
+        results
+            .lock()
+            .expect("Result lock for link in place poisoned")
+            .push((out.id, result.err()));
+        rt.progress.inc_both(1);
+        Ok(())
+    };
+
+    batched_loop(
+        // INFO: Function filters ('dir' and 'unknown')
+        |bs| rt.db.list_out_tree_for_linking(bs, true),
+        BATCH_SIZE,
+        |entries: Vec<(FileRecord, OutTreeRecord)>| {
+            let parallel = pool.install(|| {
+                entries.par_iter().try_for_each(
+                    |(can, out)| inner_process(can, out)
+                )
+            });
+
+            // Check Pool Result
+            match parallel {
+                Ok(()) => (),
+                Err(Error::Interrupted) => (), // Exit
+                Err(e) => return Err(e),
+            }
+
+            // Get the results
+            let new_res = Vec::new();
+            let linked = std::mem::replace(
+                &mut *results
+                .lock()
+                .expect("hash results lock"),
+                new_res
+            );
+
+            // Apply results to db
+            rt.db.ingest_results_link_tree(&linked)?;
+            for (id, err) in linked {
+                match err {
+                    None => { let _ = rt.db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?; }
+                    Some(e) => {
+                        recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default());
+                    }
+                }
+            }
+            Ok(())
         }
-        recorder.flush()?;
-        rt.progress.inc_both(n);
-    }
+    )?;
+    recorder.flush()?;
     Ok(())
 }
 
