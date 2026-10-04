@@ -2,7 +2,7 @@ use crate::config::RuntimeState;
 use crate::db::common::with_transaction;
 use crate::db::flags::ErrorFlags;
 use crate::db::flags::FileFlag;
-use crate::db::types::{FileId, NewFileRecord};
+use crate::db::types::{FileId, FileType, NewFileRecord};
 use crate::db::{ErrorPhase, Recorder, meta};
 use crate::error::{FileStatError, Result, ToPanic};
 use path_clean::PathClean;
@@ -54,7 +54,7 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
             ":uid": record.uid,
             ":gid": record.gid,
             ":mode": record.mode,
-            ":ftype": record.ftype.map(|t| t.as_str()),
+            ":ftype": record.ftype.unwrap_or(FileType::Unknown).as_str(),
             ":xattr": record.xattrs.as_deref(),
             ":acl": record.posix_acl.as_deref(),
             ":selinux": record.selinux_ctx.as_deref(),
@@ -276,10 +276,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("t.sqlite")).unwrap();
         let s1 = db
-            .add_get_source(Path::new("/root-a"), "--input-dir", Some(0), None, dir_flags())
+            .add_get_source(Path::new("/root-a"), "--input-dir", Some(0),
+                            Some(Path::new("/root-a")), dir_flags())
             .unwrap();
         let s2 = db
-            .add_get_source(Path::new("/root-b"), "--input-dir", Some(1), None, dir_flags())
+            .add_get_source(Path::new("/root-b"), "--input-dir", Some(1),
+                            Some(Path::new("/root-b")), dir_flags())
             .unwrap();
         let rec = record("/shared/file.txt");
         assert!(db.insert_file_and_ref(s1, &rec).unwrap());
@@ -303,6 +305,9 @@ mod tests {
         let loaded: FileRecord = db.get_file_by_id(id).unwrap().expect("row");
         assert_eq!(loaded.major, None);
         assert_eq!(loaded.minor, None);
+        // A record without a captured file type is never stored NULL; the DB
+        // layer casts it to `unknown`.
+        assert_eq!(loaded.ftype, FileType::Unknown);
     }
 
     #[test]
