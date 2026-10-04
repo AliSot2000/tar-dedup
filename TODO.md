@@ -12,14 +12,14 @@
 - [ ] list / inspect command (go through the db and dump the files. csv, parameter to list the columns which we want. 
       (join filter, join filter, join source))
 - [ ] query (query by file, out_tree or error table.)
-- [ ] Add a warn_if_times_changed -> Should also set a flag in the db.
+- [X] Add a warn_if_times_changed -> Should also set a flag in the db.
 
 # NOW TODO
 - [X] Placement Conflict Handling
 - [X] Mode parsing
 - [X] Filename rewriting
-- [ ] Progress
-- [ ] Batching
+- [X] Progress
+- [X] Batching
 - [X] Resume
 - [X] Filter on extract
 - [X] All Metadata flag.
@@ -30,8 +30,8 @@
 - [ ] Testing
 - [ ] Rework error handling and log policy as well as log levels
 - [X] Sequential / Parallel where possible
-- [ ] Add Version of Tool to metadata
-- [ ] Add Platform to metadata
+- [X] Add Version of Tool to metadata
+- [X] Add Platform to metadata
 - [X] Capture Errors in database for review.
 - [X] need to add source root -i flag to the metadata (solved as source table)
 - [ ] Add archive process started, archive process ended time stamps to the db.
