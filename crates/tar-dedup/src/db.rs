@@ -598,6 +598,16 @@ impl Database {
         meta::dump_meta(&*self.conn())
     }
 
+    /// See [`meta::get_tar_dedup_version`].
+    pub fn get_tar_dedup_version(&self) -> Result<Option<String>> {
+        meta::get_tar_dedup_version(&*self.conn())
+    }
+
+    /// See [`meta::get_tar_dedup_os`].
+    pub fn get_tar_dedup_os(&self) -> Result<Option<String>> {
+        meta::get_tar_dedup_os(&*self.conn())
+    }
+
     pub fn set_archive_owner_policy(
         &self,
         policy: &crate::common::perms::OwnerGroupPolicy,
