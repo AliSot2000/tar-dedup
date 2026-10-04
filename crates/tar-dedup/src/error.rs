@@ -7,7 +7,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Wrap a `Result`-returning free fn so `Err` is constrained to `$allowed`
 /// (an or-pattern). Debug builds panic on disallowed variants; the assert
 /// wrapper is compiled out entirely on release.
-#[warn(unused)]
+#[warn(unused_macros)]
 macro_rules! error_guarded {
     (
         $vis:vis fn $name:ident($($arg:ident : $ty:ty),*) -> $ret:ty $body:block,
