@@ -30,14 +30,6 @@ struct XattrDump {
     data: HashMap<String, String>,
 }
 
-// Encoding constants.
-#[warn(dead_code)]
-#[cfg(feature = "debug-force-utf8")]
-const ENCODING: &str = "utf8";
-#[warn(dead_code)]
-#[cfg(not(feature = "debug-force-utf8"))]
-const ENCODING: &str = "base64";
-
 #[derive(Debug, Error)]
 pub enum PosixQualifierParserError {
     #[error("unexpected qualifier string: {0:?}")]
