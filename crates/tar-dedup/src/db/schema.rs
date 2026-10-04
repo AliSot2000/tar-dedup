@@ -32,9 +32,9 @@ CREATE TABLE IF NOT EXISTS filter_reason_extract (
 
 CREATE TABLE IF NOT EXISTS source (
     id INTEGER PRIMARY KEY CHECK (id > 0),
-    source TEXT NOT NULL,
+    source TEXT NOT NULL, --from-file or --input-dir
     abs_path TEXT NOT NULL,
-    original_path TEXT,
+    original_path TEXT NOT NULL,
     line INTEGER,
     flags INTEGER NOT NULL DEFAULT 0,
     UNIQUE (source, abs_path, line)
