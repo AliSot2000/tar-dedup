@@ -1,7 +1,7 @@
 //! Rehash: verify extract-cache payloads against catalog SHA-1 digests.
 
 use crate::common::io_buffer;
-use crate::common::send_receive_loop;
+use crate::common::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY, send_receive_loop};
 use crate::config::ExtractPipelinePhase;
 use crate::db::flags::ErrorFlags;
 use crate::db::rehash::RehashOutcome;
@@ -19,17 +19,6 @@ use std::io::Read;
 use std::mem::take;
 use std::path::{Path, PathBuf};
 use std::thread;
-
-// TODO via args
-const BATCH_SIZE: u64 = 10_000;
-
-// Producer/consumer pipeline bounds: the input queue takes over the old
-// whole-batch pull's memory guard, but workers stream file-by-file so a big
-// file no longer stalls every other row's commit and progress.
-const WORK_CAPACITY: usize = BATCH_SIZE as usize;
-const OUT_CAPACITY: usize = 2 * WORK_CAPACITY;
-const FEED_CHUNK: usize = 1_024;                     // rows pulled from the DB per round
-const DRAIN_CHUNK: usize = BATCH_SIZE as usize / 2;  // outcomes committed per transaction
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Rehash);
 

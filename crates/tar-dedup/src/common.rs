@@ -41,6 +41,20 @@ pub const DEFAULT_BATCH_SIZE: u64 = 100_000;
 /// Number of ErrorRecordDrafts at a time in ram before attempting to auto flush;
 pub const DEFAULT_AUTO_FLUSH_LIMIT: u64 = 10_000;
 
+// Producer/consumer pipeline bounds shared by every `send_receive_loop` phase
+// (hash, dedup, sparsify, rehash, place). Bounds are generous so big in-flight
+// files do not stall the feed; each phase still commits outcomes in
+// `DRAIN_CHUNK`-sized transactions.
+
+/// Items in the input (work) channel.
+pub const WORK_CAPACITY: usize = 10_000;
+/// Outcomes in the result channel.
+pub const OUT_CAPACITY: usize = 20_000;
+/// Rows pulled from the DB per feed round.
+pub const FEED_CHUNK: usize = 1_024;
+/// Outcomes committed per transaction.
+pub const DRAIN_CHUNK: usize = 5_000;
+
 
 pub fn io_buffer() -> Vec<u8> {
     vec![0u8; IO_BUF_SIZE]
