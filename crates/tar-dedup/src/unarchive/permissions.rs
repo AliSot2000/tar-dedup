@@ -8,6 +8,7 @@
 //! only the canonical row is touched. With `--overwrite-dir`, directory metadata is
 //! applied as well.
 
+use crate::common::BATCH_SIZE;
 use crate::common::batched_loop;
 use crate::common::perms::{
     ModeSource, OwnerGroupPolicy, OwnerGroupSource, parse_mode_changes, resolve_owner_group,
@@ -27,7 +28,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-const BATCH_SIZE: u64 = 10_000;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Permissions);
 
 pub struct OwnerGroupMode {

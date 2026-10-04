@@ -1,6 +1,7 @@
 //! Extract filter phase: pure DB pass applying the user's include/exclude rules
 //! against `files.abs_path`, writing `include_reason_extract` / `exclude_reason_extract`.
 
+use crate::common::BATCH_SIZE;
 use crate::common::filter::ingest_filters as internal_ingest_filter;
 use crate::common::filter::{FilterSink, joint_filter_phase};
 use crate::config::ExtractConfig;
@@ -11,7 +12,6 @@ use crate::error::Result;
 use crate::unarchive::ExtractRTArgs;
 use std::cell::RefCell;
 
-const BATCH_SIZE: u64 = 100_000;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(crate::config::ExtractPipelinePhase::Filter);
 
 #[derive(Clone, Debug, Default)]

@@ -33,13 +33,14 @@ pub const IO_BUF_SIZE: usize = 1024 * 1024 * 4;
 /// Tar read chunk size during archive (keep xz fed without huge resident buffers).
 const ARCHIVE_IO_BUF_SIZE: usize = 4 * 1024 * 1024;
 
-/// When processing files, file system entries, ... we take the precaution not to load too much
-/// into ram. Worst case Estimate is 16kiB / Entry, so we try to be conservative with 100'000 as
-/// a batch size
-pub const DEFAULT_BATCH_SIZE: u64 = 100_000;
-
 /// Number of ErrorRecordDrafts at a time in ram before attempting to auto flush;
 pub const DEFAULT_AUTO_FLUSH_LIMIT: u64 = 10_000;
+
+/// Default batch size for per-phase SQL pulls (rows fetched per statement).
+/// Kept modest: a worst-case [`crate::db::types::FileRecord`] (4 KiB xattr +
+/// acl + selinux blobs, ~1 KiB paths) is ~21 KiB, so 10_000 rows ≈ 210 MiB —
+/// safe even on a 4 GiB machine, where 100_000 rows would approach 2 GiB.
+pub const BATCH_SIZE: u64 = 10_000;
 
 // Producer/consumer pipeline bounds shared by every `send_receive_loop` phase
 // (hash, dedup, sparsify, rehash, place). Bounds are generous so big in-flight
