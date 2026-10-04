@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use path_clean::PathClean;
 use rusqlite::{Connection, named_params};
 
 use crate::db::content_id::{content_id_from_digest, sparse_member_name};
@@ -401,20 +400,6 @@ pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Resu
     let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!("SELECT {cols} FROM files WHERE id = :id")).to_panic()?;
     let mut rows = stmt.query(named_params! { ":id": file_id.0 }).to_panic()?;
-    if let Some(row) = rows.next().to_panic()? {
-        return Ok(Some(R::from_row(row, None).to_panic()?));
-    }
-    Ok(None)
-}
-
-// TODO: Delete?
-pub fn get_file_by_path<R: SqlFileRow>(conn: &Connection, abs_path: &Path) -> Result<Option<R>> {
-    debug_assert_eq!(abs_path, abs_path.to_path_buf().clean(), "Got non-normalized path");
-    let cols = R::sql_columns(None);
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {cols} FROM files WHERE abs_path = :abs_path"
-    )).to_panic()?;
-    let mut rows = stmt.query(named_params! { ":abs_path": abs_path.to_string_lossy() }).to_panic()?;
     if let Some(row) = rows.next().to_panic()? {
         return Ok(Some(R::from_row(row, None).to_panic()?));
     }
