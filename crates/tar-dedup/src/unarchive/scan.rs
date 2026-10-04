@@ -166,6 +166,14 @@ fn run_inner(
         &rt.config.paths.archive_path, &rt.config.decompression
     )?;
 
+    // Resume skip bound: members up to **and including** the last one fully
+    // processed by an earlier pass are skipped (re-ingesting `manifest.sqlite`
+    // would be rejected as "not at the beginning"). `saw_any_members` as loaded
+    // (not the live flag) distinguishes a fresh db (`last == 0`, nothing
+    // processed) from a resume that already consumed the leading manifest
+    // (`last == 0`, a member was seen) — both store `last_member_index == 0`.
+    let skip_processed_until = scan.saw_any_members.then_some(scan.last_member_index);
+
     // FEATURE: Switch to seek for tar
     for (m_idx, wrapped_entry) in archive
         .entries()
@@ -180,7 +188,7 @@ fn run_inner(
 
         // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
         let member_index = m_idx as u64;
-        if member_index < scan.last_member_index {
+        if skip_processed_until.is_some_and(|last| member_index <= last) {
             // TODO LLM: Can I also drop this wrapped entry here and not check if it errored out
             wrapped_entry.map_err(|e| {
                 io_error_with_session_scan_error(&rt.config.paths.archive_path, recorder, e)
@@ -323,7 +331,10 @@ fn process_entry(
     -> Result<()> {
 
     let mut install_db = |rts: &mut ScanRTState| {
-        if scan.from_footer {
+        // The in-tar `manifest.sqlite` is authoritative only for footer-less
+        // archives: with a footer the catalog was already installed up-front and
+        // is the *final* db — overlaying the older in-tar manifest would regress it.
+        if !scan.from_footer {
             install_database(rts, db_path, entry, recorder, fb)
         } else {
             Ok(())
@@ -678,6 +689,32 @@ mod tests {
         let db = Database::open(path).expect("open catalog");
         let canonical = insert(&db, "/canonical.txt", 4, FileType::File);
         let duplicate = insert(&db, "/duplicate.txt", 4, FileType::File);
+
+        // Seed the joint include filter (id -1 = internal catch-all) in both
+        // tables so the eager-extract gate (`should_extract_canonical_id`) sees
+        // the canonicals as filter-eligible; then pin the reason columns.
+        db.with_transaction(|conn| {
+            for table in ["archive", "extract"] {
+                conn.execute(
+                    &format!(
+                        "INSERT OR IGNORE INTO filter_reason_{table} (id, source, line, expression) \
+                         VALUES (-1, 'internal', NULL, '.*')"
+                    ),
+                    [],
+                ).expect("seed internal include rule");
+            }
+            Ok(())
+        }).expect("filter seed tx");
+        for id in [canonical, duplicate] {
+            db.with_transaction(|conn| {
+                conn.execute(
+                    "UPDATE files SET include_reason_archive = -1, exclude_reason_archive = 0, \
+                     include_reason_extract = -1, exclude_reason_extract = 0 WHERE id = :id",
+                    rusqlite::named_params! { ":id": id.0 },
+                ).expect("set reason columns");
+                Ok(())
+            }).expect("reason tx");
+        }
 
         // TODO: Need to figure out if we need to set the last one to true/false
         db.update_file_inspection_per_id(canonical, [7u8; 20], 0, false)
