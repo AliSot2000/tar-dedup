@@ -27,6 +27,20 @@
 - [X] All Metadata flag.
 - [ ] Force utf8 (any non-utf8 string panics and aborts.)
 
+# Final remainder
+- [ ] - add cli arg for shards (use_shars, max_shard_size)
+- [ ] - add cli arg for debug-feat ordering-override (don't use custom ordering. order by files(id))
+- [ ] - add cli arg batch_size, flush_size (override the defaults from config.)
+- [ ] - correct errors (
+            tracing::error - major fail (file not found, not removed, dir not created, ... something contentswise is not there the way we wanted)
+            tracing::warning - minor fail (failed to remove a stage, metadata failed, recording errors failed, ...)
+            tracing::info - general update (x number of files processed this session. y number of errors etc, ...)
+            tracing::debug - file level updates (file x moved to location, metadata of file x acquired, file staged, ...))
+- [ ] - finish testing for [inventory, place_prologue, place, permissions]
+- [ ] - finish the readme
+- [ ] - publish to crates.io
+- [ ] - publish to gh releases
+- [ ] - publish to flatpak
 
 ## General:
 - [ ] Testing
