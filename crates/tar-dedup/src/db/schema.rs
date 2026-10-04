@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS files (
     flags          INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(sha1, size);
+CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(size, sha1);
 CREATE INDEX IF NOT EXISTS idx_files_canonical ON files(canonical_id);
 CREATE INDEX IF NOT EXISTS idx_files_phase ON files(phase);
 CREATE INDEX IF NOT EXISTS idx_files_abs_path ON files(abs_path);
