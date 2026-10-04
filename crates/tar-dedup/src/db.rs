@@ -42,7 +42,7 @@ pub use extract::ExtractScanState;
 pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
 use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
-use crate::db::place::MaterializeResult;
+use crate::db::place::{CopyOutcome, MaterializeResult};
 use crate::db::rehash::RehashOutcome;
 use crate::db::sparsify::SparseOutcome;
 
@@ -842,6 +842,64 @@ impl Database {
         scan::init_extract_runtime_state(&mut *self.conn_mut())
     }
 
+    /// Count the **overall** link-tree move workload (stable across sessions).
+    pub fn count_files_to_move(&self, filter: bool) -> Result<u64> {
+        place::count_files_to_move(&self.conn(), filter)
+    }
+
+    /// Of [`Self::count_files_to_move`], how many already sit at the link source
+    /// — the resume position for the moved bar.
+    pub fn count_moved_files(&self, filter: bool) -> Result<u64> {
+        place::count_moved_files(&self.conn(), filter)
+    }
+
+    /// Create the `canonical_move_queue` ordering table (idempotent).
+    pub fn create_canonical_move_queue(&self) -> Result<()> {
+        place::create_canonical_move_queue(&self.conn())
+    }
+
+    /// Populate `canonical_move_queue` with files still to move into the link
+    /// source, `size DESC` order (idempotent; see `db/place.rs`).
+    pub fn populate_canonical_move_queue(&self, filter: bool) -> Result<u64> {
+        place::populate_canonical_move_queue(&self.conn(), filter)
+    }
+
+    /// Next slice of still-pending files to move, in `canonical_move_queue`
+    /// (size-DESC) order, as `(queue_position, record)` pairs.
+    pub fn pull_canonical_move_queue<R: SqlFileRow>(&self, index: u64, limit: u64)
+        -> Result<Vec<(u64, R)>> {
+        place::pull_canonical_move_queue(&self.conn(), index, limit)
+    }
+
+    /// Drop the `canonical_move_queue` ordering table (idempotent). Success-path only.
+    pub fn drop_canonical_move_queue(&self) -> Result<()> {
+        place::drop_canonical_move_queue(&self.conn())
+    }
+
+    /// Create the `materialize_queue` ordering table (idempotent).
+    pub fn create_materialize_queue(&self) -> Result<()> {
+        place::create_materialize_queue(&self.conn())
+    }
+
+    /// Populate `materialize_queue` with canonical file out rows, `size DESC`
+    /// order (idempotent; see `db/place.rs`).
+    pub fn populate_materialize_queue(&self) -> Result<u64> {
+        place::populate_materialize_queue(&self.conn())
+    }
+
+    /// Next slice of still-pending canonical file out rows, in
+    /// `materialize_queue` (size-DESC) order, as
+    /// `(queue_position, canonical_record, out_tree_record)` triples.
+    pub fn pull_materialize_queue<R: SqlFileRow>(&self, index: u64, limit: u64)
+        -> Result<Vec<(u64, R, OutTreeRecord)>> {
+        place::pull_materialize_queue(&self.conn(), index, limit)
+    }
+
+    /// Drop the `materialize_queue` ordering table (idempotent). Success-path only.
+    pub fn drop_materialize_queue(&self) -> Result<()> {
+        place::drop_materialize_queue(&self.conn())
+    }
+
     pub fn list_canonical_files_for_move<R: SqlFileRow>(
         &self,
         filter: bool,
@@ -979,6 +1037,11 @@ impl Database {
         -> Result<()> {
         place::ingest_materialize_results(&mut self.conn_mut(), results, is_hardlink, set_reflink)
     }
+
+    pub fn ingest_copy_results(&self, results: &Vec<CopyOutcome>) -> Result<u64> {
+        place::ingest_copy_results(&mut self.conn_mut(), results)
+    }
+
     // --- permissions (metadata restore) ---
 
     pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(&self, batch_size: u64)
