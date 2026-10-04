@@ -1,8 +1,50 @@
 # Plan: Place stage crossbeam + size-DESC + inner-loop progress
 
-Status: **agreed, ready to implement** (2026-10-03). Implementation only — **no tests in
-this round** (a place test battery is deferred, matching how hash/rehash were sequenced.
-`materialize_link_tree` and `prepare_extraction_dir` are untouched).
+Status: **implemented** (2026-10-03). Build green, 272/4 lib tests (same 4
+pre-existing failures). **No tests in this round** (a place test battery is deferred,
+matching how hash/rehash were sequenced). `materialize_link_tree` and
+`prepare_extraction_dir` are untouched.
+
+## As-built
+
+- `db/place.rs`: `canonical_move_queue(id, file_id UNIQUE REFERENCES files)`,
+  `materialize_queue(id, out_tree_id UNIQUE REFERENCES out_tree)` with create /
+  populate (`row_number() OVER (ORDER BY size DESC, id)`) / pull (queue position
+  + pending re-filter) / drop (success-path only).
+  `pull_canonical_move_queue` re-filters `flags & AtLinkSource = 0`;
+  `pull_materialize_queue` re-filters `Placed = 0 AND ErrorWhilePlace = 0` and reads
+  the dedup canonical via `f.canonical_id = c.id` (returns `(pos, canonical, out)`).
+  All rusqlite in `db/`, facades in `Database`.
+- `count_files_to_move` / `count_moved_files` mirror `count_files_to_rehash` /
+  `count_rehashed_files`: the **overall** move workload (stable set, no
+  `AtLinkSource` predicate) and, of it, the already-moved count. The moved
+  sub-bar sets `length = total` and `position = done`; `pending = total − done`
+  drives the early-return. (A first cut used the pending remainder as the bar
+  max, which made resumed runs under-report.)
+- `copy_canonicals_to_source`: crossbeam worker pipeline over `send_receive_loop`
+  (W=`StrippedRecord`, O=`Result<(FileId,bool),(FileId,Error)>`); per-worker Bytes
+  thread bar; separate `files moved` Count sub-bar (`push_sub_bar`); **no
+  phase/global increments** (owned by `materialize_link_tree`). Cache-source removal
+  after a successful copy when `!keep_stage` (confirmed inverted-`remove_file(dst)`
+  fix). Worker `check_between_files` between rows; force-abort drops the in-flight
+  outcome (`None`); queue dropped / `Err(Interrupted)` handled like hash/rehash.
+- `materialize_files` / `materialize_hardlinks` / `materialize_others` are three thin
+  wrappers over the private `materialize_loop(rt, recorder, kind)` with
+  `enum MaterializeKind { Files, Hardlinks, Others }` and a common
+  `MaterializeWork { canonical: FileRecord, out: OutTreeRecord, out_canon: Option<OutTreeRecord> }`
+  (`#[derive(Clone)]`; the shared loop requires `W: Clone`). `Files` is size-DESC via
+  `materialize_queue`; hardlinks/others keep the `id`-cursor listers
+  (now already-`FileRecord`, skipping the old `to_stripped()` downgrade at the lister).
+  Workers reuse one template; single-action kinds get `ProgressBar::hidden()` bars
+  (no noise), copy kind gets Bytes thread bars. `process_results` (ingest + recorder)
+  reused verbatim; phase/global advance `inc_both(1)` per item in the apply closure.
+- `copy_single_file` gained `pb: Option<&ProgressBar>`; the sparse-copy
+  `on_progress` callback advances the bar by read deltas (and still runs
+  `check_in_flight`); reflink path untouched.
+- Worker contract mirrors hash/rehash: `check_between_files`, trailing `None`,
+  force mid-copy → `None` (discard in-flight, row stays pending), graceful finishes
+  the in-flight entry. `recorder.flush()` once after each loop; auto-flush (10k)
+  otherwise. `io_jobs` = worker count everywhere.
 
 ## Goal
 
