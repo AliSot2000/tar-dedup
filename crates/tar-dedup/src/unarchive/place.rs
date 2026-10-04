@@ -2,7 +2,10 @@
 
 use crate::cli::ConflictPolicy;
 use crate::common::files;
-use crate::common::{batched_loop, batched_stepped_loop, send_receive_loop};
+use crate::common::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY,
+                    WORK_CAPACITY,
+                    batched_loop, batched_stepped_loop, send_receive_loop,
+};
 use crate::config::{ExtractConfig, ExtractPipelinePhase};
 use crate::db::Database;
 use crate::db::flags::{ErrorFlags, OutTreeFlag};
@@ -32,17 +35,8 @@ use std::{fs, io};
 const BATCH_SIZE: u64 = 10_000;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Place);
 
-// Producer/consumer pipeline bounds: the input queue takes over the old
-// whole-batch pull's memory guard, but workers stream file-by-file so a big
-// file no longer stalls every other row's commit and progress.
-const WORK_CAPACITY: usize = BATCH_SIZE as usize;
-const OUT_CAPACITY: usize = 2 * WORK_CAPACITY;
-const FEED_CHUNK: usize = 1_024;                     // rows pulled from the DB per round
-const DRAIN_CHUNK: usize = BATCH_SIZE as usize / 2;  // outcomes committed per transaction
-
 // TODO
 //  Logging
-//  Progress
 //  Rethink when we are pub and when private
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     debug_assert!(rt.db.placement_prologue_done()?,

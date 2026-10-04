@@ -10,7 +10,7 @@ use std::mem::take;
 use crate::archive::ArchiveRTArgs;
 use crate::cli::DedupMode;
 use crate::common::files::warn_if_times_changed;
-use crate::common::{io_buffer, send_receive_loop};
+use crate::common::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY, io_buffer, send_receive_loop};
 use crate::db::ErrorPhase;
 use crate::db::dedup::{CompareOutcome, ComparePair, compare_pair};
 use crate::db::flags::ErrorFlags;
@@ -20,14 +20,9 @@ use crate::error::{Error, FileStatError, Result};
 use crate::progress::BarKind;
 use crate::shutdown::Shutdown;
 
-// Producer/consumer bounds (see plans/dedup-crossbeam.md). The input queue
-// bounds in-flight pairs; `dedup_inflight` (a TEMP table) makes the candidate
-// re-scan exactly-once so the feed can "start again" at any time without a
-// global pool-exhausted barrier.
-const WORK_CAPACITY: usize = 10_000;
-const OUT_CAPACITY: usize = 20_000;
-const FEED_CHUNK: usize = 1_024;      // rows pulled from list_pending_comparisons per round
-const DRAIN_CHUNK: usize = 5_000;     // outcomes committed per transaction
+// `dedup_inflight` (a TEMP table) makes the candidate re-scan exactly-once so
+// the feed can "start again" at any time without a global pool-exhausted
+// barrier.
 
 // =================================================================================================
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
