@@ -537,7 +537,7 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
                     .map(|(canonical, out)| MaterializeWork {
                         canonical, out, out_canon: None,
                     }).collect();
-;                Ok(out)
+                Ok(out)
             }
         }
     };
