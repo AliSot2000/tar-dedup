@@ -65,8 +65,15 @@ impl Database {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| crate::error::Error::io(parent, e))?;
         }
+        let add_info = !path.exists();
         let conn = Connection::open(path)?;
         schema::initialize(&conn)?;
+        // Stamp the producing tool version + host, refreshed on every open so a
+        // future schema migration can see which release last touched the db.
+        if add_info {
+            meta::set_tar_dedup_version(&conn, crate::common::TOOL_VERSION)?;
+            meta::set_tar_dedup_os(&conn, &crate::common::host_os_string())?;
+        }
         Ok(Self {
             conn: RefCell::new(conn),
         })
