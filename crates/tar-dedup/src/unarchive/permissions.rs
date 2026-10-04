@@ -16,7 +16,7 @@ use crate::common::xattr::{set_file_acl, set_file_selinux_data, set_file_xattrs}
 use crate::config::ExtractConfig;
 use crate::config::ExtractPipelinePhase;
 use crate::db::flags::{ErrorFlags, FileFlag};
-use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord};
+use crate::db::types::{FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::unarchive::ExtractRTArgs;
@@ -77,8 +77,11 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         errored_files = errored,
         "permissions: propagated metadata flags to files"
     );
-    // TODO finish up the db promote to permissions
 
+    // INFO: Since all relevant things are stored in out_tree, we cna blanket promote here.
+    if !rt.shutdown.is_interrupted() {
+        rt.db.global_mark_phase(FilePhase::PermissionsRestored)?;
+    }
     Ok(())
 }
 
