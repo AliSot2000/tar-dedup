@@ -1,15 +1,15 @@
 //! Shared filter application used by both the archive and extract pipelines.
 
+use crate::common::batched_stepped_loop;
 use crate::db::flags::ErrorFlags;
 use crate::db::types::{FileId, FilePhase, FilterExpression, StrippedRecord};
 use crate::db::{Database, ErrorPhase, Recorder};
 use crate::error::{FileStatError, Result};
+use crate::progress::{BarKind, ProgressBarSet};
 use indicatif::ProgressBar;
 use regex::{Regex, RegexBuilder};
 use std::fs;
 use std::path::PathBuf;
-use crate::common::batched_stepped_loop;
-use crate::progress::{BarKind, ProgressBarSet};
 
 const REGEX_UTF_8: bool = true;
 
@@ -264,8 +264,8 @@ pub fn ingest_filters(
     ignore_case: bool,
     recorder: &mut Recorder,
     e_phase: ErrorPhase,
-    sink: FilterSink<'_>,
-) -> Result<()> {
+    sink: FilterSink<'_>)
+    -> Result<()> {
     handle_pattern_source(
         include_patterns,
         include_from,
@@ -302,8 +302,8 @@ fn handle_pattern_source(
     ignore_case: bool,
     insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
     recorder: &mut Recorder,
-    e_phase: ErrorPhase,
-) -> Result<()> {
+    e_phase: ErrorPhase)
+    -> Result<()> {
     // Scan single argument expressions.
     for (idx, query) in pattern.iter().enumerate() {
         handle_query(
