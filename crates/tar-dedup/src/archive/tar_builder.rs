@@ -6,7 +6,7 @@ use crate::archive::ArchiveRTArgs;
 use crate::archive_footer;
 use crate::common::batched_stepped_loop;
 use crate::common::files::warn_if_times_changed;
-use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
+use crate::common::{BATCH_SIZE, SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::db::ErrorPhase;
 use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FilePhase, StrippedRecord};
@@ -15,8 +15,6 @@ use crate::error::{Error, FileStatError, Result};
 use crate::tar_writer::TarWriter;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive);
-
-const BATCH_SIZE: u64 = 10_000;
 
 // INFO - Archival works as follows:
 //  Ineligible files are promoted first.

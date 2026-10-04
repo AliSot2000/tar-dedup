@@ -13,6 +13,7 @@ use std::path::{Component, Path, PathBuf};
 use path_clean::PathClean;
 
 use crate::cli::HardLinkGrouping;
+use crate::common::BATCH_SIZE;
 use crate::common::batched_stepped_loop;
 use crate::common::transform::{TransformExpr, TransformSource, parse_transform_expr};
 use crate::db::Database;
@@ -20,8 +21,6 @@ use crate::db::flags::{OutTreeFlag, OutTreeFlags};
 use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, SourceRecord, StrippedRecord};
 use crate::error::Result;
 use crate::unarchive::ExtractRTArgs;
-
-const BATCH_SIZE: u64 = 10_000;
 
 /// Run the pure-DB placement preparation once (idempotent via meta flag).
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {

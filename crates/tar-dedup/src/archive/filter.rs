@@ -1,4 +1,5 @@
 use crate::archive::ArchiveRTArgs;
+use crate::common::BATCH_SIZE;
 use crate::common::filter::{
     FilterSink, ingest_filters as ingest_filter_rules, joint_filter_phase,
 };
@@ -6,8 +7,6 @@ use crate::config::ArchiveConfig;
 use crate::db::Database;
 use crate::db::types::FilePhase;
 use crate::error::Result;
-
-const BATCH_SIZE: u64 = 100_000;
 
 /// Stub filter stage: advance hashed → filtered before dedup.
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {

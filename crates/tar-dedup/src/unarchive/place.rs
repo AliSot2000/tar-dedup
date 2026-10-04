@@ -2,7 +2,7 @@
 
 use crate::cli::ConflictPolicy;
 use crate::common::files;
-use crate::common::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY,
+use crate::common::{BATCH_SIZE, DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY,
                     WORK_CAPACITY,
                     batched_loop, batched_stepped_loop, send_receive_loop,
 };
@@ -32,7 +32,6 @@ use std::sync::Mutex;
 use std::thread;
 use std::{fs, io};
 
-const BATCH_SIZE: u64 = 10_000;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Place);
 
 // TODO

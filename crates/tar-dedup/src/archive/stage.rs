@@ -1,4 +1,5 @@
 use crate::archive::ArchiveRTArgs;
+use crate::common::BATCH_SIZE;
 use crate::common::batched_stepped_loop;
 use crate::common::files::warn_if_times_changed;
 use crate::config::PipelinePhase;
@@ -13,8 +14,6 @@ use std::fs;
 use std::mem::take;
 use std::os::unix::fs::symlink;
 use std::sync::Mutex;
-
-const BATCH_SIZE: u64 = 10_000;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(PipelinePhase::Stage);
 
