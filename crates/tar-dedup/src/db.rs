@@ -1,3 +1,5 @@
+#![allow(rustdoc::private_intra_doc_links)] // facade methods link to the `db/*` module impl fns
+
 use std::cell::{Ref, RefCell, RefMut};
 use std::path::{Path, PathBuf};
 
@@ -222,27 +224,23 @@ impl Database {
         Ok(out)
     }
     
-    /// Create the `hash_queue` ordering table (idempotent).
+    /// See [`hash::create_hash_queue`].
     pub fn create_hash_queue(&self) -> Result<()> {
         hash::create_hash_queue(&*self.conn())
     }
 
-    /// Populate `hash_queue` with the full, stable set of hashable files in
-    /// `size DESC` order (idempotent; see `db/hash.rs`).
+    /// See [`hash::populate_hash_queue`].
     pub fn populate_hash_queue(&self, eager_filter: bool, detect_hardlinks: bool) -> Result<u64> {
         hash::populate_hash_queue(&*self.conn(), eager_filter, detect_hardlinks)
     }
 
-    /// Next slice of still-pending hash rows, in `hash_queue` (size-DESC)
-    /// order, as `(queue_position, record)` pairs. All SQLite lives in
-    /// `db/hash.rs`; a long-lived prepared cursor cannot outlive its owning
-    /// connection, so the pass streams in `limit` slices.
+    /// See [`hash::pull_pending_hash_rows`].
     pub fn pull_pending_hash_rows<R: SqlFileRow>(&self, index: u64, limit: u64)
         -> Result<Vec<(u64, R)>> {
         hash::pull_pending_hash_rows(&*self.conn(), index, limit)
     }
 
-    /// Drop the `hash_queue` ordering table (idempotent). Success-path only.
+    /// See [`hash::drop_hash_queue`].
     pub fn drop_hash_queue(&self) -> Result<()> {
         hash::drop_hash_queue(&*self.conn())
     }
@@ -291,95 +289,83 @@ impl Database {
         dedup::promote_ineligible_entries_to_dedup(&*self.conn(), eager_filter)
     }
 
-    /// `Hash` dedup mode: elect `min(id)` per `(sha1, size)` group as the
-    /// self-canonical, point every other member at it (no byte compare).
+    /// See [`dedup::promote_hash_mode_to_dedup`].
     pub fn promote_hash_mode_to_dedup(&self, eager_filter: bool) -> Result<u64> {
         dedup::promote_hash_mode_to_dedup(&mut self.conn_mut(), eager_filter)
     }
 
-    /// `None` dedup mode: no content dedup. With hardlink detection only
-    /// `(sha1, size, dev, ino)` hard-link clusters collapse; otherwise every
-    /// eligible file becomes self-canonical.
+    /// See [`dedup::promote_none_mode_to_dedup`].
     pub fn promote_none_mode_to_dedup(
         &self, eager_filter: bool, detect_hardlinks: bool) -> Result<u64> {
         dedup::promote_none_mode_to_dedup(&mut self.conn_mut(), eager_filter, detect_hardlinks)
     }
 
-    /// Phase-bar total for the bulk dedup modes: the eligible corpus (hashed
-    /// files with a digest and the archive filter passed), any phase.
+    /// See [`dedup::count_dedup_eligible_total`].
     pub fn count_dedup_eligible_total(&self, eager_filter: bool) -> Result<u64> {
         dedup::count_dedup_eligible_total(&*self.conn(), eager_filter)
     }
 
-    /// Of [`Self::count_dedup_eligible_total`], how many are already `deduped`.
+    /// See [`dedup::count_dedup_eligible_position`].
     pub fn count_dedup_eligible_position(&self, eager_filter: bool) -> Result<u64> {
         dedup::count_dedup_eligible_position(&*self.conn(), eager_filter)
     }
 
-    /// Create `dedup_progress` + the per-connection `dedup_inflight` TEMP table.
-    /// Idempotent. Call once before the dedup FSM.
+    /// See [`dedup::create_temp_dedup_table`].
     pub fn create_temp_dedup_table(&self) -> Result<()> {
         dedup::create_temp_dedup_table(&*self.conn())
     }
 
-    /// Drop `dedup_progress`. Success-path only; leave in place across
-    /// interrupts/resumes so the group state survives.
+    /// See [`dedup::drop_temp_dedup_table`].
     pub fn drop_temp_dedup_table(&self) -> Result<()> {
         dedup::drop_temp_dedup_table(&*self.conn())
     }
 
-    /// Add duplicate `(sha1, size)` groups into `dedup_progress` (idempotent).
+    /// See [`dedup::populate_temp_table`].
     pub fn populate_temp_table(&self, eager_filter: bool) -> Result<u64> {
         dedup::populate_temp_table(&*self.conn(), eager_filter)
     }
 
-    /// Groups still needing work (`ready`/`searching`/`finished`).
+    /// See [`dedup::count_pending_dedup_groups`].
     pub fn count_pending_dedup_groups(&self) -> Result<u64> {
         dedup::count_pending_dedup_groups(&*self.conn())
     }
 
-    /// Phase-bar total: files inside duplicate groups (still `<prev>` or already
-    /// `deduped`) — every one of these ends the phase `deduped`.
+    /// See [`dedup::count_dedup_phase_total`].
     pub fn count_dedup_phase_total(&self, eager_filter: bool) -> Result<u64> {
         dedup::count_dedup_phase_total(&*self.conn(), eager_filter)
     }
 
-    /// Of [`Self::count_dedup_phase_total`], how many are already `deduped`.
+    /// See [`dedup::count_dedup_phase_position`].
     pub fn count_dedup_phase_position(&self, eager_filter: bool) -> Result<u64> {
         dedup::count_dedup_phase_position(&*self.conn(), eager_filter)
     }
 
-    /// `searching` -> `finished` (guarded SQL; only complete groups flip).
+    /// See [`dedup::searching_to_finished`].
     pub fn searching_to_finished(&self, eager_filter: bool) -> Result<u64> {
         dedup::searching_to_finished(&mut *self.conn_mut(), eager_filter)
     }
 
-    /// `finished` -> `errored`; promotes the group's remaining files. Returns
-    /// `(groups errored, files promoted)`.
+    /// See [`dedup::finish_to_error`].
     pub fn finish_to_error(&self, eager_filter: bool) -> Result<(u64, u64)> {
         dedup::finish_to_error(&mut *self.conn_mut(), eager_filter)
     }
 
-    /// `finished` -> `done`; promotes the group's remaining files. Returns the
-    /// files promoted.
+    /// See [`dedup::finish_to_done`].
     pub fn finish_to_done(&self, eager_filter: bool) -> Result<u64> {
         dedup::finish_to_done(&mut *self.conn_mut(), eager_filter)
     }
 
-    /// `finished` -> `ready`; retires the canonical. Returns the canonicals
-    /// promoted.
+    /// See [`dedup::finish_to_ready`].
     pub fn finish_to_ready(&self, eager_filter: bool) -> Result<u64> {
         dedup::finish_to_ready(&mut *self.conn_mut(), eager_filter)
     }
 
-    /// `ready` -> `searching`: elects canuseslonals and closes lone-canonical
-    /// groups. Returns `(canonicals elected, files promoted)`.
+    /// See [`dedup::ready_to_searching`].
     pub fn ready_to_searching(&self, eager_filter: bool) -> Result<(u64, u64)> {
         dedup::ready_to_searching(&mut *self.conn_mut(), eager_filter)
     }
 
-    /// Next slice of `(candidate, canonical)` pairs still awaiting compare.
-    /// `dedup_inflight` excludes pairs already handed out (scan restart-safe).
+    /// See [`dedup::list_pending_comparisons`].
     pub fn list_pending_comparisons<R: SqlFileRow>(
         &self, eager_filter: bool, last_candidate_id: u64, limit: u64)
         -> Result<Vec<(R, R)>> {
@@ -496,43 +482,38 @@ impl Database {
         sparsify::promote_non_sparsify_candidates_to_sparsified(&*self.conn(), min_pages)
     }
 
-    /// Create the `sparsify_queue` ordering table (idempotent).
+    /// See [`sparsify::create_sparsify_queue`].
     pub fn create_sparsify_queue(&self) -> Result<()> {
         sparsify::create_sparsify_queue(&*self.conn())
     }
 
-    /// Populate `sparsify_queue` with the full, stable set of sparsify
-    /// candidates in `size DESC` order (idempotent; see `db/sparsify.rs`).
+    /// See [`sparsify::populate_sparsify_queue`].
     pub fn populate_sparsify_queue(&self, min_pages: u64) -> Result<u64> {
         sparsify::populate_sparsify_queue(&*self.conn(), min_pages)
     }
 
-    /// Next slice of still-pending sparsify rows, in `sparsify_queue`
-    /// (size-DESC) order, as `(queue_position, record)` pairs.
+    /// See [`sparsify::pull_pending_sparsify_rows`].
     pub fn pull_pending_sparsify_rows<R: SqlFileRow>(&self, index: u64, limit: u64)
         -> Result<Vec<(u64, R)>> {
         sparsify::pull_pending_sparsify_rows(&*self.conn(), index, limit)
     }
 
-    /// Drop the `sparsify_queue` ordering table (idempotent). Success-path only.
+    /// See [`sparsify::drop_sparsify_queue`].
     pub fn drop_sparsify_queue(&self) -> Result<()> {
         sparsify::drop_sparsify_queue(&*self.conn())
     }
 
-    /// The overall sparsify workload — all candidates regardless of phase or
-    /// progress flags (stable across sessions; see `db/sparsify.rs`).
+    /// See [`sparsify::count_all_sparsify_candidates`].
     pub fn count_all_sparsify_candidates(&self, min_pages: u64) -> Result<u64> {
         sparsify::count_all_sparsify_candidates(&*self.conn(), min_pages)
     }
 
-    /// Rows still awaiting a sparse rewrite (the session "todo"; matches the
-    /// un-limited feed pull).
+    /// See [`sparsify::count_pending_sparsify_candidates`].
     pub fn count_pending_sparsify_candidates(&self, min_pages: u64) -> Result<u64> {
         sparsify::count_pending_sparsify_candidates(&*self.conn(), min_pages)
     }
 
-    /// Apply a batch of worker outcomes (flags + `sparsified` promotion) in one
-    /// transaction. Returns the rows advanced to `sparsified`.
+    /// See [`sparsify::ingest_sparsify_outcome`].
     pub fn ingest_sparsify_outcome(&self, results: &Vec<SparseOutcome>) -> Result<u64> {
         sparsify::ingest_sparsify_outcome(&mut self.conn_mut(), results)
     }
@@ -667,25 +648,23 @@ impl Database {
         tar_writer::promote_to_archived(&self.conn(), id)
     }
 
-    /// Create the `archive_queue` ordering table (idempotent).
+    /// See [`tar_writer::create_archive_queue`].
     pub fn create_archive_queue(&self) -> Result<()> {
         tar_writer::create_archive_queue(&*self.conn())
     }
 
-    /// Populate `archive_queue` with staged canonicals in `ext, size, id` order
-    /// (by basename when `sort_by_name`); idempotent (see `db/tar_writer.rs`).
+    /// See [`tar_writer::populate_archive_queue`].
     pub fn populate_archive_queue(&self, sort_by_name: bool) -> Result<u64> {
         tar_writer::populate_archive_queue(&*self.conn(), sort_by_name)
     }
 
-    /// Next slice of still-pending archive rows, in `archive_queue` order, as
-    /// `(queue_position, record)` pairs.
+    /// See [`tar_writer::pull_pending_archive_rows`].
     pub fn pull_pending_archive_rows<R: SqlFileRow>(&self, index: u64, limit: u64)
         -> Result<Vec<(u64, R)>> {
         tar_writer::pull_pending_archive_rows(&*self.conn(), index, limit)
     }
 
-    /// Drop the `archive_queue` ordering table (idempotent). Success-path only.
+    /// See [`tar_writer::drop_archive_queue`].
     pub fn drop_archive_queue(&self) -> Result<()> {
         tar_writer::drop_archive_queue(&*self.conn())
     }
@@ -784,56 +763,48 @@ impl Database {
         extract::list_files_to_restore(&*self.conn())
     }
 
-    /// Count the **overall rehash workload** — elected rows regardless of phase.
-    /// Stable across sessions, so a resumed run's phase bar still reflects the
-    /// full workload (see `db/rehash.rs`).
+    /// See [`rehash::count_files_to_rehash`].
     pub fn count_files_to_rehash(&self) -> Result<u64> {
         rehash::count_files_to_rehash(&*self.conn())
     }
 
-    /// Of [`Self::count_files_to_rehash`], how many are already `rehashed` — the
-    /// resume position on the phase bar.
+    /// See [`rehash::count_rehashed_files`].
     pub fn count_rehashed_files(&self) -> Result<u64> {
         rehash::count_rehashed_files(&*self.conn())
     }
 
-    /// Advance non-elected `extract_filtered` rows straight to `rehashed`
-    /// (dupes, non-files, filter-excluded, sha-less).
+    /// See [`rehash::promote_unrehashable_files`].
     pub fn promote_unrehashable_files(&self) -> Result<u64> {
         rehash::promote_unrehashable_files(&*self.conn())
     }
 
-    /// Create the `rehash_queue` ordering table (idempotent).
+    /// See [`rehash::create_rehash_queue`].
     pub fn create_rehash_queue(&self) -> Result<()> {
         rehash::create_rehash_queue(&*self.conn())
     }
 
-    /// Populate `rehash_queue` with the full, stable set of elected rows in
-    /// `size DESC` order (idempotent; see `db/rehash.rs`).
+    /// See [`rehash::populate_rehash_queue`].
     pub fn populate_rehash_queue(&self) -> Result<u64> {
         rehash::populate_rehash_queue(&*self.conn())
     }
 
-    /// Next slice of still-pending rehash rows, in `rehash_queue` (size-DESC)
-    /// order, as `(queue_position, record)` pairs.
+    /// See [`rehash::pull_pending_rehash_rows`].
     pub fn pull_pending_rehash_rows<R: SqlFileRow>(&self, index: u64, limit: u64)
         -> Result<Vec<(u64, R)>> {
         rehash::pull_pending_rehash_rows(&*self.conn(), index, limit)
     }
 
-    /// Drop the `rehash_queue` ordering table (idempotent). Success-path only.
+    /// See [`rehash::drop_rehash_queue`].
     pub fn drop_rehash_queue(&self) -> Result<()> {
         rehash::drop_rehash_queue(&*self.conn())
     }
 
-    /// Apply one batch of rehash outcomes (flags + `rehashed` promotion) in a
-    /// single transaction.
+    /// See [`rehash::ingest_rehash_outcome`].
     pub fn ingest_rehash_outcome(&self, results: &Vec<RehashOutcome>) -> Result<u64> {
         rehash::ingest_rehash_outcome(&mut self.conn_mut(), results)
     }
 
-    /// Promote every `extract_filtered` row to `rehashed` without verifying
-    /// payloads (the `--no-rehash` path).
+    /// See [`rehash::skip_rehash`].
     pub fn skip_rehash(&self) -> Result<u64> {
         rehash::skip_rehash(&*self.conn())
     }
@@ -842,60 +813,54 @@ impl Database {
         scan::init_extract_runtime_state(&mut *self.conn_mut())
     }
 
-    /// Count the **overall** link-tree move workload (stable across sessions).
+    /// See [`place::count_files_to_move`].
     pub fn count_files_to_move(&self, filter: bool) -> Result<u64> {
         place::count_files_to_move(&self.conn(), filter)
     }
 
-    /// Of [`Self::count_files_to_move`], how many already sit at the link source
-    /// — the resume position for the moved bar.
+    /// See [`place::count_moved_files`].
     pub fn count_moved_files(&self, filter: bool) -> Result<u64> {
         place::count_moved_files(&self.conn(), filter)
     }
 
-    /// Create the `canonical_move_queue` ordering table (idempotent).
+    /// See [`place::create_canonical_move_queue`].
     pub fn create_canonical_move_queue(&self) -> Result<()> {
         place::create_canonical_move_queue(&self.conn())
     }
 
-    /// Populate `canonical_move_queue` with files still to move into the link
-    /// source, `size DESC` order (idempotent; see `db/place.rs`).
+    /// See [`place::populate_canonical_move_queue`].
     pub fn populate_canonical_move_queue(&self, filter: bool) -> Result<u64> {
         place::populate_canonical_move_queue(&self.conn(), filter)
     }
 
-    /// Next slice of still-pending files to move, in `canonical_move_queue`
-    /// (size-DESC) order, as `(queue_position, record)` pairs.
+    /// See [`place::pull_canonical_move_queue`].
     pub fn pull_canonical_move_queue<R: SqlFileRow>(&self, index: u64, limit: u64)
         -> Result<Vec<(u64, R)>> {
         place::pull_canonical_move_queue(&self.conn(), index, limit)
     }
 
-    /// Drop the `canonical_move_queue` ordering table (idempotent). Success-path only.
+    /// See [`place::drop_canonical_move_queue`].
     pub fn drop_canonical_move_queue(&self) -> Result<()> {
         place::drop_canonical_move_queue(&self.conn())
     }
 
-    /// Create the `materialize_queue` ordering table (idempotent).
+    /// See [`place::create_materialize_queue`].
     pub fn create_materialize_queue(&self) -> Result<()> {
         place::create_materialize_queue(&self.conn())
     }
 
-    /// Populate `materialize_queue` with canonical file out rows, `size DESC`
-    /// order (idempotent; see `db/place.rs`).
+    /// See [`place::populate_materialize_queue`].
     pub fn populate_materialize_queue(&self) -> Result<u64> {
         place::populate_materialize_queue(&self.conn())
     }
 
-    /// Next slice of still-pending canonical file out rows, in
-    /// `materialize_queue` (size-DESC) order, as
-    /// `(queue_position, canonical_record, out_tree_record)` triples.
+    /// See [`place::pull_materialize_queue`].
     pub fn pull_materialize_queue<R: SqlFileRow>(&self, index: u64, limit: u64)
         -> Result<Vec<(u64, R, OutTreeRecord)>> {
         place::pull_materialize_queue(&self.conn(), index, limit)
     }
 
-    /// Drop the `materialize_queue` ordering table (idempotent). Success-path only.
+    /// See [`place::drop_materialize_queue`].
     pub fn drop_materialize_queue(&self) -> Result<()> {
         place::drop_materialize_queue(&self.conn())
     }
@@ -1059,12 +1024,19 @@ impl Database {
         permissions::list_canonical_files_for_permissions(&self.conn(), batch_size)
     }
 
-    pub fn count_out_tree_for_permissions(&self) -> Result<u64> {
+    /// See [`permissions::count_out_tree_for_permissions_non_dir`].
+    pub fn count_out_tree_for_permissions(&self) -> Result<(u64, u64)> {
         permissions::count_out_tree_for_permissions_non_dir(&self.conn())
     }
 
-    pub fn count_out_tree_for_permissions_dirs(&self) -> Result<u64> {
+    /// See [`permissions::count_out_tree_for_permissions_dirs`].
+    pub fn count_out_tree_for_permissions_dirs(&self) -> Result<(u64, u64)> {
         permissions::count_out_tree_for_permissions_dirs(&self.conn())
+    }
+
+    /// See [`permissions::count_canonical_files_for_permissions`].
+    pub fn count_canonical_files_for_permissions(&self) -> Result<(u64, u64)> {
+        permissions::count_canonical_files_for_permissions(&self.conn())
     }
 
     pub fn apply_permissions_flags_to_files(&self) -> Result<(u64, u64)> {
