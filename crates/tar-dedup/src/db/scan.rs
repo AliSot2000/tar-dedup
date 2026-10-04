@@ -209,7 +209,7 @@ pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool
     let res = conn.query_row(&format!(
         "SELECT COUNT(*) AS count
         FROM files
-        WHERE flag & :archived
+        WHERE flags & :archived
             AND ftype = 'file'
             AND {filter_cols}
             AND canonical_id = :id"),
