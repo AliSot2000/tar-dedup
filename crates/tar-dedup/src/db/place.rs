@@ -784,7 +784,7 @@ pub fn ingest_materialize_results(
                         validate_materialize_result(&suc);
                     }
                     set_out_tree_flag(i_conn, suc.id, OutTreeFlag::Placed, suc.placed)?;
-                    set_out_tree_flag(i_conn, suc.id, OutTreeFlag::RemovedPrevious, !suc.removed)?;
+                    set_out_tree_flag(i_conn, suc.id, OutTreeFlag::RemovedPrevious, suc.removed)?;
                     set_out_tree_flag(i_conn, suc.id, OutTreeFlag::Conflict, suc.conflict)?;
                     if is_hardlink {
                         set_out_tree_flag(i_conn, suc.id, OutTreeFlag::IsHardlink, true)?;
