@@ -2,29 +2,42 @@
 
 use crate::cli::ConflictPolicy;
 use crate::common::files;
-use crate::common::{batched_loop, batched_stepped_loop};
+use crate::common::{batched_loop, batched_stepped_loop, send_receive_loop};
 use crate::config::{ExtractConfig, ExtractPipelinePhase};
 use crate::db::Database;
-use crate::db::flags::{ErrorFlags, FileFlag, OutTreeFlag};
-use crate::db::place::MaterializeResult;
+use crate::db::flags::{ErrorFlags, OutTreeFlag};
+use crate::db::place::{CopyOutcome, MaterializeResult};
 #[warn(unused_imports)] // LinkType needed for linking back on windows.
 use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
+use crate::progress::BarKind;
 use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
+use crossbeam_channel::{Receiver, Sender, bounded};
+use indicatif::ProgressBar;
 use nix::NixPath;
 use nix::libc::makedev;
 use nix::sys::stat::{Mode, SFlag, mknod};
 use path_clean::PathClean;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
+use std::mem::take;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::thread;
 use std::{fs, io};
 
 const BATCH_SIZE: u64 = 10_000;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Place);
+
+// Producer/consumer pipeline bounds: the input queue takes over the old
+// whole-batch pull's memory guard, but workers stream file-by-file so a big
+// file no longer stalls every other row's commit and progress.
+const WORK_CAPACITY: usize = BATCH_SIZE as usize;
+const OUT_CAPACITY: usize = 2 * WORK_CAPACITY;
+const FEED_CHUNK: usize = 1_024;                     // rows pulled from the DB per round
+const DRAIN_CHUNK: usize = BATCH_SIZE as usize / 2;  // outcomes committed per transaction
 
 // TODO
 //  Logging
@@ -171,74 +184,99 @@ pub fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
         }
     }
 
-    let results: Mutex<Vec<std::result::Result<(FileId, bool), (FileId, Error)>>> =
-        Mutex::new(Vec::new());
-    let mut last_id = FileId(0);
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(rt.config.process.io_jobs)
-        .build()
-        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
-
-    loop {
-        rt.shutdown.check_in_flight()?;
-        let to_copy: Vec<StrippedRecord> = rt.db.list_canonical_files_for_move(
-            true, last_id, BATCH_SIZE)?;
-        if to_copy.is_empty() { break }
-        last_id = to_copy.last().expect("PRECONDITION FAILED: Not Empty").id;
-        let n = to_copy.len() as u64;
-
-        // Parallel File Move
-        let parallel = pool.install(|| {
-            to_copy.par_iter().try_for_each(|record| -> Result<()> {
-                let cid = record.content_id().expect("Content id existed, when extracting.");
-                let src = rt.config.paths.extract_cache_dir().join(&cid.0);
-                let dst = base_dir.join(&cid.0);
-                let res = copy_single_file(
-                    record.id, &src, &dst, &rt.shutdown.clone(), rt.config.placement.no_reflink
-                );
-                if !rt.config.process.cleanup.keep_stage {
-                    let _ = fs::remove_file(dst);
-                }
-                results.lock().expect("Canonial File Copy Lock poisoned").push(res);
-                Ok(())
-            })
-        });
-
-        // Check Pool Result
-        match parallel {
-            Ok(()) => (),
-            Err(Error::Interrupted) => (), // Exit
-            Err(e) => return Err(e),
-        }
-
-        // Get the results
-        let new_res = Vec::new();
-        let copied = std::mem::replace(
-            &mut *results
-                .lock()
-                .expect("hash results lock"),
-            new_res
-        );
-
-        for result in copied {
-            match result {
-                Err((_, Error::Interrupted)) => (),
-                Err((id, Error::FileStat(e))) => {
-                    recorder.record_file(id, ERROR_PHASE, e, ErrorFlags::default());
-                   rt.db.set_file_flag(id, FileFlag::ErrorWhilePlacing, true)?;
-                }
-                Err((_id, other)) => panic!(
-                    "INVARIANT FAILED: Return type violates contract. Encountered error {other}"
-                ),
-                Ok((id, is_copy)) => {
-                    rt.db.set_file_flag(id, FileFlag::AtLinkSource, true)?;
-                    rt.db.set_file_flag(id, FileFlag::UsedRefLink, !is_copy)?;
-                }
-            }
-        }
-        recorder.flush()?;
-        rt.progress.inc_both(n);
+    // Stable workload + resume position, mirroring the rehash phase bar: the
+    // max is the *overall* set of files the phase will ever move, the position
+    // the already-moved count, so a resumed run restarts exactly where it left
+    // off (and the early `pending == 0` short-circuit runs on the remainder).
+    let total = rt.db.count_files_to_move(true)?;
+    let done = rt.db.count_moved_files(true)?;
+    let pending = total.saturating_sub(done);
+    if pending == 0 {
+        rt.db.drop_canonical_move_queue()?;
+        return Ok(());
     }
+    rt.db.create_canonical_move_queue()?;
+    rt.db.populate_canonical_move_queue(true)?;
+
+    // Progress: one per-worker byte bar for the in-flight copy plus a dedicated
+    // files-done sub-bar. Neither the phase bar nor the global is touched here —
+    // both are owned by `materialize_link_tree` (a moved canonical counts there,
+    // exactly once).
+    rt.progress.create_thread_bars(BarKind::Bytes, rt.config.process.io_jobs);
+    let moved_bar = rt.progress.push_sub_bar("files moved", BarKind::Count);
+    moved_bar.set_length(total);
+    moved_bar.set_position(done);
+    let mut bars = Vec::<ProgressBar>::new();
+    for i in 0..rt.config.process.io_jobs {
+        bars.push(rt.progress.thread_bar(i));
+    }
+
+    let (work_s, work_r) = bounded::<StrippedRecord>(WORK_CAPACITY);
+    let (out_s, out_r) = bounded::<Option<CopyOutcome>>(OUT_CAPACITY);
+    let mut thread_handles = Vec::with_capacity(rt.config.process.io_jobs);
+
+    let cache_dir = rt.config.paths.extract_cache_dir();
+    let keep_stage = rt.config.process.cleanup.keep_stage;
+    let no_reflink = rt.config.placement.no_reflink;
+    for i in 0..rt.config.process.io_jobs {
+        let base = base_dir.clone();
+        let cache = cache_dir.clone();
+        let bar = bars[i].clone();
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        let sh = rt.shutdown.clone();
+        let res = thread::Builder::new()
+            .name(format!("copy-worker-{i}").into())
+            .spawn(move || copy_canonical_worker(
+                base, cache, keep_stage, no_reflink, bar, sh, wr, os
+            ))
+            .expect("spawn copy worker");
+        thread_handles.push(res);
+    }
+    drop(work_r);
+    drop(out_s);
+
+    // Feed cursor over `canonical_move_queue`: `queue_index` is the last
+    // consumed queue position. The pull re-filters to rows still lacking
+    // `AtLinkSource`, so an already-moved file is never re-pulled.
+    let mut queue_index = 0u64;
+    let pull = || {
+        let rows = rt.db.pull_canonical_move_queue::<StrippedRecord>(
+            queue_index, FEED_CHUNK as u64)?;
+        if !rows.is_empty() {
+            queue_index = rows[rows.len() - 1].0;
+        }
+        Ok(rows.into_iter().map(|(_q, row)| row).collect::<Vec<_>>())
+    };
+    let apply = |pending: &mut Vec<CopyOutcome>| -> Result<()> {
+        let items = take(pending);
+        let n = rt.db.ingest_copy_results(&items)?;
+        for result in items {
+            if let Err((id, Error::FileStat(e))) = result{
+                recorder.record_file(id, ERROR_PHASE, e, ErrorFlags::default());
+            };
+        }
+        moved_bar.inc(n);
+        Ok(())
+    };
+
+    send_receive_loop(
+        rt.shutdown,
+        work_s,
+        out_r,
+        thread_handles,
+        DRAIN_CHUNK,
+        false,
+        pull,
+        |_| Ok(()),
+        || Ok(true),
+        apply)?;
+    rt.progress.drop_thread_bars();
+    recorder.flush()?;
+    if rt.shutdown.is_interrupted() {
+        return Err(Error::Interrupted);
+    }
+    rt.db.drop_canonical_move_queue()?;
     Ok(())
 }
 
@@ -316,7 +354,7 @@ pub fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Res
     };
 
     batched_loop(
-        // INFO: Function filters ('dir' and 'unknown')
+        // INFO: list_out_tree_for_linking filters ('dir' and 'unknown')
         |bs| rt.db.list_out_tree_for_linking(bs, true),
         BATCH_SIZE,
         |entries: Vec<(FileRecord, OutTreeRecord)>| {
@@ -359,224 +397,292 @@ pub fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Res
     Ok(())
 }
 
+/// Which output entries a [`materialize_loop`] pass rebuilds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MaterializeKind {
+    /// File canonical rows (`out_tree.canonical_id = id`): copy from the cache.
+    Files,
+    /// Rows aliasing an already-placed canonical row: hardlink into place.
+    Hardlinks,
+    /// Symlinks, fifos, char/block devices (no copy).
+    Others,
+}
+
+/// Unit of placement work: the file row plus the output row it materializes,
+/// and for hardlinks the placed canonical output row that is aliased.
+#[derive(Clone)]
+struct MaterializeWork {
+    canonical: FileRecord,
+    out: OutTreeRecord,
+    out_canon: Option<OutTreeRecord>,
+}
+
+type MaterializeOutcome = std::result::Result<MaterializeResult, (OutTreeId, Error)>;
+
 /// Set the canonical_id of the out_tree.
 /// PRECONDITION: This function should ouly be called with link_tree == false
 /// Iterate through the out_tree and reflink / copy all files into placed which are marked as
 /// (hardlink) canonicals. (out_tree.canonical_id = id)
 pub fn materialize_files(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
-    let mut last_id = OutTreeId(0);
-
-    let cache_dir = rt.config.paths.extract_cache_dir();
-    let shutdown = rt.shutdown.clone();
-    let no_reflink = rt.config.placement.no_reflink;
-
-    let results: Mutex<Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>> =
-        Mutex::new(Vec::new());
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(rt.config.process.io_jobs)
-        .build()
-        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
-
-    loop {
-        shutdown.check_between_files()?;
-        let entries: Vec<(StrippedRecord, OutTreeRecord)> = rt.db.list_out_tree_for_materialization(
-            &last_id, BATCH_SIZE
-        )?;
-        if entries.is_empty() { break }
-        last_id = entries
-            .last()
-            .expect("PRECONDITION FAILED: at least one element should exist")
-            .1
-            .id;
-        let n = entries.len() as u64;
-
-        let parallel = pool.install(|| {
-            entries.par_iter().try_for_each(|(canonical, target)| -> Result<()> {
-                    let id = canonical
-                        .content_id()
-                        .expect("PRECONDITION FAILED: Enqueued files must have a content_id");
-                    let src = cache_dir.join(id.0);
-
-                    let res = match check_path(
-                        &rt.config.clone(), &src, &canonical) {
-
-                        Err(e) => Err((target.id, Error::FileStat(e))),
-                        Ok((false, conflict, removed)) => Ok(MaterializeResult {
-                            id: target.id.clone(),
-                            placed: false, conflict, removed, used_copy: false,
-                        }),
-                        Ok((true, conflict, removed)) => {
-                            tracing::info!("Materializing to {}", target.abs_path.display());
-                            match copy_single_file(
-                                target.id, &src, &target.abs_path, &shutdown, no_reflink) {
-                                Err(e) => Err(e),
-                                Ok((id, used_copy)) => Ok(MaterializeResult {
-                                    id: id.clone(),
-                                    placed: true, conflict, removed, used_copy
-                                })
-                            }
-                        }
-                    };
-                    results.lock().expect("materialize files lock poisoned").push(res);
-                    Ok(())
-                })
-        });
-
-        match parallel {
-            Ok(_) => (),
-            Err(Error::Interrupted) => (), // INFO: need to finish iteration
-            Err(e) => return Err(e),
-        }
-
-        // Get the results
-        let new_res = Vec::new();
-        let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
-
-        process_results(copied, recorder, &rt.db, false, true)?;
-        recorder.flush()?;
-        rt.progress.inc_both(n);
-    }
-    Ok(())
+    materialize_loop(rt, recorder, MaterializeKind::Files)
 }
 
 /// Create all the hardlinks after the copy stage.
 /// PRECONDITION: Function must be called after the [`materialize_files`]
 pub fn materialize_hardlinks(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
-    let mut last_id = OutTreeId(0);
-
-    let shutdown = rt.shutdown.clone();
-
-    let results: Mutex<Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>> =
-        Mutex::new(Vec::new());
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(rt.config.process.io_jobs)
-        .build()
-        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
-
-    loop {
-        shutdown.check_between_files()?;
-        let entries: Vec<(StrippedRecord, OutTreeRecord, OutTreeRecord)> =
-            rt.db.list_out_tree_for_hardlinks(&last_id, BATCH_SIZE)?;
-        if entries.is_empty() { break }
-        last_id = entries
-            .last()
-            .expect("PRECONDITION FAILED: at least one element should exist")
-            .1
-            .id;
-        let n = entries.len() as u64;
-
-        let parallel = pool.install(|| {
-            entries.par_iter().try_for_each(
-                |(stripped, out_canonical, target)| -> Result<()> {
-                    shutdown.check_between_files()?;
-                    let src = &out_canonical.abs_path;
-                    let dst = &target.abs_path;
-
-                    let res = match check_path(
-                        &rt.config.clone(), &dst, &stripped) {
-                        Err(e) => Err((target.id, Error::FileStat(e))),
-                        Ok((false, conflict, removed)) => Ok(MaterializeResult {
-                            id: target.id.clone(),
-                            placed: false, conflict, removed, used_copy: false
-                        }),
-                        Ok((true, conflict, removed)) => match fs::hard_link(src, dst) {
-                            Err(e) => Err((target.id, Error::io(dst, e))),
-                            Ok(()) => Ok(MaterializeResult {
-                                id: target.id.clone(),
-                                placed: true, conflict, removed, used_copy: false,
-                            }),
-                        },
-                    };
-                    results.lock().expect("materialize files lock poisoned").push(res);
-                    Ok(())
-                })
-        });
-
-        match parallel {
-            Ok(_) => (),
-            Err(Error::Interrupted) => (), // INFO: need to finish iteration
-            Err(e) => return Err(e),
-        }
-
-        // Get the results
-        let new_res = Vec::new();
-        let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
-
-        process_results(copied, recorder, &rt.db, true, false)?;
-        recorder.flush()?;
-        rt.progress.inc_both(n);
-    }
-    Ok(())
+    materialize_loop(rt, recorder, MaterializeKind::Hardlinks)
 }
 
 /// Final step, pass through all the remaining entries which could be materialized:
 /// (symlink, fifo, character device, block device, socket)
 pub fn materialize_others(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
+    materialize_loop(rt, recorder, MaterializeKind::Others)
+}
+
+/// Shared materializer for the three non-link placement passes. `Files` copies
+/// canonical payloads from the extract cache (size-DESC order via the ordering
+/// queue), `Hardlinks` aliases the placed canonical row, `Others` recreates
+/// special files. Owns this pass's worker threads and thread bars.
+fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: MaterializeKind)
+    -> Result<()> {
+    let jobs = rt.config.process.io_jobs;
+    let is_hardlink = matches!(kind, MaterializeKind::Hardlinks);
+    // Reflink flag-tracking and the size-DESC queue both apply only to the copy
+    // pass (`Files`); derive the second from the first so the two can't drift.
+    let is_files =  matches!(kind, MaterializeKind::Files);
+    let ordered = is_files;
+    let set_reflink = is_files;
+
+    if ordered {
+        rt.db.create_materialize_queue()?;
+        rt.db.populate_materialize_queue()?;
+        // Copy work streams byte progress into a per-worker Bytes bar; the single
+        // actions are near-instant, so their bars stay hidden.
+        rt.progress.create_thread_bars(BarKind::Bytes, jobs);
+
+    }
+
+    let mut bars = Vec::<Option<ProgressBar>>::new();
+    for i in 0..jobs {
+        bars.push(if ordered { Some(rt.progress.thread_bar(i)) } else { None });
+    }
+
+    let (work_s, work_r) = bounded::<MaterializeWork>(WORK_CAPACITY);
+    let (out_s, out_r) = bounded::<Option<MaterializeOutcome>>(OUT_CAPACITY);
+    let mut thread_handles = Vec::with_capacity(jobs);
+    for i in 0..jobs {
+        let bar = bars[i].clone();
+        let wr = work_r.clone();
+        let os = out_s.clone();
+        let sh = rt.shutdown.clone();
+        let cfg = rt.config.clone();
+        let res = thread::Builder::new()
+            .name(format!("materialize-worker-{i}").into())
+            .spawn(move || materialize_worker(kind, cfg, bar, sh, wr, os))
+            .expect("spawn materialize worker");
+        thread_handles.push(res);
+    }
+    drop(work_r);
+    drop(out_s);
+
+    // Feed cursor per kind: the ordered queue (positional) for files, a plain
+    // `out_tree` id cursor for the two lister-driven kinds (same contract: a
+    // handed row is never re-pulled; the loop drains every committed outcome).
+    let mut queue_index = 0u64;
     let mut last_id = OutTreeId(0);
-
-    let shutdown = rt.shutdown.clone();
-
-    let results: Mutex<Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>> =
-        Mutex::new(Vec::new());
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(rt.config.process.io_jobs)
-        .build()
-        .map_err(|e| Error::Other(anyhow::anyhow!("thread pool: {e}")))?;
-
-    loop {
-        shutdown.check_between_files()?;
-        let entries: Vec<(FileRecord, OutTreeRecord)> = rt.db.list_out_tree_others(
-            &last_id, BATCH_SIZE
-        )?;
-        if entries.is_empty() { break }
-        last_id = entries
-            .last().expect("PRECONDITION FAILED: at least one element should exist").1.id;
-        let n = entries.len() as u64;
-
-        let parallel = pool.install(|| {
-            entries.par_iter().try_for_each(
-                |(canonical, target)| -> Result<()> {
-                    shutdown.check_between_files()?;
-
-                    let res = match check_path(
-                        &rt.config.clone(), &target.abs_path, &canonical.to_stripped()) {
-                        Err(e) => Err((target.id, Error::FileStat(e))),
-                        Ok((false, conflict, removed)) => Ok(MaterializeResult {
-                            id: target.id,
-                            placed: false, conflict, removed, used_copy: false
-                        }),
-                        Ok((true, conflict, removed)) => match build_other(
-                            &canonical,
-                            &target,
-                            rt.config.placement.recreate_none_file_entries.clone()) {
-
-                            Err(e) => Err((target.id, Error::FileStat(e))),
-                            Ok(()) => Ok(MaterializeResult {
-                                id: target.id.clone(),
-                                placed: true, conflict, removed, used_copy: false,
-                            }),
-                        },
-                    };
-                    results.lock().expect("materialize files lock poisoned").push(res);
-                    Ok(())
-                })
-        });
-
-        match parallel {
-            Ok(_) => (),
-            Err(Error::Interrupted) => (), // INFO: need to finish iteration
-            Err(e) => return Err(e),
+    let pull = || -> Result<Vec<MaterializeWork>> {
+        match kind {
+            MaterializeKind::Files => {
+                let rows = rt.db.pull_materialize_queue::<FileRecord>(
+                    queue_index, FEED_CHUNK as u64)?;
+                if !rows.is_empty() {
+                    queue_index = rows[rows.len() - 1].0;
+                }
+                let out = rows
+                    .into_iter()
+                    .map(|(_q, canonical, out)| MaterializeWork {
+                        canonical, out, out_canon: None,
+                    }).collect();
+                Ok(out)
+            }
+            MaterializeKind::Hardlinks => {
+                let entries = rt.db.list_out_tree_for_hardlinks::<FileRecord>(
+                    &last_id, FEED_CHUNK as u64)?;
+                if !entries.is_empty() {
+                    last_id = entries[entries.len() - 1].1.id;
+                }
+                let out = entries
+                    .into_iter()
+                    .map(|(can, otr_can, otr_ent)|
+                        MaterializeWork {
+                        canonical: can, out: otr_ent, out_canon: Some(otr_can),
+                    }).collect();
+                Ok(out)
+            }
+            MaterializeKind::Others => {
+                let entries = rt.db.list_out_tree_others::<FileRecord>(
+                    &last_id, FEED_CHUNK as u64)?;
+                if !entries.is_empty() {
+                    last_id = entries[entries.len() - 1].1.id;
+                }
+                let out = entries
+                    .into_iter()
+                    .map(|(canonical, out)| MaterializeWork {
+                        canonical, out, out_canon: None,
+                    }).collect();
+;                Ok(out)
+            }
         }
-
-        // Get the results
-        let new_res = Vec::new();
-        let copied = std::mem::replace(&mut *results.lock().expect("hash results lock"), new_res);
-
-        process_results(copied, recorder, &rt.db, false, false)?;
-        recorder.flush()?;
+    };
+    let apply = |pending: &mut Vec<MaterializeOutcome>| -> Result<()> {
+        let items = take(pending);
+        if items.is_empty() {
+            return Ok(());
+        }
+        let n = items.len() as u64;
+        process_results(items, recorder, rt.db, is_hardlink, set_reflink)?;
         rt.progress.inc_both(n);
+        Ok(())
+    };
+
+    send_receive_loop(
+        rt.shutdown,
+        work_s,
+        out_r,
+        thread_handles,
+        DRAIN_CHUNK,
+        false,
+        pull,
+        |_| Ok(()),
+        || Ok(true),
+        apply)?;
+
+    rt.progress.drop_thread_bars();
+    recorder.flush()?;
+    if rt.shutdown.is_interrupted() {
+        return Err(Error::Interrupted);
+    }
+    if ordered {
+        rt.db.drop_materialize_queue()?;
     }
     Ok(())
+}
+
+/// Worker thread: rebuilds one output entry at a time, forwards the outcome.
+/// Owns its bar; only touches the channels, `tracing` and its `Shutdown` clone.
+/// A force abort mid-copy drops the in-flight outcome (`None`) so the row stays
+/// pending for the resumed run.
+fn materialize_worker(
+    kind: MaterializeKind,
+    config: ExtractConfig,
+    bar: Option<ProgressBar>,
+    shutdown: Shutdown,
+    work: Receiver<MaterializeWork>,
+    out: Sender<Option<MaterializeOutcome>>) -> () {
+    let cache_dir = config.paths.extract_cache_dir();
+    loop {
+        match work.recv() {
+            Ok(w) => {
+                if shutdown.is_interrupted() {
+                    break;
+                }
+                if let Some(b) = bar.as_ref() {
+                    b.reset();
+                    b.set_length(w.canonical.size);
+                    b.set_message(format!("Materializing {}", w.out.abs_path.display()));
+                }
+                match materialize_one(&kind, &cache_dir, &config, &w, &shutdown, bar.as_ref()) {
+                    Some(outcome) => {
+                        out.send(Some(outcome)).expect("materialize worker: result channel closed");
+                    }
+                    None => break,
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    out.send(None).expect("materialize worker: result channel closed");
+}
+
+/// Rebuild a single output entry per its kind. Returns `None` when the run was
+/// force-aborted mid-copy: the in-flight row must not be committed.
+fn materialize_one(
+    kind: &MaterializeKind,
+    cache_dir: &Path,
+    config: &ExtractConfig,
+    w: &MaterializeWork,
+    shutdown: &Shutdown,
+    bar: Option<&ProgressBar>)
+    -> Option<MaterializeOutcome> {
+    let stripped = w.canonical.to_stripped();
+    match kind {
+        MaterializeKind::Files => {
+            let target = &w.out;
+            let id = w.canonical.content_id()
+                .expect("PRECONDITION FAILED: Enqueued files must have a content_id");
+            let src = cache_dir.join(id.0);
+
+            match check_path(config, &src, &stripped) {
+                Err(e) => Some(Err((target.id, Error::FileStat(e)))),
+                Ok((false, conflict, removed)) => Some(Ok(MaterializeResult {
+                    id: target.id, placed: false, conflict, removed, used_copy: false,
+                })),
+                Ok((true, conflict, removed)) => {
+                    tracing::info!("Materializing to {}", target.abs_path.display());
+                    match copy_single_file(
+                        target.id, &src, &target.abs_path, shutdown,
+                        config.placement.no_reflink, bar) {
+
+                        Err((_, Error::Interrupted)) => None,
+                        Err(other) => Some(Err(other)),
+                        Ok((fid, used_copy)) => Some(Ok(MaterializeResult {
+                            id: fid, placed: true, conflict, removed, used_copy,
+                        })),
+                    }
+                }
+            }
+        }
+        MaterializeKind::Hardlinks => {
+            let out_canon = w.out_canon.as_ref()
+                .expect("PRECONDITION FAILED: hardlink work must carry the canonical out row");
+            let dst = &w.out.abs_path;
+            let idx = w.out.id;
+
+            match check_path(config, dst, &stripped) {
+                Err(e) => Some(Err((idx, Error::FileStat(e)))),
+                Ok((false, conflict, removed)) => Some(Ok(MaterializeResult {
+                    id: idx, placed: false, conflict, removed, used_copy: false,
+                })),
+                Ok((true, conflict, removed)) => match fs::hard_link(
+                    &out_canon.abs_path, dst) {
+
+                    Err(e) => Some(Err((idx, Error::io(dst, e)))),
+                    Ok(()) => Some(Ok(MaterializeResult {
+                        id: idx, placed: true, conflict, removed, used_copy: false,
+                    })),
+                },
+            }
+        }
+        MaterializeKind::Others => {
+            let target = &w.out;
+            let idx = target.id;
+
+            match check_path(config, &target.abs_path, &stripped) {
+                Err(e) => Some(Err((idx, Error::FileStat(e)))),
+                Ok((false, conflict, removed)) => Some(Ok(MaterializeResult {
+                    id: idx, placed: false, conflict, removed, used_copy: false,
+                })),
+                Ok((true, conflict, removed)) => match build_other(
+                    &w.canonical, target, config.placement.recreate_none_file_entries) {
+
+                    Err(e) => Some(Err((idx, Error::FileStat(e)))),
+                    Ok(()) => Some(Ok(MaterializeResult {
+                        id: idx, placed: true, conflict, removed, used_copy: false,
+                    })),
+                },
+            }
+        }
+    }
 }
 
 /// Function recreates all special files it can. Importantly, files, directories and unknown
@@ -630,16 +736,27 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
                 }),
             }
         }
-        FileType::BlockDevice => {
+        f @ (FileType::BlockDevice | FileType::CharacterDevice) => {
+            let (dev_type, s_flag) = match f {
+                FileType::BlockDevice => ("block device", SFlag::S_IFBLK),
+                FileType::CharacterDevice => ("character device", SFlag::S_IFCHR),
+                _ => panic!(
+                    "Unexpected file type {}, expected BlockDevice or CharacterDevice",
+                    f.as_str()
+                ),
+            };
             if !try_special {
                 return Ok(());
             }
             if canonical.major.is_none() || canonical.minor.is_none() {
                 tracing::error!(
-                    "Could not create block device at {}, major and/or minor is missing",
+                    "Could not create {dev_type} at {}, major and/or minor is missing",
                     out_tree.abs_path.display()
                 );
-                return Ok(());
+                return Err(FileStatError::general(
+                    Some(&out_tree.abs_path),
+                    "Missing major and/or minor".to_string()
+                ));
             }
             let dev = makedev(
                 canonical.major.unwrap() as u32,
@@ -647,36 +764,7 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
             );
             let create_res = mknod(
                 &out_tree.abs_path,
-                SFlag::S_IFBLK,
-                Mode::from_bits_truncate(0o644),
-                dev,
-            );
-            match create_res {
-                Ok(_) => Ok(()),
-                Err(e) => Err(FileStatError::Nix {
-                    path: out_tree.abs_path.to_path_buf(),
-                    source: e,
-                }),
-            }
-        }
-        FileType::CharacterDevice => {
-            if canonical.major.is_none() || canonical.minor.is_none() {
-                tracing::error!(
-                    "Could not create block device at {}, major and/or minor is missing",
-                    out_tree.abs_path.display()
-                );
-                return Ok(());
-            }
-            if !try_special {
-                return Ok(());
-            }
-            let dev = makedev(
-                canonical.major.unwrap() as u32,
-                canonical.minor.unwrap() as u32,
-            );
-            let create_res = mknod(
-                &out_tree.abs_path,
-                SFlag::S_IFCHR,
+                s_flag,
                 Mode::from_bits_truncate(0o644),
                 dev,
             );
@@ -789,11 +877,81 @@ fn relative_pardirs_to_dir(dir: &Path, file: &Path) -> PathBuf {
     }
 }
 
+/// Worker thread: pulls one canonical row at a time, copies it into the link
+/// source, removes the cache source on success (when not keeping the stage),
+/// forwards the outcome. Owns its bar. On a force abort the in-flight outcome
+/// is dropped (`None`) so the row stays pending for the resumed run.
+fn copy_canonical_worker(
+    base_dir: PathBuf,
+    cache_dir: PathBuf,
+    keep_stage: bool,
+    no_reflink: bool,
+    bar: ProgressBar,
+    shutdown: Shutdown,
+    work: Receiver<StrippedRecord>,
+    out: Sender<Option<CopyOutcome>>) -> () {
+    loop {
+        match work.recv() {
+            Ok(row) => {
+                if shutdown.check_between_files().is_err() {
+                    break;
+                }
+                bar.reset();
+                bar.set_length(row.size);
+                bar.set_message(format!("Moving {}", row.abs_path.display()));
+                match copy_one_to_source(
+                    &base_dir, &cache_dir, keep_stage, no_reflink, &row, &shutdown, Some(&bar)) {
+                    Some(outcome) => {
+                        out.send(Some(outcome)).expect("copy worker: result channel closed");
+                    }
+                    None => break,
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    out.send(None).expect("copy worker: result channel closed");
+}
+
+/// Move a single canonical payload into the link-source dir. Returns `None`
+/// when the run was force-aborted mid-copy: the in-flight row must not be
+/// committed.
+fn copy_one_to_source(
+    base_dir: &Path,
+    cache_dir: &Path,
+    keep_stage: bool,
+    no_reflink: bool,
+    row: &StrippedRecord,
+    shutdown: &Shutdown,
+    pb: Option<&ProgressBar>)
+    -> Option<std::result::Result<(FileId, bool), (FileId, Error)>> {
+
+    let cid = row.content_id().expect("Content id existed, when extracting.");
+    let src = cache_dir.join(&cid.0);
+    let dst = base_dir.join(&cid.0);
+    match copy_single_file(row.id, &src, &dst, shutdown, no_reflink, pb) {
+        Ok((fid, is_copy)) => {
+            // The `.sources` copy is what the link tree links FROM and must
+            // stay; the cache source is redundant once it landed. Dropping it
+            // frees the stage dir ahead of the end-of-place cleanup sweep.
+            if !keep_stage {
+                let _ = fs::remove_file(&src);
+            }
+            Some(Ok((fid, is_copy)))
+        }
+        Err((_, Error::Interrupted)) => None,
+        Err(other) => Some(Err(other)),
+    }
+}
+
 /// Copy a single file from a to b. Function implements a shutdown check to avoid long blocking
 /// Error contains the Error as well as the file id to link against,
 /// Ok contains the id as well as bool which is false if reflink was used and true if copy was used.
+/// `pb` (when present) is advanced by copied byte deltas, so the caller's bar
+/// shows live progress on big files.
 /// INFO: Function returns Variants Interrupted and FileStatError
-fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no_reflink: bool)
+fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no_reflink: bool,
+    pb: Option<&ProgressBar>)
     -> std::result::Result<(ID, bool), (ID, Error)> {
     // Attempt to reflink
     if !no_reflink {
@@ -804,9 +962,16 @@ fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no
     }
 
     // Failed, perform sparse copy
+    let mut prev = 0u64;
     let spc_res = sparse_cp::sparse_copy_with_progress(
         src, dst, 4096,
-        |_, _, _| -> Result<()> { shutdown.check_in_flight() }
+        |bytes: u64, _size: u64, _dur: std::time::Duration| -> Result<()> {
+            if let Some(pb) = pb {
+                pb.inc(bytes - prev);
+            }
+            prev = bytes;
+            shutdown.check_in_flight()
+        }
     );
 
     // Handle result; sparse-cp converts io errors via `From<io::Error>` with an
