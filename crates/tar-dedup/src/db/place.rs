@@ -36,7 +36,11 @@ pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Res
 }
 
 pub fn count_out_tree_rows(conn: &Connection) -> Result<u64> {
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM out_tree", [], |row| row.get(0)).to_panic()?;
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM out_tree",
+        [],
+        |row| row.get(0)
+    ).to_panic()?;
     Ok(n as u64)
 }
 
