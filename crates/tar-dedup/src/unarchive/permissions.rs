@@ -15,7 +15,7 @@ use crate::common::perms::{
 use crate::common::xattr::{set_file_acl, set_file_selinux_data, set_file_xattrs};
 use crate::config::ExtractConfig;
 use crate::config::ExtractPipelinePhase;
-use crate::db::flags::{ErrorFlags, FileFlag};
+use crate::db::flags::ErrorFlags;
 use crate::db::types::{FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
@@ -52,10 +52,25 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         mp: mode_changes,
     };
 
-    // TODO set the phase progress info
+    // Phase-bar accounting. Link-tree mode applies metadata on the `.sources`
+    // canonical files (files table); the non-link mode on non-dir `out_tree`
+    // rows. Directory rows are only counted — and applied — under
+    // `--overwrite-dir`. Each count is `(pending, done)`: bar length = the full
+    // workload, position = the already-handled rows (resume-correct).
+    let (file_pending, file_done) = if rt.config.placement.link_tree {
+        rt.db.count_canonical_files_for_permissions()?
+    } else {
+        rt.db.count_out_tree_for_permissions()?
+    };
+    let (dir_pending, dir_done) = if rt.config.attributes.force_overwrite_dir {
+        rt.db.count_out_tree_for_permissions_dirs()?
+    } else {
+        (0, 0)
+    };
+    rt.progress.set_phase_total(file_pending + file_done + dir_pending + dir_done);
+    rt.progress.set_phase_position(file_done + dir_done);
 
     if rt.config.placement.link_tree {
-        // TODO fix progress here.
         apply_permissions_link_sources(&rt, &mut recorder, &ps)?;
     } else {
         // Files (and non-directory entries) first.
@@ -243,6 +258,7 @@ pub fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps
                 for err in errs {
                     rec.record_file(file.id, ERROR_PHASE, err, ErrorFlags::default());
                 }
+                rt.progress.inc_both(1);
             }
             rt.db.ingest_apply_permission_file_results(&results)?;
             Ok(())
