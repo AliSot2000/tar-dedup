@@ -129,17 +129,14 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 
 ## Build / test / dev
 
-> **Tests are a work in progress — do not block on them.** The integration tests
-> (`crates/tar-dedup/tests/`) were partially written by another LLM with partial
-> information: they are incomplete, don't cover the whole codebase, and may rely on
-> outdated schema/API assumptions. Priority is finishing the construction and design
-> of the pipelines; the test suite is a follow-up task. If a test can't compile or
-> fails, treat that as expected, fix the production code on its own merits, and
-> defer test repair.
+> Tests live inline in modules (`#[cfg(test)]`); there are **no top-level
+> integration tests** (the old `crates/tar-dedup/tests/` were stale and deleted
+> 2026-10). Known coverage gap: `archive_footer` has no tests yet; add a module
+> unit-test battery there as a follow-up.
 
 - Dev shell: `nix develop` (flake) provides rust toolchain + native libs (`flake.nix`); on Debian install `libselinux-dev libclang-dev clang` instead.
 - Build: `cargo build` / `cargo build -p tar-dedup-cli`.
-- Test: `cargo test` (unit tests inline in modules; integration tests in `crates/tar-dedup/tests/`: `archive_footer.rs`, `db_extract.rs`, `out_tree.rs`, `types.rs`, `common/`).
+- Test: `cargo test -p tar-dedup --lib` (module unit tests; dev profile only — never `--release`, `panic="abort"` breaks `catch_unwind`). Full `cargo test` also builds the `sparse-cp` 1 GiB sparse-math tests and the `examples/` bins.
 - No clippy/CI config in repo; no `.github` workflow.
 - `sparse-cp` has its own heavy 1 GiB unit tests (large sparse-file math) — run under `-p sparse-cp` to isolate.
 
