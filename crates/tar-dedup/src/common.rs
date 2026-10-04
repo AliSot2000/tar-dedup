@@ -598,4 +598,23 @@ mod tests {
         assert_eq!(dequeue, 6);
         assert_eq!(sorted(applied), (1..=6).collect::<Vec<_>>());
     }
+
+    #[test]
+    fn tool_version_is_semantic_triple() {
+        // `MAJOR.MINOR.PATCH`, all numeric dot-separated components.
+        let parts = TOOL_VERSION.split('.').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3, "expected MAJOR.MINOR.PATCH, got {TOOL_VERSION}");
+        for part in parts {
+            assert!(part.chars().all(|c| c.is_ascii_digit()), "bad component: {part}");
+            assert!(!part.is_empty(), "empty version component");
+        }
+    }
+
+    #[test]
+    fn host_os_string_is_non_empty() {
+        let s = host_os_string();
+        assert!(!s.is_empty());
+        // Always "<family> <something>".
+        assert!(s.contains(' '));
+    }
 }
