@@ -3,7 +3,8 @@
 //! Key strings are scoped by validity:
 //! - one phase → phase slug (`tar_writer_…`, `scan_tar_…`)
 //! - one command → command slug (`archive_…`, `extract_…`)
-//! - both commands → `tar_dedup_…` (reserved; unused today)
+//! - both commands → `tar_dedup_…` (version / host descriptor; a future schema
+//!   migration consults them to see which tool release produced the db)
 
 // EnumDiscriminatns << needed for the simpler MetaKey nomenclature.
 use chrono::{DateTime, Utc};
@@ -37,6 +38,8 @@ pub enum MetaKey {
     ArchiveTransform,
     ArchiveConfig,
     ExtractConfig,
+    TarDedupVersion,
+    TarDedupOs,
 }
 
 impl MetaKey {
@@ -62,6 +65,8 @@ impl MetaKey {
             Self::ArchiveTransform => "archive_transform",
             Self::ArchiveConfig => "archive_config",
             Self::ExtractConfig => "extract_config",
+            Self::TarDedupVersion => "tar_dedup_version",
+            Self::TarDedupOs => "tar_dedup_os",
         }
     }
 
@@ -87,6 +92,8 @@ impl MetaKey {
             "archive_transform" => Self::ArchiveTransform,
             "archive_config" => Self::ArchiveConfig,
             "extract_config" => Self::ExtractConfig,
+            "tar_dedup_version" => Self::TarDedupVersion,
+            "tar_dedup_os" => Self::TarDedupOs,
             _ => return None,
         })
     }
@@ -113,6 +120,8 @@ impl MetaKey {
             Self::ArchiveTransform,
             Self::ArchiveConfig,
             Self::ExtractConfig,
+            Self::TarDedupVersion,
+            Self::TarDedupOs,
         ]
     }
 }
@@ -140,6 +149,8 @@ pub enum MetaEntry {
     ArchiveTransform(String),
     ArchiveConfig(ArchiveConfig),
     ExtractConfig(ExtractConfig),
+    TarDedupVersion(String),
+    TarDedupOs(String),
 }
 
 impl MetaEntry {
@@ -165,6 +176,8 @@ impl MetaEntry {
             Self::ArchiveTransform(_) => MetaKey::ArchiveTransform,
             Self::ArchiveConfig(_) => MetaKey::ArchiveConfig,
             Self::ExtractConfig(_) => MetaKey::ExtractConfig,
+            Self::TarDedupVersion(_) => MetaKey::TarDedupVersion,
+            Self::TarDedupOs(_) => MetaKey::TarDedupOs,
         }
     }
 
@@ -192,6 +205,7 @@ impl MetaEntry {
             Self::ArchiveTransform(v) => v.clone(),
             Self::ArchiveConfig(v) => serde_json::to_string(v).expect("archive config serializable"),
             Self::ExtractConfig(v) => serde_json::to_string(v).expect("extract config serializable"),
+            Self::TarDedupVersion(v) | Self::TarDedupOs(v) => v.clone(),
         }
     }
 
@@ -242,6 +256,8 @@ impl MetaEntry {
             MetaKey::ExtractConfig => serde_json::from_str(raw)
                 .map(Self::ExtractConfig)
                 .map_err(|_| Error::Config(format!("invalid extract_config meta: {raw}"))),
+            MetaKey::TarDedupVersion => Ok(Self::TarDedupVersion(raw.to_string())),
+            MetaKey::TarDedupOs => Ok(Self::TarDedupOs(raw.to_string())),
         }
     }
 }
@@ -512,6 +528,28 @@ pub fn set_extract_config(conn: &Connection, value: &ExtractConfig) -> Result<()
     set_entry(conn, &MetaEntry::ExtractConfig(value.clone()))
 }
 
+pub fn get_tar_dedup_version(conn: &Connection) -> Result<Option<String>> {
+    get_typed(conn, MetaKey::TarDedupVersion, |e| match e {
+        MetaEntry::TarDedupVersion(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_tar_dedup_version(conn: &Connection, value: &str) -> Result<()> {
+    set_entry(conn, &MetaEntry::TarDedupVersion(value.to_string()))
+}
+
+pub fn get_tar_dedup_os(conn: &Connection) -> Result<Option<String>> {
+    get_typed(conn, MetaKey::TarDedupOs, |e| match e {
+        MetaEntry::TarDedupOs(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_tar_dedup_os(conn: &Connection, value: &str) -> Result<()> {
+    set_entry(conn, &MetaEntry::TarDedupOs(value.to_string()))
+}
+
 // TODO Delete the entirety of the archive keys.
 /// Drop tar-writer byte counters. Archive/extract phase keys are left standing.
 pub fn clear_archive_meta(conn: &mut Connection) -> Result<()> {
@@ -707,5 +745,37 @@ mod tests {
             get_extract_phase(&conn).unwrap(),
             Some(ExtractPipelinePhase::ScanTar)
         );
+    }
+
+    #[test]
+    fn tar_dedup_version_and_os_round_trip() {
+        let (_dir, conn) = open_conn();
+
+        assert_eq!(get_tar_dedup_version(&conn).unwrap(), None);
+        assert_eq!(get_tar_dedup_os(&conn).unwrap(), None);
+
+        set_tar_dedup_version(&conn, crate::common::TOOL_VERSION).unwrap();
+        set_tar_dedup_os(&conn, &crate::common::host_os_string()).unwrap();
+
+        assert_eq!(
+            get_tar_dedup_version(&conn).unwrap(),
+            Some(crate::common::TOOL_VERSION.to_string())
+        );
+        assert_eq!(
+            get_tar_dedup_os(&conn).unwrap(),
+            Some(crate::common::host_os_string())
+        );
+
+        let dump = dump_meta(&conn).unwrap();
+        assert!(dump.known.iter().any(|e| matches!(
+            e,
+            MetaEntry::TarDedupVersion(v) if v == crate::common::TOOL_VERSION
+        )));
+        assert!(dump.known.iter().any(|e| matches!(
+            e,
+            MetaEntry::TarDedupOs(_)
+        )));
+        assert!(dump.unknown_keys.is_empty());
+        assert!(dump.invalid.is_empty());
     }
 }
