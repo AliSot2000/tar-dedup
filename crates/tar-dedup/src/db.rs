@@ -92,7 +92,7 @@ impl Database {
         let tx = conn.transaction()?;
         let inserted = inventory::insert_file(&tx, record)?;
         let file_id = inventory::file_id_by_abs_path(&tx, &record.abs_path)?.ok_or_else(|| {
-            crate::error::Error::Config(
+            Error::Config(
                 "insert_file_and_ref: file missing after insert".into(),
             )
         })?;
@@ -1218,7 +1218,7 @@ impl<'a> Recorder<'a> {
         file_id: Option<FileId>,
         out_tree_id: Option<OutTreeId>,
         phase: ErrorPhase,
-        error: crate::error::FileStatError,
+        error: FileStatError,
         flags: flags::ErrorFlags) {
 
         if !self.enabled {
@@ -1241,7 +1241,7 @@ impl<'a> Recorder<'a> {
     pub fn record_session(
         &mut self,
         phase: ErrorPhase,
-        error: crate::error::FileStatError,
+        error: FileStatError,
         flags: flags::ErrorFlags) {
 
         self.record(
@@ -1258,7 +1258,7 @@ impl<'a> Recorder<'a> {
         &mut self,
         file_id: FileId,
         phase: ErrorPhase,
-        error: crate::error::FileStatError,
+        error: FileStatError,
         flags: flags::ErrorFlags,
     ) {
         self.record(Some(file_id), None, phase, error, flags);
@@ -1269,7 +1269,7 @@ impl<'a> Recorder<'a> {
         &mut self,
         out_tree_id: OutTreeId,
         phase: ErrorPhase,
-        error: crate::error::FileStatError,
+        error: FileStatError,
         flags: flags::ErrorFlags,
     ) {
         self.record(None, Some(out_tree_id), phase, error, flags);
