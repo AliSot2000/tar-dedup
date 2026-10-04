@@ -13,6 +13,8 @@
       (join filter, join filter, join source))
 - [ ] query (query by file, out_tree or error table.)
 - [X] Add a warn_if_times_changed -> Should also set a flag in the db.
+- [ ] Err variant check (add a wraper around functions returning a subset of errors to check that they follow the 
+      contract)
 
 # NOW TODO
 - [X] Placement Conflict Handling
