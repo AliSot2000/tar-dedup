@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS out_tree (
     id       INTEGER PRIMARY KEY CHECK (id > 0),
     canonical_id INTEGER REFERENCES out_tree(id),
     abs_path TEXT NOT NULL UNIQUE,
-    file_id  INTEGER REFERENCES files(id),
+    file_id  INTEGER REFERENCES files(id), --first row that resolved to this out_tree_row
     flags    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_out_tree_file ON out_tree(file_id) WHERE file_id IS NOT NULL;
