@@ -33,6 +33,15 @@ pub const IO_BUF_SIZE: usize = 1024 * 1024 * 4;
 /// Tar read chunk size during archive (keep xz fed without huge resident buffers).
 const ARCHIVE_IO_BUF_SIZE: usize = 4 * 1024 * 1024;
 
+/// When processing files, file system entries, ... we take the precaution not to load too much
+/// into ram. Worst case Estimate is 16kiB / Entry, so we try to be conservative with 100'000 as
+/// a batch size
+pub const DEFAULT_BATCH_SIZE: u64 = 100_000;
+
+/// Number of ErrorRecordDrafts at a time in ram before attempting to auto flush;
+pub const DEFAULT_AUTO_FLUSH_LIMIT: u64 = 10_000;
+
+
 pub fn io_buffer() -> Vec<u8> {
     vec![0u8; IO_BUF_SIZE]
 }
@@ -41,13 +50,95 @@ pub fn archive_io_buffer() -> Vec<u8> {
     vec![0u8; ARCHIVE_IO_BUF_SIZE]
 }
 
-/// When processing files, file system entries, ... we take the precaution not to load too much
-/// into ram. Worst case Estimate is 16kiB / Entry, so we try to be conservative with 100'000 as
-/// a batch size
-pub const DEFAULT_BATCH_SIZE: u64 = 100_000;
+/// Tool semantic version (`MAJOR.MINOR.PATCH`, kept in sync with
+/// `Cargo.toml`). Stamped into the work-db `meta` table (`tar_dedup_version`)
+/// so a future schema migration can detect which tool release produced a db.
+pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Number of ErrorRecordDrafts at a time in ram before attempting to auto flush;
-pub const DEFAULT_AUTO_FLUSH_LIMIT: u64 = 10_000;
+/// Best-effort `"<OS family> <release>"` descriptor of the host this tool runs
+/// on, e.g. `"Fedora 44"`, `"macOS 15.1"`, `"Windows 10.0.22631"`. Purely
+/// informational (stored under `tar_dedup_os`); never used for correctness.
+/// Falls back to `<family> <arch>` when no release can be determined.
+pub fn host_os_string() -> String {
+    let family = match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    };
+    #[cfg(target_os = "linux")]
+    if let Some(release) = os_release_linux() {
+        return format!("{family} {release}");
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(release) = run_and_trim("/usr/bin/sw_vers", &["-productVersion"]) {
+        return format!("{family} {release}");
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(release) = windows_release() {
+        return format!("{family} {release}");
+    }
+    format!("{family} {}", std::env::consts::ARCH)
+}
+
+/// `NAME` + `VERSION_ID` from `/etc/os-release` (`"Fedora Linux 44"`).
+#[cfg(target_os = "linux")]
+fn os_release_linux() -> Option<String> {
+    let contents = std::fs::read_to_string("/etc/os-release").ok()?;
+    let mut name = None;
+    let mut version = None;
+    for line in contents.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;   // blank lines / comments.
+        };
+        let value = unquote_os_value(value).trim().to_string();
+        match key {
+            "NAME" => name = Some(value),
+            "VERSION_ID" => version = Some(value),
+            _ => (),
+        }
+    }
+    match (name, version) {
+        (Some(n), Some(v)) => Some(format!("{n} {v}")),
+        (Some(n), None) => Some(n),
+        _ => None,
+    }
+}
+
+/// Strip the surrounding quotes an os-release value may carry.
+#[cfg(target_os = "linux")]
+fn unquote_os_value(value: &str) -> &str {
+    let value = value.trim();
+    let len = value.len();
+    match value.as_bytes() {
+        [b'"', .., b'"'] | [b'\'', .., b'\''] if len >= 2 => &value[1..len - 1],
+        _ => value,
+    }
+}
+
+/// Run a command and return its trimmed stdout on success.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn run_and_trim(program: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(program).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Parse the `"Version …"` payload out of `cmd /c ver`.
+#[cfg(target_os = "windows")]
+fn windows_release() -> Option<String> {
+    let raw = run_and_trim("cmd.exe", &["/c", "ver"])?;
+    let idx = raw.find("Version ")?;
+    let rest = &raw[idx + "Version ".len()..];
+    let end = rest
+        .find(|c| c == '\r' || c == '\n' || c == ']')
+        .unwrap_or(rest.len());
+    let version = rest[..end].trim().to_string();
+    if version.is_empty() { None } else { Some(version) }
+}
 
 /// Perform the batched loop with a step id. Arguments work as follows:
 /// [`new_id`]: Function must return the lower bound for ids. Typically 0, since we start id at 1
