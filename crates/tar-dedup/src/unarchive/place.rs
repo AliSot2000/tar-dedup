@@ -7,6 +7,7 @@ use crate::config::{ExtractConfig, ExtractPipelinePhase};
 use crate::db::Database;
 use crate::db::flags::{ErrorFlags, OutTreeFlag};
 use crate::db::place::{CopyOutcome, MaterializeResult};
+use crate::db::types::FilePhase;
 #[warn(unused_imports)] // LinkType needed for linking back on windows.
 use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord, StrippedRecord};
 use crate::db::{ErrorPhase, Recorder};
@@ -92,8 +93,8 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         materialize_hardlinks(rt, &mut recorder)?;
         materialize_others(rt, &mut recorder)?;
     }
-    recorder.flush()?;
-    let (placed, ref_linked, conflict, removed, errored, skipped) = rt.db.apply_flags_to_files()?;
+    let res = rt.db.apply_flags_to_files()?;
+    let (placed, ref_linked, conflict, removed, errored, skipped) = res;
     tracing::info!(
         "Updated File Table:
         {placed} of entries placed,
@@ -104,7 +105,6 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         {removed} of entries that attempted to remove before placeing the extracted file."
     );
 
-    // TODO push the files records to the next phase
     if !rt.config.process.cleanup.keep_stage {
         let cache_dir = rt.config.paths.extract_cache_dir();
         match capture_error(
@@ -112,13 +112,21 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
             &cache_dir.to_path_buf(), |p| fs::remove_dir_all(p)) {
             Ok(()) => (),
             Err(e) => {
-                tracing::warn!("Failed to clean up stage directors '{}' with error {}",
+                if rt.config.process.fail_fast {
+                    return Err(Error::Config(format!(
+                        "Failed to clean up stage directors '{}' with error {}",
+                        cache_dir.display(), e)))
+                } else {
+                    tracing::warn!("Failed to clean up stage directors '{}' with error {}",
                     cache_dir.display(), e);
-                // TODO fail fast.
+                }
             }
         }
     }
-
+    // INFO: Since all relevant things are stored in out_tree, we cna blanket promote here.
+    if !rt.shutdown.is_interrupted() {
+        rt.db.global_mark_phase(FilePhase::AtDestination)?;
+    }
     recorder.flush()?;
     Ok(())
 }
