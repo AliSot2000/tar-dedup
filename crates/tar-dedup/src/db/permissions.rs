@@ -102,47 +102,97 @@ pub fn list_out_tree_for_permissions_dirs<R: SqlFileRow>(
 }
 
 /// Count of non-dir rows still needing metadata (for progress reporting).
-pub fn count_out_tree_for_permissions_non_dir(conn: &Connection) -> Result<u64> {
+pub fn count_out_tree_for_permissions_non_dir(conn: &Connection) -> Result<(u64, u64)> {
     count_out_tree_for_permissions(conn, false)
 }
 
 /// Count of directory rows still needing metadata (only relevant with `--overwrite-dir`).
-pub fn count_out_tree_for_permissions_dirs(conn: &Connection) -> Result<u64> {
+pub fn count_out_tree_for_permissions_dirs(conn: &Connection) -> Result<(u64, u64)> {
     count_out_tree_for_permissions(conn, true)
 }
 
-fn count_out_tree_for_permissions(conn: &Connection, dirs: bool) -> Result<u64> {
+/// Phase-bar accounting for one `out_tree` slice of the permissions pass:
+/// `(pending, done)` = rows still to apply, and rows already handled
+/// (`AppliedMetadata` or `ErrorWhileApplyingMetadata`). Bar length =
+/// `pending + done`, position = `done`, so a resumed run restarts where it
+/// left off. Mirrors the listers' predicates.
+fn count_out_tree_for_permissions(conn: &Connection, dirs: bool) -> Result<(u64, u64)> {
     // Directories are never marked Placed/errored (created up-front by
     // prepare_extraction_dir); NULL file_id ancestors (ensure_parent) are included.
-    let (from, where_extra, params) = if dirs {
+    let (where_kind, params) = if dirs {
         (
-            "FROM out_tree o",
-            "AND o.flags & :is_dir != 0",
+            "AND o.flags & :is_dir != 0".to_string(),
             named_params! {
                 ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
+                ":err": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
                 ":is_dir": OutTreeFlag::IsDirectory.mask_i64(),
             },
         )
     } else {
         (
-            "FROM out_tree o",
-            "AND o.flags & :is_dir = 0 AND o.canonical_id = o.id",
+            "AND o.flags & :is_dir = 0 \
+             AND o.flags & :placed != 0 \
+             AND o.canonical_id = o.id".to_string(),
             named_params! {
                 ":placed": OutTreeFlag::Placed.mask_i64(),
                 ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
-                ":error": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
+                ":err": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
                 ":is_dir": OutTreeFlag::IsDirectory.mask_i64(),
             },
         )
     };
-    let sql = format!(
-        "SELECT COUNT(*)
-         {from}
-         WHERE o.flags & :applied = 0
-           {where_extra}"
-    );
-    let n: i64 = conn.query_row(&sql, params, |row| row.get(0)).to_panic()?;
-    Ok(n as u64)
+    let pending: i64 = conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM out_tree o
+             WHERE (o.flags & :applied) = 0
+               AND (o.flags & :err) = 0
+               {where_kind}"
+        ),
+        params,
+        |row| row.get(0),
+    ).to_panic()?;
+    let done: i64 = conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM out_tree o
+             WHERE (o.flags & :applied) != 0
+                OR (o.flags & :err) != 0
+               {where_kind}"
+        ),
+        params,
+        |row| row.get(0),
+    ).to_panic()?;
+    Ok((pending as u64, done as u64))
+}
+
+/// Phase-bar accounting for the link-tree path: `(pending, done)` = canonical
+/// files staged at the link source whose metadata still needs applying, and
+/// those already handled. Mirrors `list_canonical_files_for_permissions`.
+pub fn count_canonical_files_for_permissions(conn: &Connection) -> Result<(u64, u64)> {
+    let pending: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files
+         WHERE (flags & :at_dst) != 0
+           AND (flags & :applied) = 0
+           AND (flags & :err) = 0",
+        named_params! {
+            ":at_dst": FileFlag::AtLinkSource.mask_i64(),
+            ":applied": FileFlag::AppliedMetadata.mask_i64(),
+            ":err": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
+        },
+        |row| row.get(0),
+    ).to_panic()?;
+    let done: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files
+         WHERE (flags & :at_dst) != 0
+           AND ((flags & :applied) != 0
+             OR (flags & :err) != 0)",
+        named_params! {
+            ":at_dst": FileFlag::AtLinkSource.mask_i64(),
+            ":applied": FileFlag::AppliedMetadata.mask_i64(),
+            ":err": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
+        },
+        |row| row.get(0),
+    ).to_panic()?;
+    Ok((pending as u64, done as u64))
 }
 
 /// (metadata applied, metadata with error)
