@@ -2,6 +2,7 @@
 
 use crate::archive_footer::read_footer;
 use crate::common::files::copy_reader_batched;
+use crate::common::utf8::PathText;
 use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
@@ -219,8 +220,12 @@ fn run_inner(
             Ok(p) => p,
             Err(_) => continue,
         };
-        let name = match entry_name(&path) {
-            Ok(n) => n,
+        let name = match entry_name(&path, rt.config.process.relax_utf8) {
+            Ok(Some(n)) => n,
+            Ok(None) => {
+                tracing::warn!("Skipping non-UTF-8 tar member: {}", path.to_string_lossy());
+                continue;
+            }
             Err(e) => {
                 record_session_error(recorder, e.to_file_stat(Some(&path)));
                 return Err(e);
@@ -696,18 +701,22 @@ fn open_initial_database(
 }
 
 /// Extract and sanitize the entry basename from a tar member path.
-fn entry_name(path: &Path) -> Result<String> {
-    let name = path
-        .clean()
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| Error::Config("invalid tar entry name".into()))?
-        .to_string();
-    debug_assert!(
-        !(name.contains('/') || name.contains('\\') || name == ".." || name == "."),
-        "INVARIANT BROKEN: Entry Name contained an illegal character."
-    );
-    Ok(name)
+/// `Ok(None)` marks a non-UTF-8 name that `--relax-utf8` allows skipping.
+fn entry_name(path: &Path, relax: bool) -> Result<Option<String>> {
+    let cleaned = path.clean();
+    let file = cleaned.file_name();
+    let name = match file {
+        Some(f) => f.to_utf8(relax)?,
+        None => return Err(Error::Config("invalid tar entry name".into())),
+    };
+    if let Some(n) = name {
+        debug_assert!(
+            !(n.contains('/') || n.contains('\\') || n == ".." || n == "."),
+            "INVARIANT BROKEN: Entry Name contained an illegal character."
+        );
+        return Ok(Some(n));
+    }
+    Ok(None)
 }
 
 //==================================================================================================
