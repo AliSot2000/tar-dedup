@@ -6,6 +6,7 @@ pub mod filter;
 pub mod perms;
 pub mod start;
 pub mod transform;
+pub mod utf8;
 pub mod xattr;
 
 use crate::error::Result;
