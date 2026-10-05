@@ -49,6 +49,12 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         prepare_hardlink_canonicals(rt)?;
     }
     rt.db.set_placement_prologue_done()?;
+    tracing::info!(
+        "placement_prologue done: processed {} of {}, {} error(s)",
+        rt.db.count_out_tree_rows()?,
+        rt.db.count_out_tree_rows()?,
+        rt.db.count_errors(Some("placement_prologue"))?,
+    );
     Ok(())
 }
 
@@ -150,7 +156,7 @@ pub fn populate_out_tree(
 
 /// Elect hard-link canonicals in the out_tree (mark_canonical family of updates).
 fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
-    let updates: u64 = match rt.config.placement.hard_link_grouping {
+    let _updates: u64 = match rt.config.placement.hard_link_grouping {
         HardLinkGrouping::None => rt.db.mark_all_canonical()?,
         HardLinkGrouping::Global => rt.db.mark_global_canonical()?,
         HardLinkGrouping::Source => {
@@ -170,7 +176,6 @@ fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
             sum
         }
     };
-    tracing::info!("Number of materialized target {updates}");
     Ok(())
 }
 

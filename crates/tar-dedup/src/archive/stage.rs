@@ -39,6 +39,12 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         tracing::info!("stage complete (nothing to do)");
         return Ok(());
     }
+    tracing::info!(
+        "starting stage: total {}, processing {}, pending {}",
+        rt.db.count_entries()?,
+        workload,
+        pending,
+    );
 
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
     let pool = ThreadPoolBuilder::new()
@@ -92,6 +98,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                             results.lock().expect("stage results lock").push(
                                 Ok((record.id, modified))
                             );
+                            tracing::debug!("staged {}", target.display());
                             Ok(())
                         }
                         Err(e) => {
@@ -150,7 +157,12 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     )?;
 
     recorder.flush()?;
-    tracing::info!(staged, "stage complete");
+    tracing::info!(
+        "stage done: processed {} of {}, {} error(s)",
+        workload.saturating_sub(pending) + staged,
+        workload,
+        rt.db.count_errors(Some("stage"))?,
+    );
     // Live DB already lives in the flat work dir (`snapshot.sqlite`); tar-writer
     // stages a copy via `.snapshot-for-tar.sqlite` when appending to the archive.
     Ok(())

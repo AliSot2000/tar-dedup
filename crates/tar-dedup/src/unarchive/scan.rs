@@ -172,6 +172,24 @@ fn run_inner(
     scan.from_footer |= footer_this_pass;
     scan.scan_complete = false; // Set when archive iterator is empty.
 
+    let corpus = match rt.db {
+        Some(ref d) => d.count_entries()?,
+        None => 0u64,
+    };
+    if resume_db {
+        tracing::info!(
+            "starting scan: total {}, processing {}, pending {} \
+             (resume from member {})",
+            corpus, corpus, corpus,
+            scan.last_member_index.saturating_add(1),
+        );
+    } else {
+        tracing::info!(
+            "starting scan: total {}, processing {}, pending {}",
+            corpus, corpus, corpus,
+        );
+    }
+
     let mut archive = open_tar_archive(
         &rt.config.paths.archive_path, &rt.config.decompression
     )?;
@@ -232,7 +250,7 @@ fn run_inner(
             }
         };
 
-        tracing::info!("Index: {} Path: {}", member_index, path.display());
+        tracing::debug!("Index: {} Path: {}", member_index, path.display());
         process_entry(
             &mut rt,
             db_path,
@@ -297,7 +315,6 @@ fn run_inner(
     // Check for any payloads that were extracted but somehow not recorded
     // TODO should this be a panic?
     let (present, new) = sdb.check_cached_payloads(&rt.config.paths.extract_cache_dir())?;
-    tracing::info!("Successfully extracted {present} files to the cache directory");
     if new > 0 {
         tracing::warn!("Found {new} archive payload(s) which were not recorded as extracted.");
     }
@@ -314,16 +331,14 @@ fn run_inner(
     }
 
     let paths = sdb.count_files_in_phase(FilePhase::Unarchived)?;
-    let source = if scan.from_footer { "footer" } else { "stream manifest" };
 
     // TODO Promote all
 
     tracing::info!(
-        unarchived = paths,
-        last_member_index = ?scan.last_member_index,
-        snapshots_this_pass = scan.snapshots_ingested - scan.nt_snapshot_before,
-        snapshots_ingested = scan.snapshots_ingested,
-        "extract: catalog from {source}, {paths} path(s) unarchived"
+        "scan done: processed {} of {}, {} error(s)",
+        present,
+        paths,
+        sdb.count_errors(Some("scan_tar"))?,
     );
 
     let _ = fs::remove_file(rt.config.paths.temp_db());
@@ -449,7 +464,10 @@ fn process_entry(
                 copy_reader_batched(entry, &entry_dst, on_bytes)
             };
             match sp_res {
-                Ok(_) => (),
+                Ok(_) => {
+                    tracing::debug!("extracted cache payload {}", entry_dst.display());
+                    ()
+                },
                 // Clean exit on interrupt: no file error recorded, caller saves state.
                 Err(Error::Interrupted) => return Err(Error::Interrupted),
                 // Re-attach the destination path (copy helpers lose it) and record.

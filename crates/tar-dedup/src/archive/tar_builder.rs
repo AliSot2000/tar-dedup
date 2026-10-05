@@ -77,6 +77,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         tracing::warn!("no staged files to archive");
     }
 
+    tracing::info!(
+        "starting archive: total {}, processing {}, pending {} bytes",
+        rt.db.count_entries()?,
+        to_archive,
+        total_bytes.saturating_sub(already_archived),
+    );
+
     let capture_error = |err: Error, rec: &mut Recorder, fid| {
         match err {
             Error::FileStat(e) => rec.record_file(
@@ -136,6 +143,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                 match writer.append_path(
                     &source, &tar_name, |n| progress.inc_phase(n)) {
                     Ok(()) => {
+                        tracing::debug!("appended {} ({} bytes)", tar_name, record.size);
                         rt.db.set_file_flag(record.id, FileFlag::AppendedPath, true)?;
                         if modified {
                             rt.db.set_file_flag(record.id, FileFlag::Modified, true)?;
@@ -196,6 +204,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     rt.db.drop_archive_queue()?;
     recorder.flush()?;
+    let done_bytes = rt.db.sum_archived_canonical_bytes()?;
+    tracing::info!(
+        "archive done: processed {} of {} bytes, {} error(s)",
+        done_bytes,
+        total_bytes,
+        rt.db.count_errors(Some("archive"))?,
+    );
     Ok(())
 }
 

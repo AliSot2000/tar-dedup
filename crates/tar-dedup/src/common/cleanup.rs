@@ -31,7 +31,14 @@ pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode) -> Result<()
     if !keep.keep_stage {
         let work = &config.paths().work_dir;
         if work.is_dir() {
-            fs::remove_dir_all(work).map_err(|e| Error::io(work, e))?;
+            match fs::remove_dir_all(work) {
+                Ok(_) => (),
+                Err(e) => tracing::warn!(
+                    "failed to remove work dir {}: {}; leaving in place",
+                    work.display(),
+                    e,
+                ),
+            }
         }
     }
 

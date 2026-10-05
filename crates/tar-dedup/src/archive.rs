@@ -115,18 +115,17 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         shutdown.check_between_files()?;
 
         enter_phase(&progress, &state.phase);
-        tracing::info!(phase = state.phase.as_str(), "archive phase");
         match run_phase(&state.phase, &rt) {
             Ok(()) => {exit_phase(&progress, &state.phase, &db)?}
             Err(Error::Interrupted) => {
                 db.save_runtime_state(&state)?;
                 if shutdown.is_force() {
-                    tracing::error!(
+                    tracing::warn!(
                         "aborted during {}; in-flight progress discarded — rerun to resume",
                         state.phase.as_str()
                     );
                 } else {
-                    tracing::error!(
+                    tracing::warn!(
                         "stopped during {}; completed work saved — rerun to resume",
                         state.phase.as_str()
                     );

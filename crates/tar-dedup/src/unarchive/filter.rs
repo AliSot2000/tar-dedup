@@ -57,6 +57,13 @@ impl ParseFilterBuffer {
 //  filter pass is a deliberate no-op: there is nothing to match against, and filters
 //  stay in `ExtractConfig`. Verified via the row count.
 pub fn run(rt: &ExtractRTArgs, set_phase: bool) -> Result<()> {
+    let eligible = rt.db.count_files_in_phase(Unarchived)?;
+    tracing::info!(
+        "starting filter: total {}, processing {}, pending {}",
+        rt.db.count_entries()?,
+        eligible,
+        eligible,
+    );
     joint_filter_phase(
         false,
         rt.config.filter.anchored,

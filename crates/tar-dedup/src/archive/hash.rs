@@ -29,12 +29,10 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let pending = rt.db.count_pending_hashable_files(eager_filter, detect_hardlinks)?;
     let already_hashed = hash_needed.saturating_sub(pending);
     tracing::info!(
+        "starting hash: total {}, processing {}, pending {}",
         total_entries,
-        unshed_files = pending,
-        already_hashed,
-        jobs = rt.config.process.effective_jobs(),
-        page_size = rt.config.sparse.page_size,
-        "hash pass"
+        hash_needed,
+        pending,
     );
 
     rt.progress.set_phase_total(hash_needed);
@@ -104,6 +102,12 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             Err(Error::Interrupted)
         }
         false => {
+            tracing::info!(
+                "hash done: processed {} of {}, {} error(s)",
+                already_hashed + completed,
+                hash_needed,
+                rt.db.count_errors(Some("hash"))?,
+            );
             rt.db.drop_hash_queue()?;
             Ok(())
         }
@@ -200,9 +204,12 @@ fn hash_worker(
                 );
                 let res = match hash_one(
                     &mut buf, &row.abs_path, page_size, &shutdown, Some(&bar)) {
-                    Ok((hash, zero_pages)) => Ok(HashSuccess {
-                        id: row.id, hash, zero_pages, modified
-                    }),
+                    Ok((hash, zero_pages)) => {
+                        tracing::debug!("hashed {}", row.abs_path.display());
+                        Ok(HashSuccess {
+                            id: row.id, hash, zero_pages, modified
+                        })
+                    }
                     Err(err) => Err(HashError {
                         id: row.id, err, modified
                     })
@@ -247,7 +254,7 @@ fn hash_one(
         match shutdown.check_in_flight() {
             Ok(_) => (),
             Err(e) => {
-                tracing::info!("hash worker got in-flight interrupt");
+                tracing::debug!("hash worker got in-flight interrupt");
                 return Err(e);
             }
         };

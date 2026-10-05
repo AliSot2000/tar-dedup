@@ -92,6 +92,12 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         errored_files = errored,
         "permissions: propagated metadata flags to files"
     );
+    tracing::info!(
+        "permissions done: processed {} of {}, {} error(s)",
+        applied,
+        file_pending + file_done + dir_pending + dir_done,
+        rt.db.count_errors(Some("permissions"))?,
+    );
 
     // INFO: Since all relevant things are stored in out_tree, we cna blanket promote here.
     if !rt.shutdown.is_interrupted() {
@@ -374,7 +380,7 @@ fn apply_one(
 
     // This function already handles the errors.
     for error in &errors {
-        tracing::error!(
+        tracing::warn!(
             path = %tgt_path.display(),
             error = %error,
             "metadata restore failure; marking ErrorWhileApplyingMetadata"

@@ -78,7 +78,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
             filter_buffer = Some(ingest_filters(&config, &mut pre_db_recorder)?);
         }
         StartAction::Resume => {
-            tracing::error!("resuming extract from phase `{}`", state.phase.as_str());
+            tracing::info!("resuming extract from phase `{}`", state.phase.as_str());
             db = Some(Database::open(&db_path)?);
             filter_buffer = Some(ParseFilterBuffer::default());
             config_written = true; // stored by the original run
@@ -93,11 +93,9 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     while state.phase != ExtractPipelinePhase::Done {
         shutdown.check_between_files()?;
         enter_phase(&progress, state.phase);
-        tracing::info!(phase = state.phase.as_str(), "unarchive phase");
 
         match state.phase {
             ExtractPipelinePhase::ScanTar => {
-                tracing::error!("extract: scanning archive");
                 db = Some(scan::run(&config, &db_path, &shutdown,
                                     &mut pre_db_recorder, &mut filter_buffer, &progress)?);
                 if !config_written {
@@ -152,7 +150,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     bars.finish();
     drop(bars);
 
-    tracing::error!("extracted to {}", config.paths.extraction_root().display());
+    tracing::info!("extracted to {}", config.paths.extraction_root().display());
     Ok(())
 }
 

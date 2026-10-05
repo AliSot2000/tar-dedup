@@ -59,12 +59,6 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         return Err(Error::Config("page_size must be greater than 0".into()));
     }
 
-    tracing::info!(
-        page_size =rt. config.sparse.page_size,
-        min_pages = ?rt.config.sparse.min_pages,
-        "sparsify pass"
-    );
-
     let stage_dir = rt.config.paths.stage_dir();
     fs::create_dir_all(&stage_dir).map_err(|e| Error::io(&stage_dir, e))?;
 
@@ -100,6 +94,12 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         sanity_no_deduped(rt.db)?;
         return Ok(());
     }
+    tracing::info!(
+        "starting sparsify: total {}, processing {}, pending {}",
+        rt.db.count_entries()?,
+        workload,
+        pending,
+    );
 
     // One bar per worker, materialized now so each worker can take its bar by
     // value; workers never touch `ProgressBarSet`.
@@ -130,7 +130,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     drop(work_r);
     drop(out_s);
 
-    let (completed, errored) = run_enqueue_dequeue_loop_sparsify(
+    let (completed, _errored) = run_enqueue_dequeue_loop_sparsify(
         &rt, work_s, out_r, thread_handles
     )?;
     rt.progress.drop_thread_bars();
@@ -148,7 +148,12 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         false => {
             rt.db.drop_sparsify_queue()?;
             sanity_no_deduped(rt.db)?;
-            tracing::info!(ok = completed - errored, err = errored, "sparsify complete");
+            tracing::info!(
+                "sparsify done: processed {} of {}, {} error(s)",
+                workload.saturating_sub(pending) + completed,
+                workload,
+                rt.db.count_errors(Some("sparsify"))?,
+            );
             Ok(())
         }
     }
@@ -255,6 +260,7 @@ fn sparsify_worker(
                 let outcome = match sparse_one(
                     &row.abs_path, tmp.path(), page_size, &shutdown, Some(&bar)) {
                     Ok(_) => {
+                        tracing::debug!("sparsified {}", row.abs_path.display());
                         tmp.keep();
                         SparseOutcome { id: row.id, modified, err: None }
                     }

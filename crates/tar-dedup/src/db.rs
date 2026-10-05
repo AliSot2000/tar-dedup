@@ -1105,6 +1105,10 @@ impl Database {
         errors::count_records(&self.conn(), scope, reemit)
     }
 
+    pub fn count_errors(&self, phase: Option<&str>) -> Result<u64> {
+        errors::count_errors(&self.conn(), phase)
+    }
+
     // --- integrity checks across the database
 
     pub fn count_missing_dev_inode(&self) -> Result<u64> {

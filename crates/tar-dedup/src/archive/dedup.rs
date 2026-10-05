@@ -41,7 +41,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     };
 
     match rt.config.pipeline.dedup_mode {
-        DedupMode::Regular => run_regular_fsm(rt, eager_filter, prev_phase, catalog, ineligible),
+        DedupMode::Regular => run_regular_fsm(rt, eager_filter, prev_phase, catalog),
         DedupMode::Hash => run_hash_mode(rt, eager_filter, prev_phase, catalog),
         DedupMode::None => run_none_mode(rt, eager_filter, prev_phase, catalog),
     }
@@ -53,8 +53,7 @@ fn run_regular_fsm(
     rt: &ArchiveRTArgs,
     eager_filter: bool,
     prev_phase: FilePhase,
-    catalog: u64,
-    ineligible: u64)
+    catalog: u64)
     -> Result<()> {
     // Singleton groups (unique content) need no compare round.
     let skipped_singleton = rt.db.promote_singleton_filtered_to_deduped(eager_filter)?;
@@ -73,13 +72,10 @@ fn run_regular_fsm(
     rt.progress.set_phase_position(phase_done);
 
     tracing::info!(
+        "starting dedup: total {}, processing {}, pending {}",
         catalog,
-        ineligible_files = ineligible,
-        skipped_singleton,
-        dedup_candidates = phase_total,
-        already_deduped = phase_done,
-        jobs = rt.config.process.io_jobs,
-        "dedup pass"
+        phase_total,
+        phase_total.saturating_sub(phase_done),
     );
 
     if rt.db.count_pending_dedup_groups()? == 0 {
@@ -140,7 +136,12 @@ fn run_regular_fsm(
         false => {
             sanity_check_flags(rt.db, prev_phase)?;
             rt.db.drop_temp_dedup_table()?;
-            tracing::info!("dedup complete");
+            tracing::info!(
+                "dedup done: processed {} of {}, {} error(s)",
+                phase_done + completed,
+                phase_total,
+                rt.db.count_errors(Some("dedup"))?,
+            );
             Ok(())
         }
     }
@@ -161,10 +162,10 @@ fn run_bulk_mode(
     rt.progress.set_phase_total(total);
     rt.progress.set_phase_position(done);
     tracing::info!(
+        "starting dedup: total {}, processing {}, pending {}",
         catalog,
-        dedup_candidates = total,
-        already_deduped = done,
-        "dedup pass"
+        total,
+        total.saturating_sub(done),
     );
 
     if total == 0 || done == total {
@@ -175,7 +176,12 @@ fn run_bulk_mode(
     let moved = promote(rt.db, eager_filter)?;
     rt.progress.inc_both(moved);
     sanity_check_flags(rt.db, prev_phase)?;
-    tracing::info!("dedup complete");
+    tracing::info!(
+        "dedup done: processed {} of {}, {} error(s)",
+        done + moved,
+        total,
+        rt.db.count_errors(Some("dedup"))?,
+    );
     Ok(())
 }
 

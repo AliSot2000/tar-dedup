@@ -35,12 +35,11 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     let total = rt.db.count_files_to_rehash()?;
     let done = rt.db.count_rehashed_files()?;
     let pending = total.saturating_sub(done);
-    let do_skip = if rt.config.scan.rehash { "" } else { "skip " };
     tracing::info!(
-        files = total,
+        "starting rehash: total {}, processing {}, pending {}",
+        rt.db.count_entries()?,
+        total,
         pending,
-        jobs = rt.config.process.effective_jobs(),
-        "{do_skip}rehash pass"
     );
 
     if !rt.config.scan.rehash {
@@ -114,10 +113,10 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         false => {
             rt.db.drop_rehash_queue()?;
             tracing::info!(
-                matches = counts.matches,
-                mismatches = counts.mismatches,
-                errors = counts.errors,
-                "rehash complete"
+                "rehash done: processed {} of {}, {} error(s)",
+                done + counts.matches + counts.mismatches + counts.errors,
+                total,
+                rt.db.count_errors(Some("rehash"))?,
             );
             if counts.mismatches > 0 {
                 if rt.config.process.force {
@@ -262,7 +261,7 @@ fn rehash_one(
         // Force abort landed inside the read loop: keep the row pending.
         Err(Error::Interrupted) => return None,
         Err(e @ Error::FileStat(_)) => {
-            tracing::warn!(
+            tracing::error!(
                 file_id = record.id.0,
                 path = %path.display(),
                 error = %e,
@@ -278,6 +277,7 @@ fn rehash_one(
         .expect("PRECONDITION FAILED: rehash requires sha1 to be present");
 
     if digest == expected {
+        tracing::debug!("rehashed {} OK", path.display());
         Some(RehashOutcome::Match(record.id))
     } else {
         Some(RehashOutcome::Mismatch(record.id))
