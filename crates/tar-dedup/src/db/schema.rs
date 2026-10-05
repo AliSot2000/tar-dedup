@@ -7,7 +7,7 @@ pub fn initialize(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-const SCHEMA: &str = "
+pub const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 
