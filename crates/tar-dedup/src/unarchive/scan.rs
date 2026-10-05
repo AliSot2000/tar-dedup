@@ -156,7 +156,7 @@ fn run_inner(
         rt.progress.set_phase_total(edb.count_entries()?);
     }
 
-    let mut force_buffer: Option<Vec<FileId>> = if rt.config.scan.force_scan {
+    let mut force_buffer: Option<Vec<FileId>> = if rt.config.process.force {
         Some(Vec::new())
     } else {
         None
@@ -271,14 +271,14 @@ fn run_inner(
         }
         // Nothing to attach the buffered errors to; the flush reports the loss.
         flush_scan_recorder(recorder, rt.db.as_ref())?;
-        if rt.config.scan.force_scan {
+        if rt.config.process.force {
             return Err(Error::Config(
                 "Archive did not contain database. Cannot continue extraction".to_string(),
             ));
         } else {
             panic!(
                 "INVARIANT ERROR: No Database with at least one canonical file. \
-                 MUST NOT happen when force_scan is false"
+                 MUST NOT happen when force is false"
             );
         }
     }
@@ -287,7 +287,7 @@ fn run_inner(
     validate_result(&scan, resume_db)?;
 
     let sdb = rt.db.expect(OPT_DB_ERROR);
-    let trust_catalog = scan.from_footer || scan.saw_manifest_db || rt.config.scan.force_scan;
+    let trust_catalog = scan.from_footer || scan.saw_manifest_db || rt.config.process.force;
 
     // Check for any payloads that were extracted but somehow not recorded
     // TODO should this be a panic?
@@ -297,13 +297,13 @@ fn run_inner(
         tracing::warn!("Found {new} archive payload(s) which were not recorded as extracted.");
     }
 
-    report_scan_completeness(&sdb, scan.from_footer, rt.config.scan.force_scan)?;
+    report_scan_completeness(&sdb, scan.from_footer, rt.config.process.force)?;
     if trust_catalog {
         let n = sdb.promote_extracted_to_unarchived()?;
         if n > 0 {
             tracing::warn!(
                 "promoted {n} extracted row(s) to unarchived without snapshot confirmation \
-                 (footer and/or --force-scan)"
+                 (footer and/or --force)"
             );
         }
     }
@@ -367,10 +367,10 @@ fn process_entry(
         }
         // Not Spec: First Member is Snapshot.
         (SNAPSHOT_TAR_NAME, false) => {
-            if !rt.config.scan.force_scan {
+            if !rt.config.process.force {
                 return Err(Error::Config(format!(
                     "first tar member is {SNAPSHOT_TAR_NAME} not manifest.sqlite; \
-                         attempt to bypass with --force-scan"
+                         attempt to bypass with --force"
                 )));
             } else {
                 install_db(rt)?;
@@ -379,7 +379,7 @@ fn process_entry(
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
         }
         (SNAPSHOT_TAR_NAME, true) => {
-            if rt.config.scan.force_scan && rt.db.is_none() {
+            if rt.config.process.force && rt.db.is_none() {
                 install_db(rt)?;
                 let ref_db = rt.db.as_ref().expect(OPT_DB_ERROR);
                 scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
@@ -392,7 +392,7 @@ fn process_entry(
                 // Confirm from this snapshot after marking buffered extracts.
                 ref_db.apply_snapshot_promote_unarchived(&rt.config.paths.temp_db())?;
             } else {
-                assert!(rt.config.force || rt.db.is_some(),
+                assert!(rt.config.process.force || rt.db.is_some(),
                         "INVARIANT ERROR: without force, the first member of an archive MUST be an \
                         initial db");
                 let ldb = rt.db.as_ref().expect(OPT_DB_ERROR);
@@ -402,10 +402,10 @@ fn process_entry(
             }
         }
         (cid, saw_first) if let Ok((_, _, fid, _)) = parse_content_id(cid) => {
-            if !rt.config.scan.force_scan && !saw_first {
+            if !rt.config.process.force && !saw_first {
                 return Err(Error::Config(format!(
                     "first tar member is canonical file {cid} not manifest.sqlite; \
-                     bypass available with --force-scan"
+                     bypass available with --force"
                 )));
             }
             // Extraction gated due to not selected by filter
@@ -414,7 +414,7 @@ fn process_entry(
                     return Ok(())
                 }
             }
-            // PRECONDITION: either force_scan && no db is true or we saw at least one member.
+            // PRECONDITION: either force && no db is true or we saw at least one member.
             let entry_dst = rt.config.paths.extract_cache_dir().join(name);
             // Stepped member write: sparse copy preserves holes when requested
             // (hole-detection block = `--page-size`), plain batched copy otherwise;
@@ -455,10 +455,10 @@ fn process_entry(
                 Err(e) => return Err(e),
             };
 
-            if rt.config.scan.force_scan && rt.db.is_none() {
+            if rt.config.process.force && rt.db.is_none() {
                 let buf = force_buffer
                     .as_mut()
-                    .expect("INVARIANT ERROR: Buffer must be Some(Vec) if force_scan is set");
+                    .expect("INVARIANT ERROR: Buffer must be Some(Vec) if force is set");
                 buf.push(fid);
             } else {
                 let ldb = rt.db.as_ref().expect(OPT_DB_ERROR);
@@ -532,14 +532,14 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
     Ok(())
 }
 
-fn report_scan_completeness(db: &Database, from_footer: bool, force_scan: bool) -> Result<()> {
+fn report_scan_completeness(db: &Database, from_footer: bool, force: bool) -> Result<()> {
     // INFO: AppendedPath = true, FileExtracted = false
     let missing = db.count_missing_payloads()?;
     if missing > 0 {
         let msg = format!(
             "{missing} canonical file(s) have AppendedPath but were not extracted from the archive"
         );
-        if force_scan { tracing::warn!("{msg}"); } else { return Err(Error::Config(msg)); }
+        if force { tracing::warn!("{msg}"); } else { return Err(Error::Config(msg)); }
     }
     // INFO: rows FileExtracted = True || parent i.e. id = canonical_id has FileExtracted = True
     let unconfirmed = db.count_unconfirmed_extracted()?;

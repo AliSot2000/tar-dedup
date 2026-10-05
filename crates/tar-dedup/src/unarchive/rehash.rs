@@ -120,7 +120,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
                 "rehash complete"
             );
             if counts.mismatches > 0 {
-                if rt.config.force {
+                if rt.config.process.force {
                     tracing::warn!(mismatches = counts.mismatches, "rehash digest mismatch(es) recorded");
                 } else {
                     // TODO different error
@@ -966,7 +966,7 @@ mod tests {
     #[test]
     fn run_mismatch_endgame() {
         let mut world = ExtractTestWorld::new();
-        world.config.force = false;
+        world.config.process.force = false;
         let payload = pattern(1024 * 1024, 41);
         let id = world.add_elected("mm.bin", &payload);
         std::fs::write(world.stage_path(id), pattern(1024 * 1024, 42))
@@ -978,7 +978,7 @@ mod tests {
         assert!(world.flag(id, FileFlag::RehashMismatch));
 
         // --force path: the phase completes and records the mismatch.
-        world.config.force = true;
+        world.config.process.force = true;
         let sh3 = Shutdown::detached();
         run(&world.rt_with(&sh3)).expect("force run");
         assert_eq!(world.phase(id), FilePhase::Rehashed);

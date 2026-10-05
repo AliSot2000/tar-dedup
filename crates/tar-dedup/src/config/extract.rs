@@ -66,7 +66,6 @@ pub struct OwnerGroupOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScanOptions {
-    pub force_scan: bool,
     pub rehash: bool,
     pub clear_archive_meta: bool,
     pub sparsify: bool,
@@ -76,7 +75,6 @@ pub struct ScanOptions {
 impl Default for ScanOptions {
     fn default() -> Self {
         Self {
-            force_scan: false,
             rehash: true,
             clear_archive_meta: false,
             sparsify: false,
@@ -87,7 +85,6 @@ impl Default for ScanOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractConfig {
-    pub force: bool, // Will force the system just try anyway even tho stuff failed. Might lead to inconsistent states and corrupted data.
     pub paths: PathLayout,
     pub decompression: super::compression::CompressionFormat,
     pub placement: PlacementOptions,
@@ -301,7 +298,6 @@ impl ExtractConfig {
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
         let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
         Ok(Self {
-            force: true, // TODO cli
             paths: PathLayout {
                 archive_path,
                 directory,
@@ -338,7 +334,6 @@ impl ExtractConfig {
                 no_same_permissions: !resolve_bool_flag(args.no_same_permissions, args.same_permissions, apply_all),
             },
             scan: ScanOptions {
-                force_scan: false,
                 rehash: true,
                 clear_archive_meta: false,
                 sparsify: args.sparsify,
@@ -380,7 +375,6 @@ impl ExtractConfig {
     #[cfg(test)]
     pub fn for_place_test(extraction_root: PathBuf, absolute_names: bool, jobs: usize) -> Self {
         Self {
-            force: true,
             paths: PathLayout {
                 archive_path: PathBuf::new(),
                 directory: extraction_root,
@@ -453,7 +447,6 @@ impl ExtractConfig {
     #[cfg(test)]
     pub fn for_scan_test(archive_path: PathBuf, work_dir: PathBuf, directory: PathBuf) -> Self {
         Self {
-            force: true, // TODO cli
             paths: PathLayout {
                 archive_path,
                 directory,
@@ -546,7 +539,6 @@ impl ExtractConfig {
     /// defined" and inherit from `base`; everything else comes from the candidate.
     fn merge_over(&self, base: &Self, default: &Self) -> Self {
         Self {
-            force: self.force,
             paths: self.paths.clone(),
             decompression: self.decompression,
             placement: self.placement.clone(),
@@ -558,6 +550,7 @@ impl ExtractConfig {
                 io_jobs: merge_pick_copy(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
                 fail_fast: merge_pick_copy(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
                 no_errors: merge_pick_copy(self.process.no_errors, base.process.no_errors, default.process.no_errors),
+                force: merge_pick_copy(self.process.force, base.process.force, default.process.force),
                 cleanup: self.process.cleanup,
                 exit_after_stage: self.process.exit_after_stage,
             },
@@ -601,7 +594,6 @@ fn validate_metadata_pairs(args: &ExtractArgs) -> Result<()> {
 /// merge baseline: fields equal to `DEFAULT_CONFIG` count as unset during a
 /// config merge.
 const DEFAULT_CONFIG: ExtractConfig = ExtractConfig {
-    force: false,
     paths: PathLayout {
         archive_path: PathBuf::new(),
         directory: PathBuf::new(),
@@ -638,7 +630,6 @@ const DEFAULT_CONFIG: ExtractConfig = ExtractConfig {
         no_same_permissions: true,
     },
     scan: ScanOptions {
-                force_scan: false,
                 rehash: true,
                 clear_archive_meta: false,
                 sparsify: false,

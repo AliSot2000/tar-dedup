@@ -46,7 +46,7 @@ pub fn check_cached_payloads(conn: &mut Connection, cache_dir: &Path) -> Result<
 }
 
 /// End-of-scan salvage: promote every `FileExtracted` canonical (and dependents)
-/// that is still `archived` → `unarchived`. Used when `from_footer || force_scan`.
+/// that is still `archived` → `unarchived`. Used when `from_footer || force`.
 pub fn promote_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
     let n = conn.execute(
