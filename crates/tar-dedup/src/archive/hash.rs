@@ -390,6 +390,7 @@ mod tests {
                 io_jobs: 4,
                 fail_fast: false,
                 no_errors: false,
+                force: false,
                 cleanup: CleanupSettings { keep_db: false, keep_stage: false },
                 exit_after_stage: None,
             },
