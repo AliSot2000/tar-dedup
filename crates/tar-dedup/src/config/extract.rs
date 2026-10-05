@@ -64,10 +64,25 @@ pub struct OwnerGroupOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ScanOptions {
     pub force_scan: bool,
     pub rehash: bool,
     pub clear_archive_meta: bool,
+    pub sparsify: bool,
+    pub page_size: usize,
+}
+
+impl Default for ScanOptions {
+    fn default() -> Self {
+        Self {
+            force_scan: false,
+            rehash: true,
+            clear_archive_meta: false,
+            sparsify: false,
+            page_size: 4096,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,7 +248,14 @@ impl ExtractConfig {
                 disjoint subgroups of hardlinks that formerly were a single hardlink.");
         }
 
+        if args.sparsify && args.page_size == 0 {
+            return Err(Error::Config(
+                "page_size must be greater than 0 when `--sparsify` is set".into(),
+            ));
+        } // TODO warn if page size given but ignored.
+
         // TODO clean_target and one_top_level IS NONE => warning, no effect.
+        // TODO force_overwrite_dir
 
         // Extract default: apply nothing. `--apply-all-metadata` flips the whole
         // group on; per-bit `--x`/`--no-x` override on top (explicit wins).
@@ -319,6 +341,8 @@ impl ExtractConfig {
                 force_scan: false,
                 rehash: true,
                 clear_archive_meta: false,
+                sparsify: args.sparsify,
+                page_size: args.page_size,
             },
             process: ProcessOptions {
                 start_policy,
@@ -391,11 +415,7 @@ impl ExtractConfig {
                 no_selinux: false,
                 no_same_permissions: false,
             },
-            scan: ScanOptions {
-                force_scan: false,
-                rehash: true,
-                clear_archive_meta: false,
-            },
+            scan: ScanOptions::default(),
             process: ProcessOptions {
                 start_policy: StartPolicy::Create,
                 jobs,
@@ -467,11 +487,7 @@ impl ExtractConfig {
                 no_selinux: false,
                 no_same_permissions: false,
             },
-            scan: ScanOptions {
-                force_scan: false,
-                rehash: true,
-                clear_archive_meta: false,
-            },
+            scan: ScanOptions::default(),
             process: ProcessOptions {
                 start_policy: StartPolicy::Create,
                 jobs: 1,
@@ -619,11 +635,13 @@ const DEFAULT_CONFIG: ExtractConfig = ExtractConfig {
         no_same_permissions: true,
     },
     scan: ScanOptions {
-        force_scan: false,
-        rehash: true,
-        clear_archive_meta: false,
-    },
-    process: ProcessOptions {
+                force_scan: false,
+                rehash: true,
+                clear_archive_meta: false,
+                sparsify: false,
+                page_size: 4096,
+            },
+            process: ProcessOptions {
         start_policy: StartPolicy::Create,
         jobs: 0,
         io_jobs: 0,

@@ -10,33 +10,31 @@ use std::path::{Path, PathBuf};
 
 use super::io_buffer;
 
-/// Copy `src` → `dst` in 4 MiB chunks, calling `should_interrupt` after each chunk.
+/// Copy a `Read` source to `dst` in 4 MiB chunks, calling `on_batch` with the
+/// cumulative byte count after each chunk.
 ///
-/// When `should_interrupt()` returns `true`, the partial `dst` is removed and [`Error::Interrupted`]
-/// is returned. When it returns `false`, copying continues until EOF.
-pub fn copy_file_batched<P, F>(src: P, dst: P, mut should_interrupt: F) -> Result<()>
+/// When `on_batch` returns an error (incl. [`Error::Interrupted`]), the partial
+/// `dst` is removed and the error is propagated. On success, `dst` holds the
+/// full stream.
+pub fn copy_reader_batched<R: Read, F>(src: &mut R, dst: &Path, mut on_batch: F) -> Result<()>
 where
-    P: AsRef<Path>,
-    F: FnMut() -> bool,
+    F: FnMut(u64) -> Result<()>,
 {
-    let src = src.as_ref();
-    let dst = dst.as_ref();
-
-    let mut src_file = File::open(src).map_err(|e| Error::io(src, e))?;
     let mut dst_file = File::create(dst).map_err(|e| Error::io(dst, e))?;
-
     let mut buf = io_buffer();
+    let mut total = 0u64;
     loop {
-        let n = src_file.read(&mut buf).map_err(|e| Error::io(src, e))?;
+        let n = src.read(&mut buf).map_err(|e| Error::io(dst, e))?;
         if n == 0 {
             break;
         }
         dst_file
             .write_all(&buf[..n])
             .map_err(|e| Error::io(dst, e))?;
-        if should_interrupt() {
+        total += n as u64;
+        if let Err(e) = on_batch(total) {
             let _ = fs::remove_file(dst);
-            return Err(Error::Interrupted);
+            return Err(e);
         }
     }
     Ok(())
@@ -398,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_file_batched_copies_all_bytes() {
+    fn copy_reader_batched_copies_all_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("src.bin");
         let dst = dir.path().join("dst.bin");
@@ -407,13 +405,14 @@ mod tests {
             .collect();
         fs::write(&src, &payload).expect("write src");
 
-        copy_file_batched(&src, &dst, || false).expect("copy");
+        let mut src_file = File::open(&src).expect("open src");
+        copy_reader_batched(&mut src_file, &dst, |_| Ok(())).expect("copy");
 
         assert_eq!(fs::read(&dst).expect("read dst"), payload);
     }
 
     #[test]
-    fn copy_file_batched_interrupt_removes_partial_dst() {
+    fn copy_reader_batched_interrupt_removes_partial_dst() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("src.bin");
         let dst = dir.path().join("dst.bin");
@@ -421,9 +420,15 @@ mod tests {
         fs::write(&src, &payload).expect("write src");
 
         let mut chunks = 0u32;
-        let err = copy_file_batched(&src, &dst, || {
+        let mut src_file = File::open(&src).expect("open src");
+        let err = copy_reader_batched(&mut src_file, &dst, |bytes| -> Result<()> {
             chunks += 1;
-            chunks >= 2
+            assert!(bytes > 0, "cumulative byte count must grow");
+            if chunks >= 2 {
+                Err(Error::Interrupted)
+            } else {
+                Ok(())
+            }
         })
         .expect_err("interrupted");
 

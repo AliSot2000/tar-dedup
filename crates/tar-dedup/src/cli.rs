@@ -766,6 +766,27 @@ pub struct ExtractArgs {
     #[arg(long = "lazy-filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
     pub lazy_filter: bool,
 
+    // --- Sparse Files ---
+
+    /// Re-create holes in the extract cache while unpacking (sparse writer over
+    /// a plain copy; uses `--page-size` for hole detection).
+    #[arg(
+        long = "sparsify",
+        default_value_t = false,
+        action = ArgAction::SetTrue,
+        help_heading = "Sparse Files"
+    )]
+    pub sparsify: bool,
+
+    /// Page size in bytes for sparse-hole detection while unpacking.
+    #[arg(
+        long = "page-size",
+        value_name = "BYTES",
+        default_value_t = 4096,
+        help_heading = "Sparse Files"
+    )]
+    pub page_size: usize,
+
     /// Abort on the first warning or error instead of continuing where possible.
     #[arg(
         long = "fail-fast",

@@ -1,6 +1,7 @@
 //! Scan/untar: footer-first catalog, else leading `manifest.sqlite`; cache payloads.
 
 use crate::archive_footer::read_footer;
+use crate::common::files::copy_reader_batched;
 use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
@@ -8,12 +9,13 @@ use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FileId, FilePhase};
 use crate::db::{Database, ErrorPhase, ExtractScanState, Recorder};
 use crate::error::{Error, FileStatError, Result};
-use crate::progress::ProgressBarSet;
+use crate::progress::{BarKind, ProgressBarSet};
 use crate::shutdown::Shutdown;
 use crate::tar_reader::open_tar_archive;
 use crate::unarchive::ExtractRTArgs;
 use crate::unarchive::filter::ParseFilterBuffer;
 use crate::unarchive::filter::run as filter_run;
+use indicatif::ProgressBar;
 use path_clean::PathClean;
 use std::fs;
 use std::io;
@@ -29,6 +31,7 @@ struct ScanRTState <'a> {
     pub config: &'a ExtractConfig,
     pub shutdown: &'a  Shutdown,
     pub progress: &'a  ProgressBarSet,
+    pub pb: ProgressBar,
 }
 
 // INFO: State Model for a File and its associated canonical row in the db:
@@ -110,7 +113,13 @@ pub fn run(
     progress: &ProgressBarSet)
     -> Result<Database> {
 
-    let rt = ScanRTState {config, db: None, shutdown, progress};
+    let rt = ScanRTState {
+        config,
+        db: None,
+        shutdown,
+        progress,
+        pb: progress.push_sub_bar("extracting", BarKind::Bytes),
+    };
     run_inner(rt, db_path, recorder, filter_buffer)
 }
 
@@ -407,12 +416,43 @@ fn process_entry(
             }
             // PRECONDITION: either force_scan && no db is true or we saw at least one member.
             let entry_dst = rt.config.paths.extract_cache_dir().join(name);
-            match entry.unpack(&entry_dst) {
-                Ok(_) => (),
-                Err(e) => {
-                    record_file_scan_error(recorder, fid, FileStatError::copy_io(&entry_dst, &e));
-                    return Err(Error::io(&entry_dst, e));
+            // Stepped member write: sparse copy preserves holes when requested
+            // (hole-detection block = `--page-size`), plain batched copy otherwise;
+            // both report per-member byte progress on the shared sub-bar.
+            let member_total = entry.size();
+            rt.pb.set_position(0);
+            rt.pb.set_length(member_total);
+            let mut prev = 0u64;
+            let mut on_bytes = |bytes: u64| -> Result<()> {
+                rt.pb.inc(bytes - prev);
+                prev = bytes;
+                rt.shutdown.check_in_flight()
+            };
+            let sp_res = if rt.config.scan.sparsify {
+                let mut buf = vec![0u8; rt.config.scan.page_size];
+                match sparse_cp::sparse_copy_reader(
+                    entry,
+                    &entry_dst,
+                    member_total,
+                    &mut buf,
+                    |bytes, _size: u64, _dur: std::time::Duration| on_bytes(bytes))
+                {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
                 }
+            } else {
+                copy_reader_batched(entry, &entry_dst, on_bytes)
+            };
+            match sp_res {
+                Ok(_) => (),
+                // Clean exit on interrupt: no file error recorded, caller saves state.
+                Err(Error::Interrupted) => return Err(Error::Interrupted),
+                // Re-attach the destination path (copy helpers lose it) and record.
+                Err(Error::FileStat(FileStatError::Io { source, .. })) => {
+                    record_file_scan_error(recorder, fid, FileStatError::copy_io(&entry_dst, &source));
+                    return Err(Error::io(&entry_dst, source));
+                }
+                Err(e) => return Err(e),
             };
 
             if rt.config.scan.force_scan && rt.db.is_none() {
