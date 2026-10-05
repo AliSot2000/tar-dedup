@@ -1,3 +1,4 @@
+use crate::common::utf8::require_utf8;
 use crate::config::ExtractRuntimeState;
 use crate::db::common::with_transaction;
 use crate::db::content_id::parse_content_id;
@@ -86,11 +87,11 @@ pub fn apply_snapshot_promote_unarchived(
     conn: &Connection,
     snapshot_path: &Path)
     -> Result<u64> {
-    let path = snapshot_path.to_string_lossy();
+    let path = require_utf8(snapshot_path)?;
     let bit = FileFlag::FileExtracted.mask_i64();
     conn.execute(
         "ATTACH DATABASE :path AS snap",
-        named_params! { ":path": path.as_ref() },
+        named_params! { ":path": path },
     ).to_panic()?;
     let promoted = conn.execute(
         "UPDATE files
