@@ -79,21 +79,14 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
     -> Result<()> {
 
     if rt.config.placement.absolute_names {
-        batched_stepped_loop(
-            BATCH_SIZE,
-            || FileId(0),
-            |lid, bs| rt.db.list_materialized_entries(
-                *lid, bs, None, None, false
-            ),
-            |r: &StrippedRecord| r.id,
-            |entries| {
-                apply_renames(rt, &entries, transform, |abs: &Path| {
-                    debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
-                    debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
-                    abs.strip_prefix("/").expect("abs path starts with /").to_path_buf()
-                })
-            }
-        )
+        let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
+            apply_renames(rt, entries, transform, |abs: &Path| {
+                debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
+                debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
+                abs.strip_prefix("/").expect("abs path starts with /").to_path_buf()
+            })
+        };
+        stepped_dirs_then_rest(rt, None, false, &mut apply)
     } else {
         batched_stepped_loop(
             BATCH_SIZE,
@@ -103,21 +96,14 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
             |sources| {
                 for source in sources {
                     let source_abs = source.abs_path;
-                    batched_stepped_loop(
-                        BATCH_SIZE,
-                        || FileId(0),
-                        |lid, bs| rt.db.list_materialized_entries(
-                            *lid, bs, Some(source.id), None, false,
-                        ),
-                        |rec: &StrippedRecord|  rec.id,
-                        |entries| {
-                            apply_renames(rt, &entries, transform, |abs: &Path| {
-                                abs.strip_prefix(&source_abs)
-                                    .expect("entry must start within source root")
-                                    .to_path_buf()
-                            })
-                        }
-                    )?;
+                    let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
+                        apply_renames(rt, entries, transform, |abs: &Path| {
+                            abs.strip_prefix(&source_abs)
+                                .expect("entry must start within source root")
+                                .to_path_buf()
+                        })
+                    };
+                    stepped_dirs_then_rest(rt, Some(source.id), false, &mut apply)?;
                 }
                 Ok(())
             }
@@ -188,6 +174,49 @@ fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
     Ok(())
 }
 
+/// Single batched pass over one `list_materialized_entries` bucket (`only_dirs`),
+/// reporting each batch to `f`.
+fn stepped_materialized(
+    rt: &ExtractRTArgs,
+    source_id: Option<i64>,
+    only_dirs: Option<bool>,
+    apply_filters: bool,
+    only_valid_new_name: bool,
+    f: &mut impl FnMut(&Vec<StrippedRecord>) -> Result<()>)
+    -> Result<()> {
+    batched_stepped_loop(
+        BATCH_SIZE,
+        || FileId(0),
+        |lid, bs| rt.db.list_materialized_entries(
+            *lid, bs, source_id, only_dirs, only_valid_new_name, apply_filters
+        ),
+        |r: &StrippedRecord| r.id,
+        |entries| f(&entries),
+    )
+}
+
+/// Two-stage driver over `list_materialized_entries`: directory rows first, then
+/// the remaining entries. The directory pass bypasses the include/exclude filters
+/// when `--overwrite-dir` is set (excluded directories still get out_tree rows so
+/// their archived metadata can be restored); the second pass is always
+/// filter-aware.
+fn stepped_dirs_then_rest(
+    rt: &ExtractRTArgs,
+    source_id: Option<i64>,
+    only_valid_new_name: bool,
+    f: &mut impl FnMut(&Vec<StrippedRecord>) -> Result<()>)
+    -> Result<()> {
+
+    stepped_materialized(
+        rt, source_id, Some(true), !rt.config.attributes.force_overwrite_dir,
+        only_valid_new_name, f)?;
+
+    stepped_materialized(
+        rt, source_id, Some(false), true, only_valid_new_name, f)?;
+
+    Ok(())
+}
+
 // -------------------------------------------------------------------------------------------------
 // Substage
 // -------------------------------------------------------------------------------------------------
@@ -220,25 +249,18 @@ fn populate_out_tree_abs(
     debug_assert!(rt.config.placement.absolute_names,
                   "PRECONDITION FAILED: Function builds absolute names");
 
-    batched_stepped_loop(
-        BATCH_SIZE,
-        || FileId(0),
-        |lid, bs| rt.db.list_materialized_entries(
-            *lid, bs, None, None, use_new_name
-        ),
-        |rec: &StrippedRecord| rec.id,
-        |entries| {
-            // Process the entries
-            let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-                &entries, &rt.config.paths.extraction_root(), None, use_new_name
-            );
+    let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
+        // Process the entries
+        let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
+            entries, &rt.config.paths.extraction_root(), None, use_new_name
+        );
 
-            rt.db.insert_out_tree_rows(&processed)?;
-            rt.progress.inc_both(processed.len() as u64);
-            // INFO ref table is left empty since we are working with abs_paths
-            Ok(())
-        }
-    )
+        rt.db.insert_out_tree_rows(&processed)?;
+        rt.progress.inc_both(processed.len() as u64);
+        // INFO ref table is left empty since we are working with abs_paths
+        Ok(())
+    };
+    stepped_dirs_then_rest(rt, None, use_new_name, &mut apply)
 }
 
 /// Build the out_tree table, if the user selected no absolute names for the materialization method.
@@ -250,8 +272,6 @@ fn populate_out_tree_rel(
     rt: &ExtractRTArgs,
     use_new_name: bool)
     -> Result<()> {
-    let new_name = use_new_name;
-
     let root = rt.config.paths.extraction_root();
     batched_stepped_loop(
         BATCH_SIZE,
@@ -278,28 +298,21 @@ fn populate_out_tree_rel(
                     root.join(cut)
                 };
 
-                batched_stepped_loop(
-                    BATCH_SIZE,
-                    || FileId(0),
-                    |lid, bs| rt.db.list_materialized_entries(
-                        *lid, bs, Some(source.id), None, new_name,
-                    ),
-                    |rec: &StrippedRecord| rec.id,
-                    |entries| {
-                        let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-                            &entries, &root, Some((&source.abs_path, &extraction_base)), new_name
-                        );
+                let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
+                    let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
+                        entries, &root, Some((&source.abs_path, &extraction_base)), use_new_name
+                    );
 
-                        let out_ids = rt.db.insert_out_tree_rows(&processed)?;
-                        let ref_pairs: Vec<(OutTreeId, i64)> = out_ids
-                            .iter()
-                            .map(|id| { (id.clone(), source.id) })
-                            .collect();
-                        rt.db.insert_ref_out_rows(&ref_pairs)?;
-                        rt.progress.inc_both(processed.len() as u64);
-                        Ok(())
-                    }
-                )?;
+                    let out_ids = rt.db.insert_out_tree_rows(&processed)?;
+                    let ref_pairs: Vec<(OutTreeId, i64)> = out_ids
+                        .iter()
+                        .map(|id| { (id.clone(), source.id) })
+                        .collect();
+                    rt.db.insert_ref_out_rows(&ref_pairs)?;
+                    rt.progress.inc_both(processed.len() as u64);
+                    Ok(())
+                };
+                stepped_dirs_then_rest(rt, Some(source.id), use_new_name, &mut apply)?;
             }
             Ok(())
         }

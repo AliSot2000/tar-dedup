@@ -926,9 +926,11 @@ impl Database {
         source_id: Option<i64>,
         only_dirs: Option<bool>,
         only_valid_new_name: bool,
+        apply_filters: bool,
     ) -> Result<Vec<R>> {
         place_prologue::list_materialized_entries(
-            &self.conn(), last_id, batch_size, source_id, only_dirs, only_valid_new_name)
+            &self.conn(), last_id, batch_size, source_id, only_dirs,
+            only_valid_new_name, apply_filters)
     }
 
     pub fn insert_out_tree_rows(&self, rows: &[NewOutTreeRow]) -> Result<Vec<OutTreeId>> {
