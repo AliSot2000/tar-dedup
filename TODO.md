@@ -28,9 +28,15 @@
 - [ ] Force utf8 (any non-utf8 string panics and aborts.)
 
 # Final remainder
+- [X] - Sparse writer
+- [ ] - force_write_dir
+- [ ] - move force boolean to process
+- [ ] - Sanity checks
 - [ ] - add cli arg for shards (use_shars, max_shard_size)
 - [ ] - add cli arg for debug-feat ordering-override (don't use custom ordering. order by files(id))
-- [ ] - add cli arg batch_size, flush_size (override the defaults from config.)
+- [ ] - add cli arg batch_size, flush_size, ... (override the defaults from config.)
+- [ ] - add cli arg for log level
+- [ ] - add cli arg for the disabling the per thread progress or all progress.
 - [ ] - correct errors (
             tracing::error - major fail (file not found, not removed, dir not created, ... something contentswise is not there the way we wanted)
             tracing::warning - minor fail (failed to remove a stage, metadata failed, recording errors failed, ...)
