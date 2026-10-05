@@ -104,8 +104,8 @@ pub fn list_sources(
     conn: &Connection,
     only_dirs: Option<bool>,
     starting_id: i64,
-    batch_size: u64,
-) -> Result<Vec<SourceRecord>> {
+    batch_size: u64)
+    -> Result<Vec<SourceRecord>> {
     debug_assert!(starting_id >= 0, "INVARIANT ERROR: starting_id >= 0, since ids start at 1");
     let dir_filter = match only_dirs {
         Some(true) => " AND flags & :DirFlag != 0",
