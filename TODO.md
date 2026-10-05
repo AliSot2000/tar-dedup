@@ -15,6 +15,7 @@
 - [X] Add a warn_if_times_changed -> Should also set a flag in the db.
 - [ ] Err variant check (add a wraper around functions returning a subset of errors to check that they follow the 
       contract)
+- [ ] correct error variant for the issues when we fail in the extract stage
 
 # NOW TODO
 - [X] Placement Conflict Handling
@@ -28,25 +29,29 @@
 - [ ] Force utf8 (any non-utf8 string panics and aborts.)
 
 # Final remainder
-- [X] - Sparse writer
-- [ ] - force_write_dir
-- [ ] - move force boolean to process
-- [ ] - Sanity checks
-- [ ] - add cli arg for shards (use_shars, max_shard_size)
-- [ ] - add cli arg for debug-feat ordering-override (don't use custom ordering. order by files(id))
-- [ ] - add cli arg batch_size, flush_size, ... (override the defaults from config.)
-- [ ] - add cli arg for log level
-- [ ] - add cli arg for the disabling the per thread progress or all progress.
-- [ ] - correct errors (
+- [X] Sparse writer
+- [X] force_write_dir
+- [X] move force boolean to process
+- [X] skip dedup
+- [ ] force utf-8
+- [ ] Sanity checks
+- [ ] add cli arg for shards (use_shars, max_shard_size)
+- [ ] add cli arg for debug-feat ordering-override (don't use custom ordering. order by files(id))
+- [ ] add cli arg batch_size, flush_size, ... (override the defaults from config.)
+- [ ] add cli arg for log level
+- [ ] add cli arg for the disabling the per thread progress or all progress.
+- [ ] add cli arg for force
+- [ ] add cli arg for force utf-8
+- [ ] correct errors (
             tracing::error - major fail (file not found, not removed, dir not created, ... something contentswise is not there the way we wanted)
             tracing::warning - minor fail (failed to remove a stage, metadata failed, recording errors failed, ...)
             tracing::info - general update (x number of files processed this session. y number of errors etc, ...)
             tracing::debug - file level updates (file x moved to location, metadata of file x acquired, file staged, ...))
-- [ ] - finish testing for [inventory, place_prologue, place, permissions]
-- [ ] - finish the readme
-- [ ] - publish to crates.io
-- [ ] - publish to gh releases
-- [ ] - publish to flatpak
+- [ ] finish testing for [inventory, place_prologue, place, permissions]
+- [ ] finish the readme
+- [ ] publish to crates.io
+- [ ] publish to gh releases
+- [ ]publish to flatpak
 
 ## General:
 - [ ] Testing
