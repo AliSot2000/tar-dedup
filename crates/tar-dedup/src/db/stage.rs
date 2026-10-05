@@ -16,7 +16,7 @@ pub fn promote_unstageable_files(conn: &Connection) -> Result<u64> {
             OR canonical_id IS NULL
             OR canonical_id != id
             OR sha1 IS NULL
-            OR NOT ({filter_rows})
+            OR NOT ({filter_rows}) --implied by canonical_id != id OR IS NULL
         )"
         ),
         [],
