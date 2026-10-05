@@ -308,6 +308,7 @@ impl ArchiveConfig {
                 fail_fast: args.fail_fast,
                 no_errors: args.no_errors,
                 force: false,
+                relax_utf8: false, // TODO cli
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
                 exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             },
@@ -357,6 +358,7 @@ impl ArchiveConfig {
                 fail_fast: merge_pick_copy(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
                 no_errors: merge_pick_copy(self.process.no_errors, base.process.no_errors, default.process.no_errors),
                 force: merge_pick_copy(self.process.force, base.process.force, default.process.force),
+                relax_utf8: merge_pick_copy(self.process.relax_utf8, base.process.relax_utf8, default.process.relax_utf8),
                 cleanup: self.process.cleanup,
                 exit_after_stage: self.process.exit_after_stage,
             },
@@ -446,6 +448,7 @@ const DEFAULT_CONFIG: ArchiveConfig = ArchiveConfig {
         fail_fast: false,
         no_errors: false,
         force: false,
+        relax_utf8: false, // TODO cli
         cleanup: CleanupSettings { keep_db: false, keep_stage: false },
         exit_after_stage: None,
     },

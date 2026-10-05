@@ -253,6 +253,7 @@ impl ExtractConfig {
 
         // TODO clean_target and one_top_level IS NONE => warning, no effect.
         // TODO force_overwrite_dir and no_overwrite_dir
+        // TODO cli: reject --relax-utf8 combined with --fail-fast (Error::Config).
 
 
         // Extract default: apply nothing. `--apply-all-metadata` flips the whole
@@ -347,6 +348,7 @@ impl ExtractConfig {
                 fail_fast: args.fail_fast,
                 no_errors: args.no_errors,
                 force: true, // TODO cli
+                relax_utf8: false, // TODO cli
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
                 exit_after_stage: None,
             },
@@ -419,6 +421,7 @@ impl ExtractConfig {
                 fail_fast: false,
                 no_errors: false,
                 force: true, // TODO cli
+                relax_utf8: false, // TODO cli
                 cleanup: CleanupSettings { keep_db: false, keep_stage: false },
                 exit_after_stage: None,
             },
@@ -491,6 +494,7 @@ impl ExtractConfig {
                 fail_fast: false,
                 no_errors: false,
                 force: true, // TODO cli
+                relax_utf8: false, // TODO cli
                 cleanup: CleanupSettings { keep_db: false, keep_stage: false },
                 exit_after_stage: None,
             },
@@ -552,6 +556,7 @@ impl ExtractConfig {
                 fail_fast: merge_pick_copy(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
                 no_errors: merge_pick_copy(self.process.no_errors, base.process.no_errors, default.process.no_errors),
                 force: merge_pick_copy(self.process.force, base.process.force, default.process.force),
+                relax_utf8: merge_pick_copy(self.process.relax_utf8, base.process.relax_utf8, default.process.relax_utf8),
                 cleanup: self.process.cleanup,
                 exit_after_stage: self.process.exit_after_stage,
             },
@@ -643,6 +648,7 @@ const DEFAULT_CONFIG: ExtractConfig = ExtractConfig {
         fail_fast: false,
         no_errors: false,
         force: false,
+        relax_utf8: false, // TODO cli
         cleanup: CleanupSettings { keep_db: false, keep_stage: false },
         exit_after_stage: None,
     },
