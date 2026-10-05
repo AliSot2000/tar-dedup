@@ -65,11 +65,19 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         debug_assert!(input_dir.absolute_path.clean() == input_dir.absolute_path,
                       "Path should be minimal");
 
+        // INFO: Check needed because source assumes everything serializes correctly!
+        if let Some(_) = no_treat_path(&rt, &input_dir.original_path, "input-dir-org") {
+            continue
+        };
+        if let Some(_) = no_treat_path(&rt, &input_dir.absolute_path, "input-dir-abs") {
+            continue
+        };
+
         let source_id = rt.db.add_get_source(
             &input_dir.absolute_path,
             "--input-dir",
             Some(index as u64),
-            Some(&input_dir.original_path),
+            &input_dir.original_path,
             SourceFlags::default().with(SourceFlag::IsDirectory, true),
         )?;
         handle_dir(&rt, &sub_bar, source_id, &input_dir.absolute_path,
@@ -176,11 +184,19 @@ fn handle_from_files_line<P: AsRef<Path>>(
         }
     }
 
+    // INFO: Check needed because source assumes everything serializes correctly!
+    if let Some(_) = no_treat_path(&rt, &fpath.clean(), "line-from-stdin") {
+        return Ok(())
+    };
+    if let Some(_) = no_treat_path(&rt, &abs_path, "conv-abs-from-stdin") {
+        return Ok(())
+    };
+
     let source_id = rt.db.add_get_source(
         &abs_path,
         &format!("--files-from={from_files_disp_path}"),
         Some(line as u64),
-        Some(&fpath.clean()),
+        &fpath.clean(),
         SourceFlags::default().with(SourceFlag::IsDirectory, abs_path.is_dir()),
     )?;
     handle_dir(&rt, &sub_bar, source_id, &abs_path, processed, recorder)?;
@@ -666,5 +682,18 @@ pub fn inner_file_type(meta: &Metadata, path: &Path, enc_err: &mut Vec<FileStatE
             });
             t
         }
+    }
+}
+
+/// Perform equivalent of transpose. Has a warning for Ok(None).
+/// Warning generated is `Skipping non-UTF-8 {path_type}-path`
+pub fn no_treat_path(rt: &ArchiveRTArgs, path: &Path, path_type: &str) -> Option<Result<()>> {
+    match path.to_utf8(rt.config.process.relax_utf8) {
+        Ok(Some(_)) => None,
+        Ok(None) => {
+            tracing::warn!("Skipping non-UTF-8 {path_type}-path: {}", path.to_string_lossy());
+            Some(Ok(()))
+        }
+        Err(e) => Some(Err(e)),
     }
 }
