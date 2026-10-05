@@ -131,7 +131,7 @@ pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result
 
     for row in rows {
         insert.execute(named_params! {
-            ":abs_path": row.abs_path.to_string_lossy().as_ref(),
+            ":abs_path": require_utf8(&row.abs_path)?,
             ":file_id": row.file_id.map(|id| id.0),
             ":flags": row.flags.to_i64(),
         }).to_panic()?;
@@ -141,7 +141,7 @@ pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result
     for row in rows {
         let id: i64 = conn.query_row(
             "SELECT id FROM out_tree WHERE abs_path = :abs_path",
-            named_params! { ":abs_path": row.abs_path.to_string_lossy().as_ref() },
+            named_params! { ":abs_path": require_utf8(&row.abs_path)? },
             |r| r.get(0),
         ).to_panic()?;
         ids.push(OutTreeId(id));
