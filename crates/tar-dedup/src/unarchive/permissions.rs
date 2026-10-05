@@ -78,7 +78,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     }
 
     // Directories, only when `--overwrite-dir` is requested.
-    if rt.config.attributes.force_overwrite_dir {
+    if !rt.config.attributes.no_overwrite_dir {
         process_batches(&rt, &mut recorder, &ps, true)?;
     }
 
@@ -188,6 +188,7 @@ fn process_batches_dirs(
     ps: &OwnerGroupMode)
     -> Result<()> {
     batched_loop(
+        // TODO: bool to only return directories which are not excluded.
         |bs| rt.db.list_out_tree_for_permissions_dirs::<FileRecord>(bs),
         BATCH_SIZE,
         |entries| {
