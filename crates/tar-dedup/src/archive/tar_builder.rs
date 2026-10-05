@@ -71,7 +71,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // Batched queue of staged canonicals in packing order; the ordering table
     // survives interrupts so a resume repopulate is a no-op for queued rows.
     rt.db.create_archive_queue()?;
-    rt.db.populate_archive_queue(false)?; // sort_by_name hard-coded false for now
+    rt.db.populate_archive_queue(false)?; // TODO add the user
     let to_archive = rt.db.count_files_in_phase(FilePhase::Staged)?;
     if to_archive == 0 && already_archived == 0 {
         tracing::warn!("no staged files to archive");
