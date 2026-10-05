@@ -67,9 +67,9 @@ pub fn add_get_source(
 pub fn find_overlapping_source(
     conn: &Connection,
     abs_path: &Path,
-    no_recursion: bool,
-) -> Result<Option<(i64, PathBuf)>> {
-    let path_str = abs_path.to_string_lossy();
+    no_recursion: bool)
+    -> Result<Option<(i64, PathBuf)>> {
+    let path_str = require_utf8(abs_path)?;
     let dir_bit = SourceFlag::IsDirectory.mask_i64();
     let overlap = if no_recursion {
         "rtrim(abs_path, '/') = rtrim(:path, '/')"
@@ -86,7 +86,7 @@ pub fn find_overlapping_source(
              LIMIT 1"
         ),
         named_params! {
-            ":path": path_str.as_ref(),
+            ":path": path_str,
             ":dir_bit": dir_bit,
         },
         |row| Ok((row.get(0)?, PathBuf::from(row.get::<_, String>(1)?))),
