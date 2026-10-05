@@ -149,19 +149,7 @@ mod tests {
 
     fn conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE source (
-                id INTEGER PRIMARY KEY,
-                source TEXT NOT NULL,
-                abs_path TEXT NOT NULL,
-                original_path TEXT,
-                line INTEGER,
-                flags INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX idx_source_dirs ON source(abs_path)
-            WHERE (flags & 1) != 0;",
-        )
-        .unwrap();
+        crate::db::schema::initialize(&conn).unwrap();
         conn
     }
 
