@@ -37,11 +37,13 @@
 - [ ] Sanity checks
 - [ ] add cli arg for shards (use_shars, max_shard_size)
 - [ ] add cli arg for debug-feat ordering-override (don't use custom ordering. order by files(id))
+- [ ] add cli arg for ordering (ext, filename, file_size, id / ext, file_size, id)
 - [ ] add cli arg batch_size, flush_size, ... (override the defaults from config.)
 - [ ] add cli arg for log level
 - [ ] add cli arg for the disabling the per thread progress or all progress.
 - [ ] add cli arg for force
-- [ ] add cli arg for force utf-8
+- [ ] add cli arg for relax-utf8
+- [ ] add cli file name sorting to archive generaetion
 - [X] correct tracing (
             tracing::error - major fail (file not found, not removed, dir not created, ... something contentswise is not there the way we wanted)
             tracing::warning - minor fail (failed to remove a stage, metadata failed, recording errors failed, ...)
