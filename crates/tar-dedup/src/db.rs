@@ -115,7 +115,7 @@ impl Database {
         abs_path: &Path,
         source_kind: &str,
         line: Option<u64>,
-        original_path: Option<&Path>,
+        original_path: &Path,
         flags: SourceFlags,
     ) -> Result<i64> {
         source::add_get_source(
