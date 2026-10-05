@@ -70,6 +70,9 @@ pub struct ProcessOptions {
     pub no_errors: bool,
     /// Force: continue even if the tool cannot guarantee the integrity of the data.
     pub force: bool,
+    /// Skip entries whose path cannot be represented as UTF-8 (warn + continue).
+    /// TODO cli: `--relax-utf8`, mutually exclusive with `--fail-fast` (validated in try_from).
+    pub relax_utf8: bool,
     pub cleanup: CleanupSettings,
     pub exit_after_stage: Option<ExitAfterStage>,
 }
