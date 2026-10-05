@@ -26,14 +26,14 @@
 - [X] Resume
 - [X] Filter on extract
 - [X] All Metadata flag.
-- [ ] Force utf8 (any non-utf8 string panics and aborts.)
+- [X] Force utf8 (any non-utf8 string panics and aborts.)
 
 # Final remainder
 - [X] Sparse writer
 - [X] force_write_dir
 - [X] move force boolean to process
 - [X] skip dedup
-- [ ] force utf-8
+- [X] force utf-8
 - [ ] Sanity checks
 - [ ] add cli arg for shards (use_shars, max_shard_size)
 - [ ] add cli arg for debug-feat ordering-override (don't use custom ordering. order by files(id))
@@ -42,7 +42,7 @@
 - [ ] add cli arg for the disabling the per thread progress or all progress.
 - [ ] add cli arg for force
 - [ ] add cli arg for force utf-8
-- [ ] correct errors (
+- [ ] correct tracing (
             tracing::error - major fail (file not found, not removed, dir not created, ... something contentswise is not there the way we wanted)
             tracing::warning - minor fail (failed to remove a stage, metadata failed, recording errors failed, ...)
             tracing::info - general update (x number of files processed this session. y number of errors etc, ...)
@@ -51,7 +51,7 @@
 - [ ] finish the readme
 - [ ] publish to crates.io
 - [ ] publish to gh releases
-- [ ]publish to flatpak
+- [ ] publish to flatpak
 
 ## General:
 - [ ] Testing
