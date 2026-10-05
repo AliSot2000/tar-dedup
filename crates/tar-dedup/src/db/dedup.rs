@@ -683,8 +683,8 @@ pub fn promote_hash_mode_to_dedup(conn: &mut Connection, eager_filter: bool) -> 
 pub fn promote_none_mode_to_dedup(
     conn: &mut Connection,
     eager_filter: bool,
-    detect_hardlinks: bool,
-) -> Result<u64> {
+    detect_hardlinks: bool)
+    -> Result<u64> {
     let tx = conn.transaction().to_panic()?;
     let candidates = dedup_eligible_where(eager_filter);
     let n = if detect_hardlinks {
