@@ -252,7 +252,8 @@ impl ExtractConfig {
         } // TODO warn if page size given but ignored.
 
         // TODO clean_target and one_top_level IS NONE => warning, no effect.
-        // TODO force_overwrite_dir
+        // TODO force_overwrite_dir and no_overwrite_dir
+
 
         // Extract default: apply nothing. `--apply-all-metadata` flips the whole
         // group on; per-bit `--x`/`--no-x` override on top (explicit wins).
