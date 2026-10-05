@@ -14,6 +14,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         true => FilePhase::Inventoried,
         false => FilePhase::Hashed,
     };
+    let eligible = rt.db.count_files_in_phase(previous_phase)?;
+    tracing::info!(
+        "starting filter: total {}, processing {}, pending {}",
+        rt.db.count_entries()?,
+        eligible,
+        eligible,
+    );
     joint_filter_phase(
         !rt.config.indexing.no_hardlink_detection,
         rt.config.filter.anchored,

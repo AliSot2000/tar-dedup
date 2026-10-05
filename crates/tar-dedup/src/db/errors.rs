@@ -203,6 +203,26 @@ pub fn count_records(
     Ok(n as u64)
 }
 
+/// Count error rows for a phase, or all phases when `phase` is `None`. Whole-run
+/// by design: a resume recounts (accepted — the number anchors every end line).
+pub fn count_errors(conn: &Connection, phase: Option<&str>) -> Result<u64> {
+    match phase {
+        None => {
+            let n: i64 = conn.query_row("SELECT COUNT(*) FROM errors", [], |r| r.get(0))
+                .to_panic()?;
+            Ok(n as u64)
+        }
+        Some(phase) => {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM errors WHERE phase = :phase",
+                named_params! { ":phase": phase },
+                |r| r.get(0),
+            ).to_panic()?;
+            Ok(n as u64)
+        }
+    }
+}
+
 /// Build SQL fragments (SQLite booleans + bits are inlined as integer literals).
 fn build_filters(scope: ErrorScope, reemit: Option<(bool, i64)>) -> (String, String) {
     let bits = scope.bits();

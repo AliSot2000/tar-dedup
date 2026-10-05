@@ -35,6 +35,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         rt.db.purge_entries()?;
     }
 
+    tracing::info!(
+        "starting inventory: total {}, processing {}, pending {}",
+        rt.db.count_entries()?,
+        total_sources,
+        total_sources,
+    );
+
     // TOOD dedent figure out.
     tracing::info!(dedent!("
         Inventory pass cannot be gracefully interrupted. \
@@ -140,9 +147,11 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     }
     // TODO: Add inspect with query for missing files.
     tracing::info!(
-        entries_processed = processed,
-        total_unique_entries = rt.db.count_entries()?,
-        "inventory indexed");
+        "inventory done: processed {} of {}, {} error(s)",
+        processed,
+        rt.db.count_entries()?,
+        rt.db.count_errors(Some("inventory"))?,
+    );
     let failed_implication = rt.db.count_id_implication()?;
     assert_eq!(failed_implication, 0, "INVARIANT FAILED: Number of files with username / groupname \
         set but not uid / gid set MUST be 0");
@@ -440,6 +449,7 @@ pub fn handle_entry(
     )? {
         *processed += 1;
         sub_bar.inc(1);
+        tracing::debug!("inventoried {}", path.display());
     }
 
     // Persist the accumulated per-file errors (xattr/ACL/SELinux/ftype/times/read-link).
@@ -538,6 +548,7 @@ pub fn handle_entry(
     )? {
         *processed += 1;
         sub_bar.inc(1);
+        tracing::debug!("inventoried {}", path.display());
         // TODO deal with the error vec!
     }
     Ok(())

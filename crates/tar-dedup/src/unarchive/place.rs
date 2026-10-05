@@ -35,14 +35,21 @@ use std::{fs, io};
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Place);
 
 // TODO
-//  Logging
 //  Rethink when we are pub and when private
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     debug_assert!(rt.db.placement_prologue_done()?,
                   "PRECONDITION FAILED: PlacementPrologue must complete before place");
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
     let progress = rt.progress;
-    progress.set_phase_total(rt.db.count_out_tree_rows()?);
+    let corpus = rt.db.count_out_tree_rows()?;
+    progress.set_phase_total(corpus);
+    let (ac, mc, ah, mh, ao, mo) = status_message_rebuilding(rt)?;
+    tracing::info!(
+        "starting place: total {}, processing {}, pending {}",
+        corpus,
+        ac + ah + ao,
+        mc + mh + mo,
+    );
     let capture_error = |rec: &mut Recorder, path: &PathBuf, iof: fn(&Path)
         -> io::Result<()>| {
         match iof(&path) {
@@ -81,21 +88,17 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         // Step 2, first copy files, then hardlink, then create other types
         // (symlinks, char-dev, block-dev, FIFO). Canonical election ran in
         // the PlacementPrologue phase.
-        let (_ac, _mc, _ah, _mh, _ao, _mo) = status_message_rebuilding(rt)?;
         materialize_files(rt, &mut recorder)?;
         materialize_hardlinks(rt, &mut recorder)?;
         materialize_others(rt, &mut recorder)?;
     }
-    let res = rt.db.apply_flags_to_files()?;
-    let (placed, ref_linked, conflict, removed, errored, skipped) = res;
+    let (placed, _ref_linked, _conflict, _removed, _errored, _skipped) =
+        rt.db.apply_flags_to_files()?;
     tracing::info!(
-        "Updated File Table:
-        {placed} of entries placed,
-        {ref_linked} of entries were copied using reflink,
-        {errored} of entries which encountered an error,
-        {skipped} of entries skipped due to a placement conflict.
-        {conflict} of entries encountered a conflict
-        {removed} of entries that attempted to remove before placeing the extracted file."
+        "place done: processed {} of {}, {} error(s)",
+        placed,
+        corpus,
+        rt.db.count_errors(Some("place"))?,
     );
 
     if !rt.config.process.cleanup.keep_stage {
@@ -615,7 +618,7 @@ fn materialize_one(
     bar: Option<&ProgressBar>)
     -> Option<MaterializeOutcome> {
     let stripped = w.canonical.to_stripped();
-    match kind {
+    let outcome = match kind {
         MaterializeKind::Files => {
             let target = &w.out;
             let id = w.canonical.content_id()
@@ -628,7 +631,8 @@ fn materialize_one(
                     id: target.id, placed: false, conflict, removed, used_copy: false,
                 })),
                 Ok((true, conflict, removed)) => {
-                    tracing::info!("Materializing to {}", target.abs_path.display());
+                    tracing::debug!("Materializing to {} ({})", target.abs_path.display(),
+                        stripped.ftype.as_str());
                     match copy_single_file(
                         target.id, &src, &target.abs_path, shutdown,
                         config.placement.no_reflink, bar) {
@@ -682,7 +686,19 @@ fn materialize_one(
                 },
             }
         }
+    };
+    match outcome {
+        Some(Ok(ref r)) if r.placed => {
+            tracing::debug!("placed {} ({})", w.out.abs_path.display(),
+                            stripped.ftype.as_str());
+        }
+        Some(Err((_idx, ref e @ Error::FileStat(_)))) => {
+            tracing::error!("place failed {} ({}): {}", w.out.abs_path.display(),
+                            stripped.ftype.as_str(), e);
+        }
+        _ => (),
     }
+    outcome
 }
 
 /// Function recreates all special files it can. Importantly, files, directories and unknown
@@ -694,7 +710,8 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
         FileType::Directory => panic!("PRECONDITION ERROR: build_other does not treat directories"),
         FileType::Unknown => panic!("PRECONDITION ERROR: build_other does not treat unknown"),
         FileType::Socket => {
-            tracing::info!("Received Socket at {}, skipping", &out_tree.abs_path.display());
+            tracing::debug!("Received Socket at {}, skipping ({})",
+                &out_tree.abs_path.display(), canonical.ftype.as_str());
             Ok(())
         }
         #[cfg(unix)]
@@ -1049,7 +1066,7 @@ pub fn build_path(
             // INFO: Raise; if fs fails here, almost guaranteed that extraction fails.
             capture_error(&prefix, |p: &Path| fs::remove_file(p))?;
             capture_error(&prefix, |p: &Path| fs::create_dir_all(p))?;
-            tracing::info!("Replaced symlink with dir at path: {printable}");
+            tracing::debug!("Replaced symlink with dir at path: {printable}");
             continue;
         }
 
@@ -1059,7 +1076,7 @@ pub fn build_path(
                 // INFO: Raise; if fs fails here, almost guaranteed that extraction fails.
                 capture_error(&prefix, |p: &Path| fs::remove_file(p))?;
                 capture_error(&prefix, |p: &Path| fs::create_dir_all(p))?;
-                tracing::info!("Replaced non-dir with dir at path: {printable}");
+                tracing::debug!("Replaced non-dir with dir at path: {printable}");
                 continue;
             } else {
                 return Err(Error::Config(format!(
@@ -1073,7 +1090,7 @@ pub fn build_path(
         if !prefix.exists() {
             // INFO: No further checks: no_create_dir is false
             capture_error(&prefix, |p: &Path| fs::create_dir_all(p))?;
-            tracing::info!("Replaced non-dir with dir at path: {printable}");
+            tracing::debug!("Replaced non-dir with dir at path: {printable}");
             continue;
         }
 
@@ -1105,7 +1122,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
     let file_metadata = match tgt.symlink_metadata() {
         Err(e) => {
             return if config.placement.silent_conflicts {
-                tracing::info!(
+                tracing::warn!(
                     "Leaving {}, could not assess conflict due to inaccessible file metadata",
                     tgt.display()
                 );
@@ -1126,7 +1143,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         let db_mtime = match rec.mtime {
             None => {
                 if !config.placement.silent_conflicts {
-                    tracing::info!(
+                    tracing::warn!(
                         "Leaving {}, could not assess conflict due to missing mtime in db",
                         tgt.display()
                     );
@@ -1139,7 +1156,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         let file_mtime = match res_mtime {
             Err(e) => {
                 return if config.placement.silent_conflicts {
-                    tracing::info!("Leaving {}, could not retrieve file mtime", tgt.display());
+                    tracing::warn!("Leaving {}, could not retrieve file mtime", tgt.display());
                     Ok((false, true, false))
                 } else {
                     Err(FileStatError::Io { path: tgt.to_path_buf(), source: e })
@@ -1157,7 +1174,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
                             message: "File is too old.".to_string(),
                         })
                     } else {
-                        tracing::info!("Could not extract to {}, file is too old.", tgt.display());
+                        tracing::warn!("Could not extract to {}, file is too old.", tgt.display());
                         Ok((false, true, false))
                     };
                 }
@@ -1170,7 +1187,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
                             message: "File is new old.".to_string(),
                         })
                     } else {
-                        tracing::info!("Could not extract to {}, file is too new.", tgt.display());
+                        tracing::warn!("Could not extract to {}, file is too new.", tgt.display());
                         Ok((false, true, false))
                     };
                 }
@@ -1184,7 +1201,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         Err((ft, failed_path, e)) => {
             // INFO: Error means ftype unknown. Can proceed, add error regardless
             if config.placement.silent_conflicts {
-                tracing::info!("Error while determining file type of {}. Got {}",
+                tracing::warn!("Error while determining file type of {}. Got {}",
                 tgt.display(), &e);
             } else {
                 return Err(FileStatError::Io{ path: failed_path, source: e })
@@ -1194,7 +1211,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
     };
     let remove = if ftype != rec.ftype {
         if config.placement.remove_and_replace {
-            tracing::info!("File type mismatch, expected {} got {}",
+            tracing::warn!("File type mismatch, expected {} got {}",
                 rec.ftype.as_str(), ftype.as_str());
             true
         } else {
@@ -1208,7 +1225,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
                     ),
                 })
             } else {
-                tracing::info!("File type mismatch, expected {} got {}",
+                tracing::warn!("File type mismatch, expected {} got {}",
                     rec.ftype.as_str(), ftype.as_str());
                 Ok((false, true, false))
             };
@@ -1222,7 +1239,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
             Ok(()) => Ok((true, true, true)),
             Err(e) => {
                 if config.placement.silent_conflicts {
-                    tracing::info!("Failed to remove preexisting path {} with error {}",
+                    tracing::warn!("Failed to remove preexisting path {} with error {}",
                         tgt.display(), e);
                     Ok((false, true, true))
                 } else {
