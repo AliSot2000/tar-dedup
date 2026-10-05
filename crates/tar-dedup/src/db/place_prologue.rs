@@ -1,3 +1,4 @@
+use crate::common::utf8::require_utf8;
 use crate::db::common::SqlFileRow;
 use crate::db::common::generate_archive_and_extract_filter;
 use crate::db::meta;
@@ -154,32 +155,21 @@ mod tests {
     use super::*;
     use crate::db::types::StrippedRecord;
 
-    /// Minimal `files` surface for `list_materialized_entries`: the StrippedRecord
-    /// columns plus the four filter-reason columns the gate reads.
+    /// Real schema — `list_materialized_entries` reads the StrippedRecord columns
+    /// plus the four filter-reason columns the gate uses.
     fn conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("
-            CREATE TABLE files (
-                id INTEGER PRIMARY KEY,
-                abs_path TEXT NOT NULL,
-                ext TEXT NOT NULL DEFAULT '',
-                size INTEGER NOT NULL DEFAULT 0,
-                sha1 BLOB,
-                mtime INTEGER, atime INTEGER, ctime INTEGER,
-                ftype TEXT NOT NULL,
-                canonical_id INTEGER,
-                flags INTEGER NOT NULL DEFAULT 0,
-                phase TEXT NOT NULL DEFAULT 'inventoried',
-                inode INTEGER,
-                dev INTEGER,
-                new_name TEXT,
-                include_reason_archive INTEGER NOT NULL DEFAULT 0,
-                exclude_reason_archive INTEGER NOT NULL DEFAULT 0,
-                include_reason_extract INTEGER NOT NULL DEFAULT 0,
-                exclude_reason_extract INTEGER NOT NULL DEFAULT 0
-            );
-        ",)
-            .unwrap();
+        crate::db::schema::initialize(&conn).unwrap();
+        // Internal include sentinel referenced by `files.include_reason_*` (-1).
+        for table in ["archive", "extract"] {
+            conn.execute(
+                &format!(
+                    "INSERT OR IGNORE INTO filter_reason_{table} (id, source, line, expression) \
+                     VALUES (-1, 'internal', NULL, '.*')"
+                ),
+                [],
+            ).unwrap();
+        }
         conn
     }
 
@@ -188,8 +178,8 @@ mod tests {
     fn insert_row(conn: &Connection, id: i64, abs_path: &str, ftype: &str) {
         conn.execute(
             "INSERT INTO files \
-             (id, abs_path, ftype, ext, include_reason_archive, include_reason_extract) \
-             VALUES (:id, :abs_path, :ftype, '', -1, -1)",
+             (id, abs_path, ftype, ext, size, include_reason_archive, include_reason_extract) \
+             VALUES (:id, :abs_path, :ftype, '', 0, -1, -1)",
             named_params! {
                 ":id": id,
                 ":abs_path": abs_path,
@@ -199,6 +189,11 @@ mod tests {
     }
 
     fn exclude_extract(conn: &Connection, id: i64) {
+        conn.execute(
+            "INSERT OR IGNORE INTO filter_reason_extract (id, source, line, expression) \
+             VALUES (3, 'test', NULL, 'x')",
+            [],
+        ).unwrap();
         conn.execute(
             "UPDATE files SET exclude_reason_extract = 3 WHERE id = :id",
             named_params! { ":id": id },
