@@ -4,6 +4,7 @@ use crate::archive::ArchiveRTArgs;
 use crate::common::files::{determine_file_type, original_extension};
 #[cfg(windows)]
 use crate::common::files::get_file_times;
+use crate::common::utf8::PathText;
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::db::Recorder;
 use crate::db::flags::{ErrorFlags, SourceFlag, SourceFlags};
@@ -245,6 +246,17 @@ pub fn handle_entry_base(
     -> Result<()> {
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
 
+    // UTF-8 gate: strict aborts the run; `--relax-utf8` skips the entry (warn +
+    // lossy report) so non-UTF-8 names never reach the database.
+    match path.to_utf8(rt.config.process.relax_utf8) {
+        Ok(Some(_)) => (),
+        Ok(None) => {
+            tracing::warn!("Skipping non-UTF-8 path: {}", path.to_string_lossy());
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    }
+
     // Preflight: already inventoried — attach this source without restatting.
     if let Some(file_id) = rt.db.file_id_by_abs_path(path)? {
         rt.db.add_ref(source_id, file_id)?;
@@ -369,6 +381,22 @@ pub fn handle_entry(
             Ok(md) => Some(md),
         }
     } else { None };
+
+    // Guard the link_dst path
+    if let Some(dst) = link_dst.as_ref() {
+        match dst.to_utf8(rt.config.process.relax_utf8) {
+            Ok(Some(_)) => (),
+            Ok(None) => {
+                tracing::warn!(
+                    "Skipping non-UTF-8 link target: {} for symlink {}",
+                    dst.to_string_lossy(),
+                    path.to_string_lossy()
+                );
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        }
+    }
 
     if rt.db.insert_file_and_ref(
         source_id,

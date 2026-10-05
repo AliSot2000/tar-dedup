@@ -1,3 +1,4 @@
+use crate::common::utf8::require_utf8;
 use crate::config::RuntimeState;
 use crate::db::common::with_transaction;
 use crate::db::flags::ErrorFlags;
@@ -16,7 +17,7 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhas
 pub fn file_id_by_abs_path(conn: &Connection, path: &Path) -> Result<Option<FileId>> {
     conn.query_row(
         "SELECT id FROM files WHERE abs_path = :abs_path",
-        named_params! { ":abs_path": path.to_string_lossy() },
+        named_params! { ":abs_path": require_utf8(path)? },
         |row| row.get(0).map(FileId),
     )
     .optional()
@@ -34,6 +35,11 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
                      record.abs_path.to_path_buf().clean(),
                      "Paths must be normalized to enter the db");
 
+    let link_dst: Option<String> = match record.link_dst.as_ref() {
+        Some(p) => Some(require_utf8(p)?),
+        None => None,
+    };
+
     let changed = conn.execute(
         "INSERT OR IGNORE INTO files (
              abs_path, ext, size, mtime, atime, ctime, uid, gid, mode, ftype,
@@ -45,7 +51,7 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
              :win_perm
          )",
         named_params! {
-            ":abs_path": record.abs_path.to_string_lossy(),
+            ":abs_path": require_utf8(&record.abs_path)?,
             ":ext": record.ext.as_str(),
             ":size": record.size,
             ":mtime": record.mtime.as_ref().map(|t| t.to_rfc3339()),
@@ -58,10 +64,7 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
             ":xattr": record.xattrs.as_deref(),
             ":acl": record.posix_acl.as_deref(),
             ":selinux": record.selinux_ctx.as_deref(),
-            ":link_dst": record
-                .link_dst
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned()),
+            ":link_dst": link_dst,
             ":inode": record.inode_id.map(|v| v as i64),
             ":dev": record.device_id.map(|v| v as i64),
             ":major": record.major.map(|v| v as i64),
