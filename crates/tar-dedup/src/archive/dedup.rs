@@ -569,6 +569,7 @@ mod tests {
                 fail_fast: false,
                 no_errors: false,
                 force: false,
+                relax_utf8: false, // TODO cli
                 cleanup: CleanupSettings { keep_db: false, keep_stage: false },
                 exit_after_stage: None,
             },
