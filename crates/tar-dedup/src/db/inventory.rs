@@ -280,11 +280,11 @@ mod tests {
         let db = Database::open(&dir.path().join("t.sqlite")).unwrap();
         let s1 = db
             .add_get_source(Path::new("/root-a"), "--input-dir", Some(0),
-                            Some(Path::new("/root-a")), dir_flags())
+                            Path::new("/root-a"), dir_flags())
             .unwrap();
         let s2 = db
             .add_get_source(Path::new("/root-b"), "--input-dir", Some(1),
-                            Some(Path::new("/root-b")), dir_flags())
+                            Path::new("/root-b"), dir_flags())
             .unwrap();
         let rec = record("/shared/file.txt");
         assert!(db.insert_file_and_ref(s1, &rec).unwrap());
