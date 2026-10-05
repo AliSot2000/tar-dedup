@@ -309,6 +309,7 @@ fn hash_file(path: &Path, buf: &mut Vec<u8>, shutdown: &Shutdown, pb: Option<&Pr
 mod tests {
     use super::*;
     use crate::common::files::original_extension;
+    use crate::common::utf8::require_utf8;
     use crate::config::ExtractConfig;
     use crate::db::Database;
     use crate::db::flags::FileFlag;
@@ -451,7 +452,7 @@ mod tests {
                      include_reason_extract, exclude_reason_extract, flags, canonical_id) \
                      VALUES (:abs, '.bin', 0, 'file', 'extract_filtered', :sha1, -1, 0, -1, 0, :flag, :canon)",
                     named_params! {
-                        ":abs": seed_path.to_string_lossy().into_owned(),
+                        ":abs": require_utf8(&seed_path)?,
                         ":sha1": [7u8; 20].as_slice(),
                         ":flag": FileFlag::FileExtracted.mask_i64(),
                         ":canon": canonical.0,
@@ -474,7 +475,7 @@ mod tests {
                      include_reason_extract, exclude_reason_extract, flags) \
                      VALUES (:abs, '.bin', 0, 'dir', 'extract_filtered', -1, 0, -1, 0, 0)",
                     named_params! {
-                        ":abs": seed_path.to_string_lossy().into_owned(),
+                        ":abs": require_utf8(&seed_path)?,
                     },
                 ).expect("insert non-file");
                 Ok(())
