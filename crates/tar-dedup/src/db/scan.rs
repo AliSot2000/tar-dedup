@@ -195,11 +195,13 @@ pub fn count_non_appended_by_ftype(conn: &Connection) -> Result<Vec<(String, u64
          ORDER BY ft",
         crate::db::common::generate_archive_filter(None),
     )).to_panic()?;
-    let rows = stmt.query_map(named_params! { ":bit": bit }, |row| {
-        Ok((
-            row.get::<_, String>("ft")?,
-            row.get::<_, i64>("count")? as u64,
-        ))
+    let rows = stmt.query_map(
+        named_params! { ":bit": bit },
+        |row| {
+            Ok((
+                row.get::<_, String>("ft")?,
+                row.get::<_, i64>("count")? as u64,
+            ))
     }).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
