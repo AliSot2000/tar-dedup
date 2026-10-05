@@ -350,6 +350,7 @@ impl ExtractConfig {
                 io_jobs,
                 fail_fast: args.fail_fast,
                 no_errors: args.no_errors,
+                force: true, // TODO cli
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
                 exit_after_stage: None,
             },
@@ -422,6 +423,7 @@ impl ExtractConfig {
                 io_jobs: jobs,
                 fail_fast: false,
                 no_errors: false,
+                force: true, // TODO cli
                 cleanup: CleanupSettings { keep_db: false, keep_stage: false },
                 exit_after_stage: None,
             },
@@ -494,6 +496,7 @@ impl ExtractConfig {
                 io_jobs: 1,
                 fail_fast: false,
                 no_errors: false,
+                force: true, // TODO cli
                 cleanup: CleanupSettings { keep_db: false, keep_stage: false },
                 exit_after_stage: None,
             },
@@ -647,6 +650,7 @@ const DEFAULT_CONFIG: ExtractConfig = ExtractConfig {
         io_jobs: 0,
         fail_fast: false,
         no_errors: false,
+        force: false,
         cleanup: CleanupSettings { keep_db: false, keep_stage: false },
         exit_after_stage: None,
     },
