@@ -68,6 +68,8 @@ pub struct ProcessOptions {
     pub io_jobs: usize,
     pub fail_fast: bool,
     pub no_errors: bool,
+    /// Force: continue even if the tool cannot guarantee the integrity of the data.
+    pub force: bool,
     pub cleanup: CleanupSettings,
     pub exit_after_stage: Option<ExitAfterStage>,
 }
