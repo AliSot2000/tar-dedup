@@ -21,6 +21,8 @@ use super::{
 };
 use crate::config::FilterOptions;
 
+// TODO check all paths for clean, and utf-8 compliance!
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacementOptions {
     pub absolute_names: bool,

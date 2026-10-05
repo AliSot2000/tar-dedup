@@ -15,6 +15,8 @@ use super::{
     default_archive_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_dir, validate_file,
 };
 
+// TODO check all paths for clean, and utf-8 compliance!
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputOptions {
     pub input_dirs: Vec<PathSource>,
