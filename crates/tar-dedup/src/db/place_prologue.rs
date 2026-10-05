@@ -47,47 +47,47 @@ pub fn list_materialized_entries<R: SqlFileRow>(
         ""
     };
 
-    let sql = match source_id {
-        Some(_) => {
+    let (sql, params) = match source_id {
+        Some(sid) => {
             let filter_included_exclude = generate_archive_and_extract_filter(Some("f"));
-            &format!("
-                SELECT {columns}
-                FROM files f
-                WHERE f.id > :last_id
-                    AND {filter_included_exclude}
-                    AND f.id IN (SELECT file_id FROM ref WHERE source_id = :source_id)
-                    {filter_dir}
-                    {filter_new_name}
-                ORDER BY f.id
-                LIMIT :batch_size"
-            )
+            (
+                format!("
+                    SELECT {columns}
+                    FROM files f
+                    WHERE f.id > :last_id
+                        AND {filter_included_exclude}
+                        AND f.id IN (SELECT file_id FROM ref WHERE source_id = :source_id)
+                        {filter_dir}
+                        {filter_new_name}
+                    ORDER BY f.id
+                    LIMIT :batch_size"
+            ),
+                 named_params! {
+                     ":last_id": last_id.0,
+                     ":source_id": sid.clone(),
+                     ":batch_size": batch_size,
+            })
         },
         None => {
             let filter_include_exclude = generate_archive_and_extract_filter(Some("f"));
-            &format!("
-                SELECT {columns}
-                FROM files f
-                WHERE f.id > :last_id
-                    AND {filter_include_exclude}
-                    {filter_dir}
-                    {filter_new_name}
-                ORDER BY f.id
-                LIMIT :batch_size"
-            )
-        },
-    };
-    let mut stmt = conn.prepare(sql).to_panic()?;
-    let params = match source_id {
-        Some(sid) => named_params! {
+            (
+                format!("
+                    SELECT {columns}
+                    FROM files f
+                    WHERE f.id > :last_id
+                        AND {filter_include_exclude}
+                        {filter_dir}
+                        {filter_new_name}
+                    ORDER BY f.id
+                    LIMIT :batch_size"
+            ),
+                named_params! {
                     ":last_id": last_id.0,
-                    ":source_id": sid.clone(),
                     ":batch_size": batch_size,
-        },
-        None => named_params! {
-            ":last_id": last_id.0,
-            ":batch_size": batch_size,
+            })
         },
     };
+    let mut stmt = conn.prepare(&sql).to_panic()?;
     let rows = stmt.query_map(
         params,
         |r| R::from_row(r, Some("f"))).to_panic()?;
