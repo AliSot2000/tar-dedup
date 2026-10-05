@@ -1,6 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, named_params};
 use std::path::{Path, PathBuf};
 
+use crate::common::utf8::require_utf8;
 use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::types::SourceRecord;
 use crate::error::{Result, ToPanic};
@@ -29,18 +30,19 @@ pub fn add_get_source(
     abs_path: &Path,
     source: &str,
     line: Option<u64>,
-    original_path: Option<&Path>,
+    original_path: &Path,
     flags: SourceFlags)
     -> Result<i64> {
-    let path_str = abs_path.to_string_lossy();
+    let path_str = require_utf8(abs_path)?;
+    let org_path = require_utf8(original_path)?;
     conn.execute(
         "INSERT OR IGNORE INTO source (source, abs_path, line, original_path, flags) \
         VALUES (:source, :abs_path, :line, :org_path, :flags)",
         named_params! {
             ":source": source,
-            ":abs_path": path_str.as_ref(),
+            ":abs_path": path_str,
             ":line": line,
-            ":org_path": original_path.map(|p| p.to_string_lossy()),
+            ":org_path": org_path,
             ":flags": flags.to_i64(),
         },
     ).to_panic()?;
@@ -48,7 +50,7 @@ pub fn add_get_source(
         "SELECT id FROM source WHERE source = :source AND abs_path = :path AND line = :line",
         named_params! {
             ":source": source,
-            ":path": path_str.as_ref(),
+            ":path": path_str,
             ":line": line,
         },
         |row| row.get(0),
@@ -169,7 +171,7 @@ mod tests {
             Path::new(path),
             "--input-dir",
             Some(0),
-            None,
+            Path::new(path),
             SourceFlags::default().with(SourceFlag::IsDirectory, true),
         )
         .unwrap();
@@ -181,7 +183,7 @@ mod tests {
             Path::new(path),
             "--files-from=x",
             Some(line),
-            None,
+            Path::new(path),
             SourceFlags::default(),
         )
         .unwrap();
