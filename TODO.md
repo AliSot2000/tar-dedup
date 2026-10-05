@@ -42,7 +42,7 @@
 - [ ] add cli arg for the disabling the per thread progress or all progress.
 - [ ] add cli arg for force
 - [ ] add cli arg for force utf-8
-- [ ] correct tracing (
+- [X] correct tracing (
             tracing::error - major fail (file not found, not removed, dir not created, ... something contentswise is not there the way we wanted)
             tracing::warning - minor fail (failed to remove a stage, metadata failed, recording errors failed, ...)
             tracing::info - general update (x number of files processed this session. y number of errors etc, ...)
