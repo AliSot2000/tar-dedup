@@ -123,7 +123,10 @@ verify_after_phase(&rt, state.phase)?;   // new
 
 // archive.rs
 fn verify_after_phase(rt: &ArchiveRTArgs, phase: PipelinePhase) -> Result<()> {
-    rt.db.integrity_check_after_archive(&archive_gate(rt.config), phase)
+    let gate = ArchiveGate { eager_filter, detect_hardlinks, sparsify, min_pages };
+    let bar = rt.progress.begin_integrity(archive_phase_check_count(&gate, phase));
+    let tick = || bar.inc(1);
+    rt.db.integrity_check_after_archive(&gate, phase, Some(&tick))
 }
 
 // unarchive.rs — after the ScanTar arm returns the db, and after each later arm:
@@ -131,20 +134,44 @@ verify_after_phase(&rt, state.phase)?;   // new
 
 // unarchive.rs
 fn verify_after_phase(rt: &ExtractRTArgs, phase: ExtractPipelinePhase) -> Result<()> {
-    rt.db.integrity_check_after_extract(rt.config, phase)
+    let bar = rt.progress.begin_integrity(extract_phase_check_count(rt.config, phase));
+    let tick = || bar.inc(1);
+    rt.db.integrity_check_after_extract(rt.config, phase, Some(&tick))
 }
 ```
 
 `check_after_extract_phase` internally calls the archive invariants (config-free
 subset) first, satisfying "the archive checks also apply during extraction".
 `Debug`/Release note: checks are always-on (not gated behind `debug_assertions`).
+Both aggregators take an optional `&dyn Fn()` progress callback fired once per
+completed check; `begin_integrity(total)` (progress.rs) draws the
+`integrity checks: {pos}/{len}` sub-bar during the battery, sized with
+`archive_phase_check_count` / `extract_phase_check_count` which mirror the exact
+gating of the aggregators.
+
+**Phase gating** (which checks are *established* by the completed phase):
+
+| Check | Runs when the completed phase is |
+|---|---|
+| A2, A3, A4 | every archive phase (+ extract) |
+| A1 | `Hash` or later in pipeline order (both modes) — **not** `Filter`, since in eager mode filter precedes hash |
+| A5 | `Dedup` or later |
+| A6 | `Sparsify` or later (only when the archive ran sparsify) |
+| A7, A8 | `Archive` |
+| E1, E2, E3 | every extract phase after scan |
+| E4 | `Rehash` or later (only when `scan.rehash`) |
+| E5, E6, E7 | `PlacementPrologue` or later |
+| E8a, E8b, E9 | `Place` or later |
+| E10 | `Permissions` (only in the toggled scope) |
 
 ## Tests (module-inline, real `schema::initialize`)
 
 In `integrity.rs` `#[cfg(test)]`, for each `count_*`:
 - clean DB → `== 0`;
 - one intentionally violating row → `== 1`;
-- aggregator panics on violation (`catch_unwind`).
+- aggregator panics on violation (`catch_unwind`);
+- `progress_ticks_match_phase_check_count` — the tick total equals the bar-length
+  count function per phase.
 
 Behavior-change tests:
 - B1: `promote_remaining_to_unarchived` flips only `archived` rows; scan end
