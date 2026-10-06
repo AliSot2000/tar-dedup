@@ -783,7 +783,9 @@ mod tests {
     use super::*;
     use crate::config::ExtractConfig;
     use crate::db::flags::FileFlag;
-    use crate::db::types::{FilePhase, FileRecord, FileType, NewFileRecord, StrippedRecord};
+    use crate::db::types::{
+        FileId, FilePhase, FileRecord, FileType, NewFileRecord, StrippedRecord,
+    };
 
     /// Catalog with one canonical regular file and one duplicate pointing at it,
     /// both `archived`, canonical flagged `AppendedPath`. Returns the member name.
@@ -931,6 +933,40 @@ mod tests {
         assert_eq!(state.last_member_index, 2);
         assert_eq!(state.snapshots_ingested, 1);
         assert!(!state.from_footer);
+    }
+
+    #[test]
+    fn scan_force_payload_failure_marks_error_flag_and_promotes() {
+        // B2: a failed payload copy under (hardcoded) --force records
+        // ErrorWhileExtracting and continues; B1 then blanket-promotes the
+        // leftover `archived` rows and records a session error.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, member) = build_archive(dir.path());
+        let db_path = config.paths.db_path();
+
+        // Sabotage the payload destination: a directory at the member path makes
+        // the cache copy fail (File::create on an existing dir).
+        let cache = config.paths.extract_cache_dir();
+        fs::create_dir_all(&cache).expect("cache dir");
+        fs::create_dir(cache.join(&member)).expect("sabotage member dst");
+
+        let db = run(&config, &db_path, &Shutdown::detached(),
+                     &mut Recorder::speculative(true),
+                     &mut Some(ParseFilterBuffer::default()),
+                     &crate::progress::ProgressBarSet::new(
+                         crate::progress::EXTRACT_MULTIPLIER))
+            .expect("scan completes under force");
+
+        // Row 1 is the canonical in `write_catalog`: tolerated, not extracted.
+        let rec = db.get_file_by_id::<StrippedRecord>(FileId(1))
+            .expect("get").expect("row exists");
+        assert!(rec.flags.get(FileFlag::ErrorWhileExtracting));
+        assert!(!rec.flags.get(FileFlag::FileExtracted));
+        // B1 blanket-promoted both leftover archived rows.
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("count"), 2);
+        assert_eq!(db.count_files_in_phase(FilePhase::Archived).expect("count"), 0);
+        // The leftover promote is recorded as a session error.
+        assert!(db.count_errors(Some("scan_tar")).expect("errors") >= 1);
     }
 
     #[test]
