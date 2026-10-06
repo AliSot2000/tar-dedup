@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-use crate::config::{ExtractRuntimeState, RuntimeState};
+use crate::config::{
+    ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, RuntimeState,
+};
 use crate::db::flags::{FileFlag, FileFlags, OutTreeFlag, OutTreeFlags, SourceFlags};
 use crate::db::types::{
     ArchiveSession, FileId, FilePhase, FilterExpression, NewFileRecord, NewOutTreeRow,
@@ -41,6 +43,9 @@ mod tar_writer;
 
 pub use common::SqlFileRow;
 pub use extract::ExtractScanState;
+pub use integrity::{
+    ArchiveGate, archive_phase_check_count, extract_phase_check_count,
+};
 pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
 use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
