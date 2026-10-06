@@ -17,6 +17,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+// TODO AGENT!!! update docstrings
 // Constants reused across the project that need to be coherent.
 
 /// Name for the first database that is added to an archive to record what was considered initially.
@@ -41,7 +42,7 @@ pub const DEFAULT_AUTO_FLUSH_LIMIT: u64 = 10_000;
 /// Kept modest: a worst-case [`crate::db::types::FileRecord`] (4 KiB xattr +
 /// acl + selinux blobs, ~1 KiB paths) is ~21 KiB, so 10_000 rows ≈ 210 MiB —
 /// safe even on a 4 GiB machine, where 100_000 rows would approach 2 GiB.
-pub const BATCH_SIZE: u64 = 10_000;
+pub const BATCH_SIZE: u64 = 1_024 * 16;
 
 // Producer/consumer pipeline bounds shared by every `send_receive_loop` phase
 // (hash, dedup, sparsify, rehash, place). Bounds are generous so big in-flight
@@ -49,13 +50,13 @@ pub const BATCH_SIZE: u64 = 10_000;
 // `DRAIN_CHUNK`-sized transactions.
 
 /// Items in the input (work) channel.
-pub const WORK_CAPACITY: usize = 10_000;
+pub const WORK_CAPACITY: usize = 1_024 * 16;
 /// Outcomes in the result channel.
-pub const OUT_CAPACITY: usize = 20_000;
+pub const OUT_CAPACITY: usize = 1_024 * 32;
 /// Rows pulled from the DB per feed round.
 pub const FEED_CHUNK: usize = 1_024;
 /// Outcomes committed per transaction.
-pub const DRAIN_CHUNK: usize = 5_000;
+pub const DRAIN_CHUNK: usize = 1_024 * 4;
 
 
 pub fn io_buffer() -> Vec<u8> {
