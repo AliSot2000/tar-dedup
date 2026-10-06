@@ -34,7 +34,8 @@ struct ScanRTState <'a> {
     pub progress: &'a  ProgressBarSet,
     pub pb: ProgressBar,
 }
-
+// TODO Agent: Create separate array to push files that failed into. That way we can set the flag
+//  when seeing a snapshot.
 // INFO: State Model for a File and its associated canonical row in the db:
 //    0. File seen in the stream
 //    1. File finished extracting successfully => FileExtracted = True
@@ -330,9 +331,28 @@ fn run_inner(
         }
     }
 
-    let paths = sdb.count_files_in_phase(FilePhase::Unarchived)?;
+    // B1: end-of-scan catch-all — every remaining `archived` row goes to
+    // `unarchived`. Leftovers (extracted-but-unconfirmed, never-extracted, or
+    // non-file entries) are a truncation/salvage signal; record the count as a
+    // session error so it cannot silently vanish, then blanket promote.
+    let remaining = sdb.count_files_in_phase(FilePhase::Archived)?;
+    if remaining > 0 {
+        tracing::info!(
+            "promoting {remaining} unconfirmed archived row(s) to unarchived"
+        );
+        record_session_error(
+            recorder,
+            FileStatError::general(
+                None,
+                format!("{remaining} archived row(s) promoted to unarchived without confirmation"),
+            ),
+        );
+        let promoted = sdb.promote_remaining_to_unarchived()?;
+        debug_assert_eq!(promoted, remaining, "promote count must match remaining");
+        flush_scan_recorder(recorder, Some(&sdb))?;
+    }
 
-    // TODO Promote all
+    let paths = sdb.count_files_in_phase(FilePhase::Unarchived)?;
 
     tracing::info!(
         "scan done: processed {} of {}, {} error(s)",
@@ -473,6 +493,19 @@ fn process_entry(
                 // Re-attach the destination path (copy helpers lose it) and record.
                 Err(Error::FileStat(FileStatError::Io { source, .. })) => {
                     record_file_scan_error(recorder, fid, FileStatError::copy_io(&entry_dst, &source));
+                    // B2: under `--force` a failed payload is tolerated — mark the
+                    // row `ErrorWhileExtracting` and move on; the missing-payload
+                    // report stays visible in the completeness pass.
+                    if rt.config.process.force {
+                        tracing::warn!(
+                            "failed to extract cache payload {}; continuing (--force)",
+                            entry_dst.display()
+                        );
+                        if let Some(ldb) = rt.db.as_ref() {
+                            ldb.set_file_flag(fid, FileFlag::ErrorWhileExtracting, true)?;
+                        }
+                        return Ok(());
+                    }
                     return Err(Error::io(&entry_dst, source));
                 }
                 Err(e) => return Err(e),
