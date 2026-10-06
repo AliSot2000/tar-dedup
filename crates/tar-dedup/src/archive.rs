@@ -116,7 +116,10 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
 
         enter_phase(&progress, &state.phase);
         match run_phase(&state.phase, &rt) {
-            Ok(()) => {exit_phase(&progress, &state.phase, &db)?}
+            Ok(()) => {
+                verify_after_phase(&rt, state.phase)?;
+                exit_phase(&progress, &state.phase, &db)?
+            }
             Err(Error::Interrupted) => {
                 db.save_runtime_state(&state)?;
                 if shutdown.is_force() {
@@ -234,6 +237,18 @@ fn enter_phase(progress: &ProgressBarSet, phase: &PipelinePhase) {
         PipelinePhase::Done => ("done", BarKind::Counter),
     };
     progress.begin_phase(phase.index(), name, kind);
+}
+
+/// Run the cross-phase integrity battery against the archive invariants after
+/// `phase` completed successfully. See `db/integrity.rs` and `plans/sanity-checks.md`.
+fn verify_after_phase(rt: &ArchiveRTArgs, phase: PipelinePhase) -> Result<()> {
+    let gate = crate::db::ArchiveGate {
+        eager_filter: rt.config.filter.eager_filter,
+        detect_hardlinks: !rt.config.indexing.no_hardlink_detection,
+        sparsify: rt.config.sparse.sparsify,
+        min_pages: rt.config.sparse.min_pages,
+    };
+    rt.db.integrity_check_after_archive(&gate, phase)
 }
 
 /// Handle cleanup or any post operation actions. Importantly, these actions should only be run,
