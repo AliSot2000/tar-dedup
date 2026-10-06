@@ -733,6 +733,10 @@ impl Database {
         scan::promote_extracted_to_unarchived(&*self.conn())
     }
 
+    pub fn promote_remaining_to_unarchived(&self) -> Result<u64> {
+        scan::promote_remaining_to_unarchived(&*self.conn())
+    }
+
     pub fn check_cached_payloads(&self, cache_dir: &Path) -> Result<(u64, u64)> {
         scan::check_cached_payloads(&mut *self.conn_mut(), cache_dir)
     }
@@ -1136,6 +1140,23 @@ impl Database {
     }
     pub fn count_missing_unix_infos(&self) -> Result<u64> {
         integrity::count_missing_unix_infos(&self.conn())
+    }
+    // --- cross-phase invariant battery (`plans/sanity-checks.md`) ---
+
+    /// Run the archive battery after a completed phase. `progress` fires once
+    /// per completed check (integrity counter bar); pass `None` to skip.
+    pub fn integrity_check_after_archive(
+        &self, gate: &ArchiveGate, phase: PipelinePhase,
+        progress: Option<&dyn Fn()>) -> Result<()> {
+        integrity::check_after_archive_phase(&self.conn(), gate, phase, progress)
+    }
+
+    /// Run the archive (config-free subset) + extract battery. `progress` fires
+    /// once per completed check (integrity counter bar); pass `None` to skip.
+    pub fn integrity_check_after_extract(
+        &self, config: &ExtractConfig, phase: ExtractPipelinePhase,
+        progress: Option<&dyn Fn()>) -> Result<()> {
+        integrity::check_after_extract_phase(&self.conn(), config, phase, progress)
     }
 }
 
