@@ -65,6 +65,19 @@ pub fn promote_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+/// End-of-scan catch-all: promote **every** remaining `archived` row to
+/// `unarchived` (extracted-but-unconfirmed, never-extracted, and non-file rows
+/// that stay `archived` today). Enables the strict `count_in_phase(Archived) == 0`
+/// post-scan invariant. The caller records the leftover count as a session error
+/// before calling this.
+pub fn promote_remaining_to_unarchived(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files SET phase = 'unarchived' WHERE phase = 'archived'",
+        [],
+    ).to_panic()?;
+    Ok(n as u64)
+}
+
 pub fn record_snapshot_ingested(conn: &mut Connection) -> Result<u32> {
     let mut scan = load_extract_scan_state(conn)?;
     scan.snapshots_ingested = scan.snapshots_ingested.saturating_add(1);
