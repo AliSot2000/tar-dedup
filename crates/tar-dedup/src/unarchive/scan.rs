@@ -314,12 +314,14 @@ fn run_inner(
     let trust_catalog = scan.from_footer || scan.saw_manifest_db || rt.config.process.force;
 
     // Check for any payloads that were extracted but somehow not recorded
-    // TODO should this be a panic?
     let (present, new) = sdb.check_cached_payloads(&rt.config.paths.extract_cache_dir())?;
-    if new > 0 {
+    if rt.config.process.force {
         tracing::warn!("Found {new} archive payload(s) which were not recorded as extracted.");
+    } else {
+        panic!("Found {new} archive payload(s) which were not recorded as extracted.");
     }
 
+    // TODO we cannot assert that we have all entries in the files table in 'archived' no?
     report_scan_completeness(&sdb, scan.from_footer, rt.config.process.force)?;
     if trust_catalog {
         let n = sdb.promote_extracted_to_unarchived()?;
