@@ -231,6 +231,10 @@ define_flags! {
         AppliedMetadata = 23,
         /// At least one error occurred while applying metadata
         ErrorWhileApplyingMetadata = 24,
+        /// Rehash verified the payload against the catalog `sha1` (digest matched).
+        /// Verdict flags are mutually exclusive on elected rows: exactly one of
+        /// `RehashMismatch` / `ErrorWhileRehashing` / `RehashVerified`.
+        RehashVerified = 25,
     }
     /// Bitset stored in `files.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

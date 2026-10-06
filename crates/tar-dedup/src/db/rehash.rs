@@ -197,6 +197,7 @@ pub fn ingest_rehash_outcome(
     for outcome in results.iter() {
         match outcome {
             RehashOutcome::Match(id) => {
+                assert_eq!(1, set_file_flag(&tx, *id, FileFlag::RehashVerified, true)?);
                 mark_phase(&tx, *id, FilePhase::Rehashed)?;
             }
             RehashOutcome::Mismatch(id) => {
@@ -392,11 +393,15 @@ mod tests {
         }
         let flags = FileFlag::RehashMismatch.mask_i64();
         let err_flag = FileFlag::ErrorWhileRehashing.mask_i64();
+        let ok_flag = FileFlag::RehashVerified.mask_i64();
         assert_eq!(row_flags(&conn, 1) & (flags | err_flag), 0);
+        assert_ne!(row_flags(&conn, 1) & ok_flag, 0, "match must set RehashVerified");
         assert_ne!(row_flags(&conn, 2) & flags, 0);
         assert_eq!(row_flags(&conn, 2) & err_flag, 0);
+        assert_eq!(row_flags(&conn, 2) & ok_flag, 0);
         assert_eq!(row_flags(&conn, 3) & flags, 0);
         assert_ne!(row_flags(&conn, 3) & err_flag, 0);
+        assert_eq!(row_flags(&conn, 3) & ok_flag, 0);
     }
 
     #[test]
