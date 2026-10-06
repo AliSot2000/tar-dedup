@@ -172,6 +172,15 @@ impl ProgressBarSet {
         bar
     }
 
+    /// Start a fraction bar for a self-contained step between phases (e.g. the
+    /// cross-phase integrity battery). `total` is the number of steps; advance
+    /// with `inc(1)` on the returned handle. Torn down with the phase bars.
+    pub fn begin_integrity(&self, total: u64) -> ProgressBar {
+        let bar = self.push_sub_bar("integrity checks: ", BarKind::Count);
+        bar.set_length(total);
+        bar
+    }
+
     /// Prepare a lazy per-thread bar pool for the current phase. Call once at the
     /// start of a parallel phase; bars are materialized on first use by each
     /// thread index (`thread_bar`) and torn down with [`Self::drop_thread_bars`]

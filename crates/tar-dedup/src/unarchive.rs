@@ -170,7 +170,9 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 /// the extract invariants) after `phase` completed. See `db/integrity.rs` and
 /// `plans/sanity-checks.md`.
 fn verify_after_phase(rt: &ExtractRTArgs, phase: ExtractPipelinePhase) -> Result<()> {
-    rt.db.integrity_check_after_extract(rt.config, phase)
+    let bar = rt.progress.begin_integrity(crate::db::extract_phase_check_count(rt.config, phase));
+    let tick = || bar.inc(1);
+    rt.db.integrity_check_after_extract(rt.config, phase, Some(&tick))
 }
 
 /// Map a phase to its global-bar anchor and swap in the matching phase bar.

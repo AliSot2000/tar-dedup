@@ -248,7 +248,9 @@ fn verify_after_phase(rt: &ArchiveRTArgs, phase: PipelinePhase) -> Result<()> {
         sparsify: rt.config.sparse.sparsify,
         min_pages: rt.config.sparse.min_pages,
     };
-    rt.db.integrity_check_after_archive(&gate, phase)
+    let bar = rt.progress.begin_integrity(crate::db::archive_phase_check_count(&gate, phase));
+    let tick = || bar.inc(1);
+    rt.db.integrity_check_after_archive(&gate, phase, Some(&tick))
 }
 
 /// Handle cleanup or any post operation actions. Importantly, these actions should only be run,
