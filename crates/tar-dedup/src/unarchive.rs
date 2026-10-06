@@ -138,6 +138,18 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
             ),
         }
 
+        // Cross-phase integrity battery after each completed phase (the Cleanup
+        // arm breaks out before this point). See `plans/sanity-checks.md`.
+        if let Some(edb) = db.as_ref() {
+            let rt = ExtractRTArgs {
+                config: &config,
+                db: edb,
+                shutdown: &shutdown,
+                progress: &progress,
+            };
+            verify_after_phase(&rt, state.phase)?;
+        }
+
         let Some(next) = state.phase.next() else {
             break;
         };
@@ -152,6 +164,13 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 
     tracing::info!("extracted to {}", config.paths.extraction_root().display());
     Ok(())
+}
+
+/// Run the cross-phase integrity battery (archive config-free subset first, then
+/// the extract invariants) after `phase` completed. See `db/integrity.rs` and
+/// `plans/sanity-checks.md`.
+fn verify_after_phase(rt: &ExtractRTArgs, phase: ExtractPipelinePhase) -> Result<()> {
+    rt.db.integrity_check_after_extract(rt.config, phase)
 }
 
 /// Map a phase to its global-bar anchor and swap in the matching phase bar.
