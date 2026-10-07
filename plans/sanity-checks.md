@@ -18,6 +18,10 @@ subset) during extraction.
 ## Behavior changes (prerequisites)
 
 ### B1 — scan promotes everything to `archived` → `unarchived`
+> **Superseded by `plans/scan-end-unarchived.md`** (2026-10-06): the blanket promote
+> became a principled end-of-scan gate with cause-bucketed remainders and a
+> force/panic split. Kept here for history.
+
 `unarchive/scan.rs::run_inner`, after `report_scan_completeness`: if any rows
 remain in `phase = 'archived'` (extracted-but-unconfirmed, never-extracted, or
 non-file rows that today stay `archived`), then:
