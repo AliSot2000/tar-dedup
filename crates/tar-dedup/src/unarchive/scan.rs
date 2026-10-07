@@ -2,7 +2,6 @@
 
 use crate::archive_footer::read_footer;
 use crate::common::files::copy_reader_batched;
-use crate::common::utf8::PathText;
 use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
@@ -239,12 +238,11 @@ fn run_inner(
             Ok(p) => p,
             Err(_) => continue,
         };
-        let name = match entry_name(&path, rt.config.process.relax_utf8) {
-            Ok(Some(n)) => n,
-            Ok(None) => {
-                tracing::warn!("Skipping non-UTF-8 tar member: {}", path.to_string_lossy());
-                continue;
-            }
+        // Member names MUST follow our convention (content id / catalog name) and
+        // hence be UTF-8. A non-UTF8 name is lossy-converted so that it provably
+        // fails `parse_content_id` and lands in the `(other, _)` reject arm below.
+        let name = match entry_name(&path) {
+            Ok(n) => n,
             Err(e) => {
                 record_session_error(recorder, e.to_file_stat(Some(&path)));
                 return Err(e);
@@ -265,6 +263,7 @@ fn run_inner(
         rt.progress.inc_both(1);
         scan.saw_any_members = true;
         scan.last_member_index = member_index;
+        scan.last_member_was_snapshot = name == SNAPSHOT_TAR_NAME;
     }
 
     if !scan.nt_stopped {
@@ -315,10 +314,13 @@ fn run_inner(
 
     // Check for any payloads that were extracted but somehow not recorded
     let (present, new) = sdb.check_cached_payloads(&rt.config.paths.extract_cache_dir())?;
-    if rt.config.process.force {
-        tracing::warn!("Found {new} archive payload(s) which were not recorded as extracted.");
-    } else {
-        panic!("Found {new} archive payload(s) which were not recorded as extracted.");
+    if new > 0 {
+        let msg = format!("Found {new} archive payload(s) which were not recorded as extracted.");
+        if rt.config.process.force {
+            tracing::warn!("{msg}");
+        } else {
+            panic!("{msg}");
+        }
     }
 
     // TODO we cannot assert that we have all entries in the files table in 'archived' no?
@@ -333,28 +335,60 @@ fn run_inner(
         }
     }
 
-    // B1: end-of-scan catch-all — every remaining `archived` row goes to
-    // `unarchived`. Leftovers (extracted-but-unconfirmed, never-extracted, or
-    // non-file entries) are a truncation/salvage signal; record the count as a
-    // session error so it cannot silently vanish, then blanket promote.
-    let remaining = sdb.count_files_in_phase(FilePhase::Archived)?;
-    if remaining > 0 {
+    // End-of-scan gate: every row must be `unarchived`, mirroring the archive
+    // pipeline's phase-end convention. The intentional extract-filter-excluded
+    // bucket (D) is promoted out first; the remaining rows (A/B/C) are real
+    // violations and are triaged with a precise breakdown (see
+    // `plans/scan-end-unarchived.md`).
+    let tally = sdb.tally_scan_remainders(rt.config.filter.eager_filter)?;
+    if tally.filter_excluded > 0 {
+        let promoted = sdb.promote_filter_excluded_remainders()?;
+        debug_assert_eq!(promoted, tally.filter_excluded);
         tracing::info!(
-            "promoting {remaining} unconfirmed archived row(s) to unarchived"
+            count = tally.filter_excluded,
+            "scan: {} file(s) excluded by the extract filter (not extracted by design)",
+            tally.filter_excluded
         );
-        record_session_error(
-            recorder,
-            FileStatError::general(
-                None,
-                format!("{remaining} archived row(s) promoted to unarchived without confirmation"),
-            ),
+    }
+
+    let violations = tally.violations();
+    if violations > 0 {
+        let last_member = if scan.last_member_was_snapshot {
+            "a snapshot.sqlite (possibly a mid-archive session checkpoint)"
+        } else {
+            "a non-snapshot member"
+        };
+        let msg = format!(
+            "INVARIANT VIOLATION after scan: {} row(s) not in 'unarchived':\n\
+             \x20 - {} file(s) never confirmed by a final snapshot/footer (still 'staged'; \
+             last tar member was {last_member}, from_footer={})\n\
+             \x20 - {} file(s) failed to extract their payload (ErrorWhileExtracting)\n\
+             \x20 - {} file(s) were marked as archived/added but their payload was not \
+             found in the archive stream\n\
+             Run with --force to proceed (affected files will be skipped).",
+            violations,
+            tally.staged,
+            scan.from_footer,
+            tally.extracting_err,
+            tally.missing_member,
         );
-        let promoted = sdb.promote_remaining_to_unarchived()?;
-        debug_assert_eq!(promoted, remaining, "promote count must match remaining");
-        flush_scan_recorder(recorder, Some(&sdb))?;
+        if rt.config.process.force {
+            tracing::warn!("{msg}");
+            record_session_error(recorder, FileStatError::general(None, msg));
+            let promoted = sdb.promote_scan_remainders()?;
+            debug_assert!(promoted >= violations, "promote count must cover the violations");
+            flush_scan_recorder(recorder, Some(&sdb))?;
+        } else {
+            panic!("{msg}");
+        }
     }
 
     let paths = sdb.count_files_in_phase(FilePhase::Unarchived)?;
+    debug_assert_eq!(
+        sdb.count_entries()?,
+        paths,
+        "INVARIANT ERROR: after the scan gate every row must be 'unarchived'"
+    );
 
     tracing::info!(
         "scan done: processed {} of {}, {} error(s)",
@@ -648,6 +682,7 @@ fn store_progress_in_db(rt: &ScanRTState, scan: &ExtractScanState) -> Result<()>
         // `None` sorts below every `Some`, so this keeps the furthest point reached.
         persisted.last_member_index = persisted.last_member_index.max(scan.last_member_index);
         persisted.from_footer |= scan.from_footer;
+        persisted.last_member_was_snapshot = scan.last_member_was_snapshot;
         // snapshots_ingested already updated via record_snapshot_ingested.
         d.save_extract_scan_state(&persisted)?;
         d.checkpoint()?;
@@ -754,22 +789,22 @@ fn open_initial_database(
 }
 
 /// Extract and sanitize the entry basename from a tar member path.
-/// `Ok(None)` marks a non-UTF-8 name that `--relax-utf8` allows skipping.
-fn entry_name(path: &Path, relax: bool) -> Result<Option<String>> {
+///
+/// Member names MUST follow the tar-dedup convention (a content id or a catalog
+/// name — both UTF-8); a non-UTF8 name is lossy-converted so that it provably
+/// fails `parse_content_id` and hits the `(other, _)` reject arm in `process_entry`.
+fn entry_name(path: &Path) -> Result<String> {
     let cleaned = path.clean();
     let file = cleaned.file_name();
     let name = match file {
-        Some(f) => f.to_utf8(relax)?,
+        Some(f) => f.to_string_lossy().into_owned(),
         None => return Err(Error::Config("invalid tar entry name".into())),
     };
-    if let Some(n) = name {
-        debug_assert!(
-            !(n.contains('/') || n.contains('\\') || n == ".." || n == "."),
-            "INVARIANT BROKEN: Entry Name contained an illegal character."
-        );
-        return Ok(Some(n));
-    }
-    Ok(None)
+    debug_assert!(
+        !(name.contains('/') || name.contains('\\') || name == ".." || name == "."),
+        "INVARIANT BROKEN: Entry Name contained an illegal character."
+    );
+    Ok(name)
 }
 
 //==================================================================================================
@@ -778,6 +813,7 @@ fn entry_name(path: &Path, relax: bool) -> Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
 
     use super::*;
@@ -884,6 +920,40 @@ mod tests {
         builder.append_data(&mut header, name, bytes).expect("append");
     }
 
+    /// Seed the joint include filter (id -1 = internal catch-all) in both tables
+    /// and pin the four reason columns for `id`.
+    fn seed_filter_reasons(db: &Database, id: FileId) {
+        db.with_transaction(|conn| {
+            for table in ["archive", "extract"] {
+                conn.execute(
+                    &format!(
+                        "INSERT OR IGNORE INTO filter_reason_{table} (id, source, line, expression) \
+                         VALUES (-1, 'internal', NULL, '.*')"
+                    ),
+                    [],
+                ).expect("seed internal include rule");
+            }
+            conn.execute(
+                "UPDATE files SET include_reason_archive = -1, exclude_reason_archive = 0, \
+                 include_reason_extract = -1, exclude_reason_extract = 0 WHERE id = :id",
+                rusqlite::named_params! { ":id": id.0 },
+            ).expect("set reason columns");
+            Ok(())
+        }).expect("filter seed tx");
+    }
+
+    /// A self-canonical regular file, `AppendedPath` (+`phase`) so the eager
+    /// extract gate and promotions treat it as an archived participant.
+    fn add_archived_canonical(db: &Database, abs_path: &str, sha: u8, phase: FilePhase) -> FileId {
+        let id = insert(db, abs_path, 4, FileType::File);
+        seed_filter_reasons(db, id);
+        db.update_file_inspection_per_id(id, [sha; 20], 0, false).expect("digest");
+        db.mark_self_canonical(id).expect("self canonical");
+        db.set_file_flag(id, FileFlag::AppendedPath, true).expect("appended");
+        db.mark_file_phase(id, phase).expect("phase");
+        id
+    }
+
     /// `manifest.sqlite`, one payload, `snapshot.sqlite` — an uncompressed archive.
     fn build_archive(dir: &Path) -> (ExtractConfig, String) {
         let catalog = dir.join("catalog.sqlite");
@@ -902,6 +972,97 @@ mod tests {
             dir.join("work"),
             dir.join("out"),
         );
+        (config, member)
+    }
+
+    /// Multi-session counter-example: the last tar member IS a snapshot, but it
+    /// is a mid-archive checkpoint that only confirms the first candidate. The
+    /// second candidate never appears in any snapshot → stays `staged` while
+    /// `last_member_was_snapshot == true`.
+    fn archive_with_partial_snapshot(dir: &Path) -> (ExtractConfig, String) {
+        let catalog = dir.join("catalog.sqlite");
+        let db = Database::open(&catalog).expect("open catalog");
+        let c1 = add_archived_canonical(&db, "/one.txt", 7, FilePhase::Staged);
+        let c2 = add_archived_canonical(&db, "/two.txt", 8, FilePhase::Staged);
+        let member = db.get_file_by_id::<FileRecord>(c1)
+            .expect("get").expect("row").tar_member_name().expect("content id");
+        // Both payloads ARE in the stream — only the confirmation snapshot is
+        // partial (session-1 checkpoint), so the second candidate stays `staged`
+        // with its payload extracted.
+        let member2 = db.get_file_by_id::<FileRecord>(c2)
+            .expect("get").expect("row").tar_member_name().expect("content id");
+        db.checkpoint().expect("checkpoint");
+        drop(db);
+
+        // The in-stream snapshot only lists `/one.txt` (session-1 checkpoint).
+        let snap_path = dir.join("snapshot.sqlite");
+        let snap = Database::open(&snap_path).expect("open snapshot");
+        let s1 = insert(&snap, "/one.txt", 4, FileType::File);
+        seed_filter_reasons(&snap, s1);
+        snap.update_file_inspection_per_id(s1, [7u8; 20], 0, false).expect("digest");
+        snap.mark_self_canonical(s1).expect("self canonical");
+        snap.mark_file_phase(s1, FilePhase::Archived).expect("phase");
+        snap.checkpoint().expect("checkpoint");
+        drop(snap);
+
+        let catalog_bytes = fs::read(&catalog).expect("read catalog");
+        let snap_bytes = fs::read(&snap_path).expect("read snapshot");
+        let archive_path = dir.join("archive.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, SNAPSHOT_INIT_TAR_NAME, &catalog_bytes);
+        append_member(&mut builder, &member, b"data");
+        append_member(&mut builder, &member2, b"data");
+        append_member(&mut builder, SNAPSHOT_TAR_NAME, &snap_bytes);
+        builder.finish().expect("finish tar");
+
+        let config = ExtractConfig::for_scan_test(archive_path, dir.join("work"), dir.join("out"));
+        (config, member)
+    }
+
+    /// Manifest-provenance catalog (two candidates, one present + one whose
+    /// payload member is never written) → `manifest + payload + snapshot`.
+    /// The `absent` canonical ends the scan `archived` with no flags (bucket C).
+    fn archive_with_missing_member(dir: &Path) -> (ExtractConfig, String) {
+        let catalog = dir.join("catalog.sqlite");
+        let db = Database::open(&catalog).expect("open catalog");
+        let present = add_archived_canonical(&db, "/present.txt", 7, FilePhase::Archived);
+        add_archived_canonical(&db, "/absent.txt", 8, FilePhase::Archived);
+        let member = db.get_file_by_id::<FileRecord>(present)
+            .expect("get").expect("row").tar_member_name().expect("content id");
+        db.checkpoint().expect("checkpoint");
+        drop(db);
+
+        let catalog_bytes = fs::read(&catalog).expect("read catalog");
+        let archive_path = dir.join("archive.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, SNAPSHOT_INIT_TAR_NAME, &catalog_bytes);
+        append_member(&mut builder, &member, b"data");
+        append_member(&mut builder, SNAPSHOT_TAR_NAME, &catalog_bytes);
+        builder.finish().expect("finish tar");
+
+        let config = ExtractConfig::for_scan_test(archive_path, dir.join("work"), dir.join("out"));
+        (config, member)
+    }
+
+    /// Leading manifest + one payload, **no** snapshot — the tail-truncated case.
+    /// The candidate stays `staged` (bucket A) since no snapshot confirms it.
+    fn archive_without_snapshot(dir: &Path) -> (ExtractConfig, String) {
+        let catalog = dir.join("catalog.sqlite");
+        let db = Database::open(&catalog).expect("open catalog");
+        let canonical = add_archived_canonical(&db, "/canonical.txt", 7, FilePhase::Staged);
+        let member = db.get_file_by_id::<FileRecord>(canonical)
+            .expect("get").expect("row").tar_member_name().expect("content id");
+        db.checkpoint().expect("checkpoint");
+        drop(db);
+
+        let catalog_bytes = fs::read(&catalog).expect("read catalog");
+        let archive_path = dir.join("archive.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, SNAPSHOT_INIT_TAR_NAME, &catalog_bytes);
+        append_member(&mut builder, &member, b"data");
+        builder.finish().expect("finish tar");
+
+        let config = ExtractConfig::for_scan_test(archive_path, dir.join("work"), dir.join("out"));
         (config, member)
     }
 
@@ -962,11 +1123,117 @@ mod tests {
             .expect("get").expect("row exists");
         assert!(rec.flags.get(FileFlag::ErrorWhileExtracting));
         assert!(!rec.flags.get(FileFlag::FileExtracted));
-        // B1 blanket-promoted both leftover archived rows.
+        // End-of-scan gate sweep promoted the leftover `archived` rows.
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("count"), 2);
         assert_eq!(db.count_files_in_phase(FilePhase::Archived).expect("count"), 0);
         // The leftover promote is recorded as a session error.
         assert!(db.count_errors(Some("scan_tar")).expect("errors") >= 1);
+    }
+
+    #[test]
+    fn scan_missing_member_triaged_under_force() {
+        // A canonical marked `AppendedPath` whose payload member never appears in
+        // the stream (head/middle-truncated or fabricated archive) lands in the
+        // "payload not found" bucket and is swept to `unarchived` under --force.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _member) = archive_with_missing_member(dir.path());
+        let db_path = config.paths.db_path();
+
+        let db = run(&config, &db_path, &Shutdown::detached(),
+                     &mut Recorder::speculative(true),
+                     &mut Some(ParseFilterBuffer::default()),
+                     &crate::progress::ProgressBarSet::new(
+                         crate::progress::EXTRACT_MULTIPLIER))
+            .expect("scan completes under force");
+
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("count"), 2);
+        assert_eq!(db.count_entries().expect("entries"), 2);
+        // The absent canonical was never extracted and carries no error flag.
+        let rec = db.get_file_by_id::<StrippedRecord>(FileId(2))
+            .expect("get").expect("row");
+        assert!(!rec.flags.get(FileFlag::FileExtracted));
+        assert!(!rec.flags.get(FileFlag::ErrorWhileExtracting));
+        assert!(db.count_errors(Some("scan_tar")).expect("errors") >= 1);
+    }
+
+    #[test]
+    fn scan_truncated_tail_staged_triaged_under_force() {
+        // No final snapshot/footer: the candidate stays `staged` (bucket A).
+        // Under --force the gate warns and sweeps it to `unarchived`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _member) = archive_without_snapshot(dir.path());
+        let db_path = config.paths.db_path();
+
+        let db = run(&config, &db_path, &Shutdown::detached(),
+                     &mut Recorder::speculative(true),
+                     &mut Some(ParseFilterBuffer::default()),
+                     &crate::progress::ProgressBarSet::new(
+                         crate::progress::EXTRACT_MULTIPLIER))
+            .expect("scan completes under force");
+
+        assert_eq!(db.count_files_in_phase(FilePhase::Staged).expect("staged"), 0);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("count"), 1);
+        assert!(db.count_errors(Some("scan_tar")).expect("errors") >= 1);
+    }
+
+    #[test]
+    fn scan_truncated_tail_staged_panics_without_force() {
+        // Without --force the same leftover `staged` row aborts the run with an
+        // explicit truncation message (not a vague "missing files" one).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut config, _member) = archive_without_snapshot(dir.path());
+        config.process.force = false;
+        let db_path = config.paths.db_path();
+
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            run(&config, &db_path, &Shutdown::detached(),
+                &mut Recorder::speculative(false),
+                &mut Some(ParseFilterBuffer::default()),
+                &crate::progress::ProgressBarSet::new(
+                    crate::progress::EXTRACT_MULTIPLIER))
+        }));
+        let err = res.err().expect("scan must panic without --force");
+        let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(msg.contains("never confirmed"), "truncation must be explicit: {msg}");
+        assert!(msg.contains("unarchived"), "message names the invariant: {msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entry_name_lossy_converts_invalid_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let os = std::ffi::OsStr::from_bytes(&[0x62, 0xFF, 0xFE]);
+        let path = PathBuf::from(&os);
+        let name = entry_name(&path).expect("lossy conversion always succeeds");
+        assert!(name.contains('\u{FFFD}'));
+        // Lossy names are not content ids → the caller's `(other, _)` arm rejects.
+        assert!(crate::db::content_id::parse_content_id(&name).is_err());
+    }
+
+    #[test]
+    fn scan_partial_snapshot_staged_panics_without_force() {
+        // Counter-example: `last_member_was_snapshot == true` must NOT prove the
+        // archive intact — a mid-archive checkpoint leaves later-session
+        // candidates `staged`, and the gate still reports the truncation.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut config, _member) = archive_with_partial_snapshot(dir.path());
+        config.process.force = false;
+        let db_path = config.paths.db_path();
+
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            run(&config, &db_path, &Shutdown::detached(),
+                &mut Recorder::speculative(false),
+                &mut Some(ParseFilterBuffer::default()),
+                &crate::progress::ProgressBarSet::new(
+                    crate::progress::EXTRACT_MULTIPLIER))
+        }));
+        let err = res.err().expect("scan must panic without --force");
+        let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(msg.contains("never confirmed"), "truncation must be explicit: {msg}");
+        assert!(
+            msg.contains("snapshot.sqlite"),
+            "message notes the last member was a (possibly mid-archive) snapshot: {msg}"
+        );
     }
 
     #[test]
