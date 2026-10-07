@@ -135,7 +135,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 /// selected, and errors out or r&r any given path entry that was not dir. If path segment does not
 /// exist, path es created.
 /// PRECONDITION: no_create_dir is false.
-pub fn prepare_extraction_dir(
+fn prepare_extraction_dir(
     rt: &ExtractRTArgs,
     recorder: &mut Recorder) -> Result<()> {
     debug_assert!(rt.config.paths.extraction_root().is_absolute(),
@@ -167,7 +167,7 @@ pub fn prepare_extraction_dir(
 }
 
 /// Function copies all extracted canonical files to the extraction destination and
-pub fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
+fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
     -> Result<()> {
     let dir_name = match &rt.config.placement.link_source {
         None => PathBuf::from(".sources"),
@@ -288,7 +288,7 @@ pub fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
 /// the tree.
 /// Files are linked to the link source and all others links, fifo, char dev, block dev are created,
 /// sockets noted but cannot be created
-pub fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
+fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
     let dir_name = match &rt.config.placement.link_source {
         None => PathBuf::from(".sources"),
         Some(v) => v.to_path_buf(),
@@ -427,19 +427,19 @@ type MaterializeOutcome = std::result::Result<MaterializeResult, (OutTreeId, Err
 /// PRECONDITION: This function should ouly be called with link_tree == false
 /// Iterate through the out_tree and reflink / copy all files into placed which are marked as
 /// (hardlink) canonicals. (out_tree.canonical_id = id)
-pub fn materialize_files(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
+fn materialize_files(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
     materialize_loop(rt, recorder, MaterializeKind::Files)
 }
 
 /// Create all the hardlinks after the copy stage.
 /// PRECONDITION: Function must be called after the [`materialize_files`]
-pub fn materialize_hardlinks(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
+fn materialize_hardlinks(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
     materialize_loop(rt, recorder, MaterializeKind::Hardlinks)
 }
 
 /// Final step, pass through all the remaining entries which could be materialized:
 /// (symlink, fifo, character device, block device, socket)
-pub fn materialize_others(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
+fn materialize_others(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
     materialize_loop(rt, recorder, MaterializeKind::Others)
 }
 
@@ -797,7 +797,7 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
 }
 
 /// Get the number of files, hardlinks and others. Also produce
-pub fn status_message_rebuilding(rt: &ExtractRTArgs)
+fn status_message_rebuilding(rt: &ExtractRTArgs)
     -> Result<(u64, u64, u64, u64, u64, u64)> {
     let all_canonicals = rt.db.count_out_tree_canonicals(None)?;
     let all_hardlinks = rt.db.count_out_tree_hardlinks(None)?;
@@ -1016,7 +1016,7 @@ fn annotate_copy_error(e: Error, dst: &Path) -> Error {
 
 /// Build a given directory path for later extraction.
 /// PRECONDITION: Calling function must ensure no_create_dir is false
-pub fn build_path(
+fn build_path(
     config: &ExtractConfig,
     already_checked: &mut PathBuf,
     target: &Path,

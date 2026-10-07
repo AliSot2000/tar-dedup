@@ -135,7 +135,7 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
 ///
 /// If multiple files map to the same directory, the tool will not complain and simply the first
 /// entry to extract to it, will own the path.
-pub fn populate_out_tree(
+fn populate_out_tree(
     rt: &ExtractRTArgs, use_new_name: bool)
     -> Result<()> {
     debug_assert!(rt.config.paths.extraction_root().is_absolute(),

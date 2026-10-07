@@ -243,7 +243,7 @@ fn inner_apply_permissions(
 
 /// Apply the metadata to the files which were copied to the link source which are used as targets
 /// for the links in link_tree
-pub fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps: &OwnerGroupMode)
+fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps: &OwnerGroupMode)
     -> Result<()> {
     let dir_name = match &rt.config.placement.link_source {
         None => PathBuf::from(".sources"),
