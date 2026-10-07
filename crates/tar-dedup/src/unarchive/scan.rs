@@ -33,8 +33,6 @@ struct ScanRTState <'a> {
     pub progress: &'a  ProgressBarSet,
     pub pb: ProgressBar,
 }
-// TODO Agent: Create separate array to push files that failed into. That way we can set the flag
-//  when seeing a snapshot.
 // INFO: State Model for a File and its associated canonical row in the db:
 //    0. File seen in the stream
 //    1. File finished extracting successfully => FileExtracted = True
@@ -470,6 +468,9 @@ fn process_entry(
                 }
                 // Confirm from this snapshot after marking buffered extracts.
                 ref_db.apply_snapshot_promote_unarchived(&rt.config.paths.temp_db())?;
+                // Ingest any scan errors buffered while no DB existed (recorded
+                // during the no-DB window) now that one has materialized.
+                flush_scan_recorder(recorder, Some(&ref_db))?;
             } else {
                 assert!(rt.config.process.force || rt.db.is_some(),
                         "INVARIANT ERROR: without force, the first member of an archive MUST be an \
