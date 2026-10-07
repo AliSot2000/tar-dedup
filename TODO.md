@@ -35,8 +35,8 @@
 - [X] skip dedup
 - [X] force utf-8
 - [X] Sanity checks
-- [ ] error buffer scan.rs (TODO AGENT!)
-- [ ] blanked promote scan - can we not run into the problem tha files are still in staged? or do we have a blanket promote beofre -> in that case use blanket promote from later.
+- [X] error buffer scan.rs (TODO AGENT!)
+- [X] blanked promote scan - can we not run into the problem tha files are still in staged? or do we have a blanket promote beofre -> in that case use blanket promote from later.
 - [ ] add cli arg for shards (use_shars, max_shard_size)
 - [ ] add cli arg for debug-feat ordering-override (don't use custom ordering. order by files(id))
 - [ ] add cli arg for ordering (ext, filename, file_size, id / ext, file_size, id)

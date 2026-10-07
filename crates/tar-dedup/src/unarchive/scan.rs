@@ -157,8 +157,8 @@ fn run_inner(
         rt.progress.set_phase_total(edb.count_entries()?);
     }
 
-    let mut force_buffer: Option<Vec<FileId>> = if rt.config.process.force {
-        Some(Vec::new())
+    let mut force_buffer: Option<(Vec<FileId>, Vec<FileId>)> = if rt.config.process.force {
+        Some((Vec::new(), Vec::new()))
     } else {
         None
     };
@@ -409,7 +409,7 @@ fn process_entry(
     db_path: &Path,
     name: &str,
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
-    force_buffer: &mut Option<Vec<FileId>>,
+    force_buffer: &mut Option<(Vec<FileId>, Vec<FileId>)>,
     scan: &mut ExtractScanState,
     recorder: &mut Recorder,
     fb: &mut Option<ParseFilterBuffer>)
@@ -461,8 +461,11 @@ fn process_entry(
                 scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
 
                 if let Some(buf) = force_buffer.as_mut() {
-                    for fid in buf.drain(..) {
+                    for fid in buf.0.drain(..) {
                         ref_db.set_file_flag(fid, FileFlag::FileExtracted, true)?;
+                    }
+                    for fid in buf.1.drain(..) {
+                        ref_db.set_file_flag(fid, FileFlag::ErrorWhileExtracting, true)?;
                     }
                 }
                 // Confirm from this snapshot after marking buffered extracts.
@@ -537,8 +540,15 @@ fn process_entry(
                             "failed to extract cache payload {}; continuing (--force)",
                             entry_dst.display()
                         );
-                        if let Some(ldb) = rt.db.as_ref() {
-                            ldb.set_file_flag(fid, FileFlag::ErrorWhileExtracting, true)?;
+                        match rt.db.as_ref() {
+                            Some(ldb) => {
+                                ldb.set_file_flag(fid, FileFlag::ErrorWhileExtracting, true)?;
+                            }
+                            None => force_buffer
+                                .as_mut()
+                                .expect("INVARIANT ERROR: Buffer must be Some(_) iff --force is set")
+                                .1
+                                .push(fid),
                         }
                         return Ok(());
                     }
@@ -550,8 +560,8 @@ fn process_entry(
             if rt.config.process.force && rt.db.is_none() {
                 let buf = force_buffer
                     .as_mut()
-                    .expect("INVARIANT ERROR: Buffer must be Some(Vec) if force is set");
-                buf.push(fid);
+                    .expect("INVARIANT ERROR: Buffer must be Some(_) iff --force is set");
+                buf.0.push(fid);
             } else {
                 let ldb = rt.db.as_ref().expect(OPT_DB_ERROR);
                 ldb.set_file_flag(fid, FileFlag::FileExtracted, true)?;
@@ -1017,6 +1027,78 @@ mod tests {
 
         let config = ExtractConfig::for_scan_test(archive_path, dir.join("work"), dir.join("out"));
         (config, member)
+    }
+
+    /// Head-truncated archive: no manifest, `[payload, snapshot]`. The snapshot body
+/// is the catalog, so a DB materializes mid-scan (`--force`). With `sabotage`,
+/// the cache copy of the payload fails (destination is pre-created as a dir).
+fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String) {
+        let catalog = dir.join("catalog.sqlite");
+        let member = write_catalog(&catalog);
+        let catalog_bytes = fs::read(&catalog).expect("read catalog");
+
+        let archive_path = dir.join("archive.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, &member, b"data");
+        append_member(&mut builder, SNAPSHOT_TAR_NAME, &catalog_bytes);
+        builder.finish().expect("finish tar");
+
+        let config = ExtractConfig::for_scan_test(archive_path, dir.join("work"), dir.join("out"));
+        let cache = config.paths.extract_cache_dir();
+        fs::create_dir_all(&cache).expect("cache dir");
+        if sabotage {
+            fs::create_dir(cache.join(&member)).expect("sabotage member dst");
+        }
+        (config, member)
+    }
+
+    #[test]
+    fn scan_no_db_success_buffered_then_flagged_on_snapshot() {
+        // `--force`, first member is a payload (no DB yet): on success the fid is
+        // buffered and gets `FileExtracted` once the snapshot installs a DB.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _member) = archive_head_truncated(dir.path(), false);
+        let db_path = config.paths.db_path();
+
+        let db = run(&config, &db_path, &Shutdown::detached(),
+                     &mut Recorder::speculative(false),
+                     &mut Some(ParseFilterBuffer::default()),
+                     &crate::progress::ProgressBarSet::new(
+                         crate::progress::EXTRACT_MULTIPLIER))
+            .expect("scan completes under force");
+
+        // Row 1 is the canonical in `write_catalog`.
+        let rec = db.get_file_by_id::<StrippedRecord>(FileId(1))
+            .expect("get").expect("row");
+        assert!(rec.flags.get(FileFlag::FileExtracted));
+        assert!(!rec.flags.get(FileFlag::ErrorWhileExtracting));
+        // canonical + the duplicate, both unarchived at the end.
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("count"), 2);
+    }
+
+    #[test]
+    fn scan_no_db_failure_buffered_then_flagged_on_snapshot() {
+        // `--force`, no manifest: the failed payload is buffered and, once the
+        // trailing snapshot installs a DB, its `ErrorWhileExtracting` flag is
+        // ingested instead of being dropped.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _member) = archive_head_truncated(dir.path(), true);
+        let db_path = config.paths.db_path();
+
+        let db = run(&config, &db_path, &Shutdown::detached(),
+                     &mut Recorder::speculative(true),
+                     &mut Some(ParseFilterBuffer::default()),
+                     &crate::progress::ProgressBarSet::new(
+                         crate::progress::EXTRACT_MULTIPLIER))
+            .expect("scan completes under force");
+
+        let rec = db.get_file_by_id::<StrippedRecord>(FileId(1))
+            .expect("get").expect("row");
+        assert!(rec.flags.get(FileFlag::ErrorWhileExtracting),
+                "failure flag must survive the no-db window");
+        assert!(!rec.flags.get(FileFlag::FileExtracted));
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("count"), 2);
+        assert!(db.count_errors(Some("scan_tar")).expect("errors") >= 1);
     }
 
     /// Manifest-provenance catalog (two candidates, one present + one whose
