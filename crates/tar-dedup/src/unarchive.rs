@@ -7,8 +7,6 @@ mod place_prologue;
 mod rehash;
 mod scan;
 
-pub use place_prologue::populate_out_tree; // INFO: Export for testing
-
 use std::path::Path;
 
 use crate::common::cleanup::{self, CleanupMode};
