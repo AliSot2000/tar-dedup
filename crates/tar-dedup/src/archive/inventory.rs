@@ -219,7 +219,7 @@ fn handle_from_files_line<P: AsRef<Path>>(
 /// - Path is minimal
 /// - Path is directory.
 /// - Path is on the same file system if called recursively
-pub fn handle_dir(
+fn handle_dir(
     rt: &ArchiveRTArgs,
     sub_bar: &ProgressBar,
     source_id: i64,
@@ -261,7 +261,7 @@ pub fn handle_dir(
     Ok(())
 }
 
-pub fn handle_entry_base(
+fn handle_entry_base(
     rt: &ArchiveRTArgs,
     sub_bar: &ProgressBar,
     path: &Path,
@@ -293,7 +293,7 @@ pub fn handle_entry_base(
 
 /// PRECONDITION: path is abs.
 #[cfg(unix)]
-pub fn handle_entry(
+fn handle_entry(
     rt: &ArchiveRTArgs,
     sub_bar: &ProgressBar,
     path: &Path,
@@ -472,7 +472,7 @@ pub fn handle_entry(
 /// Handle a single dir entry.
 /// PRECONDITION: path is abs.
 #[cfg(windows)]
-pub fn handle_entry(
+fn handle_entry(
     rt: &ArchiveRTArgs,
     sub_bar: &ProgressBar,
     path: &Path,
@@ -683,7 +683,7 @@ fn get_file_rdev_parts(meta: &fs::Metadata) -> (Option<u64>, Option<u64>) {
     )
 }
 
-pub fn inner_file_type(meta: &Metadata, path: &Path, enc_err: &mut Vec<FileStatError>) -> FileType {
+fn inner_file_type(meta: &Metadata, path: &Path, enc_err: &mut Vec<FileStatError>) -> FileType {
     match determine_file_type(&meta, &path) {
         Ok(t) => t,
         Err((t, _failed_path, e)) => {
@@ -698,7 +698,7 @@ pub fn inner_file_type(meta: &Metadata, path: &Path, enc_err: &mut Vec<FileStatE
 
 /// Perform equivalent of transpose. Has a warning for Ok(None).
 /// Warning generated is `Skipping non-UTF-8 {path_type}-path`
-pub fn no_treat_path(rt: &ArchiveRTArgs, path: &Path, path_type: &str) -> Option<Result<()>> {
+fn no_treat_path(rt: &ArchiveRTArgs, path: &Path, path_type: &str) -> Option<Result<()>> {
     match path.to_utf8(rt.config.process.relax_utf8) {
         Ok(Some(_)) => None,
         Ok(None) => {
