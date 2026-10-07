@@ -47,6 +47,7 @@ pub use integrity::{
     ArchiveGate, archive_phase_check_count, extract_phase_check_count,
 };
 pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
+pub use scan::ScanRemainderTally;
 use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
 use crate::db::place::{CopyOutcome, MaterializeResult};
@@ -733,8 +734,16 @@ impl Database {
         scan::promote_extracted_to_unarchived(&*self.conn())
     }
 
-    pub fn promote_remaining_to_unarchived(&self) -> Result<u64> {
-        scan::promote_remaining_to_unarchived(&*self.conn())
+    pub fn tally_scan_remainders(&self, eager_filter: bool) -> Result<scan::ScanRemainderTally> {
+        scan::tally_scan_remainders(&self.conn(), eager_filter)
+    }
+
+    pub fn promote_filter_excluded_remainders(&self) -> Result<u64> {
+        scan::promote_filter_excluded_remainders(&self.conn())
+    }
+
+    pub fn promote_scan_remainders(&self) -> Result<u64> {
+        scan::promote_scan_remainders(&*self.conn())
     }
 
     pub fn check_cached_payloads(&self, cache_dir: &Path) -> Result<(u64, u64)> {

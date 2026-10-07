@@ -18,6 +18,10 @@ pub struct ExtractScanState {
     /// has been. A resumed pass restarts at the following index.
     pub last_member_index: u64,
     pub from_footer: bool,
+    /// True iff the most recently processed tar member was `snapshot.sqlite`.
+    /// Recomputed per member; message enrichment only (a mid-archive session
+    /// snapshot can be the last member of a truncated stream).
+    pub last_member_was_snapshot: bool,
     /// Cumulative `snapshot.sqlite` members ingested (persisted).
     pub snapshots_ingested: u32,
 
