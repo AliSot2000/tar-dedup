@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::ExitAfterStageArg;
 use crate::common::start::StartPolicy;
+use crate::common::{BATCH_SIZE, DEFAULT_AUTO_FLUSH_LIMIT, DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
 use crate::error::{Error, Result};
 
 use super::Validate;
@@ -102,12 +103,12 @@ impl Default for ProcessOptions {
             start_policy: StartPolicy::Create,
             jobs: 0,
             io_jobs: 0,
-            auto_flush_limit: crate::common::DEFAULT_AUTO_FLUSH_LIMIT,
-            batch_size: crate::common::BATCH_SIZE,
-            work_capacity: crate::common::WORK_CAPACITY,
-            out_capacity: crate::common::OUT_CAPACITY,
-            feed_chunk: crate::common::FEED_CHUNK,
-            drain_chunk: crate::common::DRAIN_CHUNK,
+            auto_flush_limit: DEFAULT_AUTO_FLUSH_LIMIT,
+            batch_size: BATCH_SIZE,
+            work_capacity: WORK_CAPACITY,
+            out_capacity: OUT_CAPACITY,
+            feed_chunk: FEED_CHUNK,
+            drain_chunk: DRAIN_CHUNK,
             fail_fast: false,
             no_errors: false,
             force: false,
