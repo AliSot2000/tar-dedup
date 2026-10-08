@@ -45,13 +45,13 @@
 - [ ] add cli arg for the disabling the per thread progress and/or all progress. (per thread on a e.g. 128 core machine - not very useful, disable all together if you want to pipe the output into a file.)
 - [ ] add cli arg for force
 - [ ] add cli arg for relax-utf8 (doesn't work with force!)
-- [ ] add cli arg for missing flags in extract config which are hardcoded
+- [ ] add cli arg for missing flags in extract config which are hardcoded (absolute_links: bool, clean_target, link_source, no_reflink, hard_link_grouping, recreate_none_file_entries)
 - [X] correct tracing (
             tracing::error - major fail (file not found, not removed, dir not created, ... something contentswise is not there the way we wanted)
             tracing::warning - minor fail (failed to remove a stage, metadata failed, recording errors failed, ...)
             tracing::info - general update (x number of files processed this session. y number of errors etc, ...)
             tracing::debug - file level updates (file x moved to location, metadata of file x acquired, file staged, ...))
-- [ ] fixup the public / private functions in all files. in Phases - not referenced outside -> private!
+- [X] fixup the public / private functions in all files. in Phases - not referenced outside -> private!
 - [ ] finish testing for [inventory, place_prologue, place, permissions]
 - [ ] finish the readme
 - [ ] publish to crates.io
