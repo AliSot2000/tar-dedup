@@ -220,15 +220,19 @@ pub fn create_archive_queue(conn: &Connection) -> Result<()> {
 }
 
 /// Populate `archive_queue` with the full, stable set of staged canonicals in
-/// `ext, size, id` order (or by basename when `sort_by_name` is true) — position
-/// = `row_number()`. Idempotent: `INSERT OR IGNORE` (via `UNIQUE(file_id)`) keeps
-/// rows from an earlier populate (e.g. a resume) and adds only missing ones.
-pub fn populate_archive_queue(conn: &Connection, sort_by_name: bool) -> Result<u64> {
-    let order = if sort_by_name {
-        "ext ASC, replace(abs_path, rtrim(abs_path, replace(abs_path, '/', '')), '') ASC, \
-         size ASC, id ASC"
-    } else {
-        "ext ASC, size ASC, id ASC"
+/// the requested [`crate::cli::ArchiveOrdering`] — position = `row_number()`.
+/// Idempotent: `INSERT OR IGNORE` (via `UNIQUE(file_id)`) keeps rows from an
+/// earlier populate (e.g. a resume) and adds only missing ones.
+pub fn populate_archive_queue(conn: &Connection, order: crate::cli::ArchiveOrdering)
+    -> Result<u64> {
+    let order = match order {
+        crate::cli::ArchiveOrdering::ExtSizeId => "ext ASC, size ASC, id ASC",
+        crate::cli::ArchiveOrdering::ExtNameSizeId => {
+            "ext ASC, replace(abs_path, rtrim(abs_path, replace(abs_path, '/', '')), '') ASC, \
+             size ASC, id ASC"
+        }
+        #[cfg(feature = "debug-ordering")]
+        crate::cli::ArchiveOrdering::Id => "id ASC",
     };
     let sql = format!(
         "INSERT OR IGNORE INTO archive_queue (id, file_id)
@@ -501,7 +505,7 @@ mod tests {
         insert_archive_candidate(&conn, 2, 2, "x", 100);
         insert_archive_candidate(&conn, 3, 3, "x", 200);
         create_archive_queue(&conn).expect("create queue");
-        populate_archive_queue(&conn, false).expect("populate queue");
+        populate_archive_queue(&conn, crate::cli::ArchiveOrdering::ExtSizeId).expect("populate queue");
 
         // 2 already appended last session; 3 errored.
         set_phase(&conn, 2, "archived");
@@ -528,7 +532,7 @@ mod tests {
         insert_archive_candidate(&conn, 2, 1, "a", 300);   // ext .a, size 300
         insert_archive_candidate(&conn, 3, 2, "a", 100);   // ext .a, size 100
         create_archive_queue(&conn).expect("create queue");
-        populate_archive_queue(&conn, false).expect("populate queue");
+        populate_archive_queue(&conn, crate::cli::ArchiveOrdering::ExtSizeId).expect("populate queue");
 
         let rows = pull_pending_archive_rows::<StrippedRecord>(&conn, 0, 100).expect("pull");
         let ids: Vec<FileId> = rows.iter().map(|(_p, r)| r.id).collect();
@@ -542,7 +546,7 @@ mod tests {
         insert_archive_candidate(&conn, 2, 2, "a", 300);   // basename a-2.dat
         insert_archive_candidate(&conn, 3, 3, "m", 100);   // basename m-3.dat
         create_archive_queue(&conn).expect("create queue");
-        populate_archive_queue(&conn, true).expect("populate queue");
+        populate_archive_queue(&conn, crate::cli::ArchiveOrdering::ExtNameSizeId).expect("populate queue");
 
         let rows = pull_pending_archive_rows::<StrippedRecord>(&conn, 0, 100).expect("pull");
         let ids: Vec<FileId> = rows.iter().map(|(_p, r)| r.id).collect();
@@ -555,8 +559,8 @@ mod tests {
         insert_archive_candidate(&conn, 1, 1, "x", 100);
         insert_archive_candidate(&conn, 2, 2, "x", 200);
         create_archive_queue(&conn).expect("create queue");
-        populate_archive_queue(&conn, false).expect("first populate");
-        let second_run = populate_archive_queue(&conn, false).expect("second populate");
+        populate_archive_queue(&conn, crate::cli::ArchiveOrdering::ExtSizeId).expect("first populate");
+        let second_run = populate_archive_queue(&conn, crate::cli::ArchiveOrdering::ExtSizeId).expect("second populate");
 
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM archive_queue",
