@@ -173,6 +173,12 @@ impl Default for OwnerGroupOptions {
 impl Validate for OwnerGroupOptions {
     // INFO: Stub for the moment, so all sub structs have a validate method()
     fn validate(&self) -> Result<()> {
+        if !self.same_owner && self.apply_owner {
+            tracing::warn!("--apply-stored-owner-map has no effect without --same-owner");
+        }
+        if !self.same_owner && self.apply_group{
+            tracing::warn!("--apply-stored-group-map has no effect without --same-owner");
+        }
         Ok(())
     }
 }
