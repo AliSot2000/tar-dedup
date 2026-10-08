@@ -2,10 +2,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::ExitAfterStageArg;
 use crate::common::start::StartPolicy;
+use crate::error::{Error, Result};
+
+use super::Validate;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CleanupSettings {
+    /// if true, keep the database.
     pub keep_db: bool,
+    /// if true, keep the stage directory (.astage / .estage)
     pub keep_stage: bool,
 }
 
@@ -66,21 +71,81 @@ pub struct ProcessOptions {
     pub jobs: usize,
     /// I/O-bound workers (sparsify, dedup, place pools).
     pub io_jobs: usize,
+    /// Number of error drafts buffered before an auto-flush to the database.
+    pub auto_flush_limit: u64,
+    /// Rows pulled from the database per phase iteration.
+    pub batch_size: u64,
+    /// Items in the producer/consumer work channel.
+    pub work_capacity: usize,
+    /// Items in the producer/consumer result channel.
+    pub out_capacity: usize,
+    /// Rows pulled from the database per feed round.
+    pub feed_chunk: usize,
+    /// Outcomes committed per transaction.
+    pub drain_chunk: usize,
     pub fail_fast: bool,
     pub no_errors: bool,
     /// Force: continue even if the tool cannot guarantee the integrity of the data.
     pub force: bool,
     /// Skip entries whose path cannot be represented as UTF-8 (warn + continue).
-    /// TODO cli: `--relax-utf8`, mutually exclusive with `--fail-fast` (validated in try_from).
+    /// Mutually exclusive with `--force` and `--fail-fast`.
     pub relax_utf8: bool,
+    /// Which progress bars are drawn.
+    pub progress_mode: crate::cli::ProgressMode,
     pub cleanup: CleanupSettings,
     pub exit_after_stage: Option<ExitAfterStage>,
+}
+
+impl Default for ProcessOptions {
+    fn default() -> Self {
+        Self {
+            start_policy: StartPolicy::Create,
+            jobs: 0,
+            io_jobs: 0,
+            auto_flush_limit: crate::common::DEFAULT_AUTO_FLUSH_LIMIT,
+            batch_size: crate::common::BATCH_SIZE,
+            work_capacity: crate::common::WORK_CAPACITY,
+            out_capacity: crate::common::OUT_CAPACITY,
+            feed_chunk: crate::common::FEED_CHUNK,
+            drain_chunk: crate::common::DRAIN_CHUNK,
+            fail_fast: false,
+            no_errors: false,
+            force: false,
+            relax_utf8: false,
+            progress_mode: crate::cli::ProgressMode::PerThread,
+            cleanup: CleanupSettings { keep_db: false, keep_stage: false },
+            exit_after_stage: None,
+        }
+    }
 }
 
 impl ProcessOptions {
     /// Workers for stages that are both compute- and io-bound (hash, rehash).
     pub fn effective_jobs(&self) -> usize {
         self.jobs.min(self.io_jobs)
+    }
+}
+
+impl Validate for ProcessOptions {
+    fn validate(&self) -> Result<()> {
+        if self.relax_utf8 && (self.force || self.fail_fast) {
+            return Err(Error::Config(
+                "--relax-utf8 is mutually exclusive with --force and --fail-fast".into(),
+            ));
+        }
+        for (value, name) in [
+            (self.auto_flush_limit, "--auto-flush-limit"),
+            (self.batch_size, "--batch-size"),
+            (self.work_capacity as u64, "--work-capacity"),
+            (self.out_capacity as u64, "--out-capacity"),
+            (self.feed_chunk as u64, "--feed-chunk"),
+            (self.drain_chunk as u64, "--drain-chunk"),
+        ] {
+            if value == 0 {
+                return Err(Error::Config(format!("{name} must be greater than 0")));
+            }
+        }
+        Ok(())
     }
 }
 
