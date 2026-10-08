@@ -673,8 +673,8 @@ impl Database {
     }
 
     /// See [`tar_writer::populate_archive_queue`].
-    pub fn populate_archive_queue(&self, sort_by_name: bool) -> Result<u64> {
-        tar_writer::populate_archive_queue(&*self.conn(), sort_by_name)
+    pub fn populate_archive_queue(&self, order: crate::cli::ArchiveOrdering) -> Result<u64> {
+        tar_writer::populate_archive_queue(&*self.conn(), order)
     }
 
     /// See [`tar_writer::pull_pending_archive_rows`].
