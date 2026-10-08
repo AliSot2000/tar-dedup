@@ -67,7 +67,7 @@ pub fn run(rt: &ExtractRTArgs, set_phase: bool) -> Result<()> {
         false,
         rt.config.filter.anchored,
         rt.config.filter.ignore_case,
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         Unarchived,
         &rt.db,
         rt.progress,

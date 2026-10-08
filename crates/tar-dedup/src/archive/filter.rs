@@ -24,7 +24,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         !rt.config.indexing.no_hardlink_detection,
         rt.config.filter.anchored,
         rt.config.filter.ignore_case,
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         previous_phase,
         &rt.db,
         rt.progress,
