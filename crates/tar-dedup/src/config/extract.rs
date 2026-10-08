@@ -419,7 +419,7 @@ impl ExtractConfig {
                 archive_path: c_archive_path,
                 directory: c_directory,
                 output_dir: c_output_dir,
-                work_dir,
+                work_dir: c_work_dir,
             },
             decompression,
             placement: PlacementOptions {
@@ -633,10 +633,12 @@ fn validate_metadata_pairs(args: &ExtractArgs) -> Result<()> {
 
 /// Resolve which owner/group policy applies on extract from the CLI args.
 ///
-/// Explicit `--owner`/`--group`/`--owner-map`/`--group-map` map to a CLI policy and
-/// take precedence. Otherwise the resolved `apply_owner`/`apply_group` bits request
-/// the stored policy (`Stored`), to be fetched from the archive footprint by the
-/// caller.
+/// Identity is all-or-nothing (per `--owner`/`--apply-stored-*` docs): explicit
+/// `--owner`/`--group`/`--owner-map`/`--group-map` map to a single CLI policy for
+/// **both** identities and take precedence over the apply bits, which then fall
+/// back to the archive's recorded policy only when **none** of the four is given
+/// (`Stored`). No mixing of one identity from the CLI and the other from the
+/// archive.
 fn resolve_owner_policy_from_args(
     args: &ExtractArgs,
     directory: &Path,
