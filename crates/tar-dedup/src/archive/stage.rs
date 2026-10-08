@@ -54,7 +54,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let mut staged: u64 = 0;
 
     batched_stepped_loop(
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         || FileId(0),
         |lid: &FileId, batch_size| rt.db.list_files_to_stage_after(lid, batch_size),
         |r: &StrippedRecord| r.id,
