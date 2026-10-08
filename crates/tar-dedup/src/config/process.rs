@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::cli::ExitAfterStageArg;
+use crate::common::defaults::{BATCH_SIZE, DEFAULT_AUTO_FLUSH_LIMIT, DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
 use crate::common::start::StartPolicy;
-use crate::common::{BATCH_SIZE, DEFAULT_AUTO_FLUSH_LIMIT, DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
 use crate::error::{Error, Result};
 
 use super::Validate;
@@ -101,8 +101,8 @@ impl Default for ProcessOptions {
     fn default() -> Self {
         Self {
             start_policy: StartPolicy::Create,
-            jobs: 0,
-            io_jobs: 0,
+            jobs: num_cpus::get(),
+            io_jobs: num_cpus::get(),
             auto_flush_limit: DEFAULT_AUTO_FLUSH_LIMIT,
             batch_size: BATCH_SIZE,
             work_capacity: WORK_CAPACITY,
