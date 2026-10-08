@@ -94,7 +94,7 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
         stepped_dirs_then_rest(rt, None, false, &mut apply)
     } else {
         batched_stepped_loop(
-            BATCH_SIZE,
+            rt.config.process.batch_size,
             || 0i64,
             |lid, bs| rt.db.list_sources(None, *lid, bs),
             |src: &SourceRecord| src.id,
@@ -148,7 +148,7 @@ fn populate_out_tree(
         populate_out_tree_rel(rt, use_new_name)?;
     }
 
-    ensure_parent(rt.db, rt.progress)?;
+    ensure_parent(rt.db, rt.progress, rt.config.process.batch_size)?;
     rt.db.set_out_tree_built()?;
     Ok(())
 }
@@ -161,7 +161,7 @@ fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
         HardLinkGrouping::Source => {
             let mut sum = 0u64;
             batched_stepped_loop(
-                BATCH_SIZE,
+                rt.config.process.batch_size,
                 || 0i64,
                 |lid, bs| rt.db.list_sources(None, *lid, bs),
                 |src| src.id,
@@ -189,7 +189,7 @@ fn stepped_materialized(
     f: &mut impl FnMut(&Vec<StrippedRecord>) -> Result<()>)
     -> Result<()> {
     batched_stepped_loop(
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         || FileId(0),
         |lid, bs| rt.db.list_materialized_entries(
             *lid, bs, source_id, only_dirs, only_valid_new_name, apply_filters
@@ -279,7 +279,7 @@ fn populate_out_tree_rel(
     -> Result<()> {
     let root = rt.config.paths.extraction_root();
     batched_stepped_loop(
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         || 0i64,
         |lid, bs| rt.db.list_sources(None, *lid, bs),
         |src| src.id,
@@ -328,7 +328,8 @@ fn populate_out_tree_rel(
 /// a `--files-fromm` file had a file with `/path/to/not/covered/directory/file.txt`
 /// where `/path/to/other/*` is covered by recursive index. Creating file.txt would fail because
 /// there's no parent path.
-fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet) -> Result<()> {
+fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet, batch_size: u64)
+    -> Result<()> {
     let mut current_parents: HashSet<PathBuf> = HashSet::new();
     let mut parent_rows: Vec<NewOutTreeRow> = Vec::new();
     let mut flags = OutTreeFlags::default();
@@ -336,7 +337,7 @@ fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet) -> R
     let cref_flags = &flags;
 
     batched_stepped_loop(
-        BATCH_SIZE,
+        batch_size,
         || OutTreeId(0),
         |lid, bs| db.list_out_tree(
             *lid, bs, None, Some(false)
