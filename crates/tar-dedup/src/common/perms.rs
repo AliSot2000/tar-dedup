@@ -262,8 +262,8 @@ pub fn parse_owner_group_args(
     owner: Option<&str>,
     owner_file: Option<&Path>,
     group: Option<&str>,
-    group_file: Option<&Path>,
-) -> Result<Option<OwnerGroupPolicy>> {
+    group_file: Option<&Path>)
+    -> Result<Option<OwnerGroupPolicy>> {
     let owner_override = owner.map(IdentitySpec::parse).transpose()?;
     let group_override = group.map(IdentitySpec::parse).transpose()?;
 
@@ -436,8 +436,8 @@ pub fn resolve_owner_group(
     src_groupname: Option<&str>,
     policy: &OwnerGroupPolicy,
     target: MapResolutionTarget,
-    same_owner: bool,
-) -> Result<(Option<u32>, Option<u32>)> {
+    same_owner: bool)
+    -> Result<(Option<u32>, Option<u32>)> {
     let empty_map = IdentityMap::default();
     let owner = resolve_identity(
         src_username,
@@ -467,8 +467,8 @@ fn resolve_identity(
     ovr: Option<&IdentitySpec>,
     target: MapResolutionTarget,
     same_owner: bool,
-    lookup: fn(&str) -> Option<u32>,
-) -> Result<Option<u32>> {
+    lookup: fn(&str) -> Option<u32>)
+    -> Result<Option<u32>> {
     // Step 1: pick the identity spec to emit. Matches map by name then by uid.
     let resolved_src_id = src_id.and_then(|i| map.by_id.get(&i));
     let resolved_target: Option<&IdentitySpec> = src_name
