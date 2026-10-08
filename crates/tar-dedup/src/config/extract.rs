@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
-
+use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 use crate::cli::{ConflictPolicy, ExtractArgs, HardLinkGrouping};
 use crate::common::perms::{
@@ -9,17 +9,18 @@ use crate::common::perms::{
 };
 use crate::common::start::StartPolicy;
 use crate::common::transform::{TransformSource, parse_transform_expr};
+use crate::config::filter::FilterOptions;
 use crate::error::{Error, Result};
 
+use super::Validate;
 use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
-use super::compression::infer_compression_from_suffix;
+use super::compression::resolve_compression;
 use super::paths::PathLayout;
 use super::process::{CleanupSettings, ProcessOptions};
 use super::{
     ExtractStageLocation, default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path,
     validate_file,
 };
-use crate::config::FilterOptions;
 
 // TODO check all paths for clean, and utf-8 compliance!
 
@@ -35,12 +36,79 @@ pub struct PlacementOptions {
     pub remove_and_replace: bool,
     pub link_tree: bool,
     pub use_hard_links: bool,
-    pub absolute_links: bool, // TODO not possible with use_hard_links
-    pub clean_target: bool,   // TODO implies no_create_dir is false!
-    pub link_source: Option<PathBuf>, // TODO CLI + san!!! (may be file name only), need not exist when starting extraction
-    pub no_reflink: bool,             // TODO cli
-    pub hard_link_grouping: HardLinkGrouping, // TODO cli
-    pub recreate_none_file_entries: bool, // TODO CLI
+    pub absolute_links: bool,
+    pub clean_target: bool,
+    pub link_source: Option<PathBuf>,
+    pub no_reflink: bool,
+    pub hard_link_grouping: HardLinkGrouping,
+    pub recreate_none_file_entries: bool,
+}
+
+impl Default for PlacementOptions {
+    fn default() -> Self {
+        Self {
+            absolute_names: false,
+            one_top_level: None,
+            keep_dir_symlink: false,
+            unlink_first: false,
+            no_create_dir: false,
+            conflict_policy: ConflictPolicy::Replace,
+            silent_conflicts: false,
+            remove_and_replace: false,
+            link_tree: false,
+            use_hard_links: false,
+            absolute_links: false,
+            clean_target: false,
+            link_source: None,
+            no_reflink: false,
+            hard_link_grouping: HardLinkGrouping::Global,
+            recreate_none_file_entries: false,
+        }
+    }
+}
+
+impl Validate for PlacementOptions {
+    fn validate(&self) -> Result<()> {
+        if self.clean_target && self.no_create_dir {
+            return Err(Error::Config(
+                "--clean-target conflicts with --no-create-dirs".into(),
+            ));
+        }
+        if self.absolute_links && !self.link_tree {
+            return Err(Error::Config(
+                "--absolute-links requires --link-tree".into(),
+            ));
+        }
+        if self.absolute_links && self.use_hard_links {
+            tracing::warn!("--absolute-links has no effect with --hard-links");
+        }
+        if let Some(ls) = self.link_source.as_ref() {
+            if !self.link_tree {
+                return Err(Error::Config(
+                    "--link-source requires --link-tree".into(),
+                ));
+            }
+            validate_name(ls, "--link-source")?;
+        }
+        if self.link_source.is_some() && !self.link_tree {
+            return Err(Error::Config(
+                "--link-source requires --link-tree".into(),
+            ));
+        }
+        if self.clean_target && self.one_top_level.is_none() {
+            tracing::warn!("--clean-target has no effect without --one-top-level");
+        }
+        if let Some(otl) = self.one_top_level.as_ref() {
+            validate_name(otl, "--one-top-level")?;
+        }
+        if self.absolute_names && matches!(self.hard_link_grouping, HardLinkGrouping::Source) {
+            tracing::warn!(
+                "Materializing with --absolute-names and per source hardlink recreation might \
+                cause disjoint subgroups of hardlinks that formerly were a single hardlink."
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +124,31 @@ pub struct ExtractAttributeOptions {
     pub no_same_permissions: bool,
 }
 
+impl Default for ExtractAttributeOptions {
+    fn default() -> Self {
+        Self {
+            restore_owner: false,
+            no_overwrite_dir: false,
+            force_overwrite_dir: false,
+            apply_atime: false,
+            apply_mtime: false,
+            no_xattrs: false,
+            no_acls: false,
+            no_selinux: false,
+            no_same_permissions: false,       
+        }
+    }
+}
+
+impl Validate for ExtractAttributeOptions {
+    fn validate(&self) -> Result<()> {
+        if self.no_overwrite_dir && self.force_overwrite_dir {
+            tracing::warn!("--force-overwrite-dir is disabled with --no-overwrite-dir");
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerGroupOptions {
     pub target: MapResolutionTarget,
@@ -65,11 +158,29 @@ pub struct OwnerGroupOptions {
     pub apply_group: bool,
 }
 
+impl Default for OwnerGroupOptions {
+    fn default() -> Self {
+        Self {
+            target: MapResolutionTarget::NameId,
+            validate_maps: false,
+            same_owner: false,
+            apply_owner: false,
+            apply_group: false,            
+        }
+    }
+}
+
+impl Validate for OwnerGroupOptions {
+    // INFO: Stub for the moment, so all sub structs have a validate method()
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScanOptions {
     pub rehash: bool,
-    pub clear_archive_meta: bool,
     pub sparsify: bool,
     pub page_size: usize,
 }
@@ -78,10 +189,20 @@ impl Default for ScanOptions {
     fn default() -> Self {
         Self {
             rehash: true,
-            clear_archive_meta: false,
             sparsify: false,
             page_size: 4096,
         }
+    }
+}
+
+impl Validate for ScanOptions {
+    fn validate(&self) -> Result<()> {
+        if self.sparsify && self.page_size == 0 {
+            return Err(Error::Config(
+                "page_size must be greater than 0 when `--sparsify` is set".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -101,6 +222,408 @@ pub struct ExtractConfig {
     pub filter: FilterOptions,
 }
 
+impl Default for ExtractConfig {
+    /// Extract config with every optional bit at its "off" default. Used as the
+    /// merge baseline: fields equal to `DEFAULT_CONFIG` count as unset during a
+    /// config mergee
+    fn default() -> Self {
+        Self {
+            paths: PathLayout::default(),
+            decompression: super::compression::CompressionFormat::None,
+            placement: PlacementOptions::default(),
+            attributes: ExtractAttributeOptions::default(),
+            scan: ScanOptions::default(),
+            process: ProcessOptions::default(),
+            owner_policy: OwnerGroupSource::None,
+            owner_group: OwnerGroupOptions::default(),
+            mode_policy: ModeSource::None,
+            strip_components: 0,
+            transform_policy: TransformSource::None,
+            filter: FilterOptions::default(),
+        }
+    }
+}
+
+impl super::WorkLayout for ExtractConfig {
+    fn paths(&self) -> &PathLayout {
+        &self.paths
+    }
+
+    fn cleanup(&self) -> &CleanupSettings {
+        &self.process.cleanup
+    }
+
+    fn kept_db_parent(&self, mode: super::CleanupMode) -> &Path {
+        match mode {
+            super::CleanupMode::Archive => super::path_parent(&self.paths.archive_path),
+            super::CleanupMode::Extract => self.paths.extraction_root(),
+        }
+    }
+}
+
+impl Validate for ExtractConfig {
+    fn validate(&self) -> Result<()> {
+        self.paths.validate()?;
+        self.placement.validate()?;
+        self.attributes.validate()?;
+        self.scan.validate()?;
+        self.process.validate()?;
+        self.owner_group.validate()?;
+        self.filter.validate()?;
+
+
+        Ok(())
+    }
+}
+
+impl ExtractConfig {
+    /// Build from CLI args, optionally inheriting `base` where the args do not
+    /// define a value (Option-B merge: a field whose arg-derived value matches the
+    /// default is "not defined" and inherits from `base`).
+    ///
+    /// Pair validation runs first; `--apply-all-metadata` selects the INCLUDE base
+    /// (apply every bit) and the default EXCLUDE base applies none, with per-bit
+    /// `--x`/`--no-x` flags overriding the base in either direction.
+    pub fn build(args: &ExtractArgs, base: Option<&ExtractConfig>) -> Result<Self> {
+        let candidate = Self::try_from(args)?;
+        // Validation happens on the merged result: a field alone may be valid but
+        // invalid once combined with an inherited base value (see `Validate`).
+        let merged = match base {
+            None => candidate,
+            Some(base) => candidate.merge_over(base, &ExtractConfig::default()),
+        };
+        merged.validate()?;
+        Ok(merged)
+    }
+
+    /// Option-B merge: fields whose candidate value matches `default` are "not
+    /// defined" and inherit from `base`; everything else comes from the candidate.
+    fn merge_over(&self, base: &Self, default: &Self) -> Self {
+        Self {
+            paths: self.paths.clone(),
+            decompression: self.decompression,
+            placement: self.placement.clone(),
+            attributes: self.attributes.clone(),
+            scan: merge_pick_clone(&self.scan, &base.scan, &default.scan),
+            process: ProcessOptions {
+                start_policy: self.process.start_policy,
+                jobs: merge_pick_copy(self.process.jobs, base.process.jobs, default.process.jobs),
+                io_jobs: merge_pick_copy(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
+                auto_flush_limit: merge_pick_copy(self.process.auto_flush_limit, base.process.auto_flush_limit, default.process.auto_flush_limit),
+                batch_size: merge_pick_copy(self.process.batch_size, base.process.batch_size, default.process.batch_size),
+                work_capacity: merge_pick_copy(self.process.work_capacity, base.process.work_capacity, default.process.work_capacity),
+                out_capacity: merge_pick_copy(self.process.out_capacity, base.process.out_capacity, default.process.out_capacity),
+                feed_chunk: merge_pick_copy(self.process.feed_chunk, base.process.feed_chunk, default.process.feed_chunk),
+                drain_chunk: merge_pick_copy(self.process.drain_chunk, base.process.drain_chunk, default.process.drain_chunk),
+                fail_fast: merge_pick_copy(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
+                no_errors: merge_pick_copy(self.process.no_errors, base.process.no_errors, default.process.no_errors),
+                force: merge_pick_copy(self.process.force, base.process.force, default.process.force),
+                relax_utf8: merge_pick_copy(self.process.relax_utf8, base.process.relax_utf8, default.process.relax_utf8),
+                progress_mode: merge_pick_copy(self.process.progress_mode, base.process.progress_mode, default.process.progress_mode),
+                cleanup: self.process.cleanup,
+                exit_after_stage: self.process.exit_after_stage,
+            },
+            owner_policy: merge_pick_clone(&self.owner_policy, &base.owner_policy, &default.owner_policy),
+            owner_group: self.owner_group.clone(),
+            mode_policy: merge_pick_clone(&self.mode_policy, &base.mode_policy, &default.mode_policy),
+            strip_components: self.strip_components,
+            transform_policy: merge_pick_clone(&self.transform_policy, &base.transform_policy, &default.transform_policy),
+            filter: merge_pick_clone(&self.filter, &base.filter, &default.filter),
+        }
+    }
+
+    pub fn try_from(args: &ExtractArgs) -> Result<Self> {
+        let c_directory = resolve_cwd(args.directory.as_deref())?;
+        let c_archive_path = resolve_path_to_abs_path(&args.archive, &c_directory);
+        if !c_archive_path.is_file() {
+            return Err(Error::Config(format!(
+                "archive does not exist or is not a file: {}",
+                c_archive_path.display()
+            )));
+        }
+
+        let extract_stage_location = ExtractStageLocation::BesideArchive;
+        let c_output_dir = match &args.extract_to {
+            Some(path) => resolve_path_to_abs_path(path, &c_directory),
+            None => c_directory.clone(),
+        };
+        std::fs::create_dir_all(&c_output_dir).map_err(|e| Error::io(&c_output_dir, e))?;
+        let work_dir = match &args.work_dir {
+            Some(path) => resolve_path_to_abs_path(path, &c_directory),
+            None => default_extract_work_dir(&c_archive_path, &c_output_dir, extract_stage_location),
+        };
+        std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
+
+        let start_policy = StartPolicy::create_or_fresh(args.fresh);
+
+        let decompression = resolve_compression(&args.compression, &c_archive_path)?;
+
+        validate_metadata_pairs(args)?;
+
+        // Extract default: apply nothing. `--apply-all-metadata` flips the whole
+        // group on; per-bit `--x`/`--no-x` override on top (explicit wins).
+        let apply_all = args.apply_metadata;
+
+        let apply_owner = resolve_bool_flag(args.no_apply_stored_owner_map,
+                                            args.apply_stored_owner_map,
+                                            apply_all);
+        let apply_group = resolve_bool_flag(args.no_apply_stored_group_map,
+                                            args.apply_stored_group_map,
+                                            apply_all);
+        // `same_owner` is the inference exception: explicit flags win, then the
+        // INCLUDE base infers from the effective uid, EXCLUDE base means no owner.
+        let same_owner = if args.no_same_owner {
+            false
+        } else if args.restore_owner {
+            true
+        } else {
+            let owner = infer_same_owner();
+            let owner_str = if owner { "--same-owner" } else { "--no-same-owner" };
+            tracing::info!("Inferred: {owner_str}");
+            owner
+        };
+        let apply_mode = resolve_bool_flag(args.no_apply_mode,
+                                           args.apply_mode,
+                                           apply_all);
+        let apply_transform = resolve_bool_flag(args.no_apply_transform,
+                                                args.apply_transform,
+                                                apply_all);
+
+        // Stored vs CLI owner/group policy. Explicit --owner/--group/--map take precedence;
+        // resolved apply_owner/apply_group fall back to the archive's recorded policy.
+        let owner_policy = resolve_owner_policy_from_args(
+            args, &c_directory, apply_owner, apply_group
+        )?;
+
+        let mode_policy = resolve_mode_policy_from_args(args, apply_mode)?;
+        
+        // TODO what?
+        let (apply_owner, apply_group) = if matches!(owner_policy, OwnerGroupSource::Cli(_)) {
+            (false, false)
+        } else {
+            (apply_owner, apply_group)
+        };
+        
+        let jobs = args.jobs.unwrap_or_else(num_cpus::get);
+        let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
+        
+        Ok(Self {
+            paths: PathLayout {
+                archive_path: c_archive_path,
+                directory: c_directory,
+                output_dir: c_output_dir,
+                work_dir,
+            },
+            decompression,
+            placement: PlacementOptions {
+                absolute_names: args.absolute_names,
+                one_top_level: args.one_top_level.clone(),
+                keep_dir_symlink: args.keep_dir_symlink,
+                unlink_first: args.unlink_first,
+                no_create_dir: args.no_create_dir,
+                conflict_policy: args.conflict_policy,
+                silent_conflicts: args.silent_conflicts,
+                remove_and_replace: args.remove_and_replace,
+                link_tree: args.link_tree,
+                use_hard_links: args.use_hard_links,
+                absolute_links: args.absolute_links,
+                clean_target: args.clean_target,
+                link_source: args.link_source.clone(),
+                no_reflink: args.no_reflink,
+                hard_link_grouping: args.hard_link_grouping,
+                recreate_none_file_entries: args.create_other_entries,
+            },
+            attributes: ExtractAttributeOptions {
+                restore_owner: same_owner,
+                no_overwrite_dir: args.no_overwrite_dir,
+                force_overwrite_dir: args.force_overwrite_dir,
+                apply_atime: resolve_bool_flag(args.no_apply_atime, args.apply_atime, apply_all),
+                apply_mtime: resolve_bool_flag(args.no_apply_mtime, args.apply_mtime, apply_all),
+                no_xattrs: !resolve_bool_flag(args.no_xattrs, args.xattrs, apply_all),
+                no_acls: !resolve_bool_flag(args.no_acls, args.acls, apply_all),
+                no_selinux: !resolve_bool_flag(args.no_selinux, args.selinux, apply_all),
+                no_same_permissions: !resolve_bool_flag(args.no_same_permissions,
+                                                        args.same_permissions,
+                                                        apply_all),
+            },
+            scan: ScanOptions {
+                rehash: true, // TODO cli?
+                sparsify: args.sparsify,
+                page_size: args.page_size,
+            },
+            process: ProcessOptions {
+                start_policy,
+                jobs,
+                io_jobs,
+                auto_flush_limit: args.auto_flush_limit,
+                batch_size: args.batch_size,
+                work_capacity: args.work_capacity,
+                out_capacity: args.out_capacity,
+                feed_chunk: args.feed_chunk,
+                drain_chunk: args.drain_chunk,
+                fail_fast: args.fail_fast,
+                no_errors: args.no_errors,
+                force: args.force,
+                relax_utf8: args.relax_utf8,
+                progress_mode: args.progress_mode,
+                cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
+                exit_after_stage: None,
+            },
+            owner_policy,
+            owner_group: OwnerGroupOptions {
+                target: args.map_target,
+                validate_maps: args.validate_maps,
+                same_owner,
+                apply_owner,
+                apply_group,
+            },
+            mode_policy,
+            strip_components: args.strip_components,
+            transform_policy: resolve_transform_policy_from_args(args, apply_transform)?,
+            filter: FilterOptions {
+                exclude_patterns: args.exclude.clone(),
+                include_patterns: args.include.clone(),
+                exclude_from: args.exclude_from.clone(),
+                include_from: args.include_from.clone(),
+                anchored: args.anchored,
+                ignore_case: args.ignore_case,
+                eager_filter: !args.lazy_filter,
+            },
+        })
+    }
+
+    #[cfg(test)]
+    pub fn for_place_test(extraction_root: PathBuf, absolute_names: bool, jobs: usize) -> Self {
+        Self {
+            paths: PathLayout {
+                archive_path: PathBuf::new(),
+                directory: extraction_root.clone(),
+                output_dir: extraction_root,
+                work_dir: PathBuf::new(),
+            },
+            decompression: super::compression::CompressionFormat::None,
+            placement: PlacementOptions {
+                absolute_names,
+                one_top_level: None,
+                keep_dir_symlink: false,
+                unlink_first: false,
+                no_create_dir: true,
+                conflict_policy: ConflictPolicy::Replace,
+                silent_conflicts: false,
+                remove_and_replace: false,
+                link_tree: false,
+                use_hard_links: false,
+                absolute_links: false,
+                clean_target: false,
+                link_source: None,
+                no_reflink: false,
+                hard_link_grouping: HardLinkGrouping::Global,
+                recreate_none_file_entries: true,
+            },
+            attributes: ExtractAttributeOptions::default(),
+            scan: ScanOptions::default(),
+            process: ProcessOptions::default(),
+            owner_policy: OwnerGroupSource::None,
+            owner_group: OwnerGroupOptions::default(),
+            mode_policy: ModeSource::None,
+            strip_components: 0,
+            transform_policy: TransformSource::None,
+            filter: FilterOptions::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn for_scan_test(archive_path: PathBuf, work_dir: PathBuf, directory: PathBuf) -> Self {
+        Self {
+            paths: PathLayout {
+                archive_path,
+                directory: directory.clone(),
+                output_dir: directory,
+                work_dir,
+            },
+            decompression: super::compression::CompressionFormat::None,
+            placement: PlacementOptions {
+                absolute_names: false,
+                one_top_level: None,
+                keep_dir_symlink: false,
+                unlink_first: false,
+                no_create_dir: false,
+                conflict_policy: ConflictPolicy::Replace,
+                silent_conflicts: false,
+                remove_and_replace: false,
+                link_tree: false,
+                use_hard_links: false,
+                absolute_links: false,
+                clean_target: true,
+                link_source: None,
+                no_reflink: false,
+                hard_link_grouping: HardLinkGrouping::Global,
+                recreate_none_file_entries: true,
+            },
+            attributes: ExtractAttributeOptions::default(),
+            scan: ScanOptions::default(),
+            process: ProcessOptions { jobs: 1, io_jobs: 1, force: true, ..ProcessOptions::default() },
+            owner_policy: OwnerGroupSource::None,
+            owner_group: OwnerGroupOptions::default(),
+            mode_policy: ModeSource::None,
+            strip_components: 0,
+            transform_policy: TransformSource::None,
+            filter: FilterOptions::default(),
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Validation Helper Functions
+// -------------------------------------------------------------------------------------------------
+
+fn validate_name(name: &Path, source: &str) -> Result<()>{
+    debug_assert_eq!(*name, name.clean(),
+                     "PRECONDITION ERROR: All paths are expected to be clean: {source}");
+    if name.components().count() != 1 {
+        return Err(Error::Config(format!(
+            "{source} must be a name, not a path."
+        )));
+    }
+    if *name == PathBuf::from("") {
+        return Err(Error::Config(format!(
+            "{source} may not be empty."
+        )));
+    }
+    Ok(())
+}
+
+
+/// Reject contradictory pairs like `--apply-atime --no-apply-atime` before building.
+fn validate_metadata_pairs(args: &ExtractArgs) -> Result<()> {
+    let pairs = [
+        (args.restore_owner, args.no_same_owner, "--same-owner", "--no-same-owner"),
+        (args.apply_stored_owner_map, args.no_apply_stored_owner_map, "--apply-stored-owner-map", "--no-apply-stored-owner-map"),
+        (args.apply_stored_group_map, args.no_apply_stored_group_map, "--apply-stored-group-map", "--no-apply-stored-group-map"),
+        (args.apply_mode, args.no_apply_mode, "--apply-mode", "--no-apply-mode"),
+        (args.apply_transform, args.no_apply_transform, "--apply-transform", "--no-apply-transform"),
+        (args.apply_atime, args.no_apply_atime, "--apply-atime", "--no-apply-atime"),
+        (args.apply_mtime, args.no_apply_mtime, "--apply-mtime", "--no-apply-mtime"),
+        (args.xattrs, args.no_xattrs, "--xattrs", "--no-xattrs"),
+        (args.acls, args.no_acls, "--acls", "--no-acls"),
+        (args.selinux, args.no_selinux, "--selinux", "--no-selinux"),
+        (args.same_permissions, args.no_same_permissions, "--same-permissions", "--no-same-permissions"),
+    ];
+    for (yes, no, yes_flag, no_flag) in pairs {
+        if yes && no {
+            return Err(Error::Config(format!(
+                "conflicting flags {} and {}; pick one",
+                yes_flag, no_flag
+            )));
+        }
+    }
+    Ok(())
+}
+
+// -------------------------------------------------------------------------------------------------
+// Resolve Helper Functions
+// -------------------------------------------------------------------------------------------------
+
 /// Resolve which owner/group policy applies on extract from the CLI args.
 ///
 /// Explicit `--owner`/`--group`/`--owner-map`/`--group-map` map to a CLI policy and
@@ -111,8 +634,8 @@ fn resolve_owner_policy_from_args(
     args: &ExtractArgs,
     directory: &Path,
     apply_owner: bool,
-    apply_group: bool,
-) -> Result<OwnerGroupSource> {
+    apply_group: bool)
+    -> Result<OwnerGroupSource> {
     let has_cli = args.owner.is_some()
         || args.group.is_some()
         || args.owner_map.is_some()
@@ -125,8 +648,12 @@ fn resolve_owner_policy_from_args(
                  explicit --owner/--group/--owner-map/--group-map take precedence"
             );
         }
-        let owner_map = resolve_map_arg(args.owner_map.as_ref(), "--owner-map", directory)?;
-        let group_map = resolve_map_arg(args.group_map.as_ref(), "--group-map", directory)?;
+        let owner_map = resolve_map_arg(
+            args.owner_map.as_ref(),"--owner-map", directory
+        )?;
+        let group_map = resolve_map_arg(
+            args.group_map.as_ref(),"--group-map", directory
+        )?;
         match parse_owner_group_args(
             args.owner.as_deref(),
             owner_map.as_deref(),
@@ -168,10 +695,8 @@ fn resolve_mode_policy_from_args(args: &ExtractArgs, apply_mode: bool) -> Result
 /// Resolve which name-transform policy applies on extract from the CLI args.
 /// Explicit `--transform` takes precedence over `apply_transform` (which
 /// falls back to the archive's recorded expression).
-fn resolve_transform_policy_from_args(
-    args: &ExtractArgs,
-    apply_transform: bool,
-) -> Result<TransformSource> {
+fn resolve_transform_policy_from_args(args: &ExtractArgs, apply_transform: bool)
+    -> Result<TransformSource> {
     if let Some(expr) = &args.transform {
         if apply_transform {
             tracing::warn!("--apply-transform ignored; explicit --transform takes precedence");
@@ -189,8 +714,8 @@ fn resolve_transform_policy_from_args(
 fn resolve_map_arg(
     map: Option<&PathBuf>,
     label: &str,
-    directory: &Path,
-) -> Result<Option<PathBuf>> {
+    directory: &Path)
+    -> Result<Option<PathBuf>> {
     match map {
         None => Ok(None),
         Some(p) => {
@@ -200,478 +725,3 @@ fn resolve_map_arg(
         }
     }
 }
-
-impl ExtractConfig {
-    /// Build from CLI args, optionally inheriting `base` where the args do not
-    /// define a value (Option-B merge: a field whose arg-derived value matches the
-    /// default is "not defined" and inherits from `base`).
-    ///
-    /// Pair validation runs first; `--apply-all-metadata` selects the INCLUDE base
-    /// (apply every bit) and the default EXCLUDE base applies none, with per-bit
-    /// `--x`/`--no-x` flags overriding the base in either direction.
-    pub fn build(args: &ExtractArgs, base: Option<&ExtractConfig>) -> Result<Self> {
-        validate_metadata_pairs(args)?;
-        let candidate = Self::try_from(args)?;
-        match base {
-            None => Ok(candidate),
-            Some(base) => Ok(candidate.merge_over(base, &DEFAULT_CONFIG)),
-        }
-    }
-
-    pub fn try_from(args: &ExtractArgs) -> Result<Self> {
-        let directory = resolve_cwd(args.directory.as_deref())?;
-        let archive_path = resolve_path_to_abs_path(&args.archive, &directory);
-        if !archive_path.is_file() {
-            return Err(Error::Config(format!(
-                "archive does not exist or is not a file: {}",
-                archive_path.display()
-            )));
-        }
-
-        std::fs::create_dir_all(&directory).map_err(|e| Error::io(&directory, e))?;
-
-        let extract_stage_location = ExtractStageLocation::BesideArchive;
-        let work_dir = match &args.work_dir {
-            Some(path) => resolve_path_to_abs_path(path, &directory),
-            None => default_extract_work_dir(&archive_path, &directory, extract_stage_location),
-        };
-        std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
-
-        let decompression = infer_compression_from_suffix(&archive_path);
-        let start_policy = StartPolicy::create_or_fresh(args.fresh);
-
-        // Emit warning
-        if args.absolute_names && matches!(args.hard_link_grouping, HardLinkGrouping::Source) {
-            tracing::warn!(
-                "Materializing with --absolute-names and per source hardlink recreation might cause \
-                disjoint subgroups of hardlinks that formerly were a single hardlink.");
-        }
-
-        if args.sparsify && args.page_size == 0 {
-            return Err(Error::Config(
-                "page_size must be greater than 0 when `--sparsify` is set".into(),
-            ));
-        } // TODO warn if page size given but ignored.
-
-        // TODO clean_target and one_top_level IS NONE => warning, no effect.
-        // TODO force_overwrite_dir and no_overwrite_dir
-        // TODO cli: reject --relax-utf8 combined with --fail-fast (Error::Config).
-
-
-        // Extract default: apply nothing. `--apply-all-metadata` flips the whole
-        // group on; per-bit `--x`/`--no-x` override on top (explicit wins).
-        let apply_all = args.apply_metadata;
-
-        let apply_owner = resolve_bool_flag(args.no_apply_stored_owner_map,
-                                            args.apply_stored_owner_map,
-                                            apply_all);
-        let apply_group = resolve_bool_flag(args.no_apply_stored_group_map,
-                                            args.apply_stored_group_map,
-                                            apply_all);
-        // `same_owner` is the inference exception: explicit flags win, then the
-        // INCLUDE base infers from the effective uid, EXCLUDE base means no owner.
-        let same_owner = if args.no_same_owner {
-            false
-        } else if args.restore_owner {
-            true
-        } else if apply_all {
-            infer_same_owner()
-        } else {
-            false
-        };
-        let apply_mode = resolve_bool_flag(args.no_apply_mode,
-                                           args.apply_mode,
-                                           apply_all);
-        let apply_transform = resolve_bool_flag(args.no_apply_transform,
-                                                args.apply_transform,
-                                                apply_all);
-
-        // Stored vs CLI owner/group policy. Explicit --owner/--group/--map take precedence;
-        // resolved apply_owner/apply_group fall back to the archive's recorded policy.
-        let owner_policy = resolve_owner_policy_from_args(
-            args, &directory, apply_owner, apply_group
-        )?;
-
-        let mode_policy = resolve_mode_policy_from_args(args, apply_mode)?;
-
-        let (apply_owner, apply_group) = if matches!(owner_policy, OwnerGroupSource::Cli(_)) {
-            (false, false)
-        } else {
-            (apply_owner, apply_group)
-        };
-        let jobs = args.jobs.unwrap_or_else(num_cpus::get);
-        let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
-        Ok(Self {
-            paths: PathLayout {
-                archive_path,
-                directory,
-                work_dir,
-            },
-            decompression,
-            placement: PlacementOptions {
-                absolute_names: args.absolute_names,
-                one_top_level: args.one_top_level.clone(),
-                keep_dir_symlink: args.keep_dir_symlink,
-                unlink_first: args.unlink_first,
-                no_create_dir: args.no_create_dir,
-                conflict_policy: args.conflict_policy,
-                silent_conflicts: args.silent_conflicts,
-                remove_and_replace: args.remove_and_replace,
-                link_tree: args.link_tree,
-                use_hard_links: args.use_hard_links,
-                absolute_links: args.absolute_links,
-                clean_target: true,
-                link_source: None,
-                no_reflink: false,
-                hard_link_grouping: HardLinkGrouping::Global,
-                recreate_none_file_entries: true,
-            },
-            attributes: ExtractAttributeOptions {
-                restore_owner: same_owner,
-                no_overwrite_dir: args.no_overwrite_dir,
-                force_overwrite_dir: args.force_overwrite_dir,
-                apply_atime: resolve_bool_flag(args.no_apply_atime, args.apply_atime, apply_all),
-                apply_mtime: resolve_bool_flag(args.no_apply_mtime, args.apply_mtime, apply_all),
-                no_xattrs: !resolve_bool_flag(args.no_xattrs, args.xattrs, apply_all),
-                no_acls: !resolve_bool_flag(args.no_acls, args.acls, apply_all),
-                no_selinux: !resolve_bool_flag(args.no_selinux, args.selinux, apply_all),
-                no_same_permissions: !resolve_bool_flag(args.no_same_permissions, args.same_permissions, apply_all),
-            },
-            scan: ScanOptions {
-                rehash: true,
-                clear_archive_meta: false,
-                sparsify: args.sparsify,
-                page_size: args.page_size,
-            },
-            process: ProcessOptions {
-                start_policy,
-                jobs,
-                io_jobs,
-                fail_fast: args.fail_fast,
-                no_errors: args.no_errors,
-                force: true, // TODO cli
-                relax_utf8: false, // TODO cli
-                cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
-                exit_after_stage: None,
-            },
-            owner_policy,
-            owner_group: OwnerGroupOptions {
-                target: args.map_target,
-                validate_maps: args.validate_maps,
-                same_owner,
-                apply_owner,
-                apply_group,
-            },
-            mode_policy,
-            strip_components: args.strip_components,
-            transform_policy: resolve_transform_policy_from_args(args, apply_transform)?,
-            filter: FilterOptions {
-                exclude_patterns: args.exclude.clone(),
-                include_patterns: args.include.clone(),
-                exclude_from: args.exclude_from.clone(),
-                include_from: args.include_from.clone(),
-                anchored: args.anchored,
-                ignore_case: args.ignore_case,
-                eager_filter: !args.lazy_filter,
-            },
-        })
-    }
-
-    #[cfg(test)]
-    pub fn for_place_test(extraction_root: PathBuf, absolute_names: bool, jobs: usize) -> Self {
-        Self {
-            paths: PathLayout {
-                archive_path: PathBuf::new(),
-                directory: extraction_root,
-                work_dir: PathBuf::new(),
-            },
-            decompression: super::compression::CompressionFormat::None,
-            placement: PlacementOptions {
-                absolute_names,
-                one_top_level: None,
-                keep_dir_symlink: false,
-                unlink_first: false,
-                no_create_dir: true,
-                conflict_policy: ConflictPolicy::Replace,
-                silent_conflicts: false,
-                remove_and_replace: false,
-                link_tree: false,
-                use_hard_links: false,
-                absolute_links: false,
-                clean_target: false,
-                link_source: None,
-                no_reflink: false,
-                hard_link_grouping: HardLinkGrouping::Global,
-                recreate_none_file_entries: true,
-            },
-            attributes: ExtractAttributeOptions {
-                restore_owner: false,
-                no_overwrite_dir: false,
-                force_overwrite_dir: false,
-                apply_atime: false,
-                apply_mtime: false,
-                no_xattrs: false,
-                no_acls: false,
-                no_selinux: false,
-                no_same_permissions: false,
-            },
-            scan: ScanOptions::default(),
-            process: ProcessOptions {
-                start_policy: StartPolicy::Create,
-                jobs,
-                io_jobs: jobs,
-                fail_fast: false,
-                no_errors: false,
-                force: true, // TODO cli
-                relax_utf8: false, // TODO cli
-                cleanup: CleanupSettings { keep_db: false, keep_stage: false },
-                exit_after_stage: None,
-            },
-            owner_policy: OwnerGroupSource::None,
-            owner_group: OwnerGroupOptions {
-                target: MapResolutionTarget::NameId,
-                validate_maps: false,
-                same_owner: false,
-                apply_owner: false,
-                apply_group: false,
-            },
-            mode_policy: ModeSource::None,
-            strip_components: 0,
-            transform_policy: TransformSource::None,
-            filter: FilterOptions {
-                exclude_patterns: Vec::new(),
-                include_patterns: Vec::new(),
-                exclude_from: Vec::new(),
-                include_from: Vec::new(),
-                anchored: false,
-                ignore_case: false,
-                eager_filter: true,
-            },
-        }
-    }
-
-    #[cfg(test)]
-    pub fn for_scan_test(archive_path: PathBuf, work_dir: PathBuf, directory: PathBuf) -> Self {
-        Self {
-            paths: PathLayout {
-                archive_path,
-                directory,
-                work_dir,
-            },
-            decompression: super::compression::CompressionFormat::None,
-            placement: PlacementOptions {
-                absolute_names: false,
-                one_top_level: None,
-                keep_dir_symlink: false,
-                unlink_first: false,
-                no_create_dir: false,
-                conflict_policy: ConflictPolicy::Replace,
-                silent_conflicts: false,
-                remove_and_replace: false,
-                link_tree: false,
-                use_hard_links: false,
-                absolute_links: false,
-                clean_target: true, // TODO cli
-                link_source: None,
-                no_reflink: false,
-                hard_link_grouping: HardLinkGrouping::Global,
-                recreate_none_file_entries: true,
-            },
-            attributes: ExtractAttributeOptions {
-                restore_owner: false,
-                no_overwrite_dir: false,
-                force_overwrite_dir: false,
-                apply_atime: false,
-                apply_mtime: false,
-                no_xattrs: false,
-                no_acls: false,
-                no_selinux: false,
-                no_same_permissions: false,
-            },
-            scan: ScanOptions::default(),
-            process: ProcessOptions {
-                start_policy: StartPolicy::Create,
-                jobs: 1,
-                io_jobs: 1,
-                fail_fast: false,
-                no_errors: false,
-                force: true, // TODO cli
-                relax_utf8: false, // TODO cli
-                cleanup: CleanupSettings { keep_db: false, keep_stage: false },
-                exit_after_stage: None,
-            },
-            owner_policy: OwnerGroupSource::None,
-            owner_group: OwnerGroupOptions {
-                target: MapResolutionTarget::NameId,
-                validate_maps: false,
-                same_owner: false,
-                apply_owner: false,
-                apply_group: false,
-            },
-            mode_policy: ModeSource::None,
-            strip_components: 0,
-            transform_policy: TransformSource::None,
-            filter: FilterOptions {
-                exclude_patterns: Vec::new(),
-                include_patterns: Vec::new(),
-                exclude_from: Vec::new(),
-                include_from: Vec::new(),
-                anchored: false,
-                ignore_case: false,
-                eager_filter: true,
-            },
-        }
-    }
-}
-
-impl super::WorkLayout for ExtractConfig {
-    fn paths(&self) -> &PathLayout {
-        &self.paths
-    }
-
-    fn cleanup(&self) -> &CleanupSettings {
-        &self.process.cleanup
-    }
-
-    fn kept_db_parent(&self, mode: super::CleanupMode) -> &Path {
-        match mode {
-            super::CleanupMode::Archive => super::path_parent(&self.paths.archive_path),
-            super::CleanupMode::Extract => self.paths.extraction_root(),
-        }
-    }
-}
-
-impl ExtractConfig {
-    /// Option-B merge: fields whose candidate value matches `default` are "not
-    /// defined" and inherit from `base`; everything else comes from the candidate.
-    fn merge_over(&self, base: &Self, default: &Self) -> Self {
-        Self {
-            paths: self.paths.clone(),
-            decompression: self.decompression,
-            placement: self.placement.clone(),
-            attributes: self.attributes.clone(),
-            scan: merge_pick_clone(&self.scan, &base.scan, &default.scan),
-            process: ProcessOptions {
-                start_policy: self.process.start_policy,
-                jobs: merge_pick_copy(self.process.jobs, base.process.jobs, default.process.jobs),
-                io_jobs: merge_pick_copy(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
-                fail_fast: merge_pick_copy(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
-                no_errors: merge_pick_copy(self.process.no_errors, base.process.no_errors, default.process.no_errors),
-                force: merge_pick_copy(self.process.force, base.process.force, default.process.force),
-                relax_utf8: merge_pick_copy(self.process.relax_utf8, base.process.relax_utf8, default.process.relax_utf8),
-                cleanup: self.process.cleanup,
-                exit_after_stage: self.process.exit_after_stage,
-            },
-            owner_policy: merge_pick_clone(&self.owner_policy, &base.owner_policy, &default.owner_policy),
-            owner_group: self.owner_group.clone(),
-            mode_policy: merge_pick_clone(&self.mode_policy, &base.mode_policy, &default.mode_policy),
-            strip_components: self.strip_components,
-            transform_policy: merge_pick_clone(&self.transform_policy, &base.transform_policy, &default.transform_policy),
-            filter: merge_pick_clone(&self.filter, &base.filter, &default.filter),
-        }
-    }
-}
-
-/// Reject contradictory pairs like `--apply-atime --no-apply-atime` before building.
-fn validate_metadata_pairs(args: &ExtractArgs) -> Result<()> {
-    let pairs = [
-        (args.restore_owner, args.no_same_owner, "--same-owner", "--no-same-owner"),
-        (args.apply_stored_owner_map, args.no_apply_stored_owner_map, "--apply-stored-owner-map", "--no-apply-stored-owner-map"),
-        (args.apply_stored_group_map, args.no_apply_stored_group_map, "--apply-stored-group-map", "--no-apply-stored-group-map"),
-        (args.apply_mode, args.no_apply_mode, "--apply-mode", "--no-apply-mode"),
-        (args.apply_transform, args.no_apply_transform, "--apply-transform", "--no-apply-transform"),
-        (args.apply_atime, args.no_apply_atime, "--apply-atime", "--no-apply-atime"),
-        (args.apply_mtime, args.no_apply_mtime, "--apply-mtime", "--no-apply-mtime"),
-        (args.xattrs, args.no_xattrs, "--xattrs", "--no-xattrs"),
-        (args.acls, args.no_acls, "--acls", "--no-acls"),
-        (args.selinux, args.no_selinux, "--selinux", "--no-selinux"),
-        (args.same_permissions, args.no_same_permissions, "--same-permissions", "--no-same-permissions"),
-    ];
-    for (yes, no, yes_flag, no_flag) in pairs {
-        if yes && no {
-            return Err(Error::Config(format!(
-                "conflicting flags {} and {}; pick one",
-                yes_flag, no_flag
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Extract config with every optional bit at its "off" default. Used as the
-/// merge baseline: fields equal to `DEFAULT_CONFIG` count as unset during a
-/// config merge.
-const DEFAULT_CONFIG: ExtractConfig = ExtractConfig {
-    paths: PathLayout {
-        archive_path: PathBuf::new(),
-        directory: PathBuf::new(),
-        work_dir: PathBuf::new(),
-    },
-    decompression: super::compression::CompressionFormat::None,
-    placement: PlacementOptions {
-        absolute_names: false,
-        one_top_level: None,
-        keep_dir_symlink: false,
-        unlink_first: false,
-        no_create_dir: false,
-        conflict_policy: ConflictPolicy::Replace,
-        silent_conflicts: false,
-        remove_and_replace: false,
-        link_tree: false,
-        use_hard_links: false,
-        absolute_links: false,
-        clean_target: false,
-        link_source: None,
-        no_reflink: false,
-        hard_link_grouping: HardLinkGrouping::Global,
-        recreate_none_file_entries: true,
-    },
-    attributes: ExtractAttributeOptions {
-        restore_owner: false,
-        no_overwrite_dir: false,
-        force_overwrite_dir: false,
-        apply_atime: false,
-        apply_mtime: false,
-        no_xattrs: true,
-        no_acls: true,
-        no_selinux: true,
-        no_same_permissions: true,
-    },
-    scan: ScanOptions {
-                rehash: true,
-                clear_archive_meta: false,
-                sparsify: false,
-                page_size: 4096,
-            },
-            process: ProcessOptions {
-        start_policy: StartPolicy::Create,
-        jobs: 0,
-        io_jobs: 0,
-        fail_fast: false,
-        no_errors: false,
-        force: false,
-        relax_utf8: false, // TODO cli
-        cleanup: CleanupSettings { keep_db: false, keep_stage: false },
-        exit_after_stage: None,
-    },
-    owner_policy: OwnerGroupSource::None,
-    owner_group: OwnerGroupOptions {
-        target: MapResolutionTarget::NameId,
-        validate_maps: false,
-        same_owner: false,
-        apply_owner: false,
-        apply_group: false,
-    },
-    mode_policy: ModeSource::None,
-    strip_components: 0,
-    transform_policy: TransformSource::None,
-    filter: FilterOptions {
-        exclude_patterns: Vec::new(),
-        include_patterns: Vec::new(),
-        exclude_from: Vec::new(),
-        include_from: Vec::new(),
-        anchored: false,
-        ignore_case: false,
-        eager_filter: false,
-    },
-};
