@@ -339,6 +339,7 @@ impl ExtractConfig {
     }
 
     pub fn try_from(args: &ExtractArgs) -> Result<Self> {
+        // INFO: c_* suffix in variables indicates that the paths were sanitized.
         let c_directory = resolve_cwd(args.directory.as_deref())?;
         let c_archive_path = resolve_path_to_abs_path(&args.archive, &c_directory);
         if !c_archive_path.is_file() {
@@ -354,11 +355,11 @@ impl ExtractConfig {
             None => c_directory.clone(),
         };
         std::fs::create_dir_all(&c_output_dir).map_err(|e| Error::io(&c_output_dir, e))?;
-        let work_dir = match &args.work_dir {
+        let c_work_dir = match &args.work_dir {
             Some(path) => resolve_path_to_abs_path(path, &c_directory),
             None => default_extract_work_dir(&c_archive_path, &c_output_dir, extract_stage_location),
         };
-        std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
+        std::fs::create_dir_all(&c_work_dir).map_err(|e| Error::io(&c_work_dir, e))?;
 
         let start_policy = StartPolicy::create_or_fresh(args.fresh);
 
