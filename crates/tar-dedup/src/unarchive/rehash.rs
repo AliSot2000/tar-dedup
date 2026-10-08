@@ -1,7 +1,8 @@
 //! Rehash: verify extract-cache payloads against catalog SHA-1 digests.
 
+use crate::common::defaults::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
 use crate::common::io_buffer;
-use crate::common::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY, send_receive_loop};
+use crate::common::send_receive_loop;
 use crate::config::ExtractPipelinePhase;
 use crate::db::flags::ErrorFlags;
 use crate::db::rehash::RehashOutcome;

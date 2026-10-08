@@ -1,11 +1,10 @@
 //! Place: copy/link cached payloads to final output paths.
 
 use crate::cli::ConflictPolicy;
+use crate::common::defaults::{BATCH_SIZE, DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY,
+                              WORK_CAPACITY};
 use crate::common::files;
-use crate::common::{BATCH_SIZE, DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY,
-                    WORK_CAPACITY,
-                    batched_loop, batched_stepped_loop, send_receive_loop,
-};
+use crate::common::{batched_loop, batched_stepped_loop, send_receive_loop};
 use crate::config::{ExtractConfig, ExtractPipelinePhase};
 use crate::db::Database;
 use crate::db::flags::{ErrorFlags, OutTreeFlag};
