@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use crate::archive::ArchiveRTArgs;
+use crate::common::defaults::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
 use crate::common::files::warn_if_times_changed;
-use crate::common::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY, send_receive_loop};
+use crate::common::send_receive_loop;
 use crate::db::Database;
 use crate::db::ErrorPhase;
 use crate::db::Recorder;

@@ -1,8 +1,8 @@
 //! Scan/untar: footer-first catalog, else leading `manifest.sqlite`; cache payloads.
 
 use crate::archive_footer::read_footer;
+use crate::common::defaults::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::common::files::copy_reader_batched;
-use crate::common::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
 use crate::db::flags::{ErrorFlags, FileFlag};
@@ -21,6 +21,7 @@ use std::fs;
 use std::io;
 use std::io::{BufReader, Read};
 use std::path::Path;
+use std::time::Duration;
 use tar::Entry;
 
 const OPT_DB_ERROR: &str = "INVARIANT ERROR: Database expected to be present at this point";

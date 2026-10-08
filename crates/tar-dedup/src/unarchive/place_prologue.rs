@@ -13,7 +13,6 @@ use std::path::{Component, Path, PathBuf};
 use path_clean::PathClean;
 
 use crate::cli::HardLinkGrouping;
-use crate::common::BATCH_SIZE;
 use crate::common::batched_stepped_loop;
 use crate::common::transform::{TransformExpr, TransformSource, parse_transform_expr};
 use crate::db::Database;

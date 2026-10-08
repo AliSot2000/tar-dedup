@@ -8,8 +8,8 @@
 //! only the canonical row is touched. With `--overwrite-dir`, directory metadata is
 //! applied as well.
 
-use crate::common::BATCH_SIZE;
 use crate::common::batched_loop;
+use crate::common::defaults::BATCH_SIZE;
 use crate::common::perms::{
     ModeSource, OwnerGroupPolicy, OwnerGroupSource, parse_mode_changes, resolve_owner_group,
 };

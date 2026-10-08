@@ -1,5 +1,4 @@
 use crate::archive::ArchiveRTArgs;
-use crate::common::BATCH_SIZE;
 use crate::common::batched_stepped_loop;
 use crate::common::files::warn_if_times_changed;
 use crate::config::PipelinePhase;

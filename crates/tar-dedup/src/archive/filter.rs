@@ -1,5 +1,4 @@
 use crate::archive::ArchiveRTArgs;
-use crate::common::BATCH_SIZE;
 use crate::common::filter::{
     FilterSink, ingest_filters as ingest_filter_rules, joint_filter_phase,
 };
