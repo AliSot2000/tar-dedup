@@ -596,10 +596,6 @@ impl Database {
         tar_writer::reset_archive_state(&*self.conn())
     }
 
-    pub fn clear_archive_meta(&self) -> Result<()> {
-        meta::clear_archive_meta(&mut *self.conn_mut())
-    }
-
     pub fn dump_meta(&self) -> Result<meta::MetaDump> {
         meta::dump_meta(&*self.conn())
     }
@@ -1180,7 +1176,7 @@ impl Database {
 /// A [`Recorder::flush`] with no attached database logs the loss instead.
 ///
 /// Auto-flush (on by default): once the buffered draft count reaches
-/// [`crate::common::DEFAULT_AUTO_FLUSH_LIMIT`] a flush is attempted so bursts of
+/// [`crate::common::defaults::DEFAULT_AUTO_FLUSH_LIMIT`] a flush is attempted so bursts of
 /// errors (e.g. an unreliable filesystem) don't grow the buffer without bound.
 /// Auto-flush never propagates errors and retains the drafts for a later retry.
 pub struct Recorder<'a> {
@@ -1191,6 +1187,7 @@ pub struct Recorder<'a> {
     flush_limit: u64,
 }
 
+// TODO flush_limit
 impl<'a> Recorder<'a> {
     /// Recorder tied to an already-open database.
     pub fn new(db: &'a Database, enabled: bool) -> Self {
@@ -1199,7 +1196,7 @@ impl<'a> Recorder<'a> {
             buf: Vec::new(),
             enabled,
             auto_flush: true,
-            flush_limit: crate::common::DEFAULT_AUTO_FLUSH_LIMIT,
+            flush_limit: crate::common::defaults::DEFAULT_AUTO_FLUSH_LIMIT,
         }
     }
 
@@ -1211,7 +1208,7 @@ impl<'a> Recorder<'a> {
             buf: Vec::new(),
             enabled,
             auto_flush: true,
-            flush_limit: crate::common::DEFAULT_AUTO_FLUSH_LIMIT,
+            flush_limit: crate::common::defaults::DEFAULT_AUTO_FLUSH_LIMIT,
         }
     }
 
