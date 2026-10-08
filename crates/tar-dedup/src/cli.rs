@@ -355,14 +355,7 @@ pub struct ArchiveArgs {
 
 #[derive(Debug, Args, Default)]
 pub struct CompressionFlags {
-    /// Use archive suffix to pick the compression filter.
-    #[arg(short = 'a', long = "auto-compress", group = "compress_filter")]
-    pub auto_compress: bool,
-
-    /// Do not infer compression from the archive suffix.
-    #[arg(long = "no-auto-compress")]
-    pub no_auto_compress: bool,
-
+    /// Filter the archive through gzip (overrides extension inference).
     #[arg(short = 'z', long = "gzip", group = "compress_filter")]
     pub gzip: bool,
 

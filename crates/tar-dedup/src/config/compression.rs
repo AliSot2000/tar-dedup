@@ -140,17 +140,9 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
         return Ok(format);
     }
 
-    if flags.auto_compress || !flags.no_auto_compress {
-        return Ok(infer_compression_from_suffix(archive_path));
-    }
-
-    if flags.auto_compress && flags.no_auto_compress {
-        return Err(Error::Config(
-            "--no-auto-compress and --auto-compress cannot be passed at the same time.".to_string(),
-        ));
-    }
-
-    Ok(CompressionFormat::None)
+    // No filter flag: the archive suffix decides (extension inference; unknown
+    // or bare suffix means no compression).
+    Ok(infer_compression_from_suffix(archive_path))
 }
 
 pub fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
