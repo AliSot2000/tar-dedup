@@ -28,6 +28,16 @@ use path_clean::PathClean;
 
 use crate::error::{Error, Result};
 
+/// Cross-field validation on a completed config block.
+///
+/// Container configs validate their child blocks first (recursively), then their
+/// own invariants. `build` runs this on the **merged** result — a field may be
+/// valid in isolation but invalid once combined with an inherited base value
+/// (e.g. `clean_target` + `no_create_dir` from two different sources).
+pub trait Validate {
+    fn validate(&self) -> Result<()>;
+}
+
 /// Top-level dispatch wrapper after CLI parse.
 #[derive(Debug)]
 pub enum RunConfig {
