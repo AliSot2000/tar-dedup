@@ -53,7 +53,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     // One recorder for the whole pass; auto-flush bounds the buffer on error-heavy
     // filesystems, and the final flush happens on drop even if the pass aborts.
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
 
     // Handle input directories
     // INFO: Already sanitized those dirs, that they dont overlap.

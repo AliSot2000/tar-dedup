@@ -127,7 +127,7 @@ fn handle_send_receive_loop(
     // Feed cursor over `hash_queue`: `queue_index` is the last consumed queue
     // position. The pull filters to still-pending rows, so a file already
     // handed to a worker (or hashed on a previous run) is never re-pulled.
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     let mut queue_index = 0u64;
 
     let pull = || {
@@ -661,7 +661,7 @@ mod tests {
     fn record_hash_error_persists_filestat() {
         let world = TestWorld::new();
         let id = world.add_file("e.bin", &pattern(1024, 1));
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
         record_hash_error(&mut recorder, &HashError {
             id,
             modified: false,

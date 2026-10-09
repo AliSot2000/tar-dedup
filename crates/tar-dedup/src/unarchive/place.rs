@@ -38,7 +38,7 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Place)
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     debug_assert!(rt.db.placement_prologue_done()?,
                   "PRECONDITION FAILED: PlacementPrologue must complete before place");
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     let progress = rt.progress;
     let corpus = rt.db.count_out_tree_rows()?;
     progress.set_phase_total(corpus);

@@ -156,7 +156,7 @@ fn handle_send_receive_loop(
     recv: Receiver<Option<RehashOutcome>>,
     thread_handles: Vec<thread::JoinHandle<()>>)
     -> Result<RehashCounts> {
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     let mut counts = RehashCounts { matches: 0, mismatches: 0, errors: 0 };
 
     // Feed cursor over `rehash_queue`: `queue_index` is the last consumed queue

@@ -38,7 +38,7 @@ pub struct OwnerGroupMode {
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     // Errors encountered while applying metadata are recorded per-file; the recorder
     // flushes them in a single txn at the end (unless `--no-errors`).
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     // Resolve the owner/group policy: stored in the archive or provided on the CLI.
     let policy: Option<OwnerGroupPolicy> = resolve_owner_group_policy(rt)?;
 

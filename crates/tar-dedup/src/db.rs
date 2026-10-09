@@ -48,6 +48,7 @@ pub use integrity::{
 };
 pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
 pub use scan::ScanRemainderTally;
+use crate::common::defaults::DEFAULT_AUTO_FLUSH_LIMIT;
 use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
 use crate::db::place::{CopyOutcome, MaterializeResult};
@@ -1187,28 +1188,31 @@ pub struct Recorder<'a> {
     flush_limit: u64,
 }
 
-// TODO flush_limit
 impl<'a> Recorder<'a> {
-    /// Recorder tied to an already-open database.
-    pub fn new(db: &'a Database, enabled: bool) -> Self {
+    /// Recorder tied to an already-open database. `flush_limit` overrides the
+    /// auto-flush threshold; `None` uses the default from `defaults.rs`.
+    pub fn new(db: &'a Database, enabled: bool, flush_limit: Option<u64>) -> Self {
         Self {
             db: Some(db),
             buf: Vec::new(),
             enabled,
             auto_flush: true,
-            flush_limit: crate::common::defaults::DEFAULT_AUTO_FLUSH_LIMIT,
+            flush_limit: flush_limit
+                .unwrap_or(DEFAULT_AUTO_FLUSH_LIMIT),
         }
     }
 
     /// Speculative recorder: buffers errors without a database. Attach one later
     /// with [`bind`]; until then a [`flush`] only reports that it could not store.
-    pub fn speculative(enabled: bool) -> Self {
+    /// `flush_limit` overrides the auto-flush threshold; `None` uses the default.
+    pub fn speculative(enabled: bool, flush_limit: Option<u64>) -> Self {
         Self {
             db: None,
             buf: Vec::new(),
             enabled,
             auto_flush: true,
-            flush_limit: crate::common::defaults::DEFAULT_AUTO_FLUSH_LIMIT,
+            flush_limit: flush_limit
+                .unwrap_or(DEFAULT_AUTO_FLUSH_LIMIT),
         }
     }
 
@@ -1236,6 +1240,8 @@ impl<'a> Recorder<'a> {
     }
 
     /// Override the auto-flush threshold (draft count at which a flush is tried).
+    /// Useful once a fresh-from-disk database is attached to the process and its
+    /// stored config carries the authoritative limit (e.g. extract/resume).
     pub fn set_flush_limit(&mut self, limit: u64) {
         self.flush_limit = limit;
     }

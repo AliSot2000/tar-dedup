@@ -220,7 +220,7 @@ fn run_enqueue_dequeue_loop_dedup(
 
     let eager_filter = rt.config.filter.eager_filter;
     let fail_fast = rt.config.process.fail_fast;
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     let mut fail_fast_hit = false;
 
     // Pull: a fresh scan of the candidate space from the top on every refill.
@@ -866,7 +866,7 @@ mod tests {
     fn record_dedup_error_only_records_errors() {
         let world = TestWorld::new();
         let id = world.add_file("e.bin", &pattern(1024, 1));
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
         record_dedup_error(&mut recorder, &CompareOutcome {
             canonical_id: FileId(1), candidate_id: id, equal: Ok(true),
             canonical_modified: false, candidate_modified: false,
