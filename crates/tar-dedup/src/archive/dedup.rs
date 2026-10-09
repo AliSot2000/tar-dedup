@@ -495,8 +495,7 @@ mod tests {
     use crate::common::defaults::OUT_CAPACITY;
     use crate::common::files::original_extension;
     use crate::config::{
-        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, CompressionFormat,
-        CompressionSettings, FilterOptions, IndexingOptions, InputOptions, OwnerPolicy, PathLayout,
+        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
         ProcessOptions, SparseOptions,
     };
     use crate::db::flags::{FileFlag, set_file_flag};
@@ -519,75 +518,32 @@ mod tests {
         (io_buffer(), io_buffer())
     }
 
-    fn test_archive_config() -> ArchiveConfig {
+        fn test_archive_config() -> ArchiveConfig {
         ArchiveConfig {
-            paths: PathLayout {
-                archive_path: PathBuf::new(),
-                directory: PathBuf::new(),
-                work_dir: PathBuf::new(),
-            },
-            inputs: InputOptions {
-                input_dirs: Vec::new(),
-                files_from: Vec::new(),
-                files_from_null: false,
-            },
             indexing: IndexingOptions {
-                no_recursion: false,
-                dereference: false,
-                one_file_system: false,
                 no_hardlink_detection: true,
-                no_strict_separation: false,
+                ..IndexingOptions::default()
             },
-            filter: FilterOptions {
-                exclude_patterns: Vec::new(),
-                include_patterns: Vec::new(),
-                exclude_from: Vec::new(),
-                include_from: Vec::new(),
-                anchored: false,
-                ignore_case: false,
-                eager_filter: false,
-            },
+            filter: FilterOptions { eager_filter: false, ..FilterOptions::default() },
             capture: CaptureOptions {
                 do_xattrs: false,
                 do_posix_acl: false,
                 do_selinux: false,
-                numeric_ids_only: false,
-                mode: None,
-                transform: None,
+                ..CaptureOptions::default()
             },
-            owner_policy: OwnerPolicy {
-                owner: None,
-                owner_map: None,
-                group: None,
-                group_map: None,
-            },
-            sparse: SparseOptions { sparsify: false, page_size: 4096, min_pages: 0 },
-            compression: CompressionSettings {
-                format: CompressionFormat::None,
-                level: 0,
-                xz_extreme: false,
-                memlimit_compress: None,
-            },
-            process: ProcessOptions {
-                start_policy: StartPolicy::Create,
-                jobs: 4,
-                io_jobs: 2,
-                fail_fast: false,
-                no_errors: false,
-                force: false,
-                relax_utf8: false, // TODO cli
-                cleanup: CleanupSettings { keep_db: false, keep_stage: false },
-                exit_after_stage: None,
-            },
+            sparse: SparseOptions::default(),
+            process: ProcessOptions::default(),
             pipeline: ArchivePipelineOptions {
-                dedup_mode: DedupMode::Regular,
+                max_shard_size: 0,
                 write_archive_footer: false,
-                clear_archive_meta: false,
+                ..ArchivePipelineOptions::default()
             },
+            ..ArchiveConfig::default()
         }
     }
 
-    struct TestWorld {
+
+struct TestWorld {
         dir: tempfile::TempDir,
         db: Database,
         shutdown: Shutdown,
