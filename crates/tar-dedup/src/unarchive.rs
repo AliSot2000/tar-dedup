@@ -60,7 +60,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         WorkPresence::Absent
     };
 
-    let mut pre_db_recorder = Recorder::speculative(!config.process.no_errors);
+    let mut pre_db_recorder = Recorder::speculative(!config.process.no_errors, Some(config.process.auto_flush_limit));
     let action = resolve_start(config.process.start_policy, work, product)?;
     // TODO resume rework: seeding the db here is an interim measure; on resume the
     //  work DB already holds the catalog, so allowing any phase but scan to see None
