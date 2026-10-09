@@ -397,7 +397,6 @@ pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
              OR NOT ({filter})
            )"
     ), []).to_panic()?;
-    meta::clear_archive_meta(conn)?;
     Ok(())
 }
 

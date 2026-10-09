@@ -337,9 +337,6 @@ fn end_session(
             rt.db.set_archive_bytes_out(bytes_out)?;
 
             if write_tar_eof && rt.config.pipeline.write_archive_footer {
-                if rt.config.pipeline.clear_archive_meta {
-                    rt.db.clear_archive_meta()?;
-                }
                 rt.db.checkpoint()?;
                 // Footer catalog is always xz -9e, independent of tar stream compression.
                 match archive_footer::write_footer(
