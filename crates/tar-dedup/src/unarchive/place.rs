@@ -33,8 +33,6 @@ use std::{fs, io};
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Place);
 
-// TODO
-//  Rethink when we are pub and when private
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     debug_assert!(rt.db.placement_prologue_done()?,
                   "PRECONDITION FAILED: PlacementPrologue must complete before place");
