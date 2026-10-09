@@ -9,7 +9,6 @@
 //! applied as well.
 
 use crate::common::batched_loop;
-use crate::common::defaults::BATCH_SIZE;
 use crate::common::perms::{
     ModeSource, OwnerGroupPolicy, OwnerGroupSource, parse_mode_changes, resolve_owner_group,
 };
@@ -173,7 +172,7 @@ fn process_batched_files(
     -> Result<()> {
     batched_loop(
         |bs| rt.db.list_out_tree_for_permissions_non_dir::<FileRecord>(bs),
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         |entries| {
             let mut results: Vec<(OutTreeId, bool)> = Vec::with_capacity(entries.len());
             for (record, out) in entries
@@ -196,7 +195,7 @@ fn process_batches_dirs(
     batched_loop(
         // TODO: bool to only return directories which are not excluded.
         |bs| rt.db.list_out_tree_for_permissions_dirs::<FileRecord>(bs),
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         |entries| {
             let mut results: Vec<(OutTreeId, bool)> = Vec::with_capacity(entries.len());
             for (record, out) in entries {
@@ -252,7 +251,7 @@ fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps: &O
     let base_dir = rt.config.paths.extraction_root().join(dir_name);
     batched_loop(
         |bs| rt.db.list_canonical_files_for_permissions(bs),
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         |files: Vec<FileRecord>| {
             let mut results: Vec<(FileId, bool)> = Vec::with_capacity(files.len());
             for file in files {

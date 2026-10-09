@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use crate::archive::ArchiveRTArgs;
-use crate::common::defaults::{DRAIN_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
 use crate::common::files::warn_if_times_changed;
 use crate::common::send_receive_loop;
 use crate::db::Database;
@@ -111,8 +110,8 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         bars.push(rt.progress.thread_bar(i));
     }
 
-    let (work_s, work_r) = bounded::<StrippedRecord>(WORK_CAPACITY);
-    let (out_s, out_r) = bounded::<Option<SparseOutcome>>(OUT_CAPACITY);
+    let (work_s, work_r) = bounded::<StrippedRecord>(rt.config.process.work_capacity);
+    let (out_s, out_r) = bounded::<Option<SparseOutcome>>(rt.config.process.out_capacity);
     let mut thread_handles = Vec::with_capacity(jobs);
 
     for i in 0..jobs {
@@ -180,7 +179,7 @@ fn run_enqueue_dequeue_loop_sparsify(
     let mut queue_index = 0u64;
     let pull = || {
         let rows = rt.db.pull_pending_sparsify_rows::<StrippedRecord>(
-            queue_index, FEED_CHUNK as u64)?;
+            queue_index, rt.config.process.feed_chunk as u64)?;
         if !rows.is_empty() {
             queue_index = rows[rows.len() - 1].0;
         }
@@ -214,7 +213,7 @@ fn run_enqueue_dequeue_loop_sparsify(
 
     let completed = send_receive_loop(
         rt.shutdown, send, recv, thread_handles,
-        DRAIN_CHUNK, false,
+        rt.config.process.drain_chunk, false,
         pull, |_| Ok(()), || Ok(true), apply)?;
     recorder.flush()?;
     Ok((completed, errored))

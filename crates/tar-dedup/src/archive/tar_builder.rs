@@ -100,7 +100,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // cursor by the last queue position of each batch; already-appended /
     // errored rows exit the pull until the next session.
     match batched_stepped_loop(
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         || 0u64,
         |index: &u64, batch_size| {
             rt.db.pull_pending_archive_rows::<StrippedRecord>(*index, batch_size)

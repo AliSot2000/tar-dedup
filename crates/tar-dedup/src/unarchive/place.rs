@@ -148,7 +148,7 @@ fn prepare_extraction_dir(
     let mut already_checked = rt.config.paths.extraction_root().to_path_buf();
 
     batched_stepped_loop(
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         || OutTreeId(0),
         |lid, bs| rt.db.list_out_tree(*lid, bs, None, Some(true)),
         |rec| rec.id,
@@ -214,8 +214,8 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
         bars.push(rt.progress.thread_bar(i));
     }
 
-    let (work_s, work_r) = bounded::<StrippedRecord>(WORK_CAPACITY);
-    let (out_s, out_r) = bounded::<Option<CopyOutcome>>(OUT_CAPACITY);
+    let (work_s, work_r) = bounded::<StrippedRecord>(rt.config.process.work_capacity);
+    let (out_s, out_r) = bounded::<Option<CopyOutcome>>(rt.config.process.out_capacity);
     let mut thread_handles = Vec::with_capacity(rt.config.process.io_jobs);
 
     let cache_dir = rt.config.paths.extract_cache_dir();
@@ -245,7 +245,7 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
     let mut queue_index = 0u64;
     let pull = || {
         let rows = rt.db.pull_canonical_move_queue::<StrippedRecord>(
-            queue_index, FEED_CHUNK as u64)?;
+            queue_index, rt.config.process.feed_chunk as u64)?;
         if !rows.is_empty() {
             queue_index = rows[rows.len() - 1].0;
         }
@@ -268,7 +268,7 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
         work_s,
         out_r,
         thread_handles,
-        DRAIN_CHUNK,
+        rt.config.process.drain_chunk,
         false,
         pull,
         |_| Ok(()),
@@ -359,7 +359,7 @@ fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<
     batched_loop(
         // INFO: list_out_tree_for_linking filters ('dir' and 'unknown')
         |bs| rt.db.list_out_tree_for_linking(bs, true),
-        BATCH_SIZE,
+        rt.config.process.batch_size,
         |entries: Vec<(FileRecord, OutTreeRecord)>| {
             let parallel = pool.install(|| {
                 entries.par_iter().try_for_each(
@@ -469,8 +469,8 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
         bars.push(if ordered { Some(rt.progress.thread_bar(i)) } else { None });
     }
 
-    let (work_s, work_r) = bounded::<MaterializeWork>(WORK_CAPACITY);
-    let (out_s, out_r) = bounded::<Option<MaterializeOutcome>>(OUT_CAPACITY);
+    let (work_s, work_r) = bounded::<MaterializeWork>(rt.config.process.work_capacity);
+    let (out_s, out_r) = bounded::<Option<MaterializeOutcome>>(rt.config.process.out_capacity);
     let mut thread_handles = Vec::with_capacity(rt.config.process.io_jobs);
     for i in 0..rt.config.process.io_jobs {
         let bar = bars[i].clone();
@@ -496,7 +496,7 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
         match kind {
             MaterializeKind::Files => {
                 let rows = rt.db.pull_materialize_queue::<FileRecord>(
-                    queue_index, FEED_CHUNK as u64)?;
+                    queue_index, rt.config.process.feed_chunk as u64)?;
                 if !rows.is_empty() {
                     queue_index = rows[rows.len() - 1].0;
                 }
@@ -509,7 +509,7 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
             }
             MaterializeKind::Hardlinks => {
                 let entries = rt.db.list_out_tree_for_hardlinks::<FileRecord>(
-                    &last_id, FEED_CHUNK as u64)?;
+                    &last_id, rt.config.process.feed_chunk as u64)?;
                 if !entries.is_empty() {
                     last_id = entries[entries.len() - 1].1.id;
                 }
@@ -523,7 +523,7 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
             }
             MaterializeKind::Others => {
                 let entries = rt.db.list_out_tree_others::<FileRecord>(
-                    &last_id, FEED_CHUNK as u64)?;
+                    &last_id, rt.config.process.feed_chunk as u64)?;
                 if !entries.is_empty() {
                     last_id = entries[entries.len() - 1].1.id;
                 }
@@ -552,7 +552,7 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
         work_s,
         out_r,
         thread_handles,
-        DRAIN_CHUNK,
+        rt.config.process.drain_chunk,
         false,
         pull,
         |_| Ok(()),
