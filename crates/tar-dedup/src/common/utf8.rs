@@ -18,6 +18,23 @@ pub trait PathText {
     fn to_utf8(&self, relax: bool) -> Result<Option<String>>;
 }
 
+/// Policy-aware UTF-8 check for a path that may be skipped instead of fatal.
+///
+/// Mirror of `PathText::to_utf8`: `None` = fine, `Some(Ok(()))` = non-UTF-8
+/// skipped under `relax` (already warned), `Some(Err)` = non-UTF-8 fatal.
+pub fn sanitize_path(relax: bool, path: impl AsRef<Path>, path_type: &str)
+    -> Option<Result<()>> {
+    let path = path.as_ref();
+    match path.to_utf8(relax) {
+        Ok(Some(_)) => None,
+        Ok(None) => {
+            tracing::warn!("Skipping non-UTF-8 {path_type}-path: {}", path.to_string_lossy());
+            Some(Ok(()))
+        }
+        Err(e) => Some(Err(e)),
+    }
+}
+
 /// Strict variant for db-store call sites. Paths handed to the store have
 /// already passed an entry boundary, so a failure here is an integrity abort,
 /// not a skip.
