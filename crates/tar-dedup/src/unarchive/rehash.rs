@@ -308,6 +308,7 @@ fn hash_file(path: &Path, buf: &mut Vec<u8>, shutdown: &Shutdown, pb: Option<&Pr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::defaults::OUT_CAPACITY;
     use crate::common::files::original_extension;
     use crate::common::utf8::require_utf8;
     use crate::config::ExtractConfig;
