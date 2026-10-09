@@ -17,6 +17,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+// -------------------------------------------------------------------------------------------------
+// Uid:Gid processing
+// -------------------------------------------------------------------------------------------------
+
 /// One side of a map row, or an `--owner` / `--group` override value.
 ///
 /// Grammar: `+UID` → [`Self::id`]; `NAME` → [`Self::name`]; `NAME:UID` → both.
@@ -195,67 +199,6 @@ pub enum OwnerGroupSource {
     Cli(OwnerGroupPolicy),
 }
 
-/// Which mode-change policy applies during extraction.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum ModeSource {
-    /// No mode changes.
-    #[default]
-    None,
-    /// Apply the changes stored in the archive.
-    Stored,
-    /// Apply explicitly provided chmod-style changes (validated on the CLI).
-    Cli(String),
-}
-
-/// Parse a GNU tar `--mode` changes string into a reusable [`file_mode::Mode`].
-/// `Mode::empty()` + `set_str` yields a mask-based change set; `apply_to(file_mode)`
-/// applies it per file.
-///
-/// Two forms are accepted, mirroring `tar` / `chmod`:
-/// - symbolic changes, e.g. `u+rwx,go-rx`;
-/// - a bare octal absolute mode, e.g. `0644` / `4755`, applied as a full set
-///   (including setuid/setgid/sticky when a 4th digit is present).
-///
-/// The string is pre-validated against the chmod alphabet: `file-mode` panics
-/// (abort in release builds) on an invalid permission char rather than returning
-/// `Err`, so only fully-symbolic or fully-octal strings reach it.
-pub fn parse_mode_changes(changes: &str) -> Result<file_mode::Mode> {
-    // TODO symbolic validation should soon be unnecessary.
-    let symbolic = changes.chars().all(|c| {
-        matches!(
-            c,
-            'u' | 'g' | 'o' | 'a' | 'r' | 'w' | 'x' | 'X' | 's' | 't' | '+' | '-' | '=' | ','
-        )});
-    let octal = !changes.is_empty() && changes.chars().all(|c| c.is_ascii_digit());
-    if !symbolic && !octal {
-        return Err(Error::Config(format!(
-            "invalid --mode `{changes}`: unexpected character (expected a chmod \
-             symbolic string like `u+rwx,go-rx` or a bare octal mode like `0644`)"
-        )));
-    }
-    let mut mode = file_mode::Mode::empty();
-    if octal {
-        let value = u32::from_str_radix(changes, 8).map_err(|_| {
-            Error::Config(format!(
-                "invalid --mode `{changes}`: not a valid octal mode"
-            ))
-        })?;
-        if value > 0o7777 {
-            return Err(Error::Config(format!(
-                "invalid --mode `{changes}`: mode out of range (maximum is `7777`)"
-            )));
-        }
-        // GNU bare octal is an absolute set; file-mode wants the `=` operator,
-        // which also round-trips setuid/setgid/sticky in the leading digit.
-        mode.set_str(&format!("={changes}"))
-            .map_err(|e| Error::Config(format!("invalid --mode `{changes}`: {e}")))?;
-    } else {
-        mode.set_str(changes)
-            .map_err(|e| Error::Config(format!("invalid --mode `{changes}`: {e}")))?;
-    }
-    Ok(mode)
-}
-
 /// Parse owner/group CLI args into a policy. Syntax-only: no `--map-target` /
 /// `--same-owner` gating happens here. Shared by archive and extract.
 pub fn parse_owner_group_args(
@@ -292,16 +235,12 @@ fn parse_map_file(map_file: Option<&Path>) -> Result<Option<IdentityMap>> {
             }
         }))
 }
-
+/// Read file, Split a map file into `from → to` pairs: symmetric `FROM <ws>+ TO`, blank lines and
+/// `#`-to-EOL comments ignored.
 fn read_map_file_entries(path: &Path) -> Result<Vec<(IdentitySpec, IdentitySpec)>> {
     let text = fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
-    parse_map_lines(&text)
-}
-
-/// Split a map file into `from → to` pairs: symmetric `FROM <ws>+ TO`, blank lines and
-/// `#`-to-EOL comments ignored.
-pub fn parse_map_lines(text: &str) -> Result<Vec<(IdentitySpec, IdentitySpec)>> {
     let mut out: Vec<(IdentitySpec, IdentitySpec)> = Vec::new();
+    
     for line in text.lines() {
         // Remove comment
         let line = strip_comment(line).trim();
@@ -346,7 +285,9 @@ pub fn infer_same_owner() -> bool {
 
 /// Apply `--validate-maps`: hard-error on destinations that the target mode cannot emit.
 /// Without validation this is the per-load warning path.
-pub fn validate_for_mode(policy: &OwnerGroupPolicy, target: MapResolutionTarget) -> Result<()> {
+pub fn validate_for_resolution_mode(
+    policy: &OwnerGroupPolicy, target: MapResolutionTarget)
+    -> Result<()> {
     let empty_map = IdentityMap::default();
     let targets = [
         ("owner", policy.owner_map.as_ref().unwrap_or(&empty_map), &policy.owner_override),
@@ -355,7 +296,10 @@ pub fn validate_for_mode(policy: &OwnerGroupPolicy, target: MapResolutionTarget)
     for (label, map, ovr) in targets {
         match target {
             MapResolutionTarget::Ids => {
-                let ovr_id_not_present = ovr.as_ref().map(|s| s.id.is_none()).unwrap_or(false);
+                let ovr_id_not_present = ovr
+                    .as_ref()
+                    .map(|s| s.id.is_none())
+                    .unwrap_or(false);
                 // Raise error, if the id is missing.
                 if ovr_id_not_present {
                     return Err(Error::Config(format!(
@@ -584,6 +528,71 @@ fn lookup_gid(name: &str) -> Option<u32> {
 #[cfg(not(unix))]
 fn lookup_gid(_name: &str) -> Option<u32> {
     None
+}
+
+// -------------------------------------------------------------------------------------------------
+// Mode processing
+// -------------------------------------------------------------------------------------------------
+
+/// Which mode-change policy applies during extraction.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ModeSource {
+    /// No mode changes.
+    #[default]
+    None,
+    /// Apply the changes stored in the archive.
+    Stored,
+    /// Apply explicitly provided chmod-style changes (validated on the CLI).
+    Cli(String),
+}
+
+/// Parse a GNU tar `--mode` changes string into a reusable [`file_mode::Mode`].
+/// `Mode::empty()` + `set_str` yields a mask-based change set; `apply_to(file_mode)`
+/// applies it per file.
+///
+/// Two forms are accepted, mirroring `tar` / `chmod`:
+/// - symbolic changes, e.g. `u+rwx,go-rx`;
+/// - a bare octal absolute mode, e.g. `0644` / `4755`, applied as a full set
+///   (including setuid/setgid/sticky when a 4th digit is present).
+///
+/// The string is pre-validated against the chmod alphabet: `file-mode` panics
+/// (abort in release builds) on an invalid permission char rather than returning
+/// `Err`, so only fully-symbolic or fully-octal strings reach it.
+pub fn parse_mode_changes(changes: &str) -> Result<file_mode::Mode> {
+    // TODO symbolic validation should soon be unnecessary.
+    let symbolic = changes.chars().all(|c| {
+        matches!(
+            c,
+            'u' | 'g' | 'o' | 'a' | 'r' | 'w' | 'x' | 'X' | 's' | 't' | '+' | '-' | '=' | ','
+        )});
+    let octal = !changes.is_empty() && changes.chars().all(|c| c.is_ascii_digit());
+    if !symbolic && !octal {
+        return Err(Error::Config(format!(
+            "invalid --mode `{changes}`: unexpected character (expected a chmod \
+             symbolic string like `u+rwx,go-rx` or a bare octal mode like `0644`)"
+        )));
+    }
+    let mut mode = file_mode::Mode::empty();
+    if octal {
+        let value = u32::from_str_radix(changes, 8).map_err(|_| {
+            Error::Config(format!(
+                "invalid --mode `{changes}`: not a valid octal mode"
+            ))
+        })?;
+        if value > 0o7777 {
+            return Err(Error::Config(format!(
+                "invalid --mode `{changes}`: mode out of range (maximum is `7777`)"
+            )));
+        }
+        // GNU bare octal is an absolute set; file-mode wants the `=` operator,
+        // which also round-trips setuid/setgid/sticky in the leading digit.
+        mode.set_str(&format!("={changes}"))
+            .map_err(|e| Error::Config(format!("invalid --mode `{changes}`: {e}")))?;
+    } else {
+        mode.set_str(changes)
+            .map_err(|e| Error::Config(format!("invalid --mode `{changes}`: {e}")))?;
+    }
+    Ok(mode)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1031,7 +1040,7 @@ mod tests {
     fn validate_ids_requires_id_override() {
         let mut p = empty_policy();
         p.owner_override = Some(spec(Some("alice"), None)); // name-only override
-        let err = validate_for_mode(&p, MapResolutionTarget::Ids).expect_err("ids name ovr");
+        let err = validate_for_resolution_mode(&p, MapResolutionTarget::Ids).expect_err("ids name ovr");
         assert!(matches!(err, Error::Config(_)));
     }
 
@@ -1041,7 +1050,7 @@ mod tests {
         let (uid, _) = current_user();
         let mut p = empty_policy();
         p.owner_override = Some(spec(None, Some(uid))); // id-only, exists
-        validate_for_mode(&p, MapResolutionTarget::Ids).expect("ids + id override ok");
+        validate_for_resolution_mode(&p, MapResolutionTarget::Ids).expect("ids + id override ok");
     }
 
     #[cfg(unix)]
@@ -1051,7 +1060,7 @@ mod tests {
             (spec(Some("src"), None), spec(Some("alice"), None)), // dst name-only
         ]);
         let p = policy_with_map(map, "owner");
-        let err = validate_for_mode(&p, MapResolutionTarget::Ids).expect_err("ids name dst");
+        let err = validate_for_resolution_mode(&p, MapResolutionTarget::Ids).expect_err("ids name dst");
         assert!(matches!(err, Error::Config(_)));
     }
 
@@ -1061,7 +1070,7 @@ mod tests {
         let (uid, _) = current_user();
         let map = IdentityMap::from_entries([(spec(Some("src"), None), spec(None, Some(uid)))]);
         let p = policy_with_map(map, "owner");
-        validate_for_mode(&p, MapResolutionTarget::Ids).expect("ids + id dst ok");
+        validate_for_resolution_mode(&p, MapResolutionTarget::Ids).expect("ids + id dst ok");
     }
 
     #[cfg(unix)]
@@ -1069,7 +1078,7 @@ mod tests {
     fn validate_names_requires_name_override() {
         let mut p = empty_policy();
         p.owner_override = Some(spec(None, Some(42))); // id-only override
-        let err = validate_for_mode(&p, MapResolutionTarget::Names).expect_err("names id ovr");
+        let err = validate_for_resolution_mode(&p, MapResolutionTarget::Names).expect_err("names id ovr");
         assert!(matches!(err, Error::Config(_)));
     }
 
@@ -1079,7 +1088,7 @@ mod tests {
         let (_, name) = current_user();
         let mut p = empty_policy();
         p.owner_override = Some(spec(Some(&name), None));
-        validate_for_mode(&p, MapResolutionTarget::Names).expect("names + name ovr ok");
+        validate_for_resolution_mode(&p, MapResolutionTarget::Names).expect("names + name ovr ok");
     }
 
     #[cfg(unix)]
@@ -1089,7 +1098,7 @@ mod tests {
             (spec(Some("src"), None), spec(None, Some(42))), // dst id-only
         ]);
         let p = policy_with_map(map, "owner");
-        let err = validate_for_mode(&p, MapResolutionTarget::Names).expect_err("names id dst");
+        let err = validate_for_resolution_mode(&p, MapResolutionTarget::Names).expect_err("names id dst");
         assert!(matches!(err, Error::Config(_)));
     }
 
@@ -1099,7 +1108,7 @@ mod tests {
         let (_, name) = current_user();
         let map = IdentityMap::from_entries([(spec(Some("src"), None), spec(Some(&name), None))]);
         let p = policy_with_map(map, "owner");
-        validate_for_mode(&p, MapResolutionTarget::Names).expect("names + name dst ok");
+        validate_for_resolution_mode(&p, MapResolutionTarget::Names).expect("names + name dst ok");
     }
 
     #[cfg(unix)]
@@ -1108,7 +1117,7 @@ mod tests {
         let (_, name) = current_user();
         let map = IdentityMap::from_entries([(spec(Some("src"), None), spec(Some(&name), None))]);
         let p = policy_with_map(map, "owner");
-        validate_for_mode(&p, MapResolutionTarget::NameId).expect("existing name ok");
+        validate_for_resolution_mode(&p, MapResolutionTarget::NameId).expect("existing name ok");
     }
 
     #[cfg(unix)]
@@ -1120,7 +1129,7 @@ mod tests {
              spec(Some(&missing), None))
         ]);
         let p = policy_with_map(map, "owner");
-        let err = validate_for_mode(&p, MapResolutionTarget::NameId).expect_err("missing name");
+        let err = validate_for_resolution_mode(&p, MapResolutionTarget::NameId).expect_err("missing name");
         assert!(matches!(err, Error::Config(_)));
     }
 
@@ -1130,7 +1139,7 @@ mod tests {
         let missing = nonexistent_user_name();
         let mut p = empty_policy();
         p.owner_override = Some(spec(Some(&missing), None));
-        let err = validate_for_mode(&p, MapResolutionTarget::Names).expect_err("missing ovr name");
+        let err = validate_for_resolution_mode(&p, MapResolutionTarget::Names).expect_err("missing ovr name");
         assert!(matches!(err, Error::Config(_)));
     }
 
@@ -1140,7 +1149,7 @@ mod tests {
         let (_, name) = current_group();
         let map = IdentityMap::from_entries([(spec(Some("src"), None), spec(Some(&name), None))]);
         let p = policy_with_map(map, "group");
-        validate_for_mode(&p, MapResolutionTarget::Names).expect("existing group name ok");
+        validate_for_resolution_mode(&p, MapResolutionTarget::Names).expect("existing group name ok");
     }
 
     // ================================================================================
