@@ -40,7 +40,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
 /// Parse the arguments and add them into the database.
 pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
-    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors);
+    let mut recorder = crate::db::Recorder::new(db, !config.process.no_errors, Some(config.process.auto_flush_limit));
     let phase = crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Filter);
     ingest_filter_rules(
         &config.filter.include_patterns,

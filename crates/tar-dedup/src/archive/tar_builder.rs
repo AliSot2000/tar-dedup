@@ -28,7 +28,7 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhas
 //  (??? Files with ErrorWhileArchive need to be promoted to 'archived')
 
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     // Crash / force leftover: truncate incomplete stream C, keep finished A.B.
     recover_incomplete_session(rt, &mut recorder)?;
 
@@ -750,14 +750,14 @@ mod tests {
     #[test]
     fn recover_incomplete_session_without_open_session_is_ok() {
         let world = TestWorld::new();
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
         recover_incomplete_session(&world.rt(), &mut recorder).expect("no session -> ok");
     }
 
     #[test]
     fn recover_incomplete_session_truncate_error_aborts() {
         let world = TestWorld::new();
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
         world.begin_session(100);
         // Archive path is a directory: write-open fails, truncate errors out.
         let dir_path = world.dir.path().join("blocker");
@@ -792,7 +792,7 @@ mod tests {
         world.place_symlink(id);
         let sid = world.begin_session(0);
 
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
         let writer = TarWriter::open(
             world.config.paths.archive_path.clone(),
             &world.config.compression,
@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn append_snapshot_uses_init_vs_regular_name() {
         let world = TestWorld::new();
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
 
         let mut writer = TarWriter::open(
             world.config.paths.archive_path.clone(),
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn append_snapshot_staging_file_removed_after() {
         let world = TestWorld::new();
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
 
         let mut writer = TarWriter::open(
             world.config.paths.archive_path.clone(),
@@ -855,7 +855,7 @@ mod tests {
     fn append_snapshot_graceful_does_not_abort() {
         let world = TestWorld::new();
         world.shutdown.request_graceful();
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
 
         let mut writer = TarWriter::open(
             world.config.paths.archive_path.clone(),
@@ -886,7 +886,7 @@ mod tests {
             world.shutdown.clone(),
             true,
         ).expect("open writer");
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
         end_session(writer, &world.rt(), sid, 0, false, &mut recorder).expect("end session");
 
         assert_eq!(world.phase(id), FilePhase::Archived);
@@ -909,7 +909,7 @@ mod tests {
             world.shutdown.clone(),
             true,
         ).expect("open writer");
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
         let res = catch_unwind(AssertUnwindSafe(|| {
             end_session(writer, &world.rt(), sid, 0, true, &mut recorder).expect("end session")
         }));
@@ -940,7 +940,7 @@ mod tests {
             shutdown: &world.shutdown,
             progress: &world.progress,
         };
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
         end_session(writer, &rt, sid, 0, true, &mut recorder).expect("end session");
 
         assert!(archive_footer::has_valid_footer(&config.paths.archive_path));

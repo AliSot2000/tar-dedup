@@ -170,7 +170,7 @@ fn run_enqueue_dequeue_loop_sparsify(
     recv: Receiver<Option<SparseOutcome>>,
     thread_handles: Vec<thread::JoinHandle<()>>,
 ) -> Result<(u64, u64)> {
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     let mut errored = 0u64;
 
     // Feed cursor over `sparsify_queue`: `queue_index` is the last consumed
@@ -1043,7 +1043,7 @@ mod tests {
     fn record_sparsify_error_persists_filestat() {
         let world = TestWorld::new();
         let id = world.add_file("e.bin", &zeros(4 * 4096));
-        let mut recorder = Recorder::new(&world.db, true);
+        let mut recorder = Recorder::new(&world.db, true, None);
         record_sparsify_error(&mut recorder, &SparseOutcome {
             id,
             modified: false,

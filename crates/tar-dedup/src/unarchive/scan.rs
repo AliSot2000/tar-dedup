@@ -154,6 +154,9 @@ fn run_inner(
 
     if let Some(edb) = rt.db.as_ref() {
         rt.progress.set_phase_total(edb.count_entries()?);
+        // The scan recorder's auto-flush limit comes from the extract config that
+        // governs this run (applied once a fresh-from-disk DB is in hand).
+        recorder.set_flush_limit(rt.config.process.auto_flush_limit);
     }
 
     let mut force_buffer: Option<(Vec<FileId>, Vec<FileId>)> = if rt.config.process.force {
@@ -1063,7 +1066,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db_path = config.paths.db_path();
 
         let db = run(&config, &db_path, &Shutdown::detached(),
-                     &mut Recorder::speculative(false),
+                     &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &crate::progress::ProgressBarSet::new(
                          crate::progress::EXTRACT_MULTIPLIER))
@@ -1088,7 +1091,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db_path = config.paths.db_path();
 
         let db = run(&config, &db_path, &Shutdown::detached(),
-                     &mut Recorder::speculative(true),
+                     &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &crate::progress::ProgressBarSet::new(
                          crate::progress::EXTRACT_MULTIPLIER))
@@ -1157,7 +1160,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db_path = config.paths.db_path();
 
         let db = run(&config, &db_path, &Shutdown::detached(),
-                     &mut Recorder::speculative(false),
+                     &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &crate::progress::ProgressBarSet::new(
                          crate::progress::EXTRACT_MULTIPLIER))
@@ -1196,7 +1199,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         fs::create_dir(cache.join(&member)).expect("sabotage member dst");
 
         let db = run(&config, &db_path, &Shutdown::detached(),
-                     &mut Recorder::speculative(true),
+                     &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &crate::progress::ProgressBarSet::new(
                          crate::progress::EXTRACT_MULTIPLIER))
@@ -1224,7 +1227,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db_path = config.paths.db_path();
 
         let db = run(&config, &db_path, &Shutdown::detached(),
-                     &mut Recorder::speculative(true),
+                     &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &crate::progress::ProgressBarSet::new(
                          crate::progress::EXTRACT_MULTIPLIER))
@@ -1249,7 +1252,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db_path = config.paths.db_path();
 
         let db = run(&config, &db_path, &Shutdown::detached(),
-                     &mut Recorder::speculative(true),
+                     &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &crate::progress::ProgressBarSet::new(
                          crate::progress::EXTRACT_MULTIPLIER))
@@ -1271,7 +1274,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
 
         let res = catch_unwind(AssertUnwindSafe(|| {
             run(&config, &db_path, &Shutdown::detached(),
-                &mut Recorder::speculative(false),
+                &mut Recorder::speculative(false, None),
                 &mut Some(ParseFilterBuffer::default()),
                 &crate::progress::ProgressBarSet::new(
                     crate::progress::EXTRACT_MULTIPLIER))
@@ -1306,7 +1309,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
 
         let res = catch_unwind(AssertUnwindSafe(|| {
             run(&config, &db_path, &Shutdown::detached(),
-                &mut Recorder::speculative(false),
+                &mut Recorder::speculative(false, None),
                 &mut Some(ParseFilterBuffer::default()),
                 &crate::progress::ProgressBarSet::new(
                     crate::progress::EXTRACT_MULTIPLIER))
@@ -1328,7 +1331,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
 
         // First pass installs the catalog so later passes take the resume path.
         run(&config, &db_path, &Shutdown::detached(),
-            &mut Recorder::speculative(false),
+            &mut Recorder::speculative(false, None),
             &mut Some(ParseFilterBuffer::default()),
             &crate::progress::ProgressBarSet::new(crate::progress::EXTRACT_MULTIPLIER))
             .expect("first scan");
@@ -1338,7 +1341,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         shutdown.request_graceful();
         let progress = crate::progress::ProgressBarSet::new(crate::progress::EXTRACT_MULTIPLIER);
         match run(&config, &db_path, &shutdown,
-                  &mut Recorder::speculative(false),
+                  &mut Recorder::speculative(false, None),
                   &mut Some(ParseFilterBuffer::default()), &progress) {
             Err(Error::Interrupted) => {}
             Err(other) => panic!("expected Interrupted, got {other:?}"),
@@ -1360,7 +1363,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
 
         // Resuming must skip the manifest member; re-reading it would be an error.
         let db = run(&config, &db_path, &Shutdown::detached(),
-                     &mut Recorder::speculative(false),
+                     &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &crate::progress::ProgressBarSet::new(
                          crate::progress::EXTRACT_MULTIPLIER))

@@ -45,7 +45,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         pending,
     );
 
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors);
+    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     let pool = ThreadPoolBuilder::new()
         .num_threads(rt.config.process.io_jobs)
         .build()
