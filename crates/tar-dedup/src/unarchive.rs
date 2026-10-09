@@ -46,12 +46,6 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         .map_err(|e| Error::io(&config.paths.work_dir, e))?;
 
     let db_path = config.paths.db_path();
-    if db_path.is_file() {
-        let db = Database::open(&db_path)?;
-        if config.scan.clear_archive_meta {
-            db.clear_archive_meta()?;
-        }
-    }
     let mut state = load_extract_state(&db_path)?;
 
     let work = if db_path.is_file() && state.phase != ExtractPipelinePhase::Done {
@@ -60,11 +54,13 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         WorkPresence::Absent
     };
 
-    let mut pre_db_recorder = Recorder::speculative(!config.process.no_errors, Some(config.process.auto_flush_limit));
+    let mut pre_db_recorder = Recorder::speculative(
+        !config.process.no_errors, Some(config.process.auto_flush_limit));
     let action = resolve_start(config.process.start_policy, work, product)?;
     // TODO resume rework: seeding the db here is an interim measure; on resume the
     //  work DB already holds the catalog, so allowing any phase but scan to see None
     //  is purely defensive until resume is reworked.
+
     let mut db: Option<Database>;
     let mut filter_buffer: Option<ParseFilterBuffer>;
     // Fresh runs persist the config once the scan has installed the catalog DB.
