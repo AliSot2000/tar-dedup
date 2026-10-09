@@ -2,11 +2,14 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{ArchiveArgs, DedupMode};
+use crate::cli::{ArchiveArgs, ArchiveOrdering, DedupMode};
 use crate::common::files::directory_roots_overlap;
+use crate::common::perms::parse_owner_group_args;
 use crate::common::start::StartPolicy;
+use crate::config::filter::FilterOptions;
 use crate::error::{Error, Result};
 
+use super::Validate;
 use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
 use super::compression::{CompressionSettings, resolve_compression};
 use super::paths::{PathLayout, PathSource};
@@ -15,13 +18,32 @@ use super::{
     default_archive_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_dir, validate_file,
 };
 
-// TODO check all paths for clean, and utf-8 compliance!
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputOptions {
     pub input_dirs: Vec<PathSource>,
     pub files_from: Vec<PathBuf>,
     pub files_from_null: bool,
+}
+
+impl Default for InputOptions {
+    fn default() -> Self {
+        Self {
+            input_dirs: Vec::new(),
+            files_from: Vec::new(),
+            files_from_null: false,
+        }
+    }
+}
+
+impl Validate for InputOptions {
+    fn validate(&self) -> Result<()> {
+        if self.input_dirs.is_empty() && self.files_from.is_empty() {
+            return Err(Error::Config(
+                "at least one of `-i`/`--input-dir` or `-T`/`--files-from` is required".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,15 +55,23 @@ pub struct IndexingOptions {
     pub no_strict_separation: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FilterOptions {
-    pub exclude_patterns: Vec<String>,
-    pub include_patterns: Vec<String>,
-    pub exclude_from: Vec<PathBuf>,
-    pub include_from: Vec<PathBuf>,
-    pub anchored: bool,
-    pub ignore_case: bool,
-    pub eager_filter: bool,
+impl Default for IndexingOptions {
+    fn default() -> Self {
+        Self {
+            no_recursion: false,
+            dereference: false,
+            one_file_system: false,
+            no_hardlink_detection: false,
+            no_strict_separation: false,
+        }
+    }
+}
+
+impl Validate for IndexingOptions {
+    // INFO: Added stub to prevent later changes from being omitted due to not calling the function.
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,12 +86,63 @@ pub struct CaptureOptions {
     pub transform: Option<String>,
 }
 
+impl Default for CaptureOptions {
+    fn default() -> Self {
+        Self {
+            do_xattrs: true,
+            do_posix_acl: true,
+            do_selinux: true,
+            numeric_ids_only: false,
+            mode: None,
+            transform: None,
+        }
+    }
+}
+
+impl Validate for CaptureOptions {
+    fn validate(&self) -> Result<()> {
+        if let Some(changes) = self.mode.as_ref() {
+            crate::common::perms::parse_mode_changes(changes)?;
+        }
+        if let Some(transform) = self.transform.as_ref() {
+            crate::common::transform::parse_transform_expr(transform)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerPolicy {
     pub owner: Option<String>,
     pub owner_map: Option<PathBuf>,
     pub group: Option<String>,
     pub group_map: Option<PathBuf>,
+}
+
+impl Default for OwnerPolicy {
+    fn default() -> Self {
+        Self {
+            owner: None,
+            owner_map: None,
+            group: None,
+            group_map: None,
+        }
+    }
+}
+
+impl Validate for OwnerPolicy {
+    fn validate(&self) -> Result<()> {
+        // INFO: Parsing will be called twice but since files expected to be small, overhead from
+        //  parsing twice should be ok. Using the parser for validation.
+        match parse_owner_group_args(
+            self.owner.as_deref(),
+            self.owner_map.as_deref(),
+            self.group.as_deref(),
+            self.group_map.as_deref()) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,14 +152,69 @@ pub struct SparseOptions {
     pub min_pages: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArchivePipelineOptions {
-    pub dedup_mode: DedupMode,
-    pub write_archive_footer: bool,
-    pub clear_archive_meta: bool,
+impl Default for SparseOptions {
+    fn default() -> Self {
+        Self {
+            sparsify: false,
+            page_size: 4096,
+            min_pages: 0,
+        }
+    }
+}
+
+// TODO merge into single file
+impl Validate for SparseOptions {
+    fn validate(&self) -> Result<()> {
+        if self.sparsify && self.page_size == 0 {
+            return Err(Error::Config(
+                "--page-size must be greater than 0 when `--sparsify` is set".into()));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchivePipelineOptions {
+    pub dedup_mode: DedupMode,
+    /// Tar payload ordering (ext,size,id / ext,name,size,id / id).
+    pub order: ArchiveOrdering,
+    /// Content-defined chunking (schemas exist; implementation not yet wired).
+    pub use_shards: bool,
+    /// Maximum shard size for content-defined chunking.
+    pub max_shard_size: u64,
+    pub write_archive_footer: bool,
+}
+
+impl Default for ArchivePipelineOptions {
+    fn default() -> Self {
+        Self {
+            dedup_mode: DedupMode::Regular,
+            order: ArchiveOrdering::ExtSizeId,
+            use_shards: false,
+            max_shard_size: 1024 * 1024 * 5,
+            write_archive_footer: true
+        }
+    }
+}
+
+impl Validate for ArchivePipelineOptions {
+    fn validate(&self) -> Result<()> {
+        if self.use_shards {
+            return Err(Error::Config(
+                "--use-shards (content-defined chunking) is not implemented yet".into(),
+            ));
+        }
+        if self.max_shard_size > 0 && !self.use_shards {
+            return Err(Error::Config(
+                "--max-shard-size requires --use-shards".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ArchiveConfig {
     pub paths: PathLayout,
     pub inputs: InputOptions,
@@ -101,90 +237,132 @@ impl ArchiveConfig {
     /// `--no-capture-all-metadata` selects the EXCLUDE preset, otherwise the
     /// INCLUDE preset (archive default = capture everything).
     pub fn build(args: &ArchiveArgs, base: Option<&ArchiveConfig>) -> Result<Self> {
-        validate_capture_pairs(args)?;
         let candidate = Self::try_from(args)?;
-        match base {
-            None => Ok(candidate),
-            Some(base) => Ok(candidate.merge_over(base, &DEFAULT_CONFIG)),
+        // Validation happens on the merged result: a field alone may be valid but
+        // invalid once combined with an inherited base value (see `Validate`).
+        let merged = match base {
+            None => candidate,
+            Some(base) => candidate.merge_over(base, &ArchiveConfig::default()),
+        };
+        merged.validate()?;
+        Ok(merged)
+    }
+
+    /// Option-B merge: fields whose candidate value matches `default` are "not
+    /// defined" and inherit from `base`; everything else comes from the candidate.
+    fn merge_over(&self, base: &Self, default: &Self) -> Self {
+        Self {
+            paths: self.paths.clone(),
+            inputs: merge_pick_clone(&self.inputs, &base.inputs, &default.inputs),
+            indexing: merge_pick_clone(&self.indexing, &base.indexing, &default.indexing),
+            filter: merge_pick_clone(&self.filter, &base.filter, &default.filter),
+            capture: merge_pick_clone(&self.capture, &base.capture, &default.capture),
+            owner_policy: merge_pick_clone(&self.owner_policy, &base.owner_policy, &default.owner_policy),
+            sparse: merge_pick_clone(&self.sparse, &base.sparse, &default.sparse),
+            compression: merge_pick_clone(&self.compression, &base.compression, &default.compression),
+            process: ProcessOptions {
+                start_policy: self.process.start_policy,
+                jobs: merge_pick_copy(self.process.jobs, base.process.jobs, default.process.jobs),
+                io_jobs: merge_pick_copy(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
+                auto_flush_limit: merge_pick_copy(self.process.auto_flush_limit, base.process.auto_flush_limit, default.process.auto_flush_limit),
+                batch_size: merge_pick_copy(self.process.batch_size, base.process.batch_size, default.process.batch_size),
+                work_capacity: merge_pick_copy(self.process.work_capacity, base.process.work_capacity, default.process.work_capacity),
+                out_capacity: merge_pick_copy(self.process.out_capacity, base.process.out_capacity, default.process.out_capacity),
+                feed_chunk: merge_pick_copy(self.process.feed_chunk, base.process.feed_chunk, default.process.feed_chunk),
+                drain_chunk: merge_pick_copy(self.process.drain_chunk, base.process.drain_chunk, default.process.drain_chunk),
+                fail_fast: merge_pick_copy(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
+                no_errors: merge_pick_copy(self.process.no_errors, base.process.no_errors, default.process.no_errors),
+                force: merge_pick_copy(self.process.force, base.process.force, default.process.force),
+                relax_utf8: merge_pick_copy(self.process.relax_utf8, base.process.relax_utf8, default.process.relax_utf8),
+                progress_mode: merge_pick_copy(self.process.progress_mode, base.process.progress_mode, default.process.progress_mode),
+                cleanup: self.process.cleanup,
+                exit_after_stage: self.process.exit_after_stage,
+            },
+            pipeline: merge_pick_clone(&self.pipeline, &base.pipeline, &default.pipeline),
         }
     }
 
     pub fn try_from(args: &ArchiveArgs) -> Result<Self> {
-        let directory = resolve_cwd(args.directory.as_deref())?;
+        validate_capture_pairs(args)?;
+        let c_directory = resolve_cwd(args.directory.as_deref())?;
 
-        let archive_path = resolve_path_to_abs_path(&args.archive, &directory);
-        if let Some(parent) = archive_path.parent() {
+        // Resolve archive path and create parents.
+        let c_archive_path = resolve_path_to_abs_path(&args.archive, &c_directory);
+        if let Some(parent) = c_archive_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
 
-        let work_dir = match &args.work_dir {
-            Some(path) => resolve_path_to_abs_path(path, &directory),
-            None => default_archive_work_dir(&archive_path),
+        // Resolve work dir and create it and parents
+        let c_work_dir = match &args.work_dir {
+            Some(path) => resolve_path_to_abs_path(path, &c_directory),
+            None => default_archive_work_dir(&c_archive_path),
         };
-        std::fs::create_dir_all(&work_dir).map_err(|e| Error::io(&work_dir, e))?;
+        std::fs::create_dir_all(&c_work_dir).map_err(|e| Error::io(&c_work_dir, e))?;
 
-        if args.input_dirs.is_empty() && args.files_from.is_empty() {
-            return Err(Error::Config(
-                "at least one of `-i`/`--input-dir` or `-T`/`--files-from` is required".into(),
-            ));
-        }
-
-        // TODO rethink accepted roots.
+        // Input dirs && files from
         let mut input_dirs = Vec::with_capacity(args.input_dirs.len());
-        let mut accepted_roots: Vec<PathBuf> = Vec::with_capacity(args.input_dirs.len());
-        for dir in &args.input_dirs {
-            let resolved = resolve_path_to_abs_path(dir, &directory);
-            validate_dir(&resolved, "--input-dir")?;
-            if let Some(existing) = accepted_roots
-                .iter()
-                .find(|root| directory_roots_overlap(root, &resolved, args.no_recursion))
-            {
-                if !args.no_strict_separation {
-                    return Err(Error::Config(format!(
-                        "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
-                        resolved.display(),
-                        existing.display()
-                    )));
-                }
-            }
-            accepted_roots.push(resolved.clone());
-            input_dirs.push(PathSource {
-                original_path: dir.to_path_buf(),
-                absolute_path: resolved,
-            });
-        }
+        // INFO: Scope to drop accepted_roots again.
+        {
+            let mut accepted_roots: Vec<PathBuf> = Vec::with_capacity(args.input_dirs.len());
+            for dir in &args.input_dirs {
+                let c_resolved = resolve_path_to_abs_path(dir, &c_directory);
+                validate_dir(&c_resolved, "--input-dir")?;
+                if let Some(existing) = accepted_roots
+                    .iter()
+                    .find(|root| directory_roots_overlap(
+                        root, &c_resolved, args.no_recursion)) {
 
-        let files_from: Vec<PathBuf> = args
+                    if !args.no_strict_separation {
+                        return Err(Error::Config(format!(
+                            "input directory `{}` overlaps `{}`; use `--no-strict-separation` to \
+                            walk anyway",
+                            c_resolved.display(),
+                            existing.display()
+                        )));
+                    }
+                }
+                accepted_roots.push(c_resolved.clone());
+                input_dirs.push(PathSource {
+                    // INFO: For reproducibility purposes we, we store the original_path not cleaned
+                    //  and consumers of original_path need sanitize it.
+                    original_path: dir.to_path_buf(),
+                    absolute_path: c_resolved,
+                });
+            }
+        }
+        let c_files_from: Vec<PathBuf> = args
             .files_from
             .iter()
             .map(|p| {
                 if p.as_os_str() == "-" {
                     Ok(PathBuf::from("-"))
                 } else {
-                    let resolved = resolve_path_to_abs_path(p, &directory);
-                    validate_file(resolved.as_ref(), "--from-file")?;
-                    Ok(resolved)
+                    let c_resolved = resolve_path_to_abs_path(p, &c_directory);
+                    validate_file(c_resolved.as_ref(), "--from-file")?;
+                    Ok(c_resolved)
                 }
             })
             .collect::<Result<_>>()?;
 
-        let format = resolve_compression(&args.compression, &archive_path)?;
+        // Compression
+        let format = resolve_compression(&args.compression, &c_archive_path)?;
         let compression = CompressionSettings::from_archive_args(format, args)?;
 
-        let exclude_from: Vec<PathBuf> = args
+        // Include & Exclude files
+        let c_exclude_from: Vec<PathBuf> = args
             .exclude_from
             .iter()
             .map(|p| {
-                let resolved = resolve_path_to_abs_path(p, &directory);
+                let resolved = resolve_path_to_abs_path(p, &c_directory);
                 validate_file(&resolved, "--exclude-from")?;
                 Ok(resolved)
             })
             .collect::<Result<_>>()?;
-        let include_from: Vec<PathBuf> = args
+        let c_include_from: Vec<PathBuf> = args
             .include_from
             .iter()
             .map(|p| {
-                let resolved = resolve_path_to_abs_path(p, &directory);
+                let resolved = resolve_path_to_abs_path(p, &c_directory);
                 validate_file(&resolved, "--exclude-from")?;
                 Ok(resolved)
             })
@@ -196,49 +374,26 @@ impl ArchiveConfig {
             ));
         }
 
-        let owner_map: Option<PathBuf> = args
+        let c_owner_map: Option<PathBuf> = args
             .owner_map
             .as_ref()
             .map(|p| -> Result<PathBuf> {
-                let resolved = resolve_path_to_abs_path(p, &directory);
-                validate_file(&resolved, "--owner-map")?;
-                Ok(resolved)
+                let c_resolved = resolve_path_to_abs_path(p, &c_directory);
+                validate_file(&c_resolved, "--owner-map")?;
+                Ok(c_resolved)
             })
             .transpose()?;
-        let group_map: Option<PathBuf> = args
+        let c_group_map: Option<PathBuf> = args
             .group_map
             .as_ref()
             .map(|p| -> Result<PathBuf> {
-                let resolved = resolve_path_to_abs_path(p, &directory);
-                validate_file(&resolved, "--group-map")?;
-                Ok(resolved)
+                let c_resolved = resolve_path_to_abs_path(p, &c_directory);
+                validate_file(&c_resolved, "--group-map")?;
+                Ok(c_resolved)
             })
             .transpose()?;
 
         // TODO: call resolve_xz_threads to ensure we have sufficient resources.
-
-        if args.page_size == 0 {
-            return Err(Error::Config("page_size must be greater than 0".into()));
-        }
-
-        // Validate early so a bad `--mode` fails before any work dir is created.
-        let mode_changes: Option<String> = match &args.mode {
-            Some(changes) => {
-                crate::common::perms::parse_mode_changes(changes)?;
-                Some(changes.clone())
-            }
-            None => None,
-        };
-
-        // Validate early so a bad `--transform` fails before any work dir is
-        // created. Only validated and stored; never applied at archive time.
-        let transform: Option<String> = match &args.transform {
-            Some(expr) => {
-                crate::common::transform::parse_transform_expr(expr)?;
-                Some(expr.clone())
-            }
-            None => None,
-        };
 
         let start_policy = StartPolicy::create_or_fresh(args.fresh);
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
@@ -250,13 +405,14 @@ impl ArchiveConfig {
 
         Ok(Self {
             paths: PathLayout {
-                archive_path,
-                directory,
-                work_dir,
+                archive_path: c_archive_path,
+                directory: c_directory.clone(),
+                output_dir: c_directory,
+                work_dir: c_work_dir,
             },
             inputs: InputOptions {
                 input_dirs,
-                files_from,
+                files_from: c_files_from,
                 files_from_null: args.null,
             },
             indexing: IndexingOptions {
@@ -269,8 +425,8 @@ impl ArchiveConfig {
             filter: FilterOptions {
                 exclude_patterns: args.exclude.clone(),
                 include_patterns: args.include.clone(),
-                exclude_from,
-                include_from,
+                exclude_from: c_exclude_from,
+                include_from: c_include_from,
                 anchored: args.anchored,
                 ignore_case: args.ignore_case,
                 eager_filter: !args.lazy_filter,
@@ -288,14 +444,14 @@ impl ArchiveConfig {
                 numeric_ids_only: resolve_bool_flag(args.numeric_ids_only,
                                                     args.resolve_numeric_ids,
                                                     capture_all),
-                mode: mode_changes,
-                transform,
+                mode: args.mode.clone(),
+                transform: args.transform.clone(),
             },
             owner_policy: OwnerPolicy {
                 owner: args.owner.clone(),
-                owner_map,
+                owner_map: c_owner_map,
                 group: args.group.clone(),
-                group_map,
+                group_map: c_group_map,
             },
             sparse: SparseOptions {
                 sparsify: args.sparsify,
@@ -307,19 +463,44 @@ impl ArchiveConfig {
                 start_policy,
                 jobs,
                 io_jobs,
+                auto_flush_limit: args.auto_flush_limit,
+                batch_size: args.batch_size,
+                work_capacity: args.work_capacity,
+                out_capacity: args.out_capacity,
+                feed_chunk: args.feed_chunk,
+                drain_chunk: args.drain_chunk,
                 fail_fast: args.fail_fast,
                 no_errors: args.no_errors,
                 force: false,
-                relax_utf8: false, // TODO cli
+                relax_utf8: args.relax_utf8,
+                progress_mode: args.progress_mode,
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
                 exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             },
             pipeline: ArchivePipelineOptions {
                 dedup_mode: args.dedup_mode,
+                order: args.ordering,
+                use_shards: args.use_shards,
+                max_shard_size: args.max_shard_size,
                 write_archive_footer: true,
-                clear_archive_meta: false,
             },
         })
+    }
+}
+
+impl Validate for ArchiveConfig {
+    fn validate(&self) -> Result<()> {
+        self.paths.validate()?;
+        self.inputs.validate()?;
+        self.indexing.validate()?;
+        self.filter.validate()?;
+        self.capture.validate()?;
+        self.owner_policy.validate()?;
+        self.sparse.validate()?;
+        self.compression.validate()?;
+        self.process.validate()?;
+        self.pipeline.validate()?;
+        Ok(())
     }
 }
 
@@ -336,35 +517,6 @@ impl super::WorkLayout for ArchiveConfig {
         match mode {
             super::CleanupMode::Archive => super::path_parent(&self.paths.archive_path),
             super::CleanupMode::Extract => self.paths.extraction_root(),
-        }
-    }
-}
-
-impl ArchiveConfig {
-    /// Option-B merge: fields whose candidate value matches `default` are "not
-    /// defined" and inherit from `base`; everything else comes from the candidate.
-    fn merge_over(&self, base: &Self, default: &Self) -> Self {
-        Self {
-            paths: self.paths.clone(),
-            inputs: merge_pick_clone(&self.inputs, &base.inputs, &default.inputs),
-            indexing: merge_pick_clone(&self.indexing, &base.indexing, &default.indexing),
-            filter: merge_pick_clone(&self.filter, &base.filter, &default.filter),
-            capture: merge_pick_clone(&self.capture, &base.capture, &default.capture),
-            owner_policy: merge_pick_clone(&self.owner_policy, &base.owner_policy, &default.owner_policy),
-            sparse: merge_pick_clone(&self.sparse, &base.sparse, &default.sparse),
-            compression: merge_pick_clone(&self.compression, &base.compression, &default.compression),
-            process: ProcessOptions {
-                start_policy: self.process.start_policy,
-                jobs: merge_pick_copy(self.process.jobs, base.process.jobs, default.process.jobs),
-                io_jobs: merge_pick_copy(self.process.io_jobs, base.process.io_jobs, default.process.io_jobs),
-                fail_fast: merge_pick_copy(self.process.fail_fast, base.process.fail_fast, default.process.fail_fast),
-                no_errors: merge_pick_copy(self.process.no_errors, base.process.no_errors, default.process.no_errors),
-                force: merge_pick_copy(self.process.force, base.process.force, default.process.force),
-                relax_utf8: merge_pick_copy(self.process.relax_utf8, base.process.relax_utf8, default.process.relax_utf8),
-                cleanup: self.process.cleanup,
-                exit_after_stage: self.process.exit_after_stage,
-            },
-            pipeline: merge_pick_clone(&self.pipeline, &base.pipeline, &default.pipeline),
         }
     }
 }
@@ -387,76 +539,3 @@ fn validate_capture_pairs(args: &ArchiveArgs) -> Result<()> {
     }
     Ok(())
 }
-
-/// Archive config with every optional bit at its default (INCLUDE: capture
-/// metadata, resolve names). Used as the merge baseline: fields equal to
-/// `DEFAULT_CONFIG` count as unset during a config merge.
-const DEFAULT_CONFIG: ArchiveConfig = ArchiveConfig {
-    paths: PathLayout {
-        archive_path: PathBuf::new(),
-        directory: PathBuf::new(),
-        work_dir: PathBuf::new(),
-    },
-    inputs: InputOptions {
-        input_dirs: Vec::new(),
-        files_from: Vec::new(),
-        files_from_null: false,
-    },
-    indexing: IndexingOptions {
-        no_recursion: false,
-        dereference: false,
-        one_file_system: false,
-        no_hardlink_detection: false,
-        no_strict_separation: false,
-    },
-    filter: FilterOptions {
-        exclude_patterns: Vec::new(),
-        include_patterns: Vec::new(),
-        exclude_from: Vec::new(),
-        include_from: Vec::new(),
-        anchored: false,
-        ignore_case: false,
-        eager_filter: false,
-    },
-    capture: CaptureOptions {
-        do_xattrs: true,
-        do_posix_acl: true,
-        do_selinux: true,
-        numeric_ids_only: false,
-        mode: None,
-        transform: None,
-    },
-    owner_policy: OwnerPolicy {
-        owner: None,
-        owner_map: None,
-        group: None,
-        group_map: None,
-    },
-    sparse: SparseOptions {
-        sparsify: false,
-        page_size: 0,
-        min_pages: 0,
-    },
-    compression: CompressionSettings {
-        format: super::compression::CompressionFormat::None,
-        level: 0,
-        xz_extreme: false,
-        memlimit_compress: None,
-    },
-    process: ProcessOptions {
-        start_policy: StartPolicy::Create,
-        jobs: 0,
-        io_jobs: 0,
-        fail_fast: false,
-        no_errors: false,
-        force: false,
-        relax_utf8: false, // TODO cli
-        cleanup: CleanupSettings { keep_db: false, keep_stage: false },
-        exit_after_stage: None,
-    },
-    pipeline: ArchivePipelineOptions {
-        dedup_mode: DedupMode::Regular,
-        write_archive_footer: true,
-        clear_archive_meta: false,
-    },
-};
