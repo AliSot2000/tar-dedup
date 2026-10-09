@@ -317,7 +317,8 @@ fn sanity_no_deduped(db: &Database) -> Result<()> {
 mod tests {
     use super::*;
     use crate::cli::DedupMode;
-    use crate::common::defaults::{BATCH_SIZE, DEFAULT_AUTO_FLUSH_LIMIT, FEED_CHUNK};
+    use crate::common::defaults::{BATCH_SIZE, DEFAULT_AUTO_FLUSH_LIMIT, DRAIN_CHUNK, FEED_CHUNK,
+                                  OUT_CAPACITY, WORK_CAPACITY};
     use crate::common::files::original_extension;
     use crate::common::start::StartPolicy;
     use crate::config::{
@@ -410,7 +411,6 @@ mod tests {
                 use_shards: false,
                 max_shard_size: 0,
                 write_archive_footer: false,
-                clear_archive_meta: false,
             },
         }
     }
