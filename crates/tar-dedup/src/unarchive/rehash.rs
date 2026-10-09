@@ -1,6 +1,5 @@
 //! Rehash: verify extract-cache payloads against catalog SHA-1 digests.
 
-use crate::common::defaults::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
 use crate::common::io_buffer;
 use crate::common::send_receive_loop;
 use crate::config::ExtractPipelinePhase;
@@ -76,8 +75,8 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         bars.push(rt.progress.thread_bar(i));
     }
 
-    let (work_s, work_r) = bounded::<StrippedRecord>(WORK_CAPACITY);
-    let (out_s, out_r) = bounded::<Option<RehashOutcome>>(OUT_CAPACITY);
+    let (work_s, work_r) = bounded::<StrippedRecord>(rt.config.process.work_capacity);
+    let (out_s, out_r) = bounded::<Option<RehashOutcome>>(rt.config.process.out_capacity);
     let mut thread_handles = Vec::with_capacity(rt.config.process.effective_jobs());
 
     for i in 0..rt.config.process.effective_jobs() {
@@ -167,7 +166,7 @@ fn handle_send_receive_loop(
     let mut queue_index = 0u64;
     let pull = || {
         let rows = rt.db.pull_pending_rehash_rows::<StrippedRecord>(
-            queue_index, FEED_CHUNK as u64)?;
+            queue_index, rt.config.process.feed_chunk as u64)?;
         if !rows.is_empty() {
             queue_index = rows[rows.len() - 1].0;
         }
@@ -201,7 +200,7 @@ fn handle_send_receive_loop(
 
     let _ = send_receive_loop(
         rt.shutdown, send, recv, thread_handles,
-        DRAIN_CHUNK, false,
+        rt.config.process.drain_chunk, false,
         pull, |_| Ok(()), || Ok(true), apply)?;
     recorder.flush()?;
     Ok(counts)

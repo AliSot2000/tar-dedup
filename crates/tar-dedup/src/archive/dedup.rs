@@ -10,7 +10,7 @@ use std::mem::take;
 use crate::archive::ArchiveRTArgs;
 use crate::cli::DedupMode;
 use crate::common::files::warn_if_times_changed;
-use crate::common::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY, io_buffer, send_receive_loop};
+use crate::common::{io_buffer, send_receive_loop};
 use crate::db::ErrorPhase;
 use crate::db::dedup::{CompareOutcome, ComparePair, compare_pair};
 use crate::db::flags::ErrorFlags;
@@ -95,8 +95,8 @@ fn run_regular_fsm(
         bars.push(rt.progress.thread_bar(i));
     }
 
-    let (work_s, work_r) = bounded::<ComparePair>(WORK_CAPACITY);
-    let (out_s, out_r) = bounded::<Option<CompareOutcome>>(OUT_CAPACITY);
+    let (work_s, work_r) = bounded::<ComparePair>(rt.config.process.work_capacity);
+    let (out_s, out_r) = bounded::<Option<CompareOutcome>>(rt.config.process.out_capacity);
 
     for i in 0..jobs {
         let bar = bars[i].clone();
@@ -231,7 +231,7 @@ fn run_enqueue_dequeue_loop_dedup(
     // none exists.
     let pull = || {
         let pairs = rt.db.list_pending_comparisons::<StrippedRecord>(
-            eager_filter, 0, FEED_CHUNK as u64)?;
+            eager_filter, 0, rt.config.process.feed_chunk as u64)?;
         Ok(pairs.into_iter().map(|(candidate, canonical)| {
             compare_pair(&canonical, &candidate)
         }).collect::<Vec<_>>())
@@ -285,7 +285,7 @@ fn run_enqueue_dequeue_loop_dedup(
 
     let completed = send_receive_loop(
         rt.shutdown, send, recv, thread_handles,
-        DRAIN_CHUNK, true,
+        rt.config.process.drain_chunk, true,
         pull, on_sent, tick, apply)?;
     recorder.flush()?;
     Ok((fail_fast_hit, completed))
