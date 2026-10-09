@@ -37,13 +37,17 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
     let requested = requested.max(1) as u32;
     let mut threads = requested;
     let mut memusage = mt_memusage(threads, preset);
+    let mem_limit_str = match memlimit {
+        Some(m) => format!(" and {} memorsy limit", format_mib(m)),
+        None => "".into(),
+    };
 
     tracing::info!(
-        "xz: {} of memory is required for preset -{}{} with {} thread(s).",
+        "xz: {} of memory is required for preset -{level}{} with {} thread(s){}.",
         format_mib(memusage),
-        level,
         if preset & PRESET_EXTREME != 0 { "e" } else { "" },
-        threads
+        threads,
+        mem_limit_str
     );
 
     if let Some(limit) = memlimit {
@@ -54,7 +58,7 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
         }
         if memusage > limit {
             return Err(Error::Config(format!(
-                "xz preset -{level}{} needs at least {} ({} thread(s)); \
+                "xz: preset -{level}{} needs at least {} ({} thread(s)); \
                  raise --memlimit-compress or lower --jobs",
                 if preset & PRESET_EXTREME != 0 { "e" } else { "" },
                 format_mib(memusage),
@@ -68,11 +72,10 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
             );
         }
     } else {
-        tracing::error!("xz: memory limiter disabled (use --memlimit-compress to cap usage).");
         if let Some(ram) = physical_ram_bytes() {
             if memusage > ram {
-                tracing::error!(
-                    "xz: warning: estimated need ({}) exceeds physical RAM ({})",
+                tracing::warn!(
+                    "xz: estimated need ({}) exceeds physical RAM ({})",
                     format_mib(memusage),
                     format_mib(ram)
                 );
