@@ -404,8 +404,8 @@ impl ExtractConfig {
 
         let mode_policy = resolve_mode_policy_from_args(args, apply_mode)?;
         
-        // TODO what?
         let (apply_owner, apply_group) = if matches!(owner_policy, OwnerGroupSource::Cli(_)) {
+            // INFO: Policy Decision - only 
             (false, false)
         } else {
             (apply_owner, apply_group)
