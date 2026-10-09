@@ -6,11 +6,13 @@ mod phases;
 mod process;
 mod resume;
 mod common;
+mod filter;
 
 pub use archive::{
-    ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
+    ArchiveConfig, ArchivePipelineOptions, CaptureOptions, IndexingOptions,
     InputOptions, OwnerPolicy, SparseOptions,
 };
+pub use filter::FilterOptions;
 pub use compression::{
     CompressionFormat, CompressionSettings, infer_compression_from_suffix, resolve_compression,
 };
@@ -146,13 +148,13 @@ pub(crate) fn path_parent(path: &Path) -> &Path {
 pub(crate) fn default_extract_work_dir(
     archive_path: &Path,
     output_dir: &Path,
-    location: ExtractStageLocation,
-) -> PathBuf {
+    location: ExtractStageLocation)
+    -> PathBuf {
     let parent = match location {
         ExtractStageLocation::BesideArchive => path_parent(archive_path),
         ExtractStageLocation::BesideOutput => path_parent(output_dir),
     };
-    parent.join(format!("{}.estage", archive_stem(archive_path)))
+    parent.join(format!("{}.estage", archive_stem(archive_path))).clean()
 }
 
 pub(crate) fn default_archive_work_dir(archive_path: &Path) -> PathBuf {
