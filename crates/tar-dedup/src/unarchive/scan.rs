@@ -519,8 +519,7 @@ fn process_entry(
                     &entry_dst,
                     member_total,
                     &mut buf,
-                    |bytes, _size: u64, _dur: std::time::Duration| on_bytes(bytes))
-                {
+                    |bytes, _size: u64, _dur: Duration| on_bytes(bytes)) {
                     Ok(_) => Ok(()),
                     Err(e) => Err(e),
                 }
