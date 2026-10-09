@@ -37,15 +37,15 @@
 - [X] Sanity checks
 - [X] error buffer scan.rs (TODO AGENT!)
 - [X] blanked promote scan - can we not run into the problem tha files are still in staged? or do we have a blanket promote before -> in that case use blanket promote from later.
-- [ ] add cli arg for shards (use_shards, max_shard_size)
-- [ ] add cli arg for debug-feat ordering-override (don't use custom ordering. order by files(id) - used to test the effectiveness of our ordering idea)
-- [ ] add cli arg for ordering (ext, filename, file_size, id / ext, file_size, id)
-- [ ] add cli arg DEFAULT_AUTO_FLUSH_LIMIT, BATCH_SIZE, WORK_CAPACITY, OUT_CAPACITY, FEED_CHUNK, DRAIN_CHUNK (override the defaults from config.) - conform those consts to the cli nameing convention.
-- [ ] add cli arg for log level
-- [ ] add cli arg for the disabling the per thread progress and/or all progress. (per thread on a e.g. 128 core machine - not very useful, disable all together if you want to pipe the output into a file.)
-- [ ] add cli arg for force
-- [ ] add cli arg for relax-utf8 (doesn't work with force!)
-- [ ] add cli arg for missing flags in extract config which are hardcoded (absolute_links: bool, clean_target, link_source, no_reflink, hard_link_grouping, recreate_none_file_entries)
+- [X] add cli arg for shards (use_shards, max_shard_size)
+- [X] add cli arg for debug-feat ordering-override (don't use custom ordering. order by files(id) - used to test the effectiveness of our ordering idea)
+- [X] add cli arg for ordering (ext, filename, file_size, id / ext, file_size, id)
+- [X] add cli arg DEFAULT_AUTO_FLUSH_LIMIT, BATCH_SIZE, WORK_CAPACITY, OUT_CAPACITY, FEED_CHUNK, DRAIN_CHUNK (override the defaults from config.) - conform those consts to the cli nameing convention.
+- [X] add cli arg for log level
+- [X] add cli arg for the disabling the per thread progress and/or all progress. (per thread on a e.g. 128 core machine - not very useful, disable all together if you want to pipe the output into a file.)
+- [X] add cli arg for force
+- [X] add cli arg for relax-utf8 (doesn't work with force!)
+- [X] add cli arg for missing flags in extract config which are hardcoded (absolute_links: bool, clean_target, link_source, no_reflink, hard_link_grouping, recreate_none_file_entries)
 - [X] correct tracing (
             tracing::error - major fail (file not found, not removed, dir not created, ... something contentswise is not there the way we wanted)
             tracing::warning - minor fail (failed to remove a stage, metadata failed, recording errors failed, ...)
