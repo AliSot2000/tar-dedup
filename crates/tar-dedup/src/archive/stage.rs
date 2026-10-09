@@ -171,10 +171,8 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 mod tests {
     use super::*;
     use crate::common::files::original_extension;
-    use crate::common::start::StartPolicy;
     use crate::config::{
-        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, CleanupSettings, CompressionFormat,
-        CompressionSettings, FilterOptions, IndexingOptions, InputOptions, OwnerPolicy, PathLayout,
+        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
         ProcessOptions, SparseOptions,
     };
     use crate::db::Database;
@@ -190,84 +188,30 @@ mod tests {
 
     fn test_archive_config() -> ArchiveConfig {
         ArchiveConfig {
-            paths: PathLayout {
-                archive_path: PathBuf::new(),
-                directory: PathBuf::new(),
-                output_dir: PathBuf::new(),
-                work_dir: PathBuf::new(),
-            },
-            inputs: InputOptions {
-                input_dirs: Vec::new(),
-                files_from: Vec::new(),
-                files_from_null: false,
-            },
             indexing: IndexingOptions {
-                no_recursion: false,
-                dereference: false,
-                one_file_system: false,
                 no_hardlink_detection: true,
-                no_strict_separation: false,
+                ..IndexingOptions::default()
             },
-            filter: FilterOptions {
-                exclude_patterns: Vec::new(),
-                include_patterns: Vec::new(),
-                exclude_from: Vec::new(),
-                include_from: Vec::new(),
-                anchored: false,
-                ignore_case: false,
-                eager_filter: false,
-            },
+            filter: FilterOptions { eager_filter: false, ..FilterOptions::default() },
             capture: CaptureOptions {
                 do_xattrs: false,
                 do_posix_acl: false,
                 do_selinux: false,
-                numeric_ids_only: false,
-                mode: None,
-                transform: None,
+                ..CaptureOptions::default()
             },
-            owner_policy: OwnerPolicy {
-                owner: None,
-                owner_map: None,
-                group: None,
-                group_map: None,
-            },
-            sparse: SparseOptions { sparsify: true, page_size: 4096, min_pages: 4 },
-            compression: CompressionSettings {
-                format: CompressionFormat::None,
-                level: 0,
-                xz_extreme: false,
-                memlimit_compress: None,
-            },
-            process: ProcessOptions {
-                start_policy: StartPolicy::Create,
-                jobs: 4,
-                io_jobs: 1,
-                auto_flush_limit: crate::common::defaults::DEFAULT_AUTO_FLUSH_LIMIT,
-                batch_size: crate::common::defaults::BATCH_SIZE,
-                work_capacity: crate::common::defaults::WORK_CAPACITY,
-                out_capacity: crate::common::defaults::OUT_CAPACITY,
-                feed_chunk: crate::common::defaults::FEED_CHUNK,
-                drain_chunk: crate::common::defaults::DRAIN_CHUNK,
-                fail_fast: false,
-                no_errors: false,
-                force: false,
-                relax_utf8: false,
-                progress_mode: crate::cli::ProgressMode::PerThread,
-                cleanup: CleanupSettings { keep_db: false, keep_stage: false },
-                exit_after_stage: None,
-            },
+            sparse: SparseOptions { sparsify: true, min_pages: 4, ..SparseOptions::default() },
+            process: ProcessOptions { jobs: 4, io_jobs: 1, ..ProcessOptions::default() },
             pipeline: ArchivePipelineOptions {
-                dedup_mode: crate::cli::DedupMode::Regular,
-                order: crate::cli::ArchiveOrdering::ExtSizeId,
-                use_shards: false,
                 max_shard_size: 0,
                 write_archive_footer: false,
-                clear_archive_meta: false,
+                ..ArchivePipelineOptions::default()
             },
+            ..ArchiveConfig::default()
         }
     }
 
-    struct TestWorld {
+
+struct TestWorld {
         dir: tempfile::TempDir,
         db: Database,
         shutdown: Shutdown,
