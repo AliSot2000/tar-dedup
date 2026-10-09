@@ -124,4 +124,32 @@ mod tests {
         let path = PathBuf::from("/tmp/ok");
         assert_eq!(require_utf8(&path).unwrap(), "/tmp/ok");
     }
+
+    #[test]
+    fn sanitize_path_passes_valid() {
+        let path = PathBuf::from("/tmp/ok");
+        assert!(sanitize_path(false, &path, "test").is_none());
+        assert!(sanitize_path(true, &path, "test").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sanitize_path_relax_skips_invalid() {
+        let path = non_utf8_path();
+        // Relax: non-UTF-8 is skipped (already warned), not fatal.
+        let Some(res) = sanitize_path(true, &path, "test") else {
+            panic!("expected a relax-mode skip result");
+        };
+        assert!(res.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sanitize_path_strict_errors_invalid() {
+        let path = non_utf8_path();
+        let Some(res) = sanitize_path(false, &path, "test") else {
+            panic!("expected a strict-mode result");
+        };
+        assert!(res.is_err());
+    }
 }
