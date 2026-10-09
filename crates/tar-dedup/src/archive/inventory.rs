@@ -158,7 +158,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         tracing::warn!("Encountered {missing_dev_ino_count} files without dev or inode information.\
          Those files won't be captured by hardlink detection");
     }
-    // TODO: Add inspect with query for missing files.
+    // TODO: Add inspect with query for missing files. Ha???
     tracing::info!(
         "inventory done: processed {} of {}, {} error(s)",
         processed,
