@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::{ConflictPolicy, ExtractArgs, HardLinkGrouping};
 use crate::common::perms::{
     MapResolutionTarget, ModeSource, OwnerGroupSource, infer_same_owner, parse_mode_changes,
-    parse_owner_group_args, validate_for_mode,
+    parse_owner_group_args, validate_for_resolution_mode,
 };
 use crate::common::start::StartPolicy;
 use crate::common::transform::{TransformSource, parse_transform_expr};
@@ -671,7 +671,7 @@ fn resolve_owner_policy_from_args(
         )? {
             Some(policy) => {
                 if args.validate_maps {
-                    validate_for_mode(&policy, args.map_target)?;
+                    validate_for_resolution_mode(&policy, args.map_target)?;
                 }
                 Ok(OwnerGroupSource::Cli(policy))
             }
