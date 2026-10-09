@@ -205,7 +205,7 @@ impl Validate for ScanOptions {
     fn validate(&self) -> Result<()> {
         if self.sparsify && self.page_size == 0 {
             return Err(Error::Config(
-                "page_size must be greater than 0 when `--sparsify` is set".into(),
+                "--page-size must be greater than 0 when `--sparsify` is set".into(),
             ));
         }
         Ok(())
