@@ -312,7 +312,7 @@ fn is_all_zero(chunk: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::cli::DedupMode;
-    use crate::common::IO_BUF_SIZE;
+    use crate::common::defaults::IO_BUF_SIZE;
     use crate::common::files::original_extension;
     use crate::common::start::StartPolicy;
     use crate::config::{

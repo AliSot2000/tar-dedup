@@ -492,10 +492,10 @@ fn files_equal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::defaults::OUT_CAPACITY;
     use crate::common::files::original_extension;
-    use crate::common::start::StartPolicy;
     use crate::config::{
-        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, CleanupSettings, CompressionFormat,
+        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, CompressionFormat,
         CompressionSettings, FilterOptions, IndexingOptions, InputOptions, OwnerPolicy, PathLayout,
         ProcessOptions, SparseOptions,
     };
