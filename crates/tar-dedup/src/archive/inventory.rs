@@ -4,7 +4,7 @@ use crate::archive::ArchiveRTArgs;
 use crate::common::files::{determine_file_type, original_extension};
 #[cfg(windows)]
 use crate::common::files::get_file_times;
-use crate::common::utf8::PathText;
+use crate::common::utf8::sanitize_path;
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::db::ErrorPhase;
 use crate::db::Recorder;
@@ -73,12 +73,18 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                       "Path should be minimal");
 
         // INFO: Check needed because source assumes everything serializes correctly!
-        if let Some(_) = no_treat_path(&rt, &input_dir.original_path, "input-dir-org") {
-            continue
-        };
-        if let Some(_) = no_treat_path(&rt, &input_dir.absolute_path, "input-dir-abs") {
-            continue
-        };
+        match sanitize_path(
+            rt.config.process.relax_utf8, &input_dir.original_path, "input-dir-org") {
+            None => (),
+            Some(Ok(())) => continue,
+            Some(Err(e)) => return Err(e)
+        }
+        match sanitize_path(
+            rt.config.process.relax_utf8, &input_dir.absolute_path, "input-dir-abs") {
+            None => (),
+            Some(Ok(())) => continue,
+            Some(Err(e)) => return Err(e)
+        }
 
         let source_id = rt.db.add_get_source(
             &input_dir.absolute_path,
@@ -94,6 +100,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     // Handle from-files
     for files_file in rt.config.inputs.files_from.iter() {
+        // The from-file is a source too: skip a non-UTF-8 path under relax.
+        match sanitize_path(
+            rt.config.process.relax_utf8, files_file, "files-from") {
+            None => (),
+            Some(Ok(())) => continue,
+            Some(Err(e)) => return Err(e),
+        };
         sub_bar.set_position(0);
         sub_bar.set_message(format!("{SUB_BAR_PREFIX}'{}'", files_file.display()));
         if files_file.to_path_buf() == PathBuf::from("-") {
@@ -194,11 +207,11 @@ fn handle_from_files_line<P: AsRef<Path>>(
     }
 
     // INFO: Check needed because source assumes everything serializes correctly!
-    if let Some(_) = no_treat_path(&rt, &fpath.clean(), "line-from-stdin") {
-        return Ok(())
+    if let Some(inner) = sanitize_path(rt.config.process.relax_utf8, &fpath.clean(), "line-from-stdin") {
+        return inner;
     };
-    if let Some(_) = no_treat_path(&rt, &abs_path, "conv-abs-from-stdin") {
-        return Ok(())
+    if let Some(inner) = sanitize_path(rt.config.process.relax_utf8, &abs_path, "conv-abs-from-stdin") {
+        return inner;
     };
 
     let source_id = rt.db.add_get_source(
@@ -273,13 +286,9 @@ fn handle_entry_base(
 
     // UTF-8 gate: strict aborts the run; `--relax-utf8` skips the entry (warn +
     // lossy report) so non-UTF-8 names never reach the database.
-    match path.to_utf8(rt.config.process.relax_utf8) {
-        Ok(Some(_)) => (),
-        Ok(None) => {
-            tracing::warn!("Skipping non-UTF-8 path: {}", path.to_string_lossy());
-            return Ok(());
-        }
-        Err(e) => return Err(e),
+    if let Some(res) = sanitize_path(
+        rt.config.process.relax_utf8, path, "inventory-entry") {
+        return res; // INFO: use Ok(()) on non-valid + relaxed => Abort out of function.
     }
 
     // Preflight: already inventoried — attach this source without restatting.
@@ -409,17 +418,9 @@ fn handle_entry(
 
     // Guard the link_dst path
     if let Some(dst) = link_dst.as_ref() {
-        match dst.to_utf8(rt.config.process.relax_utf8) {
-            Ok(Some(_)) => (),
-            Ok(None) => {
-                tracing::warn!(
-                    "Skipping non-UTF-8 link target: {} for symlink {}",
-                    dst.to_string_lossy(),
-                    path.to_string_lossy()
-                );
-                return Ok(());
-            }
-            Err(e) => return Err(e),
+        if let Some(res) = sanitize_path(
+            rt.config.process.relax_utf8, &dst, "link-target") {
+            return res;  // INFO: use Ok(()) on non-valid + relaxed => Abort out of function.
         }
     }
 
@@ -693,18 +694,5 @@ fn inner_file_type(meta: &Metadata, path: &Path, enc_err: &mut Vec<FileStatError
             });
             t
         }
-    }
-}
-
-/// Perform equivalent of transpose. Has a warning for Ok(None).
-/// Warning generated is `Skipping non-UTF-8 {path_type}-path`
-fn no_treat_path(rt: &ArchiveRTArgs, path: &Path, path_type: &str) -> Option<Result<()>> {
-    match path.to_utf8(rt.config.process.relax_utf8) {
-        Ok(Some(_)) => None,
-        Ok(None) => {
-            tracing::warn!("Skipping non-UTF-8 {path_type}-path: {}", path.to_string_lossy());
-            Some(Ok(()))
-        }
-        Err(e) => Some(Err(e)),
     }
 }
