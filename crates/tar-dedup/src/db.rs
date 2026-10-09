@@ -39,6 +39,7 @@ mod schema;
 mod source;
 pub(crate) mod sparsify;
 mod stage;
+mod stats;
 mod tar_writer;
 
 pub use common::SqlFileRow;
@@ -611,6 +612,31 @@ impl Database {
         meta::get_tar_dedup_os(&*self.conn())
     }
 
+    /// See [`meta::get_archive_phase`].
+    pub fn get_archive_phase(&self) -> Result<Option<PipelinePhase>> {
+        meta::get_archive_phase(&*self.conn())
+    }
+
+    /// See [`meta::get_extract_phase`].
+    pub fn get_extract_phase(&self) -> Result<Option<ExtractPipelinePhase>> {
+        meta::get_extract_phase(&*self.conn())
+    }
+
+    /// See [`meta::get_archive_snapshot_taken_at`].
+    pub fn get_archive_snapshot_taken_at(&self) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        meta::get_archive_snapshot_taken_at(&*self.conn())
+    }
+
+    /// See [`meta::get_tar_writer_bytes_in`].
+    pub fn get_tar_writer_bytes_in(&self) -> Result<Option<u64>> {
+        meta::get_tar_writer_bytes_in(&*self.conn())
+    }
+
+    /// See [`meta::get_tar_writer_bytes_out`].
+    pub fn get_tar_writer_bytes_out(&self) -> Result<Option<u64>> {
+        meta::get_tar_writer_bytes_out(&*self.conn())
+    }
+
     pub fn set_archive_owner_policy(
         &self,
         policy: &crate::common::perms::OwnerGroupPolicy,
@@ -765,6 +791,56 @@ impl Database {
 
     pub fn count_non_appended_by_ftype(&self) -> Result<Vec<(String, u64)>> {
         scan::count_non_appended_by_ftype(&*self.conn())
+    }
+
+    /// `(ftype, count)` for every row in `files`.
+    pub fn inspect_by_ftype(&self) -> Result<Vec<(String, u64)>> {
+        stats::count_by_ftype(&*self.conn())
+    }
+
+    /// `(included, excluded_by_include, excluded_by_exclude, unfiltered)`.
+    pub fn inspect_filter_buckets(&self) -> Result<(u64, u64, u64, u64)> {
+        stats::count_filter_buckets(&*self.conn())
+    }
+
+    /// Rows with a content hash.
+    pub fn inspect_count_hashed(&self) -> Result<u64> {
+        stats::count_hashed(&*self.conn())
+    }
+
+    /// Rows carrying `flag`.
+    pub fn inspect_count_flag(&self, flag: FileFlag) -> Result<u64> {
+        stats::count_flag(&*self.conn(), flag)
+    }
+
+    /// Self-canonical payloads whose `(sha1, size)` group has exactly one member.
+    pub fn inspect_count_canonical_singletons(&self) -> Result<u64> {
+        stats::count_canonical_singletons(&*self.conn())
+    }
+
+    /// Rows pointing at themselves as canonical payload.
+    pub fn inspect_count_canonical_files(&self) -> Result<u64> {
+        stats::count_canonical_files(&*self.conn())
+    }
+
+    /// Sum of `size` over all rows.
+    pub fn inspect_sum_bytes_all(&self) -> Result<u64> {
+        stats::sum_bytes_all(&*self.conn())
+    }
+
+    /// Sum of `size` over self-canonical payloads.
+    pub fn inspect_sum_bytes_canonical(&self) -> Result<u64> {
+        stats::sum_bytes_canonical(&*self.conn())
+    }
+
+    /// Sum of `size` over appended payloads.
+    pub fn inspect_sum_bytes_archived(&self) -> Result<u64> {
+        stats::sum_bytes_archived(&*self.conn())
+    }
+
+    /// `(started_at, finished_at, session_count)` over finalized sessions.
+    pub fn inspect_session_bounds(&self) -> Result<(Option<String>, Option<String>, u64)> {
+        stats::session_bounds(&*self.conn())
     }
 
     pub fn should_extract_canonical_id(&self, id: FileId) -> Result<bool> {
