@@ -3,6 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{ArchiveArgs, CompressionFlags};
+use crate::config::Validate;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +58,24 @@ pub struct CompressionSettings {
     pub xz_extreme: bool,
     /// Max RAM for xz MT encoder (`None` = no limit, like default `xz`).
     pub memlimit_compress: Option<u64>,
+}
+
+impl Default for CompressionSettings {
+    fn default() -> Self {
+        Self {
+            format: CompressionFormat::None,
+            level: 0,
+            xz_extreme: false,
+            memlimit_compress: None,
+        }
+    }
+}
+
+impl Validate for CompressionSettings {
+    // INFO: Stub to prevent errors as a consequence of not calling new validate functionl.
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl CompressionSettings {
