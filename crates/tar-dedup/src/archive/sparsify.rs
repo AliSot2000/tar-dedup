@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use crate::archive::ArchiveRTArgs;
-use crate::common::defaults::{DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
+use crate::common::defaults::{DRAIN_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
 use crate::common::files::warn_if_times_changed;
 use crate::common::send_receive_loop;
 use crate::db::Database;
@@ -318,6 +318,7 @@ fn sanity_no_deduped(db: &Database) -> Result<()> {
 mod tests {
     use super::*;
     use crate::cli::DedupMode;
+    use crate::common::defaults::{BATCH_SIZE, DEFAULT_AUTO_FLUSH_LIMIT, FEED_CHUNK};
     use crate::common::files::original_extension;
     use crate::common::start::StartPolicy;
     use crate::config::{
@@ -346,6 +347,7 @@ mod tests {
             paths: PathLayout {
                 archive_path: PathBuf::new(),
                 directory: PathBuf::new(),
+                output_dir: PathBuf::new(),
                 work_dir: PathBuf::new(),
             },
             inputs: InputOptions {
@@ -389,15 +391,25 @@ mod tests {
                 start_policy: StartPolicy::Create,
                 jobs: 4,
                 io_jobs: 1,
+                auto_flush_limit: DEFAULT_AUTO_FLUSH_LIMIT,
+                batch_size: BATCH_SIZE,
+                work_capacity: WORK_CAPACITY,
+                out_capacity: OUT_CAPACITY,
+                feed_chunk: FEED_CHUNK,
+                drain_chunk: DRAIN_CHUNK,
                 fail_fast: false,
                 no_errors: false,
                 force: false,
-                relax_utf8: false, // TODO cli
+                relax_utf8: false,
+                progress_mode: crate::cli::ProgressMode::PerThread,
                 cleanup: CleanupSettings { keep_db: false, keep_stage: false },
                 exit_after_stage: None,
             },
             pipeline: ArchivePipelineOptions {
                 dedup_mode: DedupMode::Regular,
+                order: crate::cli::ArchiveOrdering::ExtSizeId,
+                use_shards: false,
+                max_shard_size: 0,
                 write_archive_footer: false,
                 clear_archive_meta: false,
             },
