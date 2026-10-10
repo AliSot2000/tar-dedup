@@ -61,6 +61,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     } else {
         rt.db.count_out_tree_for_permissions()?
     };
+    // TODO: Fix - this is not correct.
     let (dir_pending, dir_done) = if rt.config.attributes.force_overwrite_dir {
         rt.db.count_out_tree_for_permissions_dirs()?
     } else {
