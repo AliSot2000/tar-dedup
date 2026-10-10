@@ -3,13 +3,35 @@ use std::path::PathBuf;
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
+use crate::common;
 use crate::common::perms::MapResolutionTarget;
 
 #[derive(Debug, Parser)]
 #[command(name = "tar-dedup", about = "Deduplicating archival pipeline")]
 pub struct Cli {
+    /// Verbosity of the log output (overrides the `RUST_LOG` env var).
+    #[arg(
+        long = "log-level",
+        global = true,
+        value_enum,
+        value_name = "LEVEL",
+        help_heading = "Process Options"
+    )]
+    pub log_level: Option<LogLevel>,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// Log verbosity for `--log-level` (maps onto `tracing` levels).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogLevel {
+    Off,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
 }
 
 #[derive(Debug, Subcommand)]
@@ -244,7 +266,6 @@ pub struct ArchiveArgs {
     #[arg(long = "resolve-numeric-ids", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub resolve_numeric_ids: bool,
 
-    // TODO extraction?
     /// Force owner for archived members: `NAME`, `UID`, or `NAME:UID` (GNU tar).
     /// Stored as archive policy (meta); applied on extract.
     #[arg(long = "owner", value_name = "NAME[:UID]", help_heading = "File Attributes")]
@@ -351,6 +372,97 @@ pub struct ArchiveArgs {
         help_heading = "Process Options"
     )]
     pub dedup_mode: DedupMode,
+
+    /// Generate sorted combination of data pieces in the order necessary to write.
+    /// (GNU tar `--sort` analog; applies at the tar writer.)
+    #[arg(
+        long = "ordering",
+        value_enum,
+        default_value_t = ArchiveOrdering::ExtSizeId,
+        help_heading = "Process Options"
+    )]
+    pub ordering: ArchiveOrdering,
+
+    /// Use content-defined chunking instead of whole-file hashes (not implemented yet).
+    #[arg(long = "use-shards", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    pub use_shards: bool,
+
+    /// Maximum shard size for content-defined chunking (requires `--use-shards`).
+    #[arg(
+        long = "max-shard-size",
+        value_name = "BYTES",
+        default_value_t = 0,
+        help_heading = "Process Options"
+    )]
+    pub max_shard_size: u64,
+
+    /// Skip entries whose path cannot be represented as UTF-8 (warn + continue).
+    /// Mutually exclusive with `--force` and `--fail-fast`.
+    #[arg(long = "relax-utf8", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    pub relax_utf8: bool,
+
+    /// Number of error drafts buffered before an auto-flush to the database.
+    #[arg(
+        long = "auto-flush-limit",
+        value_name = "N",
+        default_value_t = common::defaults::DEFAULT_AUTO_FLUSH_LIMIT,
+        help_heading = "Process Options"
+    )]
+    pub auto_flush_limit: u64,
+
+    /// Rows pulled from the database per phase iteration.
+    #[arg(
+        long = "batch-size",
+        value_name = "N",
+        default_value_t = common::defaults::BATCH_SIZE,
+        help_heading = "Process Options"
+    )]
+    pub batch_size: u64,
+
+    /// Items in the producer/consumer work channel.
+    #[arg(
+        long = "work-capacity",
+        value_name = "N",
+        default_value_t = common::defaults::WORK_CAPACITY,
+        help_heading = "Process Options"
+    )]
+    pub work_capacity: usize,
+
+    /// Items in the producer/consumer result channel.
+    #[arg(
+        long = "out-capacity",
+        value_name = "N",
+        default_value_t = common::defaults::OUT_CAPACITY,
+        help_heading = "Process Options"
+    )]
+    pub out_capacity: usize,
+
+    /// Rows pulled from the database per feed round.
+    #[arg(
+        long = "feed-chunk",
+        value_name = "N",
+        default_value_t = common::defaults::FEED_CHUNK,
+        help_heading = "Process Options"
+    )]
+    pub feed_chunk: usize,
+
+    /// Outcomes committed per transaction.
+    #[arg(
+        long = "drain-chunk",
+        value_name = "N",
+        default_value_t = common::defaults::DRAIN_CHUNK,
+        help_heading = "Process Options"
+    )]
+    pub drain_chunk: usize,
+
+    /// Which progress bars to draw.
+    #[arg(
+        long = "progress-mode",
+        value_enum,
+        default_value_t = ProgressMode::PerThread,
+        help_heading = "Process Options"
+    )]
+    pub progress_mode: ProgressMode,
 }
 
 #[derive(Debug, Args, Default)]
@@ -359,12 +471,15 @@ pub struct CompressionFlags {
     #[arg(short = 'z', long = "gzip", group = "compress_filter")]
     pub gzip: bool,
 
+    /// Filter the archive through bzip2 (overrides extension inference).
     #[arg(short = 'j', long = "bzip2", group = "compress_filter")]
     pub bzip2: bool,
 
+    /// Filter the archive through xz (overrides extension inference).
     #[arg(short = 'J', long = "xz", group = "compress_filter")]
     pub xz: bool,
 
+    /// Filter the archive through zstd (overrides extension inference).
     #[arg(long = "zstd", group = "compress_filter")]
     pub zstd: bool,
 }
@@ -378,8 +493,8 @@ pub struct ExtractArgs {
     pub archive: PathBuf,
 
     /// Treat DIR as the working directory when resolving relative paths on this
-    /// command line (`-f`, `--work-dir`, …) and as the extraction root. Absolute
-    /// paths are unchanged. Default: process current directory.
+    /// command line (`-f`, `--work-dir`, …). Absolute paths are unchanged.
+    /// Default: process current directory.
     #[arg(
         short = 'C',
         long = "directory",
@@ -387,6 +502,14 @@ pub struct ExtractArgs {
         help_heading = "Archive Paths"
     )]
     pub directory: Option<PathBuf>,
+
+    /// Extract members into DIR (the restore root); default: `-C` / current dir.
+    #[arg(
+        long = "extract-to",
+        value_name = "DIR",
+        help_heading = "Archive Paths"
+    )]
+    pub extract_to: Option<PathBuf>,
 
     /// Stage directory for sqlite DB, cached payloads, and locks (defaults to
     /// `{stem}.estage` next to the archive). Relative paths use `-C` / cwd.
@@ -416,6 +539,13 @@ pub struct ExtractArgs {
     )]
     pub one_top_level: Option<PathBuf>,
 
+    // --- Compression ---
+
+    /// Compression filter override. By default the archive suffix decides
+    /// (extension inference / no compression); an explicit flag overrides it.
+    #[command(flatten, next_help_heading = "Compression")]
+    pub compression: CompressionFlags,
+
     // --- Overwrite Control ---
 
     /// Preserve existing directory symlinks instead of replacing them (GNU tar
@@ -439,7 +569,8 @@ pub struct ExtractArgs {
     )]
     pub unlink_first: bool,
 
-    /// Skip members whose parent directory does not exist (error with `--fail-fast`).
+    /// Skip the directory tree create pass. Results in the members without a parent being skipped.
+    /// Results in error with --fail-fast
     #[arg(
         long = "no-create-dirs",
         default_value_t = false,
@@ -448,7 +579,6 @@ pub struct ExtractArgs {
     )]
     pub no_create_dir: bool,
 
-    // TODO check that this is working.
     /// Do not apply archived metadata to existing directories (GNU tar
     /// `--no-overwrite-dir`). Default: apply directory metadata for placed
     /// members, matching GNU tar at the end of the pipeline.
@@ -460,6 +590,7 @@ pub struct ExtractArgs {
     )]
     pub no_overwrite_dir: bool,
 
+    // TODO implement!
     /// Also apply archived directory metadata to directories excluded by filters.
     /// Normally only placed members are updated (GNU tar equivalent); this flag
     /// matters because excluded paths remain in the catalog with full metadata.
@@ -502,10 +633,20 @@ pub struct ExtractArgs {
     #[arg(
         long = "hard-link-grouping",
         value_enum,
+        default_value_t = HardLinkGrouping::Global,
         help_heading = "Overwrite Control",
         value_name = "GROUPING-POLICY"
     )]
     pub hard_link_grouping: HardLinkGrouping,
+
+    /// Remove the extraction root before extracting (only effective with `--one-top-level`).
+    #[arg(
+        long = "clean-target",
+        default_value_t = false,
+        action = ArgAction::SetTrue,
+        help_heading = "Overwrite Control"
+    )]
+    pub clean_target: bool,
 
     // --- Link Tree ---
 
@@ -538,6 +679,34 @@ pub struct ExtractArgs {
     )]
     pub absolute_links: bool,
 
+    /// With `--link-tree`, use DIR as the directory the canonical payloads are
+    /// materialized into before linking (default: the extract cache directory).
+    #[arg(
+        long = "link-source",
+        value_name = "DIR",
+        help_heading = "Link Tree"
+    )]
+    pub link_source: Option<PathBuf>,
+
+    /// Do not attempt copy-on-write (reflink) copies when placing payloads.
+    #[arg(
+        long = "no-reflink",
+        default_value_t = false,
+        action = ArgAction::SetTrue,
+        help_heading = "Placement"
+    )]
+    pub no_reflink: bool,
+
+    /// Recreate non-regular entries (symlink, fifo, char/block device, socket).
+    /// Off by default: those entries require privileges (`mknod`) most users lack.
+    #[arg(
+        long = "create-other-entries",
+        default_value_t = false,
+        action = ArgAction::SetTrue,
+        help_heading = "Placement"
+    )]
+    pub create_other_entries: bool,
+
     // --- File Attributes ---
 
     /// Restore archived uid/gid when possible (GNU tar `--same-owner`; may require root).
@@ -552,6 +721,7 @@ pub struct ExtractArgs {
     pub restore_owner: bool,
 
     /// Do not restore archived ownership; files are owned by the extracting process.
+    /// Default: inferred from the effective uid of the extracting process.
     #[arg(long = "no-same-owner", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_same_owner: bool,
 
@@ -570,22 +740,31 @@ pub struct ExtractArgs {
     pub validate_maps: bool,
 
     /// Force owner for restored members: `NAME`, `UID`, or `NAME:UID`.
+    /// Identity is all-or-nothing: giving any of `--owner`/`--group`/`--owner-map`/
+    /// `--group-map` uses the CLI for **both** identities and disables
+    /// `--apply-stored-owner-map` / `--apply-stored-group-map` (no CLI/archive mix).
     #[arg(long = "owner", value_name = "NAME[:UID]", help_heading = "File Attributes")]
     pub owner: Option<String>,
 
-    /// Owner translation map file (GNU tar `--owner-map`).
+    /// Owner translation map file (GNU tar `--owner-map`). See `--owner` for the
+    /// all-or-nothing identity rule.
     #[arg(long = "owner-map", value_name = "FILE", help_heading = "File Attributes")]
     pub owner_map: Option<PathBuf>,
 
     /// Force group for restored members: `NAME`, `GID`, or `NAME:GID`.
+    /// See `--owner` for the all-or-nothing identity rule.
     #[arg(long = "group", value_name = "NAME[:GID]", help_heading = "File Attributes")]
     pub group: Option<String>,
 
-    /// Group translation map file (GNU tar `--group-map`).
+    /// Group translation map file (GNU tar `--group-map`). See `--owner` for the
+    /// all-or-nothing identity rule.
     #[arg(long = "group-map", value_name = "FILE", help_heading = "File Attributes")]
     pub group_map: Option<PathBuf>,
 
-    /// Apply the owner map recorded in the archive (ignored if any `--owner`/`--owner-map` given).
+    /// Apply the owner map recorded in the archive (alongside `--apply-stored-group-map`,
+    /// the whole archived identity). Ignored if any of `--owner`/`--group`/
+    /// `--owner-map`/`--group-map` is given: identity comes entirely from the
+    /// command line or entirely from the archive — never a mix.
     #[arg(long = "apply-stored-owner-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_stored_owner_map: bool,
 
@@ -593,7 +772,10 @@ pub struct ExtractArgs {
     #[arg(long = "no-apply-stored-owner-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub no_apply_stored_owner_map: bool,
 
-    /// Apply the group map recorded in the archive (ignored if any `--group`/`--group-map` given).
+    /// Apply the group map recorded in the archive (alongside `--apply-stored-owner-map`,
+    /// the whole archived identity). Ignored if any of `--owner`/`--group`/
+    /// `--owner-map`/`--group-map` is given: identity comes entirely from the
+    /// command line or entirely from the archive — never a mix.
     #[arg(long = "apply-stored-group-map", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub apply_stored_group_map: bool,
 
@@ -708,6 +890,78 @@ pub struct ExtractArgs {
     /// Wipe extract work (`.estage`) and start over.
     #[arg(long = "fresh", help_heading = "Process Options")]
     pub fresh: bool,
+
+    /// Continue even if the tool cannot guarantee the integrity of the data.
+    #[arg(long = "force", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    pub force: bool,
+
+    /// Skip entries whose path cannot be represented as UTF-8 (warn + continue).
+    /// Mutually exclusive with `--force` and `--fail-fast`.
+    #[arg(long = "relax-utf8", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    pub relax_utf8: bool,
+
+    /// Number of error drafts buffered before an auto-flush to the database.
+    #[arg(
+        long = "auto-flush-limit",
+        value_name = "N",
+        default_value_t = common::defaults::DEFAULT_AUTO_FLUSH_LIMIT,
+        help_heading = "Process Options"
+    )]
+    pub auto_flush_limit: u64,
+
+    /// Rows pulled from the database per phase iteration.
+    #[arg(
+        long = "batch-size",
+        value_name = "N",
+        default_value_t = common::defaults::BATCH_SIZE,
+        help_heading = "Process Options"
+    )]
+    pub batch_size: u64,
+
+    /// Items in the producer/consumer work channel.
+    #[arg(
+        long = "work-capacity",
+        value_name = "N",
+        default_value_t = common::defaults::WORK_CAPACITY,
+        help_heading = "Process Options"
+    )]
+    pub work_capacity: usize,
+
+    /// Items in the producer/consumer result channel.
+    #[arg(
+        long = "out-capacity",
+        value_name = "N",
+        default_value_t = common::defaults::OUT_CAPACITY,
+        help_heading = "Process Options"
+    )]
+    pub out_capacity: usize,
+
+    /// Rows pulled from the database per feed round.
+    #[arg(
+        long = "feed-chunk",
+        value_name = "N",
+        default_value_t = common::defaults::FEED_CHUNK,
+        help_heading = "Process Options"
+    )]
+    pub feed_chunk: usize,
+
+    /// Outcomes committed per transaction.
+    #[arg(
+        long = "drain-chunk",
+        value_name = "N",
+        default_value_t = common::defaults::DRAIN_CHUNK,
+        help_heading = "Process Options"
+    )]
+    pub drain_chunk: usize,
+
+    /// Which progress bars to draw.
+    #[arg(
+        long = "progress-mode",
+        value_enum,
+        default_value_t = ProgressMode::PerThread,
+        help_heading = "Process Options"
+    )]
+    pub progress_mode: ProgressMode,
 
     // --- Filtering ---
     /// Exclude paths matching regex PATTERN from extraction (repeatable).
@@ -835,7 +1089,8 @@ pub struct ResumeArgs {
 pub struct ArchiveInputArgs {
     // --- Archive Target ---
 
-    /// Archive path; the catalog is read from its seekable sqlite footer.
+    /// Archive path; the catalog is read from its seekable sqlite footer, else from
+    /// the leading `manifest.sqlite` member.
     #[arg(short = 'f', value_name = "ARCHIVE", help_heading = "Archive Target")]
     pub archive: Option<PathBuf>,
 
@@ -846,6 +1101,31 @@ pub struct ArchiveInputArgs {
     /// Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`.
     #[arg(long = "work-dir", value_name = "DIR", help_heading = "Archive Target")]
     pub work_dir: Option<PathBuf>,
+
+    // --- Output ---
+
+    /// Emit a single machine-readable JSON document instead of text sections.
+    #[arg(long = "json", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Output")]
+    pub json: bool,
+
+    /// Compact JSON output (no wrapping/indent); only meaningful with `--json`.
+    #[arg(long = "no-pretty", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Output")]
+    pub no_pretty: bool,
+
+    /// Text mode: join records within a section on one line (`; `) instead of
+    /// one per line.
+    #[arg(long = "collapse", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Output")]
+    pub collapse: bool,
+
+    /// Text mode: emit only the section(s) whose header contains SUBSTR
+    /// (case-insensitive), e.g. `--only "owner map"`.
+    #[arg(long = "only", value_name = "SUBSTR", help_heading = "Output")]
+    pub only: Option<String>,
+
+    /// Prefer the last `snapshot.sqlite` member over the footer / leading
+    /// manifest (not implemented yet).
+    #[arg(long = "force", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Output")]
+    pub force: bool,
 }
 
 /// Reset an interrupted run: re-point its stored parameters and rewind the
@@ -928,4 +1208,34 @@ pub enum DedupMode {
     /// No content dedup. With hardlink detection, only `(sha1, size, dev, ino)`
     /// hard-link groups collapse; without it, every eligible file is self-canonical.
     None,
+}
+
+/// Ordering of payloads in the tar stream; affects staging and packing order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum ArchiveOrdering {
+    /// `ext, size, id` (default).
+    #[default]
+    #[value(name = "size")]
+    ExtSizeId,
+    /// `ext, filename, size, id`.
+    #[value(name = "name")]
+    ExtNameSizeId,
+    /// Debug override: plain `id` (only compiled with the `debug-ordering` feature).
+    #[cfg(feature = "debug-ordering")]
+    #[value(name = "id")]
+    Id,
+}
+
+/// Which progress bars are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum ProgressMode {
+    /// Global, phase and sub bars, but no per-thread worker bars.
+    Global,
+    /// No progress bars at all (clean stdout for log piping).
+    None,
+    /// Everything, including per-thread worker bars (default).
+    #[default]
+    PerThread,
 }
