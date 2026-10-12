@@ -95,7 +95,7 @@ pipelines reuse them:
 
 - `parse_filter`, `test_match`, `ParsedFilter`, `FilterResult`
 - `ingest_filters` / `handle_filter` / `handle_query` — parameterized over which
-  `add_include_pattern` / `add_exclude_pattern` closure and which `ErrorPhase` they target
+  `add_include_pattern_archive` / `add_exclude_pattern_archive` closure and which `ErrorPhase` they target
   (archive `PipelinePhase::Filter` vs extract `ExtractPipelinePhase::Filter`).
 - `fast_filter` batch loop — parameterized over `get_rows_to_filter_archive` + `apply_filter_result_archive`
   so extract can reuse it against the extract columns.

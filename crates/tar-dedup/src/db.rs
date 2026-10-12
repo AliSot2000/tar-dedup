@@ -416,11 +416,11 @@ impl Database {
     }
 
     pub fn add_include_pattern(&self, from: &str, line: Option<u64>, query: &str) -> Result<u64> {
-        filter::add_include_pattern(&*self.conn(), from, line, query)
+        filter::add_include_pattern_archive(&*self.conn(), from, line, query)
     }
 
     pub fn add_exclude_pattern(&self, from: &str, line: Option<u64>, query: &str) -> Result<u64> {
-        filter::add_exclude_pattern(&*self.conn(), from, line, query)
+        filter::add_exclude_pattern_archive(&*self.conn(), from, line, query)
     }
 
     pub fn count_filters_archive(&self, exclude: Option<bool>) -> Result<u64> {
@@ -438,14 +438,14 @@ impl Database {
     pub fn get_rows_to_filter_archive<R: SqlFileRow>(
         &self, last_id: &FileId, eager_filter: bool, batch_size: u64)
         -> Result<Vec<R>> {
-        filter::get_rows_to_filter(&*self.conn(), last_id, eager_filter, batch_size)
+        filter::get_rows_to_filter_archive(&*self.conn(), last_id, eager_filter, batch_size)
     }
 
     pub fn apply_filter_result_archive<I: Iterator<Item = (FileId, i64, i64)>>(
         &self,
         results: I,
     ) -> Result<u64> {
-        filter::apply_filter_result(&mut *self.conn_mut(), results)
+        filter::apply_filter_result_archive(&mut *self.conn_mut(), results)
     }
 
     pub fn clear_extract_filters(&self) -> Result<()> {
