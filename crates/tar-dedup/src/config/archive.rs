@@ -393,8 +393,6 @@ impl ArchiveConfig {
             })
             .transpose()?;
 
-        // TODO: call resolve_xz_threads to ensure we have sufficient resources.
-
         let start_policy = StartPolicy::create_or_fresh(args.fresh);
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
         let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
@@ -497,7 +495,7 @@ impl Validate for ArchiveConfig {
         self.capture.validate()?;
         self.owner_policy.validate()?;
         self.sparse.validate()?;
-        self.compression.validate()?;
+        self.compression.validate_aux(self.process.jobs)?;
         self.process.validate()?;
         self.pipeline.validate()?;
         Ok(())

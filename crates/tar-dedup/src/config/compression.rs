@@ -3,7 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{ArchiveArgs, CompressionFlags};
-use crate::config::Validate;
+use crate::compression::resolve_xz_threads;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,9 +71,9 @@ impl Default for CompressionSettings {
     }
 }
 
-impl Validate for CompressionSettings {
-    // INFO: Stub to prevent errors as a consequence of not calling new validate functionl.
-    fn validate(&self) -> Result<()> {
+impl CompressionSettings {
+    pub fn validate_aux(&self, jobs: usize) -> Result<()> {
+        let _ = resolve_xz_threads(jobs, self.memlimit_compress, self.level)?;
         Ok(())
     }
 }
