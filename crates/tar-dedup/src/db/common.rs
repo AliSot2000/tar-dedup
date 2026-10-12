@@ -6,8 +6,8 @@ use rusqlite::{Connection, named_params};
 use crate::db::content_id::{content_id_from_digest, sparse_member_name};
 use crate::db::flags::{FileFlags, OutTreeFlag, OutTreeFlags};
 use crate::db::types::{
-    ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord,
-    StrippedRecord,
+    ContentId, ExclusionId, FileId, FilePhase, FileRecord, FileType, NewFileRecord, OutTreeId,
+    OutTreeRecord, StrippedRecord,
 };
 use crate::error::{Result, ToPanic};
 
@@ -108,6 +108,14 @@ impl FileRecord {
             flags: self.flags, phase: self.phase,
             new_name: self.new_name.clone(),
         }
+    }
+}
+
+impl NewFileRecord {
+    /// Path to use for filesystem access: the raw on-disk bytes when present,
+    /// else the (faithful) `abs_path`.
+    pub fn fs_path(&self) -> &Path {
+        self.abs_path_raw.as_deref().unwrap_or(&self.abs_path)
     }
 }
 
