@@ -546,6 +546,12 @@ pub struct ExtractArgs {
     #[command(flatten, next_help_heading = "Compression")]
     pub compression: CompressionFlags,
 
+    // --- Rehash ---
+
+    /// Do not run the rehash (content verification) phase. Default: on.
+    #[arg(long = "no-rehash", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Rehash")]
+    pub no_rehash: bool,
+
     // --- Overwrite Control ---
 
     /// Preserve existing directory symlinks instead of replacing them (GNU tar

@@ -42,7 +42,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         pending,
     );
 
-    if !rt.config.scan.rehash {
+    if !rt.config.rehash {
         let n = rt.db.skip_rehash()?;
         rt.progress.inc_global(n);
         tracing::info!(promoted = n, "rehash skipped; extract_filtered → rehashed");
@@ -932,7 +932,7 @@ mod tests {
         let id_a = world.add_elected("a.bin", &payload);
         let id_d = world.add_dup("d.bin", id_a);
         let id_n = world.add_non_file("n.bin");
-        world.config.scan.rehash = false;
+        world.config.rehash = false;
 
         run(&world.rt()).expect("run skip");
 

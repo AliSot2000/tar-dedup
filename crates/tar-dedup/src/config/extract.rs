@@ -186,7 +186,6 @@ impl Validate for OwnerGroupOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScanOptions {
-    pub rehash: bool,
     pub sparsify: bool,
     pub page_size: usize,
 }
@@ -194,7 +193,6 @@ pub struct ScanOptions {
 impl Default for ScanOptions {
     fn default() -> Self {
         Self {
-            rehash: true,
             sparsify: false,
             page_size: 4096,
         }
@@ -219,6 +217,9 @@ pub struct ExtractConfig {
     pub placement: PlacementOptions,
     pub attributes: ExtractAttributeOptions,
     pub scan: ScanOptions,
+    /// Run the rehash (content verification) phase. Default: on.
+    #[serde(default = "default_true")]
+    pub rehash: bool,
     pub process: ProcessOptions,
     pub owner_policy: OwnerGroupSource,
     pub owner_group: OwnerGroupOptions,
@@ -226,6 +227,10 @@ pub struct ExtractConfig {
     pub strip_components: u32,
     pub transform_policy: TransformSource,
     pub filter: FilterOptions,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for ExtractConfig {
@@ -239,6 +244,7 @@ impl Default for ExtractConfig {
             placement: PlacementOptions::default(),
             attributes: ExtractAttributeOptions::default(),
             scan: ScanOptions::default(),
+            rehash: true,
             process: ProcessOptions::default(),
             owner_policy: OwnerGroupSource::None,
             owner_group: OwnerGroupOptions::default(),
@@ -311,6 +317,7 @@ impl ExtractConfig {
             placement: self.placement.clone(),
             attributes: self.attributes.clone(),
             scan: merge_pick_clone(&self.scan, &base.scan, &default.scan),
+            rehash: merge_pick_copy(self.rehash, base.rehash, default.rehash),
             process: ProcessOptions {
                 start_policy: self.process.start_policy,
                 jobs: merge_pick_copy(self.process.jobs, base.process.jobs, default.process.jobs),
@@ -454,10 +461,10 @@ impl ExtractConfig {
                                                         apply_all),
             },
             scan: ScanOptions {
-                rehash: true, // TODO cli?
                 sparsify: args.sparsify,
                 page_size: args.page_size,
             },
+            rehash: !args.no_rehash,
             process: ProcessOptions {
                 start_policy,
                 jobs,
@@ -529,6 +536,7 @@ impl ExtractConfig {
             },
             attributes: ExtractAttributeOptions::default(),
             scan: ScanOptions::default(),
+            rehash: true,
             process: ProcessOptions::default(),
             owner_policy: OwnerGroupSource::None,
             owner_group: OwnerGroupOptions::default(),
@@ -569,6 +577,7 @@ impl ExtractConfig {
             },
             attributes: ExtractAttributeOptions::default(),
             scan: ScanOptions::default(),
+            rehash: true,
             process: ProcessOptions { jobs: 1, io_jobs: 1, force: true, ..ProcessOptions::default() },
             owner_policy: OwnerGroupSource::None,
             owner_group: OwnerGroupOptions::default(),
