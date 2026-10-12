@@ -81,6 +81,21 @@ impl Database {
         if add_info {
             meta::set_tar_dedup_version(&conn, crate::common::TOOL_VERSION)?;
             meta::set_tar_dedup_os(&conn, &crate::common::host_os_string())?;
+            meta::set_db_version(&conn, crate::common::DB_VERSION)?;
+        } else {
+            // Keen-awareness for the hand-maintained `DB_VERSION`: a work-db
+            // stamped with a different schema version has no migration path yet,
+            // so surface it loudly; a version-less (pre-`db_version`) db is
+            // adopted silently.
+            match meta::get_db_version(&conn)? {
+                Some(v) if v != crate::common::DB_VERSION => tracing::warn!(
+                    "work-db schema version mismatch: db has {v}, this build expects {}; \
+                     no migration path exists — proceed at your own risk",
+                    crate::common::DB_VERSION,
+                ),
+                Some(_) => (),
+                None => meta::set_db_version(&conn, crate::common::DB_VERSION)?,
+            }
         }
         Ok(Self {
             conn: RefCell::new(conn),
@@ -614,6 +629,11 @@ impl Database {
     /// See [`meta::get_tar_dedup_os`].
     pub fn get_tar_dedup_os(&self) -> Result<Option<String>> {
         meta::get_tar_dedup_os(&*self.conn())
+    }
+
+    /// See [`meta::get_db_version`].
+    pub fn get_db_version(&self) -> Result<Option<String>> {
+        meta::get_db_version(&*self.conn())
     }
 
     /// See [`meta::get_archive_phase`].
@@ -1480,6 +1500,56 @@ impl Drop for Recorder<'_> {
                 Ok(_) => {}
                 Err(e) => tracing::error!(error = %e, "failed to flush remaining errors"),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn version_of(path: &std::path::Path) -> Option<String> {
+        let conn = Connection::open(path).expect("open raw");
+        meta::get_db_version(&conn).expect("read version")
+    }
+
+    #[test]
+    fn open_stamps_db_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let db = Database::open(&path).unwrap();
+        assert_eq!(
+            db.get_db_version().unwrap().as_deref(),
+            Some(crate::common::DB_VERSION)
+        );
+    }
+
+    #[test]
+    fn open_adopts_versionless_db_and_keeps_stored_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        // A work-db created without the `db_version` stamp (pre-version) is
+        // adopted silently on first open...
+        {
+            let conn = Connection::open(&path).unwrap();
+            schema::initialize(&conn).unwrap();
+        }
+        {
+            let db = Database::open(&path).unwrap();
+            assert_eq!(
+                db.get_db_version().unwrap().as_deref(),
+                Some(crate::common::DB_VERSION)
+            );
+        }
+        // ...and a stored version is never overwritten on reopen.
+        {
+            let conn = Connection::open(&path).unwrap();
+            meta::set_db_version(&conn, "9.9.9").unwrap();
+        }
+        {
+            let db = Database::open(&path).unwrap();
+            assert_eq!(db.get_db_version().unwrap().as_deref(), Some("9.9.9"));
+            assert_eq!(version_of(&path).as_deref(), Some("9.9.9"));
         }
     }
 }

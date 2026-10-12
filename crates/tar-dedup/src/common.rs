@@ -33,6 +33,13 @@ pub fn archive_io_buffer() -> Vec<u8> {
 /// so a future schema migration can detect which tool release produced a db.
 pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Work-db schema version (`MAJOR.MINOR.PATCH`), **manually maintained** — it is
+/// NOT derived from `Cargo.toml` or anything else in the project. Bump it by hand
+/// whenever the `meta`/schema format changes (a schema change also means writing
+/// the matching migration code by hand when old archives are migrated). Stored
+/// under `db_version` in the work-db `meta` table.
+pub const DB_VERSION: &str = "0.1.0";
+
 /// Best-effort `"<OS family> <release>"` descriptor of the host this tool runs
 /// on, e.g. `"Fedora 44"`, `"macOS 15.1"`, `"Windows 10.0.22631"`. Purely
 /// informational (stored under `tar_dedup_os`); never used for correctness.
@@ -582,6 +589,17 @@ mod tests {
         // `MAJOR.MINOR.PATCH`, all numeric dot-separated components.
         let parts = TOOL_VERSION.split('.').collect::<Vec<_>>();
         assert_eq!(parts.len(), 3, "expected MAJOR.MINOR.PATCH, got {TOOL_VERSION}");
+        for part in parts {
+            assert!(part.chars().all(|c| c.is_ascii_digit()), "bad component: {part}");
+            assert!(!part.is_empty(), "empty version component");
+        }
+    }
+
+    #[test]
+    fn db_version_is_semantic_triple() {
+        // Same shape as the tool version, but hand-maintained (`common::DB_VERSION`).
+        let parts = DB_VERSION.split('.').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3, "expected MAJOR.MINOR.PATCH, got {DB_VERSION}");
         for part in parts {
             assert!(part.chars().all(|c| c.is_ascii_digit()), "bad component: {part}");
             assert!(!part.is_empty(), "empty version component");
