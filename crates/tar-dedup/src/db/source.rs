@@ -2,11 +2,13 @@ use rusqlite::{Connection, OptionalExtension, named_params};
 use std::path::{Path, PathBuf};
 
 use crate::common::utf8::require_utf8;
+use crate::db::common::{path_bytes, raw_path_from_sql};
 use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::types::SourceRecord;
 use crate::error::{Result, ToPanic};
 
-const SOURCE_RECORD_COLUMNS: &str = " id, source, abs_path, original_path, line, flags";
+const SOURCE_RECORD_COLUMNS: &str =
+    " id, source, abs_path, original_path, abs_path_raw, original_path_raw, line, flags";
 
 impl SourceRecord {
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRecord> {
@@ -15,6 +17,8 @@ impl SourceRecord {
             source: row.get::<_, String>("source")?,
             abs_path: row.get::<_, String>("abs_path")?.into(),
             original_path: row.get::<_, String>("original_path")?.into(),
+            abs_path_raw: raw_path_from_sql(row, "abs_path_raw")?,
+            original_path_raw: raw_path_from_sql(row, "original_path_raw")?,
             line: row.get::<_, i64>("line")?,
             flags: SourceFlags::from_i64(row.get::<_, i64>("flags")?),
         })
@@ -23,34 +27,38 @@ impl SourceRecord {
 
 /// Insert `(source, path)` if missing, then return the row id.
 ///
-/// Relies on `UNIQUE (source, path)` — no deletes from this table, so a plain
-/// insert-or-ignore followed by select is enough.
+/// Relies on `UNIQUE (source, abs_path_raw, line)` — no deletes from this table,
+/// so a plain insert-or-ignore followed by select is enough.
 pub fn add_get_source(
     conn: &Connection,
     abs_path: &Path,
     source: &str,
     line: Option<u64>,
     original_path: &Path,
+    abs_path_raw: &Path,
+    original_path_raw: &Path,
     flags: SourceFlags)
     -> Result<i64> {
     let path_str = require_utf8(abs_path)?;
     let org_path = require_utf8(original_path)?;
     conn.execute(
-        "INSERT OR IGNORE INTO source (source, abs_path, line, original_path, flags) \
-        VALUES (:source, :abs_path, :line, :org_path, :flags)",
+        "INSERT OR IGNORE INTO source (source, abs_path, line, original_path, abs_path_raw, original_path_raw, flags) \
+        VALUES (:source, :abs_path, :line, :org_path, :abs_raw, :org_raw, :flags)",
         named_params! {
             ":source": source,
             ":abs_path": path_str,
             ":line": line,
             ":org_path": org_path,
+            ":abs_raw": path_bytes(abs_path_raw),
+            ":org_raw": path_bytes(original_path_raw),
             ":flags": flags.to_i64(),
         },
     ).to_panic()?;
     let id = conn.query_row(
-        "SELECT id FROM source WHERE source = :source AND abs_path = :path AND line = :line",
+        "SELECT id FROM source WHERE source = :source AND abs_path_raw = :abs_raw AND line = :line",
         named_params! {
             ":source": source,
-            ":path": path_str,
+            ":abs_raw": path_bytes(abs_path_raw),
             ":line": line,
         },
         |row| row.get(0),
@@ -160,6 +168,8 @@ mod tests {
             "--input-dir",
             Some(0),
             Path::new(path),
+            Path::new(path),
+            Path::new(path),
             SourceFlags::default().with(SourceFlag::IsDirectory, true),
         )
         .unwrap();
@@ -171,6 +181,8 @@ mod tests {
             Path::new(path),
             "--files-from=x",
             Some(line),
+            Path::new(path),
+            Path::new(path),
             Path::new(path),
             SourceFlags::default(),
         )
