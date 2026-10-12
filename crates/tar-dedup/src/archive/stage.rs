@@ -264,7 +264,7 @@ struct TestWorld {
                 mtime: None, atime: None, ctime: None,
                 uid: None, gid: None, mode: None,
                 ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None,
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
                 device_id: None, inode_id: None, major: None, minor: None,
             }).expect("insert test file");
             self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
@@ -283,7 +283,7 @@ struct TestWorld {
                 mtime, atime, ctime,
                 uid: None, gid: None, mode: None,
                 ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None,
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
                 device_id: None, inode_id: None, major: None, minor: None,
             }).expect("insert recorded file");
             self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
@@ -351,7 +351,7 @@ struct TestWorld {
         fn place_symlink(&self, id: FileId) -> PathBuf {
             let rec = self.record(id);
             let target = self.target_path(id);
-            symlink(&rec.abs_path, &target).expect("place symlink");
+            symlink(rec.fs_path(), &target).expect("place symlink");
             target
         }
     }
@@ -363,8 +363,8 @@ struct TestWorld {
         world.seed_stage_row(id);
         // Replace the (auto-created) stage dir with a regular file so
         // `create_dir_all` in run() fails before anything else.
-        std::fs::remove_dir_all(&world.config.paths.work_dir).expect("remove stage dir");
-        std::fs::write(&world.config.paths.work_dir, &[0u8; 1][..]).expect("write blocker");
+        fs::remove_dir_all(&world.config.paths.work_dir).expect("remove stage dir");
+        fs::write(&world.config.paths.work_dir, &[0u8; 1][..]).expect("write blocker");
 
         let res = run(&world.rt());
         assert!(matches!(res, Err(Error::FileStat(_))));
@@ -464,7 +464,7 @@ struct TestWorld {
 
         assert!(target.is_symlink());
         let rec = world.record(id);
-        assert_eq!(fs::read_link(&target).expect("read link"), rec.abs_path);
+        assert_eq!(fs::read_link(&target).expect("read link"), rec.fs_path());
         assert_eq!(world.phase(id), FilePhase::Staged);
         assert!(world.errors_for(id).is_empty());
     }
@@ -550,7 +550,7 @@ struct TestWorld {
             let target = world.target_path(id);
             assert!(target.is_symlink());
             let rec = world.record(id);
-            assert_eq!(fs::read_link(&target).expect("read link"), rec.abs_path);
+            assert_eq!(fs::read_link(&target).expect("read link"), rec.fs_path());
             assert!(world.errors_for(id).is_empty());
         }
         assert_eq!(world.db.count_files_in_phase(FilePhase::Sparsified).expect("count"), 0);
