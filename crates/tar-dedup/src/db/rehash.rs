@@ -256,15 +256,17 @@ mod tests {
         sha1: Option<[u8; 20]>, canonical: Option<i64>,
         extracted_flag: bool, filter_ok: bool) {
         let sha_bind = sha1.map(|s| s.to_vec());
+        let ap = format!("/tmp/re-{id}.bin");
         conn.execute(
-            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+            "INSERT INTO files (id, abs_path, abs_path_raw, ext, size, ftype, phase, sha1, \
              include_reason_archive, exclude_reason_archive, \
              include_reason_extract, exclude_reason_extract, flags, canonical_id) \
-             VALUES (:id, :abs_path, '.bin', :size, :ftype, 'extract_filtered', :sha1, \
+             VALUES (:id, :abs_path, :abs_path_raw, '.bin', :size, :ftype, 'extract_filtered', :sha1, \
                      :inc_a, :exc_a, :inc_e, :exc_e, :flags, :canon)",
             named_params! {
                 ":id": id,
-                ":abs_path": format!("/tmp/re-{id}.bin"),
+                ":abs_path": &ap,
+                ":abs_path_raw": ap.as_bytes().to_vec(),
                 ":size": size as i64,
                 ":ftype": ftype,
                 ":sha1": sha_bind.as_deref(),
