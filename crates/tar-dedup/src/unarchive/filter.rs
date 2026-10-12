@@ -67,6 +67,7 @@ pub fn run(rt: &ExtractRTArgs, set_phase: bool) -> Result<()> {
         false,
         rt.config.filter.anchored,
         rt.config.filter.ignore_case,
+        rt.config.filter.no_unicode,
         rt.config.process.batch_size,
         Unarchived,
         &rt.db,
@@ -96,6 +97,7 @@ pub fn ingest_filters(config: &ExtractConfig, recorder: &mut Recorder) -> Result
         &config.filter.exclude_patterns,
         &config.filter.exclude_from,
         config.filter.ignore_case,
+        config.filter.no_unicode,
         recorder,
         ERROR_PHASE,
         FilterSink {

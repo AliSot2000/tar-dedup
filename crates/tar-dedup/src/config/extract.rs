@@ -184,7 +184,6 @@ impl Validate for OwnerGroupOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct ScanOptions {
     pub sparsify: bool,
     pub page_size: usize,
@@ -218,7 +217,6 @@ pub struct ExtractConfig {
     pub attributes: ExtractAttributeOptions,
     pub scan: ScanOptions,
     /// Run the rehash (content verification) phase. Default: on.
-    #[serde(default = "default_true")]
     pub rehash: bool,
     pub process: ProcessOptions,
     pub owner_policy: OwnerGroupSource,
@@ -227,10 +225,6 @@ pub struct ExtractConfig {
     pub strip_components: u32,
     pub transform_policy: TransformSource,
     pub filter: FilterOptions,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for ExtractConfig {
@@ -501,6 +495,7 @@ impl ExtractConfig {
                 include_from: args.include_from.clone(),
                 anchored: args.anchored,
                 ignore_case: args.ignore_case,
+                no_unicode: args.no_unicode,
                 eager_filter: !args.lazy_filter,
             },
         })

@@ -427,6 +427,7 @@ impl ArchiveConfig {
                 include_from: c_include_from,
                 anchored: args.anchored,
                 ignore_case: args.ignore_case,
+                no_unicode: args.no_unicode,
                 eager_filter: !args.lazy_filter,
             },
             capture: CaptureOptions {

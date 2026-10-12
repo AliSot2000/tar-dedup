@@ -12,6 +12,9 @@ pub struct FilterOptions {
     pub anchored: bool,
     pub ignore_case: bool,
     pub eager_filter: bool,
+    /// Compile the filter regexes in bytes mode (`\w`/`.` ASCII-only). Default:
+    /// Unicode-aware matching.
+    pub no_unicode: bool,
 }
 
 impl Default for FilterOptions {
@@ -24,6 +27,7 @@ impl Default for FilterOptions {
             anchored: false,
             ignore_case: false,
             eager_filter: true,
+            no_unicode: false,
         }
     }
 }
