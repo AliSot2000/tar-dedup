@@ -25,14 +25,13 @@ fn add_pattern(
     Ok(n as u64)
 }
 
-// TODO rename
-pub fn add_include_pattern(conn: &Connection, from: &str, line: Option<u64>, query: &str)
-    -> Result<u64> {
+pub fn add_include_pattern_archive(conn: &Connection, from: &str, line: Option<u64>, query: &str)
+                                   -> Result<u64> {
     add_pattern(conn, "filter_reason_archive", from, line, query, true)
 }
 
-pub fn add_exclude_pattern(conn: &Connection, from: &str, line: Option<u64>, query: &str)
-    -> Result<u64> {
+pub fn add_exclude_pattern_archive(conn: &Connection, from: &str, line: Option<u64>, query: &str)
+                                   -> Result<u64> {
     add_pattern(conn, "filter_reason_archive", from, line, query, false)
 }
 
@@ -110,8 +109,7 @@ pub fn apply_no_filter_extract(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
-// TODO Rename
-pub fn get_rows_to_filter<R: SqlFileRow>(
+pub fn get_rows_to_filter_archive<R: SqlFileRow>(
     conn: &Connection, last_id: &FileId, eager_filter: bool, batch_size: u64)
     -> Result<Vec<R>> {
     let last_phase = if eager_filter {
@@ -165,10 +163,9 @@ pub fn get_rows_to_filter_extract<R: SqlFileRow>(
         .map_err(Into::into)
 }
 
-// TODO Rename
 /// Apply the archive filtering results to the database.
 /// The results must have the structure (FileId, include_reason, exclude_reason)!
-pub fn apply_filter_result<I: Iterator<Item = (FileId, i64, i64)>>(
+pub fn apply_filter_result_archive<I: Iterator<Item = (FileId, i64, i64)>>(
     conn: &mut Connection, results: I)
     -> Result<u64> {
     let mut rows_updated = 0u64;
