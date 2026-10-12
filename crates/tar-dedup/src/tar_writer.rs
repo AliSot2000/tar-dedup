@@ -213,8 +213,7 @@ impl TarWriter {
         let mut builder = self
             .builder
             .take()
-            // TODO different error kind.
-            .ok_or_else(|| Error::Config("tar builder already consumed".into()))?;
+            .expect("tar builder already consumed");
 
         builder.get_mut().allow_tar_eof = allow_tar_eof;
 
@@ -349,7 +348,6 @@ impl Write for BufferedCompress {
         while !input.is_empty() {
             self.shutdown
                 .check_in_flight()
-                // TODO better error capture.
                 .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "interrupted"))?;
             let space = self.capacity().saturating_sub(self.buf.len());
             if space == 0 {
