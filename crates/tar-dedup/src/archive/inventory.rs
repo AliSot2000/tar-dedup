@@ -4,7 +4,7 @@ use crate::archive::ArchiveRTArgs;
 use crate::common::files::{determine_file_type, original_extension};
 #[cfg(windows)]
 use crate::common::files::get_file_times;
-use crate::common::utf8::sanitize_path;
+use crate::common::utf8::{SanitizedPath, sanitize_path};
 use crate::common::xattr::{get_file_acl, get_file_selinux_data, get_file_xattr};
 use crate::db::ErrorPhase;
 use crate::db::Recorder;
@@ -73,24 +73,20 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                       "Path should be minimal");
 
         // INFO: Check needed because source assumes everything serializes correctly!
-        match sanitize_path(
-            rt.config.process.relax_utf8, &input_dir.original_path, "input-dir-org") {
-            None => (),
-            Some(Ok(())) => continue,
-            Some(Err(e)) => return Err(e)
-        }
-        match sanitize_path(
-            rt.config.process.relax_utf8, &input_dir.absolute_path, "input-dir-abs") {
-            None => (),
-            Some(Ok(())) => continue,
-            Some(Err(e)) => return Err(e)
-        }
+        let Some(san_org) = sanitize_path(
+            rt.config.process.relax_utf8, rt.config.process.fail_fast,
+            &input_dir.original_path, "input-dir-org")? else { continue };
+        let Some(san_abs) = sanitize_path(
+            rt.config.process.relax_utf8, rt.config.process.fail_fast,
+            &input_dir.absolute_path, "input-dir-abs")? else { continue };
 
         let source_id = rt.db.add_get_source(
-            &input_dir.absolute_path,
+            Path::new(&san_abs.text),
             "--input-dir",
             Some(index as u64),
-            &input_dir.original_path,
+            Path::new(&san_org.text),
+            &san_abs.raw,
+            &san_org.raw,
             SourceFlags::default().with(SourceFlag::IsDirectory, true),
         )?;
         handle_dir(&rt, &sub_bar, source_id, &input_dir.absolute_path,
@@ -100,13 +96,14 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     // Handle from-files
     for files_file in rt.config.inputs.files_from.iter() {
-        // The from-file is a source too: skip a non-UTF-8 path under relax.
-        match sanitize_path(
-            rt.config.process.relax_utf8, files_file, "files-from") {
-            None => (),
-            Some(Ok(())) => continue,
-            Some(Err(e)) => return Err(e),
-        };
+        // The from-file is a source too: strict skips a non-UTF-8 path, relax
+        // lossy-converts (only the display name is affected; the file is read
+        // by its raw bytes below).
+        if sanitize_path(
+            rt.config.process.relax_utf8, rt.config.process.fail_fast,
+            files_file, "files-from")?.is_none() {
+            continue;
+        }
         sub_bar.set_position(0);
         sub_bar.set_message(format!("{SUB_BAR_PREFIX}'{}'", files_file.display()));
         if files_file.to_path_buf() == PathBuf::from("-") {
@@ -116,8 +113,18 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                 let (line, result) = element;
                 let path = match result {
                     Ok(path_vec) => PathBuf::from(&os_str_from_bytes(&path_vec)),
-                    // TODO capture error and dont raise
-                    Err(e) => return Err(Error::io("-", e)),
+                    Err(e) => {
+                        let error = Error::io("-", e);
+                        recorder.record_session(
+                            ERROR_PHASE, error.to_only_file_stat().unwrap(), ErrorFlags::default());
+                        if rt.config.process.fail_fast {
+                            return Err(error)
+                        } else {
+                            tracing::error!("Processing input failed: {error}");
+                            continue
+                        }
+
+                    },
                 };
 
                 handle_from_files_line(&rt, &sub_bar, (line, &path), &files_file,
@@ -192,33 +199,37 @@ fn handle_from_files_line<P: AsRef<Path>>(
     };
     debug_assert!(abs_path.is_absolute(), "Path must be absolute now");
 
+    // INFO: Check needed because source assumes everything serializes correctly!
+    let Some(san_fpath) = sanitize_path(
+        rt.config.process.relax_utf8, rt.config.process.fail_fast,
+        &fpath.clean(), "line-from-stdin")? else { return Ok(()) };
+    let Some(san_abs) = sanitize_path(
+        rt.config.process.relax_utf8, rt.config.process.fail_fast,
+        &abs_path, "conv-abs-from-stdin")? else { return Ok(()) };
+
     if abs_path.is_dir() {
         if let Some((_, existing)) = rt.db.find_overlapping_source(
-            &abs_path, rt.config.indexing.no_recursion)? {
-
+            Path::new(&san_abs.text), rt.config.indexing.no_recursion)? {
+            let err_str = format!(
+                "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
+                Path::new(&san_abs.text).display(),
+                existing.display()
+            );
             if !rt.config.indexing.no_strict_separation {
-                return Err(Error::Config(format!(
-                    "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
-                    abs_path.display(),
-                    existing.display()
-                )));
+                return Err(Error::Config(err_str));
+            } else {
+                tracing::warn!(err_str);
             }
         }
     }
 
-    // INFO: Check needed because source assumes everything serializes correctly!
-    if let Some(inner) = sanitize_path(rt.config.process.relax_utf8, &fpath.clean(), "line-from-stdin") {
-        return inner;
-    };
-    if let Some(inner) = sanitize_path(rt.config.process.relax_utf8, &abs_path, "conv-abs-from-stdin") {
-        return inner;
-    };
-
     let source_id = rt.db.add_get_source(
-        &abs_path,
+        Path::new(&san_abs.text),
         &format!("--files-from={from_files_disp_path}"),
         Some(line as u64),
-        &fpath.clean(),
+        Path::new(&san_fpath.text),
+        &san_abs.raw,
+        &san_fpath.raw,
         SourceFlags::default().with(SourceFlag::IsDirectory, abs_path.is_dir()),
     )?;
     handle_dir(&rt, &sub_bar, source_id, &abs_path, processed, recorder)?;
@@ -284,20 +295,19 @@ fn handle_entry_base(
     -> Result<()> {
     debug_assert!(path.is_absolute(), "Expected Absolute paths only.");
 
-    // UTF-8 gate: strict aborts the run; `--relax-utf8` skips the entry (warn +
-    // lossy report) so non-UTF-8 names never reach the database.
-    if let Some(res) = sanitize_path(
-        rt.config.process.relax_utf8, path, "inventory-entry") {
-        return res; // INFO: use Ok(()) on non-valid + relaxed => Abort out of function.
-    }
+    // UTF-8 gate: strict skips the entry (warn), strict + fail-fast aborts,
+    // relax lossy-converts (text) while keeping the raw bytes for fs access.
+    let Some(san) = sanitize_path(
+        rt.config.process.relax_utf8, rt.config.process.fail_fast,
+        path, "inventory-entry")? else { return Ok(()); };
 
     // Preflight: already inventoried — attach this source without restatting.
-    if let Some(file_id) = rt.db.file_id_by_abs_path(path)? {
+    if let Some(file_id) = rt.db.file_id_by_abs_path(&san.raw)? {
         rt.db.add_ref(source_id, file_id)?;
         return Ok(());
     }
 
-    handle_entry(&rt, &sub_bar, &path, source_id, processed, recorder)
+    handle_entry(&rt, &sub_bar, &san, source_id, processed, recorder)
 }
 
 /// PRECONDITION: path is abs.
@@ -305,11 +315,14 @@ fn handle_entry_base(
 fn handle_entry(
     rt: &ArchiveRTArgs,
     sub_bar: &ProgressBar,
-    path: &Path,
+    san: &SanitizedPath,
     source_id: i64,
     processed: &mut u64,
     recorder: &mut Recorder)
     -> Result<()> {
+    // `san` bundles the DB text form and the raw on-disk bytes; filesystem access
+    // always goes through the raw bytes (`fs_path()` once a record exists).
+    let path: &Path = san.raw.as_path();
     debug_assert!(path.is_absolute(), "PRECONDITION FAILED: path should always be abs");
     use std::os::unix::fs::MetadataExt;
 
@@ -320,9 +333,9 @@ fn handle_entry(
             // File row cannot be created without metadata; record with the path
             // alone so the failure is not lost when the phase aborts.
             recorder.record_session(
-                ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
+                ERROR_PHASE,
                 FileStatError::Io {
-                    path: path.to_path_buf(),
+                    path: PathBuf::from(&san.text),
                     source: io::Error::new(e.kind(), e.to_string()),
                 },
                 ErrorFlags::default(),
@@ -378,22 +391,33 @@ fn handle_entry(
 
     let ftype = inner_file_type(&meta, &path, &mut enc_err);
 
-    let (link_dst, major, minor) = match ftype {
-        FileType::Symlink(_) => (
-            strip_transpose(path, fs::read_link(path), &mut enc_err),
-            None,
-            None,
-        ),
+    // Symlink targets follow the same UTF-8 policy: strict skips the entry (a
+    // non-UTF-8 target cannot be stored), relax stores the lossy target text plus
+    // the original bytes (`link_dst_raw`, doc-only).
+    let (link_dst, link_dst_raw, major, minor) = match ftype {
+        FileType::Symlink(_) => {
+            match strip_transpose(path, fs::read_link(path), &mut enc_err) {
+                None => (None, None, None, None),
+                Some(dst) => {
+                    let Some(link_san) = sanitize_path(
+                        rt.config.process.relax_utf8,
+                        rt.config.process.fail_fast,
+                        &dst,
+                        "link-target")? else { return Ok(()); };
+                    (Some(PathBuf::from(link_san.text)), Some(link_san.raw), None, None)
+                }
+            }
+        }
         FileType::CharacterDevice | FileType::BlockDevice => {
             let (maj, min) = get_file_rdev_parts(&meta);
-            (None, maj, min)
+            (None, None, maj, min)
         }
         FileType::Unknown => {
             // INFO: Error not stored, since it is obvious from unknown.
             tracing::error!("{} could not be classified into a valid file type.", path.display());
-            (None, None, None)
+            (None, None, None, None)
         }
-        _ => (None, None, None),
+        _ => (None, None, None, None),
     };
 
     // Optional data
@@ -416,18 +440,11 @@ fn handle_entry(
         }
     } else { None };
 
-    // Guard the link_dst path
-    if let Some(dst) = link_dst.as_ref() {
-        if let Some(res) = sanitize_path(
-            rt.config.process.relax_utf8, &dst, "link-target") {
-            return res;  // INFO: use Ok(()) on non-valid + relaxed => Abort out of function.
-        }
-    }
-
     if rt.db.insert_file_and_ref(
         source_id,
         &NewFileRecord {
-            abs_path: path.clean().to_path_buf(),
+            abs_path: Path::new(&san.text).clean().to_path_buf(),
+            abs_path_raw: Some(san.raw.clone()),
             ext: original_extension(&path),
             size: meta.len(),
             mtime,
@@ -441,7 +458,8 @@ fn handle_entry(
             posix_acl,
             selinux_ctx,
             win_perm: None,
-            link_dst: link_dst.clone(),
+            link_dst,
+            link_dst_raw,
             device_id: Some(dev),
             inode_id: Some(ino),
             major,
@@ -476,18 +494,19 @@ fn handle_entry(
 fn handle_entry(
     rt: &ArchiveRTArgs,
     sub_bar: &ProgressBar,
-    path: &Path,
+    san: &SanitizedPath,
     source_id: i64,
     processed: &mut u64,
     recorder: &mut Recorder)
     -> Result<()> {
+    let path: &Path = san.raw.as_path();
     let mut enc_err = Vec::new();
     debug_assert!(path.is_absolute(), "PRECONDITION FAILED: path should always be abs");
 
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) => {
-            // TODO store error in db,
+            // TODO record error.
             return Err(Error::io(path, e));
         }
     };
@@ -526,7 +545,7 @@ fn handle_entry(
     if db.insert_file_and_ref(
         source_id,
         &NewFileRecord {
-            abs_path: path.clean().to_path_buf(),
+            abs_path: Path::new(&san.text).clean().to_path_buf(),
             ext: original_extension(&path),
             size: meta.len(),
             mtime,
@@ -541,6 +560,8 @@ fn handle_entry(
             selinux_ctx,
             win_perm,
             link_dst: link_dst.clone(),
+            abs_path_raw: None,
+            link_dst_raw: None,
             device_id: dev,
             inode_id: ino,
             major,
