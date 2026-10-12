@@ -52,6 +52,12 @@
             tracing::info - general update (x number of files processed this session. y number of errors etc, ...)
             tracing::debug - file level updates (file x moved to location, metadata of file x acquired, file staged, ...))
 - [X] fixup the public / private functions in all files. in Phases - not referenced outside -> private!
+- [ ] Filtering & UTF-8
+- [X] XZ Resolve in config
+- [ ] Rehash cli argv
+- [ ] Add DB Version (Version I'm putting in a const not makro et al)
+- [ ] Implementation of force-overwrite-dir + rename
+- [ ] Capture Error Inventory
 - [ ] finish testing for [inventory, place_prologue, place, permissions]
 - [ ] finish the readme
 - [ ] publish to crates.io
