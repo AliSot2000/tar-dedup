@@ -484,15 +484,16 @@ mod tests {
         conn: &Connection, id: i64, abs_path: &str, ftype: &str, phase: &str,
         sha1: Option<Vec<u8>>, canonical: Option<i64>, flags: i64) {
         conn.execute(
-            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+             "INSERT INTO files (id, abs_path, abs_path_raw, ext, size, ftype, phase, sha1, \
              include_reason_archive, exclude_reason_archive, \
              include_reason_extract, exclude_reason_extract, \
              canonical_id, flags) \
-             VALUES (:id, :abs_path, '.bin', 0, :ftype, :phase, :sha1, -1, 0, -1, 0, \
+             VALUES (:id, :abs_path, :abs_path_raw, '.bin', 0, :ftype, :phase, :sha1, -1, 0, -1, 0, \
                      :canon, :flags)",
             named_params! {
                 ":id": id,
                 ":abs_path": abs_path,
+                ":abs_path_raw": abs_path.as_bytes().to_vec(),
                 ":ftype": ftype,
                 ":phase": phase,
                 ":sha1": sha1.as_deref(),
