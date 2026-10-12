@@ -35,15 +35,18 @@ CREATE TABLE IF NOT EXISTS source (
     source TEXT NOT NULL, --from-file or --input-dir
     abs_path TEXT NOT NULL,
     original_path TEXT NOT NULL,
+    abs_path_raw BLOB NOT NULL,
+    original_path_raw BLOB NOT NULL,
     line INTEGER,
     flags INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (source, abs_path, line)
+    UNIQUE (source, abs_path_raw, line)
 );
 CREATE INDEX IF NOT EXISTS idx_source_dirs ON source(abs_path) WHERE (flags & 1) != 0;
 
 CREATE TABLE IF NOT EXISTS files (
     id            INTEGER PRIMARY KEY CHECK (id > 0),
-    abs_path      TEXT NOT NULL UNIQUE,
+    abs_path      TEXT NOT NULL,
+    abs_path_raw  BLOB NOT NULL UNIQUE,
     ext           TEXT NOT NULL,
 
     -- File Attributes
@@ -70,6 +73,7 @@ CREATE TABLE IF NOT EXISTS files (
     selinux       BLOB,
     win_perm      TEXT,   -- Windows attribute/DACL dump; NULL on unix
     link_dst      TEXT,
+    link_dst_raw  BLOB,   -- original symlink-target bytes (doc-only), NULL otherwise
 
     -- Filtering
     include_reason_archive   INTEGER REFERENCES filter_reason_archive(id) DEFAULT 0 CHECK (include_reason_archive <= 0),
