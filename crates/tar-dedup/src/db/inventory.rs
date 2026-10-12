@@ -1,6 +1,6 @@
 use crate::common::utf8::require_utf8;
 use crate::config::RuntimeState;
-use crate::db::common::with_transaction;
+use crate::db::common::{path_bytes, with_transaction};
 use crate::db::flags::ErrorFlags;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FileType, NewFileRecord};
@@ -14,10 +14,11 @@ use tracing;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory);
 
+/// Look up a file row by its raw on-disk path bytes (`abs_path_raw`).
 pub fn file_id_by_abs_path(conn: &Connection, path: &Path) -> Result<Option<FileId>> {
     conn.query_row(
-        "SELECT id FROM files WHERE abs_path = :abs_path",
-        named_params! { ":abs_path": require_utf8(path)? },
+        "SELECT id FROM files WHERE abs_path_raw = :abs_path_raw",
+        named_params! { ":abs_path_raw": path_bytes(path) },
         |row| row.get(0).map(FileId),
     )
     .optional()
@@ -39,19 +40,22 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
         Some(p) => Some(require_utf8(p)?),
         None => None,
     };
+    let abs_path_raw: Vec<u8> = path_bytes(record.fs_path());
+    let link_dst_raw: Option<Vec<u8>> = record.link_dst_raw.as_ref().map(|p| path_bytes(p));
 
     let changed = conn.execute(
         "INSERT OR IGNORE INTO files (
-             abs_path, ext, size, mtime, atime, ctime, uid, gid, mode, ftype,
-             xattr, acl, selinux, phase, link_dst, inode, dev, major, minor,
+             abs_path, abs_path_raw, ext, size, mtime, atime, ctime, uid, gid, mode, ftype,
+             xattr, acl, selinux, phase, link_dst, link_dst_raw, inode, dev, major, minor,
              win_perm
          ) VALUES (
-             :abs_path, :ext, :size, :mtime, :atime, :ctime, :uid, :gid, :mode, :ftype,
-             :xattr, :acl, :selinux, 'inventoried', :link_dst, :inode, :dev, :major, :minor,
+             :abs_path, :abs_path_raw, :ext, :size, :mtime, :atime, :ctime, :uid, :gid, :mode, :ftype,
+             :xattr, :acl, :selinux, 'inventoried', :link_dst, :link_dst_raw, :inode, :dev, :major, :minor,
              :win_perm
          )",
         named_params! {
             ":abs_path": require_utf8(&record.abs_path)?,
+            ":abs_path_raw": abs_path_raw,
             ":ext": record.ext.as_str(),
             ":size": record.size,
             ":mtime": record.mtime.as_ref().map(|t| t.to_rfc3339()),
@@ -65,6 +69,7 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
             ":acl": record.posix_acl.as_deref(),
             ":selinux": record.selinux_ctx.as_deref(),
             ":link_dst": link_dst,
+            ":link_dst_raw": link_dst_raw,
             ":inode": record.inode_id.map(|v| v as i64),
             ":dev": record.device_id.map(|v| v as i64),
             ":major": record.major.map(|v| v as i64),
