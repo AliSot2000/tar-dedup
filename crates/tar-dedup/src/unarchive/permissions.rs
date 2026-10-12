@@ -53,16 +53,16 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 
     // Phase-bar accounting. Link-tree mode applies metadata on the `.sources`
     // canonical files (files table); the non-link mode on non-dir `out_tree`
-    // rows. Directory rows are only counted — and applied — under
-    // `--overwrite-dir`. Each count is `(pending, done)`: bar length = the full
-    // workload, position = the already-handled rows (resume-correct).
+    // rows. Directory rows are counted — and applied — unless `--no-overwrite-dir`
+    // (with `--overwrite-dir` the set includes filter-excluded dirs). Each count
+    // is `(pending, done)`: bar length = the full workload, position = the
+    // already-handled rows (resume-correct).
     let (file_pending, file_done) = if rt.config.placement.link_tree {
         rt.db.count_canonical_files_for_permissions()?
     } else {
         rt.db.count_out_tree_for_permissions()?
     };
-    // TODO: Fix - this is not correct.
-    let (dir_pending, dir_done) = if rt.config.attributes.force_overwrite_dir {
+    let (dir_pending, dir_done) = if !rt.config.attributes.no_overwrite_dir {
         rt.db.count_out_tree_for_permissions_dirs()?
     } else {
         (0, 0)
@@ -77,7 +77,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         process_batches(&rt, &mut recorder, &ps, false)?;
     }
 
-    // Directories, only when `--overwrite-dir` is requested.
+    // Directories, unless `--no-overwrite-dir`.
     if !rt.config.attributes.no_overwrite_dir {
         process_batches(&rt, &mut recorder, &ps, true)?;
     }
@@ -194,7 +194,8 @@ fn process_batches_dirs(
     ps: &OwnerGroupMode)
     -> Result<()> {
     batched_loop(
-        // TODO: bool to only return directories which are not excluded.
+        // No filter here: filter-selected vs all-dirs is encoded in out_tree
+        // at population time (force_overwrite_dir bypasses the filter there).
         |bs| rt.db.list_out_tree_for_permissions_dirs::<FileRecord>(bs),
         rt.config.process.batch_size,
         |entries| {

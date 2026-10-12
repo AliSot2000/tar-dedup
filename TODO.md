@@ -54,7 +54,7 @@
 - [X] fixup the public / private functions in all files. in Phases - not referenced outside -> private!
 - [ ] Filtering & UTF-8
 - [X] XZ Resolve in config
-- [ ] Rehash cli argv
+- [X] Rehash cli argv
 - [ ] Add DB Version (Version I'm putting in a const not makro et al)
 - [ ] Implementation of force-overwrite-dir + rename
 - [ ] Capture Error Inventory
