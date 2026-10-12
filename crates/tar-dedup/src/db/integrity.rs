@@ -629,7 +629,7 @@ pub fn extract_phase_check_count(config: &ExtractConfig, phase: ExtractPipelineP
 
 fn extract_battery_count(config: &ExtractConfig, phase: ExtractPipelinePhase) -> u64 {
     let mut n = 3; // E1, E2, E3
-    if phase.index() >= ExtractPipelinePhase::Rehash.index() && config.scan.rehash {
+    if phase.index() >= ExtractPipelinePhase::Rehash.index() && config.rehash {
         n += 1; // E4
     }
     if phase.index() >= ExtractPipelinePhase::PlacementPrologue.index() {
@@ -676,7 +676,7 @@ pub fn check_after_extract_phase(conn: &Connection, config: &ExtractConfig,
     note("E2 FileExtracted OR ErrorWhileExtracting ⟹ AppendedPath",
          count_e2_stray_extracted(conn)?);
     done("E3 count_in_phase(Archived)", count_files_in_phase(conn, FilePhase::Archived)?);
-    if phase.index() >= ExtractPipelinePhase::Rehash.index() && config.scan.rehash {
+    if phase.index() >= ExtractPipelinePhase::Rehash.index() && config.rehash {
         done("E4 rehash verdict exactly-one / none on non-elected",
              count_rehash_verdict_violations(conn)?);
     }
