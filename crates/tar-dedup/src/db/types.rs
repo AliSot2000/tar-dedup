@@ -355,6 +355,8 @@ pub struct SourceRecord {
     pub source: String,
     pub abs_path: PathBuf,
     pub original_path: PathBuf,
+    pub abs_path_raw: Option<PathBuf>,
+    pub original_path_raw: Option<PathBuf>,
     pub line: i64,
     pub flags: SourceFlags,
 }
