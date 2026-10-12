@@ -405,8 +405,8 @@ pub struct ArchiveArgs {
     )]
     pub max_shard_size: u64,
 
-    /// Skip entries whose path cannot be represented as UTF-8 (warn + continue).
-    /// Mutually exclusive with `--force` and `--fail-fast`.
+    /// Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept.
+    /// Mutually exclusive with `--force`.
     #[arg(long = "relax-utf8", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub relax_utf8: bool,
 
@@ -910,8 +910,8 @@ pub struct ExtractArgs {
     #[arg(long = "force", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub force: bool,
 
-    /// Skip entries whose path cannot be represented as UTF-8 (warn + continue).
-    /// Mutually exclusive with `--force` and `--fail-fast`.
+    /// Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept.
+    /// Mutually exclusive with `--force`.
     #[arg(long = "relax-utf8", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub relax_utf8: bool,
 
