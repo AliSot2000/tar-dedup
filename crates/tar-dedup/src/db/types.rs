@@ -71,6 +71,8 @@ pub struct FileRecord {
 pub struct StrippedRecord {
     pub id: FileId,
     pub abs_path: PathBuf,
+    /// Original on-disk bytes (None -> same as `abs_path`).
+    pub abs_path_raw: Option<PathBuf>,
     pub ext: String,
     pub size: u64,
     pub sha1: Option<[u8; 20]>,
@@ -90,6 +92,8 @@ pub struct StrippedRecord {
 #[derive(Debug, Clone)]
 pub struct NewFileRecord {
     pub abs_path: PathBuf,
+    /// Original on-disk bytes (None -> same as `abs_path`); stored as `abs_path_raw`.
+    pub abs_path_raw: Option<PathBuf>,
     pub ext: String,
     pub size: u64,
     pub mtime: Option<DateTime<Utc>>,
@@ -104,6 +108,8 @@ pub struct NewFileRecord {
     pub selinux_ctx: Option<Vec<u8>>,
     pub win_perm: Option<String>,
     pub link_dst: Option<PathBuf>,
+    /// Original symlink-target bytes (doc-only; None -> no raw differs).
+    pub link_dst_raw: Option<PathBuf>,
     pub device_id: Option<u64>,
     pub inode_id: Option<u64>,
     pub major: Option<u64>,
