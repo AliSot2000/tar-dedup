@@ -88,8 +88,9 @@ pub struct ProcessOptions {
     pub no_errors: bool,
     /// Force: continue even if the tool cannot guarantee the integrity of the data.
     pub force: bool,
-    /// Skip entries whose path cannot be represented as UTF-8 (warn + continue).
-    /// Mutually exclusive with `--force` and `--fail-fast`.
+    /// Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); the
+    /// original bytes are kept for fs access and inspection.
+    /// Mutually exclusive with `--force`.
     pub relax_utf8: bool,
     /// Which progress bars are drawn.
     pub progress_mode: crate::cli::ProgressMode,
@@ -129,11 +130,12 @@ impl ProcessOptions {
 
 impl Validate for ProcessOptions {
     fn validate(&self) -> Result<()> {
-        if self.relax_utf8 && (self.force || self.fail_fast) {
-            return Err(Error::Config(
-                "--relax-utf8 is mutually exclusive with --force and --fail-fast".into(),
-            ));
-        }
+        // INFO: Kept in case I made a mistake. But force shoud not have anything to do with this.
+        // if self.relax_utf8 && self.force {
+        //     return Err(Error::Config(
+        //         "--relax-utf8 is mutually exclusive with --force".into(),
+        //     ));
+        // }
         for (value, name) in [
             (self.auto_flush_limit, "--auto-flush-limit"),
             (self.batch_size, "--batch-size"),
