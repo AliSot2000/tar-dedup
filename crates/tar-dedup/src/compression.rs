@@ -4,6 +4,7 @@ use crate::config::CompressionFormat;
 
 pub use xz::{
     FOOTER_XZ_PRESET, InterruptibleXzEncoder, compress_footer_bytes, decompress_footer_bytes,
+    resolve_xz_threads,
 };
 
 pub fn warn_on_start(format: CompressionFormat) {
