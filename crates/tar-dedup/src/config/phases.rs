@@ -172,7 +172,6 @@ impl Default for ExtractRuntimeState {
 pub struct RuntimeState {
     pub snapshot_taken_at: DateTime<Utc>,
     pub phase: PipelinePhase,
-    pub max_workers: usize,
 }
 
 impl RuntimeState {
@@ -180,7 +179,6 @@ impl RuntimeState {
         Self {
             snapshot_taken_at: Utc::now(),
             phase: PipelinePhase::Inventory,
-            max_workers,
         }
     }
 }

@@ -20,7 +20,6 @@ use crate::error::{Error, Result, ToPanic};
 pub enum MetaKey {
     ArchivePhase,
     ArchiveSnapshotTakenAt,
-    ArchiveMaxWorkers,
     TarWriterBytesIn,
     TarWriterBytesOut,
     ExtractPhase,
@@ -48,7 +47,6 @@ impl MetaKey {
         match self {
             Self::ArchivePhase => "archive_phase",
             Self::ArchiveSnapshotTakenAt => "archive_snapshot_taken_at",
-            Self::ArchiveMaxWorkers => "archive_max_workers",
             Self::TarWriterBytesIn => "tar_writer_bytes_in",
             Self::TarWriterBytesOut => "tar_writer_bytes_out",
             Self::ExtractPhase => "extract_phase",
@@ -76,7 +74,6 @@ impl MetaKey {
         Some(match raw {
             "archive_phase" => Self::ArchivePhase,
             "archive_snapshot_taken_at" => Self::ArchiveSnapshotTakenAt,
-            "archive_max_workers" => Self::ArchiveMaxWorkers,
             "tar_writer_bytes_in" => Self::TarWriterBytesIn,
             "tar_writer_bytes_out" => Self::TarWriterBytesOut,
             "extract_phase" => Self::ExtractPhase,
@@ -105,7 +102,6 @@ impl MetaKey {
         &[
             Self::ArchivePhase,
             Self::ArchiveSnapshotTakenAt,
-            Self::ArchiveMaxWorkers,
             Self::TarWriterBytesIn,
             Self::TarWriterBytesOut,
             Self::ExtractPhase,
@@ -135,7 +131,6 @@ impl MetaKey {
 pub enum MetaEntry {
     ArchivePhase(PipelinePhase),
     ArchiveSnapshotTakenAt(DateTime<Utc>),
-    ArchiveMaxWorkers(usize),
     TarWriterBytesIn(u64),
     TarWriterBytesOut(u64),
     ExtractPhase(ExtractPipelinePhase),
@@ -163,7 +158,6 @@ impl MetaEntry {
         match self {
             Self::ArchivePhase(_) => MetaKey::ArchivePhase,
             Self::ArchiveSnapshotTakenAt(_) => MetaKey::ArchiveSnapshotTakenAt,
-            Self::ArchiveMaxWorkers(_) => MetaKey::ArchiveMaxWorkers,
             Self::TarWriterBytesIn(_) => MetaKey::TarWriterBytesIn,
             Self::TarWriterBytesOut(_) => MetaKey::TarWriterBytesOut,
             Self::ExtractPhase(_) => MetaKey::ExtractPhase,
@@ -191,7 +185,6 @@ impl MetaEntry {
         match self {
             Self::ArchivePhase(v) => v.as_str().to_string(),
             Self::ArchiveSnapshotTakenAt(v) => v.to_rfc3339(),
-            Self::ArchiveMaxWorkers(v) => v.to_string(),
             Self::TarWriterBytesIn(v)
             | Self::TarWriterBytesOut(v)
             | Self::ScanTarLastMemberIndex(v) => v.to_string(),
@@ -224,12 +217,6 @@ impl MetaEntry {
                     Error::Config(format!("invalid meta `{}`: {raw}", key.as_str()))
                 })?;
                 Ok(Self::ArchiveSnapshotTakenAt(ts))
-            }
-            MetaKey::ArchiveMaxWorkers => {
-                let n = raw.parse::<usize>().map_err(|_| {
-                    Error::Config(format!("invalid meta `{}`: {raw}", key.as_str()))
-                })?;
-                Ok(Self::ArchiveMaxWorkers(n))
             }
             MetaKey::TarWriterBytesIn => Ok(Self::TarWriterBytesIn(parse_u64(key, raw)?)),
             MetaKey::TarWriterBytesOut => Ok(Self::TarWriterBytesOut(parse_u64(key, raw)?)),
@@ -334,17 +321,6 @@ pub fn get_archive_snapshot_taken_at(conn: &Connection) -> Result<Option<DateTim
 
 pub fn set_archive_snapshot_taken_at(conn: &Connection, value: DateTime<Utc>) -> Result<()> {
     set_entry(conn, &MetaEntry::ArchiveSnapshotTakenAt(value))
-}
-
-pub fn get_archive_max_workers(conn: &Connection) -> Result<Option<usize>> {
-    get_typed(conn, MetaKey::ArchiveMaxWorkers, |e| match e {
-        MetaEntry::ArchiveMaxWorkers(v) => Some(v),
-        _ => None,
-    })
-}
-
-pub fn set_archive_max_workers(conn: &Connection, value: usize) -> Result<()> {
-    set_entry(conn, &MetaEntry::ArchiveMaxWorkers(value))
 }
 
 pub fn get_tar_writer_bytes_in(conn: &Connection) -> Result<Option<u64>> {
@@ -630,7 +606,6 @@ mod tests {
         let ts = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
         set_archive_phase(&conn, PipelinePhase::Hash).unwrap();
         set_archive_snapshot_taken_at(&conn, ts).unwrap();
-        set_archive_max_workers(&conn, 8).unwrap();
         set_tar_writer_bytes_in(&conn, 11).unwrap();
         set_tar_writer_bytes_out(&conn, 22).unwrap();
         set_extract_phase(&conn, ExtractPipelinePhase::Place).unwrap();
@@ -640,7 +615,6 @@ mod tests {
 
         assert_eq!(get_archive_phase(&conn).unwrap(), Some(PipelinePhase::Hash));
         assert_eq!(get_archive_snapshot_taken_at(&conn).unwrap(), Some(ts));
-        assert_eq!(get_archive_max_workers(&conn).unwrap(), Some(8));
         assert_eq!(get_tar_writer_bytes_in(&conn).unwrap(), Some(11));
         assert_eq!(get_tar_writer_bytes_out(&conn).unwrap(), Some(22));
         assert_eq!(

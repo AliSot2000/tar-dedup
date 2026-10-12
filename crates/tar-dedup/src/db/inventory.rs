@@ -79,9 +79,6 @@ pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
     let Some(phase) = meta::get_archive_phase(conn)? else {
         return Ok(None);
     };
-    let max_workers = meta::get_archive_max_workers(conn)?
-        .ok_or_else(|| crate::error::Error::Config("missing archive_max_workers in meta".into()))
-        .to_panic()?;
     let snapshot_taken_at = meta::get_archive_snapshot_taken_at(conn)?
         .ok_or_else(|| {
             crate::error::Error::Config("missing archive_snapshot_taken_at in meta".into())
@@ -91,7 +88,6 @@ pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
     Ok(Some(RuntimeState {
         snapshot_taken_at,
         phase,
-        max_workers,
     }))
 }
 
@@ -99,7 +95,6 @@ pub fn save_runtime_state(conn: &mut Connection, state: &RuntimeState) -> Result
     with_transaction(conn, |conn| {
         meta::set_archive_phase(conn, state.phase)?;
         meta::set_archive_snapshot_taken_at(conn, state.snapshot_taken_at)?;
-        meta::set_archive_max_workers(conn, state.max_workers)?;
         Ok(())
     })
 }

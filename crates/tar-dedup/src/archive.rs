@@ -64,10 +64,8 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
 
     let mut state = match action {
         StartAction::Resume => {
-            let mut state = saved.expect("incomplete work checked above");
+            let state = saved.expect("incomplete work checked above");
             tracing::info!("resuming from phase `{}`", state.phase.as_str());
-            // TODO really:qm:
-            state.max_workers = config.process.jobs;
             db.save_runtime_state(&state)?;
             state
         }
