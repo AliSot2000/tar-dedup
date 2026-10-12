@@ -823,12 +823,13 @@ mod tests {
 
     fn seed_file(conn: &Connection, id: i64, abs_path: &str, sha1_byte: u8, size: u64) {
         conn.execute(
-            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+            "INSERT INTO files (id, abs_path, abs_path_raw, ext, size, ftype, phase, sha1, \
              include_reason_archive, exclude_reason_archive, flags, canonical_id, dev, inode) \
-             VALUES (:id, :abs_path, '.bin', :size, 'file', 'filtered', :sha1, -1, 0, 0, NULL, NULL, NULL)",
+             VALUES (:id, :abs_path, :abs_path_raw, '.bin', :size, 'file', 'filtered', :sha1, -1, 0, 0, NULL, NULL, NULL)",
             named_params! {
                 ":id": id,
                 ":abs_path": abs_path,
+                ":abs_path_raw": abs_path.as_bytes().to_vec(),
                 ":size": size as i64,
                 ":sha1": [sha1_byte; 20].as_slice(),
             },
