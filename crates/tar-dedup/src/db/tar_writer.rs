@@ -360,13 +360,15 @@ mod tests {
     /// A default staged canonical: self-canonical `staged` file with a digest
     /// and the archive filter passed.
     fn insert_archive_candidate(conn: &Connection, id: i64, qid: i64, name: &str, size: u64) {
+        let ap = format!("/tmp/{name}-{qid}.dat");
         conn.execute(
-            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+            "INSERT INTO files (id, abs_path, abs_path_raw, ext, size, ftype, phase, sha1, \
              include_reason_archive, exclude_reason_archive, flags, canonical_id) \
-             VALUES (:id, :abs_path, :ext, :size, 'file', 'staged', :sha1, -1, 0, 0, :id)",
+             VALUES (:id, :abs_path, :abs_path_raw, :ext, :size, 'file', 'staged', :sha1, -1, 0, 0, :id)",
             named_params! {
                 ":id": id,
-                ":abs_path": format!("/tmp/{name}-{qid}.dat"),
+                ":abs_path": &ap,
+                ":abs_path_raw": ap.as_bytes().to_vec(),
                 ":ext": format!(".{name}"),
                 ":size": size as i64,
                 ":sha1": [7u8; 20].as_slice(),
