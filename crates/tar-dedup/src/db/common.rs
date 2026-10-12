@@ -96,6 +96,8 @@ impl FileRecord {
         StrippedRecord {
             id: self.id,
             abs_path: self.abs_path.clone(),
+            // FileRecord is extract-side; the raw bytes are not carried there.
+            abs_path_raw: None,
             ext: self.ext.clone(),
             size: self.size,
             sha1: self.sha1,
@@ -110,6 +112,12 @@ impl FileRecord {
 }
 
 impl StrippedRecord {
+    /// Path to use for filesystem access: the raw on-disk bytes when present,
+    /// else the (faithful) `abs_path`.
+    pub fn fs_path(&self) -> &Path {
+        self.abs_path_raw.as_deref().unwrap_or(&self.abs_path)
+    }
+
     /// Self-canonical regular file with digest → content id.
     pub fn content_id(&self) -> Option<ContentId> {
         content_id_if_canonical(
@@ -242,16 +250,48 @@ impl SqlFileRow for FileRecord {
     }
 }
 
+/// Raw on-disk bytes of a path for the `*_raw` BLOB columns (unix: byte
+/// round-trip; non-unix the lossy string bytes, mirroring `abs_path`).
+pub fn path_bytes(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        path.as_os_str().to_string_lossy().into_owned().into_bytes()
+    }
+}
+
+/// Read a nullable raw-path BLOB column back into a `PathBuf` (unix: byte
+/// round-trip; non-unix the raw mirrors `abs_path`, so `None`).
+pub fn raw_path_from_sql(row: &rusqlite::Row<'_>, name: &str) -> rusqlite::Result<Option<PathBuf>> {
+    let bytes: Option<Vec<u8>> = row.get(name)?;
+    let Some(bytes) = bytes else { return Ok(None) };
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(bytes))))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = bytes;
+        Ok(None)
+    }
+}
+
 impl SqlFileRow for StrippedRecord {
     fn sql_columns(prefix: Option<&str>) -> String {
         match prefix {
-            None => "id, abs_path, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, \
+            None => "id, abs_path, abs_path_raw, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, \
                 flags, phase, inode, dev, new_name"
                 .to_string(),
             Some(p) => format!(
                 "
                 {p}.id AS \"{p}.id\",
                 {p}.abs_path AS \"{p}.abs_path\",
+                {p}.abs_path_raw AS \"{p}.abs_path_raw\",
                 {p}.ext AS \"{p}.ext\",
                 {p}.size AS \"{p}.size\",
                 {p}.sha1 AS \"{p}.sha1\",
@@ -277,6 +317,7 @@ impl SqlFileRow for StrippedRecord {
         Ok(StrippedRecord {
             id: FileId(row.get(format!("{upx}id").as_str())?),
             abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
+            abs_path_raw: raw_path_from_sql(row, format!("{upx}abs_path_raw").as_str())?,
             ext: row.get(format!("{upx}ext").as_str())?,
             size: row.get::<_, i64>(format!("{upx}size").as_str())? as u64,
             sha1: optional_sha1(row, upx)?,
