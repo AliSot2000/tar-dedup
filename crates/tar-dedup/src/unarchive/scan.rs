@@ -910,6 +910,8 @@ mod tests {
             selinux_ctx: None,
             win_perm: None,
             link_dst: None,
+            abs_path_raw: None,
+            link_dst_raw: None,
             device_id: None,
             inode_id: None,
             major: None,
