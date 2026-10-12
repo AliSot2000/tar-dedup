@@ -243,12 +243,29 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use crate::db::flags::{SourceFlag, SourceFlags};
-    use crate::db::types::{FileRecord, FileType};
+    use crate::db::types::{FileRecord, FileType, StrippedRecord};
     use std::path::{Path, PathBuf};
+
+    #[cfg(unix)]
+    #[test]
+    fn abs_path_raw_round_trip_via_fs_path() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("t.sqlite")).unwrap();
+        let raw = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/los\xFFsy.bin"));
+        let mut rec = record("/tmp/los\u{FFFD}sy.bin");
+        rec.abs_path_raw = Some(raw.clone());
+        assert!(db.insert_file(&rec).unwrap());
+        let id = db.file_id_by_abs_path(&raw).unwrap().unwrap();
+        let loaded: StrippedRecord = db.get_file_by_id(id).unwrap().expect("row");
+        assert_eq!(loaded.fs_path(), &raw);
+        assert_eq!(loaded.abs_path, PathBuf::from("/tmp/los\u{FFFD}sy.bin"));
+    }
 
     fn record(path: &str) -> NewFileRecord {
         NewFileRecord {
             abs_path: PathBuf::from(path),
+            abs_path_raw: None,
             ext: String::new(),
             size: 1,
             mtime: None,
@@ -263,6 +280,7 @@ mod tests {
             selinux_ctx: None,
             win_perm: None,
             link_dst: None,
+            link_dst_raw: None,
             device_id: None,
             inode_id: None,
             major: None,
@@ -280,11 +298,13 @@ mod tests {
         let db = Database::open(&dir.path().join("t.sqlite")).unwrap();
         let s1 = db
             .add_get_source(Path::new("/root-a"), "--input-dir", Some(0),
-                            Path::new("/root-a"), dir_flags())
+                            Path::new("/root-a"), Path::new("/root-a"), Path::new("/root-a"),
+                            dir_flags())
             .unwrap();
         let s2 = db
             .add_get_source(Path::new("/root-b"), "--input-dir", Some(1),
-                            Path::new("/root-b"), dir_flags())
+                            Path::new("/root-b"), Path::new("/root-b"), Path::new("/root-b"),
+                            dir_flags())
             .unwrap();
         let rec = record("/shared/file.txt");
         assert!(db.insert_file_and_ref(s1, &rec).unwrap());
