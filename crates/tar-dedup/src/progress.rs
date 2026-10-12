@@ -82,7 +82,8 @@ struct ThreadBars {
     bars: Vec<Option<ProgressBar>>,
 }
 
-// TODO why is phase behind mutex? Doesn't progress already do mutex et al?
+// INFO: To share the ProgressBarSet amongst multiple threads all elements inside need to be thread safe. Rust does not
+//  know that ProgressBar is thread safe -> MutEx
 impl ProgressBarSet {
     pub fn new(multiplier: u64) -> Self {
         let mp = Arc::new(MultiProgress::new());
