@@ -24,6 +24,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         !rt.config.indexing.no_hardlink_detection,
         rt.config.filter.anchored,
         rt.config.filter.ignore_case,
+        rt.config.filter.no_unicode,
         rt.config.process.batch_size,
         previous_phase,
         &rt.db,
@@ -48,6 +49,7 @@ pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
         &config.filter.exclude_patterns,
         &config.filter.exclude_from,
         config.filter.ignore_case,
+        config.filter.no_unicode,
         &mut recorder,
         phase,
         FilterSink {

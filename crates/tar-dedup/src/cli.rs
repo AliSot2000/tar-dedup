@@ -227,6 +227,15 @@ pub struct ArchiveArgs {
     )]
     pub ignore_case: bool,
 
+    /// Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte).
+    #[arg(
+        long = "no-unicode",
+        default_value_t = false,
+        action = ArgAction::SetTrue,
+        help_heading = "Filtering"
+    )]
+    pub no_unicode: bool,
+
     // --- File Attributes ---
 
     /// Capture POSIX ACLs (default: on via the capture umbrella).
@@ -1014,6 +1023,10 @@ pub struct ExtractArgs {
     /// Match patterns case-insensitively (default: case-sensitive).
     #[arg(long = "ignore-case", help_heading = "Filtering")]
     pub ignore_case: bool,
+
+    /// Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte).
+    #[arg(long = "no-unicode", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
+    pub no_unicode: bool,
 
     /// Apply include/exclude filters after a later phase (scan) instead of eagerly.
     #[arg(long = "lazy-filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]

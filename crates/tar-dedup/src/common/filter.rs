@@ -11,8 +11,6 @@ use regex::{Regex, RegexBuilder};
 use std::fs;
 use std::path::PathBuf;
 
-const REGEX_UTF_8: bool = true;
-
 /// A filter expression compiled to a regex for fast matching.
 pub struct ParsedFilter {
     pub id: i64,
@@ -31,6 +29,7 @@ pub fn joint_filter_phase(
     update_hardlink_detection: bool,
     anchored: bool,
     ignore_case: bool,
+    no_unicode: bool,
     batch_size: u64,
     pv: FilePhase,
     db: &Database,
@@ -68,7 +67,7 @@ pub fn joint_filter_phase(
     // Perform actual process of filtering. In case this is a noticeable bottleneck, it is a
     // separate function so we can swap in a rayon pool or a crossbeam ... whatever is better.
     step_filters(
-        anchored, ignore_case, batch_size, &pv, db, pg, get_rows_to_filter, apply_results
+        anchored, ignore_case, no_unicode, batch_size, &pv, db, pg, get_rows_to_filter, apply_results
     )?;
 
     if update_hardlink_detection {
@@ -82,6 +81,7 @@ pub fn joint_filter_phase(
 pub fn step_filters(
     anchored: bool,
     ignore_case: bool,
+    no_unicode: bool,
     batch_size: u64,
     pv: &FilePhase,
     db: &Database,
@@ -108,12 +108,14 @@ pub fn step_filters(
         "include",
         anchored,
         ignore_case,
+        no_unicode,
         Some(&add_flt));
     let exclude_filters = parse_filter(
         &db.get_filters_archive(true)?,
         "exclude",
         anchored,
         ignore_case,
+        no_unicode,
         Some(&add_flt));
 
     drop(add_flt);
@@ -179,6 +181,7 @@ pub fn parse_filter(
     operation: &str,
     anchored: bool,
     ignore_case: bool,
+    no_unicode: bool,
     cp: Option<&ProgressBar>)
     -> Vec<ParsedFilter> {
     let mut parsed_filters: Vec<ParsedFilter> = Vec::with_capacity(filters.len());
@@ -190,7 +193,7 @@ pub fn parse_filter(
         };
         let regex = match RegexBuilder::new(&aexp)
             .case_insensitive(ignore_case)
-            .unicode(REGEX_UTF_8) // TODO needs to be done with --force-utf8
+            .unicode(!no_unicode)
             .build()
         {
             Ok(regex) => regex,
@@ -262,6 +265,7 @@ pub fn ingest_filters(
     exclude_patterns: &[String],
     exclude_from: &[PathBuf],
     ignore_case: bool,
+    no_unicode: bool,
     recorder: &mut Recorder,
     e_phase: ErrorPhase,
     sink: FilterSink<'_>)
@@ -271,6 +275,7 @@ pub fn ingest_filters(
         include_from,
         "include",
         ignore_case,
+        no_unicode,
         &sink.add_include,
         recorder,
         e_phase,
@@ -286,6 +291,7 @@ pub fn ingest_filters(
         exclude_from,
         "exclude",
         ignore_case,
+        no_unicode,
         &sink.add_exclude,
         recorder,
         e_phase,
@@ -300,6 +306,7 @@ fn handle_pattern_source(
     files: &[PathBuf],
     operation: &str,
     ignore_case: bool,
+    no_unicode: bool,
     insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
     recorder: &mut Recorder,
     e_phase: ErrorPhase)
@@ -315,6 +322,7 @@ fn handle_pattern_source(
             recorder,
             e_phase,
             ignore_case,
+            no_unicode,
         )?;
     }
 
@@ -351,6 +359,7 @@ fn handle_pattern_source(
                 recorder,
                 e_phase,
                 ignore_case,
+                no_unicode,
             )?;
         }
     }
@@ -366,11 +375,12 @@ fn handle_query(
     insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
     recorder: &mut Recorder,
     e_phase: ErrorPhase,
-    ignore_case: bool)
+    ignore_case: bool,
+    no_unicode: bool)
     -> Result<()> {
     match RegexBuilder::new(query)
         .case_insensitive(ignore_case)
-        .unicode(REGEX_UTF_8) // TODO needs to be done with --force-utf8
+        .unicode(!no_unicode)
         .build() {
         Ok(_regex) => {
             let res = insert_fn(source, Some(line), query)?;
