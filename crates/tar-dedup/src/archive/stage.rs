@@ -70,7 +70,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                         let sparse_name = record.sparse_member_name().expect(EXPECTED_CANONICAL);
                         rt.config.paths.stage_dir().join(sparse_name).clean()
                     } else {
-                        record.abs_path.to_path_buf()
+                        record.fs_path().to_path_buf()
                     };
 
                     let tar_name = record.tar_member_name().expect(EXPECTED_CANONICAL);
