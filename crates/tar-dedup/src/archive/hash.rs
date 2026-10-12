@@ -199,10 +199,10 @@ fn hash_worker(
                 bar.set_length(row.size);
                 bar.set_message(format!("Hashing {}", row.abs_path.display()));
                 let modified = warn_if_times_changed(
-                    &row.abs_path, row.mtime, row.atime, row.ctime
+                    row.fs_path(), row.mtime, row.atime, row.ctime
                 );
                 let res = match hash_one(
-                    &mut buf, &row.abs_path, page_size, &shutdown, Some(&bar)) {
+                    &mut buf, row.fs_path(), page_size, &shutdown, Some(&bar)) {
                     Ok((hash, zero_pages)) => {
                         tracing::debug!("hashed {}", row.abs_path.display());
                         Ok(HashSuccess {
@@ -423,7 +423,7 @@ struct TestWorld {
                 mtime, atime, ctime,
                 uid: None, gid: None, mode: None,
                 ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None,
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
                 device_id: None, inode_id: None, major: None, minor: None,
             }).expect("insert test file");
             self.db.file_id_by_abs_path(path).expect("lookup test file").expect("file present")
