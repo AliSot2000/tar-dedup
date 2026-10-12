@@ -300,11 +300,12 @@ mod tests {
 
     fn insert_row(conn: &Connection, id: i64, abs_path: &str, dev: i64, inode: i64) {
         conn.execute(
-            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, dev, inode) \
-             VALUES (:id, :abs_path, '.bin', 0, 'file', 'inventoried', :dev, :inode)",
+            "INSERT INTO files (id, abs_path, abs_path_raw, ext, size, ftype, phase, dev, inode) \
+             VALUES (:id, :abs_path, :abs_path_raw, '.bin', 0, 'file', 'inventoried', :dev, :inode)",
             named_params! {
                 ":id": id,
                 ":abs_path": abs_path,
+                ":abs_path_raw": abs_path.as_bytes().to_vec(),
                 ":dev": dev,
                 ":inode": inode,
             },
