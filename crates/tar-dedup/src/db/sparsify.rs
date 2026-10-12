@@ -257,14 +257,16 @@ mod tests {
     /// A default sparsify candidate: self-canonical `deduped` file with a
     /// digest, `sparse_count` empty pages and the archive filter passed.
     fn insert_candidate(conn: &Connection, id: i64, size: u64, sparse_count: u64) {
+        let ap = format!("/tmp/sp-{id}.bin");
         conn.execute(
-            "INSERT INTO files (id, abs_path, ext, size, ftype, phase, sha1, \
+            "INSERT INTO files (id, abs_path, abs_path_raw, ext, size, ftype, phase, sha1, \
              sparse_count, include_reason_archive, exclude_reason_archive, flags, canonical_id) \
-             VALUES (:id, :abs_path, '.bin', :size, 'file', 'deduped', :sha1, \
+             VALUES (:id, :abs_path, :abs_path_raw, '.bin', :size, 'file', 'deduped', :sha1, \
                      :sparse_count, -1, 0, 0, :id)",
             named_params! {
                 ":id": id,
-                ":abs_path": format!("/tmp/sp-{id}.bin"),
+                ":abs_path": &ap,
+                ":abs_path_raw": ap.as_bytes().to_vec(),
                 ":size": size as i64,
                 ":sparse_count": sparse_count as i64,
                 ":sha1": [7u8; 20].as_slice(),
