@@ -178,11 +178,12 @@ mod tests {
     fn insert_row(conn: &Connection, id: i64, abs_path: &str, ftype: &str) {
         conn.execute(
             "INSERT INTO files \
-             (id, abs_path, ftype, ext, size, include_reason_archive, include_reason_extract) \
-             VALUES (:id, :abs_path, :ftype, '', 0, -1, -1)",
+             (id, abs_path, abs_path_raw, ftype, ext, size, include_reason_archive, include_reason_extract) \
+             VALUES (:id, :abs_path, :abs_path_raw, :ftype, '', 0, -1, -1)",
             named_params! {
                 ":id": id,
                 ":abs_path": abs_path,
+                ":abs_path_raw": abs_path.as_bytes().to_vec(),
                 ":ftype": ftype,
             },
         ).unwrap();
