@@ -108,7 +108,7 @@ impl Database {
         let mut conn = self.conn.borrow_mut();
         let tx = conn.transaction()?;
         let inserted = inventory::insert_file(&tx, record)?;
-        let file_id = inventory::file_id_by_abs_path(&tx, &record.abs_path)?.ok_or_else(|| {
+        let file_id = inventory::file_id_by_abs_path(&tx, record.fs_path())?.ok_or_else(|| {
             Error::Config(
                 "insert_file_and_ref: file missing after insert".into(),
             )
@@ -124,6 +124,8 @@ impl Database {
         source_kind: &str,
         line: Option<u64>,
         original_path: &Path,
+        abs_path_raw: &Path,
+        original_path_raw: &Path,
         flags: SourceFlags,
     ) -> Result<i64> {
         source::add_get_source(
@@ -132,6 +134,8 @@ impl Database {
             source_kind,
             line,
             original_path,
+            abs_path_raw,
+            original_path_raw,
             flags,
         )
     }
