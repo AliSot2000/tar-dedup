@@ -250,7 +250,7 @@ fn sparsify_worker(
                 bar.set_length(row.size);
                 bar.set_message(format!("Sparsifying {}", row.abs_path.display()));
                 let modified = warn_if_times_changed(
-                    &row.abs_path, row.mtime, row.atime, row.ctime,
+                    row.fs_path(), row.mtime, row.atime, row.ctime,
                 );
                 let name = row
                     .sparse_member_name()
@@ -258,7 +258,7 @@ fn sparsify_worker(
                 let dst = stage_dir.join(name).clean();
                 let tmp = TempSparseFile::new(dst);
                 let outcome = match sparse_one(
-                    &row.abs_path, tmp.path(), page_size, &shutdown, Some(&bar)) {
+                    row.fs_path(), tmp.path(), page_size, &shutdown, Some(&bar)) {
                     Ok(_) => {
                         tracing::debug!("sparsified {}", row.abs_path.display());
                         tmp.keep();
