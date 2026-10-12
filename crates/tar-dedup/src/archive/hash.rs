@@ -149,7 +149,12 @@ fn handle_send_receive_loop(
                 Ok(_) => (),
                 Err(e) => match &e.err {
                     Error::Interrupted => (),
-                    Error::FileStat(_) => record_hash_error(&mut recorder, &e),
+                    Error::FileStat(fse) => recorder.record_file(
+                        e.id,
+                        crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Hash),
+                        fse.recreate(),
+                        ErrorFlags::default(),
+                    ),
                     other => panic!(
                         "Invariant Error. Only FileStatError and Interrupted expected. Got: {other}"
                     ),
@@ -166,18 +171,6 @@ fn handle_send_receive_loop(
         pull, |_| Ok(()), || Ok(true), apply)?;
     recorder.flush()?;
     Ok(completed)
-}
-
-/// Record a per-file hash failure in the persistent error log (best-effort).
-/// `hash_file` failures are `FileStat` (per-file) errors; the carried
-/// [`FileStatError`](crate::error::FileStatError) is recreated on the way in.
-fn record_hash_error(recorder: &mut Recorder, e: &HashError) {
-    recorder.record_file(
-        e.id,
-        crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Hash),
-        e.err.to_file_stat(None), // TODO move this outside.
-        ErrorFlags::default(),
-    );
 }
 /// Worker thread: pulls one file at a time, hashes it, forwards the outcome.
 /// Owns its bar and read buffer; only touches the channels and `tracing`.
@@ -315,12 +308,11 @@ mod tests {
     use crate::common::files::original_extension;
     use crate::config::{
         ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
-        PipelinePhase, ProcessOptions, SparseOptions,
+        ProcessOptions, SparseOptions,
     };
+    use crate::db::Database;
     use crate::db::flags::FileFlag;
     use crate::db::types::{FileId, FilePhase, FileType, NewFileRecord};
-    use crate::db::{Database, ErrorPhase, Recorder};
-    use crate::error::{Error, FileStatError};
     use crate::progress::ProgressBarSet;
     use chrono::{DateTime, Utc};
     use nix::unistd::geteuid;
@@ -609,29 +601,6 @@ struct TestWorld {
         let (_hash, sparse) = hash_one(&mut buf, &path, 4096, &Shutdown::detached(), None)
             .expect("hash");
         assert_eq!(sparse, ((IO_BUF_SIZE + 2 * 4096) / 4096) as u64);
-    }
-
-    #[test]
-    fn record_hash_error_persists_filestat() {
-        let world = TestWorld::new();
-        let id = world.add_file("e.bin", &pattern(1024, 1));
-        let mut recorder = Recorder::new(&world.db, true, None);
-        record_hash_error(&mut recorder, &HashError {
-            id,
-            modified: false,
-            err: Error::FileStat(FileStatError::Io {
-                path: PathBuf::from("/tmp/e.bin"),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied, "nope".to_string()),
-            }),
-        });
-        recorder.flush().expect("flush recorder");
-
-        let records = world.db.get_records_by_file_id(id).expect("records");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].file_id, Some(id));
-        assert_eq!(records[0].error_type, "Io/PermissionDenied");
-        assert_eq!(records[0].phase, ErrorPhase::Pipeline(PipelinePhase::Hash));
     }
 
     #[ignore]
