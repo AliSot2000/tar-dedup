@@ -40,6 +40,7 @@ pub enum MetaKey {
     ExtractConfig,
     TarDedupVersion,
     TarDedupOs,
+    DbVersion,
 }
 
 impl MetaKey {
@@ -67,6 +68,7 @@ impl MetaKey {
             Self::ExtractConfig => "extract_config",
             Self::TarDedupVersion => "tar_dedup_version",
             Self::TarDedupOs => "tar_dedup_os",
+            Self::DbVersion => "db_version",
         }
     }
 
@@ -94,6 +96,7 @@ impl MetaKey {
             "extract_config" => Self::ExtractConfig,
             "tar_dedup_version" => Self::TarDedupVersion,
             "tar_dedup_os" => Self::TarDedupOs,
+            "db_version" => Self::DbVersion,
             _ => return None,
         })
     }
@@ -122,6 +125,7 @@ impl MetaKey {
             Self::ExtractConfig,
             Self::TarDedupVersion,
             Self::TarDedupOs,
+            Self::DbVersion,
         ]
     }
 }
@@ -151,6 +155,7 @@ pub enum MetaEntry {
     ExtractConfig(ExtractConfig),
     TarDedupVersion(String),
     TarDedupOs(String),
+    DbVersion(String),
 }
 
 impl MetaEntry {
@@ -178,6 +183,7 @@ impl MetaEntry {
             Self::ExtractConfig(_) => MetaKey::ExtractConfig,
             Self::TarDedupVersion(_) => MetaKey::TarDedupVersion,
             Self::TarDedupOs(_) => MetaKey::TarDedupOs,
+            Self::DbVersion(_) => MetaKey::DbVersion,
         }
     }
 
@@ -205,7 +211,7 @@ impl MetaEntry {
             Self::ArchiveTransform(v) => v.clone(),
             Self::ArchiveConfig(v) => serde_json::to_string(v).expect("archive config serializable"),
             Self::ExtractConfig(v) => serde_json::to_string(v).expect("extract config serializable"),
-            Self::TarDedupVersion(v) | Self::TarDedupOs(v) => v.clone(),
+            Self::TarDedupVersion(v) | Self::TarDedupOs(v) | Self::DbVersion(v) => v.clone(),
         }
     }
 
@@ -255,6 +261,7 @@ impl MetaEntry {
                 .map_err(|_| Error::Config(format!("invalid extract_config meta: {raw}"))),
             MetaKey::TarDedupVersion => Ok(Self::TarDedupVersion(raw.to_string())),
             MetaKey::TarDedupOs => Ok(Self::TarDedupOs(raw.to_string())),
+            MetaKey::DbVersion => Ok(Self::DbVersion(raw.to_string())),
         }
     }
 }
@@ -545,6 +552,17 @@ pub fn get_tar_dedup_os(conn: &Connection) -> Result<Option<String>> {
 
 pub fn set_tar_dedup_os(conn: &Connection, value: &str) -> Result<()> {
     set_entry(conn, &MetaEntry::TarDedupOs(value.to_string()))
+}
+
+pub fn get_db_version(conn: &Connection) -> Result<Option<String>> {
+    get_typed(conn, MetaKey::DbVersion, |e| match e {
+        MetaEntry::DbVersion(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_db_version(conn: &Connection, value: &str) -> Result<()> {
+    set_entry(conn, &MetaEntry::DbVersion(value.to_string()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
