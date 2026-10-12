@@ -42,7 +42,7 @@ pub struct ComparePair {
 pub fn compare_pair(canonical: &StrippedRecord, candidate: &StrippedRecord) -> ComparePair {
     ComparePair {
         canonical_id: canonical.id,
-        canonical_path: canonical.abs_path.to_path_buf(),
+        canonical_path: canonical.fs_path().to_path_buf(),
         canonical_mtime: canonical.mtime,
         canonical_atime: canonical.atime,
         canonical_ctime: canonical.ctime,
@@ -50,7 +50,7 @@ pub fn compare_pair(canonical: &StrippedRecord, candidate: &StrippedRecord) -> C
         canonical_inode_id: canonical.inode_id,
 
         candidate_id: candidate.id,
-        candidate_path: candidate.abs_path.to_path_buf(),
+        candidate_path: candidate.fs_path().to_path_buf(),
         candidate_size: candidate.size,
         candidate_mtime: candidate.mtime,
         candidate_atime: candidate.atime,
