@@ -412,7 +412,7 @@ mod tests {
                 mtime: None, atime: None, ctime: None,
                 uid: None, gid: None, mode: None,
                 ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None,
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
                 device_id: None, inode_id: None, major: None, minor: None,
             }).expect("insert test file");
             let id = self.db.file_id_by_abs_path(&seed_path)
@@ -448,12 +448,13 @@ mod tests {
             let seed_path = self.path(name);
             self.db.with_transaction(|conn| {
                 conn.execute(
-                    "INSERT INTO files (abs_path, ext, size, ftype, phase, sha1, \
+                    "INSERT INTO files (abs_path, abs_path_raw, ext, size, ftype, phase, sha1, \
                      include_reason_archive, exclude_reason_archive, \
                      include_reason_extract, exclude_reason_extract, flags, canonical_id) \
-                     VALUES (:abs, '.bin', 0, 'file', 'extract_filtered', :sha1, -1, 0, -1, 0, :flag, :canon)",
+                     VALUES (:abs, :abs_raw, '.bin', 0, 'file', 'extract_filtered', :sha1, -1, 0, -1, 0, :flag, :canon)",
                     named_params! {
                         ":abs": require_utf8(&seed_path)?,
+                        ":abs_raw": require_utf8(&seed_path)?.into_bytes(),
                         ":sha1": [7u8; 20].as_slice(),
                         ":flag": FileFlag::FileExtracted.mask_i64(),
                         ":canon": canonical.0,
@@ -471,12 +472,13 @@ mod tests {
             let seed_path = self.path(name);
             self.db.with_transaction(|conn| {
                 conn.execute(
-                    "INSERT INTO files (abs_path, ext, size, ftype, phase, \
+                    "INSERT INTO files (abs_path, abs_path_raw, ext, size, ftype, phase, \
                      include_reason_archive, exclude_reason_archive, \
                      include_reason_extract, exclude_reason_extract, flags) \
-                     VALUES (:abs, '.bin', 0, 'dir', 'extract_filtered', -1, 0, -1, 0, 0)",
+                     VALUES (:abs, :abs_raw, '.bin', 0, 'dir', 'extract_filtered', -1, 0, -1, 0, 0)",
                     named_params! {
                         ":abs": require_utf8(&seed_path)?,
+                        ":abs_raw": require_utf8(&seed_path)?.into_bytes(),
                     },
                 ).expect("insert non-file");
                 Ok(())
