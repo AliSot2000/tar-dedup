@@ -289,6 +289,14 @@ pub fn set_file_acl(path: &Path, raw_acl: &str) -> FileStatResult<()> {
                 source: e,
             }
         })?;
+        // Guard before `PosixACL::set`: an out-of-range perm makes `acl_add_perm`
+        // fail and the crate's `check_return` panics instead of returning Err.
+        if value & !0b111 != 0 {
+            return Err(FileStatError::General {
+                path: Some(path.to_path_buf()),
+                message: format!("invalid ACL permission {value}"),
+            });
+        }
         new_acls.set(qualifier, value);
     }
     new_acls
