@@ -74,7 +74,7 @@ pub fn list_files_to_stage_after<R: SqlFileRow>(
     rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
-// TODO fix this up, this is not correct.
+// TODO check if this is sound!
 #[cfg(test)]
 mod tests {
     use super::*;
