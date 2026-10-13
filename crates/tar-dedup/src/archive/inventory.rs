@@ -490,7 +490,7 @@ fn handle_entry(
         for error in enc_err {
             recorder.record_file(
                 file_id,
-                ErrorPhase::Pipeline(crate::config::PipelinePhase::Inventory),
+                ERROR_PHASE,
                 error,
                 ErrorFlags::default(),
             );
