@@ -13,7 +13,7 @@ use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
     ProductPresence, StartAction, StartPolicy, WorkPresence, resolve_start,
 };
-use crate::config::{ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState};
+use crate::config::{ExitAfterStage, ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState};
 use crate::db::{Database, Recorder};
 use crate::error::{Error, Result};
 use crate::progress::{BarKind, BarScope, EXTRACT_MULTIPLIER, ProgressBarSet, register_mpb};
@@ -33,6 +33,7 @@ pub struct ExtractRTArgs<'a> {
 }
 
 pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
+    validate_exit_after_stage(&config)?;
     let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
     register_mpb(progress.mp_handle());
     let mut bars = BarScope::new(&progress);
@@ -87,6 +88,8 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     while state.phase != ExtractPipelinePhase::Done {
         shutdown.check_between_files()?;
         enter_phase(&progress, state.phase);
+
+        let completed = state.phase;
 
         match state.phase {
             ExtractPipelinePhase::ScanTar => {
@@ -151,12 +154,50 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         if let Some(ref edb) = db {
             edb.save_extract_runtime_state(&state)?;
         }
+
+        // Exit after the configured stage: state is saved above, so a later
+        // resume reprocesses from the next phase.
+        if let Some(stop_after) = config
+            .process
+            .exit_after_stage
+            .and_then(ExitAfterStage::stop_after_extract_phase) {
+            if completed == stop_after {
+                tracing::info!(
+                    "exit-after-stage `{}`: finished `{}`, resume from `{}`",
+                    stop_after.as_str(),
+                    completed.as_str(),
+                    state.phase.as_str()
+                );
+                return Ok(());
+            }
+        }
     }
 
     bars.finish();
     drop(bars);
 
+    if config.process.exit_after_stage == Some(ExitAfterStage::Cleanup) {
+        tracing::info!("exit-after-stage `cleanup`: finished");
+    }
+
     tracing::info!("extracted to {}", config.paths.extraction_root().display());
+    Ok(())
+}
+
+/// Validate `--exit-after-stage` for the extract pipeline. Archive-only stages
+/// have no extract counterpart; checked at run time because a resume override
+/// bypasses `ExtractConfig::validate`.
+fn validate_exit_after_stage(config: &ExtractConfig) -> Result<()> {
+    if let Some(stage) = config.process.exit_after_stage {
+        if !matches!(stage,
+            ExitAfterStage::Inventory | ExitAfterStage::Hash
+            | ExitAfterStage::Filter | ExitAfterStage::Cleanup) {
+            return Err(Error::Config(format!(
+                "--exit-after-stage {stage:?} does not exist on extract; valid stages: \
+                 scan (inventory), hash (rehash), filter, cleanup"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -193,5 +234,43 @@ fn load_extract_state(db_path: &Path) -> Result<ExtractRuntimeState> {
             .unwrap_or_else(ExtractRuntimeState::new))
     } else {
         Ok(ExtractRuntimeState::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn validate_exit_after_stage_accepts_extract_stages() {
+        for stage in [
+            ExitAfterStage::Inventory,
+            ExitAfterStage::Hash,
+            ExitAfterStage::Filter,
+            ExitAfterStage::Cleanup,
+        ] {
+            let mut cfg = ExtractConfig::for_scan_test(PathBuf::new(), PathBuf::new(), PathBuf::new());
+            cfg.process.exit_after_stage = Some(stage);
+            assert!(validate_exit_after_stage(&cfg).is_ok(), "stage {stage:?}");
+        }
+    }
+
+    #[test]
+    fn validate_exit_after_stage_rejects_archive_only_stages() {
+        for stage in [
+            ExitAfterStage::Dedup,
+            ExitAfterStage::Sparsify,
+            ExitAfterStage::Stage,
+            ExitAfterStage::Archive,
+        ] {
+            let mut cfg = ExtractConfig::for_scan_test(PathBuf::new(), PathBuf::new(), PathBuf::new());
+            cfg.process.exit_after_stage = Some(stage);
+            let err = validate_exit_after_stage(&cfg).unwrap_err();
+            assert!(
+                err.to_string().contains("does not exist on extract"),
+                "stage {stage:?}: {err}",
+            );
+        }
     }
 }

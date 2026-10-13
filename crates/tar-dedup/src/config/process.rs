@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::phases::ExtractPipelinePhase;
 use crate::cli::ExitAfterStageArg;
 use crate::common::defaults::{BATCH_SIZE, DEFAULT_AUTO_FLUSH_LIMIT, DRAIN_CHUNK, FEED_CHUNK, OUT_CAPACITY, WORK_CAPACITY};
 use crate::common::start::StartPolicy;
@@ -60,6 +61,23 @@ impl ExitAfterStage {
             Self::Sparsify => Some(PipelinePhase::Sparsify),
             Self::Stage => Some(PipelinePhase::Stage),
             Self::Archive => Some(PipelinePhase::Archive),
+            Self::Cleanup => None,
+        }
+    }
+
+    /// Extract pipeline phase whose successful completion triggers exit
+    /// (`None` = run through cleanup). Archive-only stages (`Dedup`, `Sparsify`,
+    /// `Stage`, `Archive`) have no extract counterpart and are rejected by
+    /// `unarchive::run` before the loop.
+    pub fn stop_after_extract_phase(self) -> Option<ExtractPipelinePhase> {
+        use super::phases::ExtractPipelinePhase;
+        match self {
+            Self::Inventory => Some(ExtractPipelinePhase::ScanTar),
+            Self::Hash => Some(ExtractPipelinePhase::Rehash),
+            Self::Filter => Some(ExtractPipelinePhase::Filter),
+            Self::Dedup | Self::Sparsify | Self::Stage | Self::Archive => {
+                unreachable!("archive-only stage must be rejected before extract runs")
+            }
             Self::Cleanup => None,
         }
     }
@@ -157,4 +175,27 @@ pub struct ResumeOverrides {
     pub jobs: Option<usize>,
     pub io_jobs: Option<usize>,
     pub exit_after_stage: Option<ExitAfterStage>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ExtractPipelinePhase;
+
+    #[test]
+    fn stop_after_extract_phase_maps_shared_stages() {
+        assert_eq!(
+            ExitAfterStage::Inventory.stop_after_extract_phase(),
+            Some(ExtractPipelinePhase::ScanTar),
+        );
+        assert_eq!(
+            ExitAfterStage::Hash.stop_after_extract_phase(),
+            Some(ExtractPipelinePhase::Rehash),
+        );
+        assert_eq!(
+            ExitAfterStage::Filter.stop_after_extract_phase(),
+            Some(ExtractPipelinePhase::Filter),
+        );
+        assert_eq!(ExitAfterStage::Cleanup.stop_after_extract_phase(), None);
+    }
 }
