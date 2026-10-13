@@ -8,7 +8,7 @@
 - [X] Retry errored files during tar step
 - [ ] Parallel compression (Dedup, Sparsify, Stage, Archive)
 - [X] Filter first
-- [ ] Force utf8 (any non-utf8 string panics and aborts.)
+- [X] Force utf8 (any non-utf8 string panics and aborts.)
 - [ ] list / inspect command (go through the db and dump the files. csv, parameter to list the columns which we want. 
       (join filter, join filter, join source))
 - [ ] query (query by file, out_tree or error table.)
@@ -55,10 +55,13 @@
 - [X] Filtering & UTF-8
 - [X] XZ Resolve in config
 - [X] Rehash cli argv
-- [ ] Add DB Version (Version I'm putting in a const not makro et al)
+- [X] Add DB Version (Version I'm putting in a const not makro et al)
 - [X] Implementation of force-overwrite-dir + rename
 - [ ] Capture Error Inventory
-- [ ] finish testing for [inventory, place_prologue, place, permissions]
+- [ ] finish testing for [inventory]
+- [ ] finish testing for [place_prologue]
+- [ ] finish testing for [place]
+- [ ] finish testing for [permissions]
 - [ ] finish the readme
 - [ ] publish to crates.io
 - [ ] publish to gh releases
