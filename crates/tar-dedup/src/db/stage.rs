@@ -25,7 +25,7 @@ pub fn promote_unstageable_files(conn: &Connection) -> Result<u64> {
 }
 
 /// Number of rows that will ever be staged (across sessions): eligible
-/// canonical files currently either `sparsified` (todo) or already `staged`
+/// canonical files currently either `sparsified` (pending) or already `staged`
 /// (done in a prior run). Ineligible rows promoted to `staged` never match.
 pub fn count_all_stage_candidates(conn: &Connection) -> Result<u64> {
     let filter_rows = generate_archive_filter(None);
@@ -151,8 +151,8 @@ mod tests {
     fn count_all_stage_candidates_spans_sessions() {
         let (_dir, conn) = open_db();
         insert_candidate(&conn, 1);   // staged in a prior session
-        insert_candidate(&conn, 2);   // todo this session
-        insert_candidate(&conn, 3);   // todo this session
+        insert_candidate(&conn, 2);   // pending this session
+        insert_candidate(&conn, 3);   // pending this session
         conn.execute("UPDATE files SET phase = 'staged' WHERE id = 1", []).expect("staged");
 
         // Ineligible rows promoted to `staged` must not inflate the workload.

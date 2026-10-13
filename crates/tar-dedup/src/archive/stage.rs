@@ -28,7 +28,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     tracing::info!(promoted, "promoted entries to staged which aren't eligible");
 
     // Progress across sessions: the workload counts every eligible canonical file
-    // (both sparsified todo and already-staged done); the position is the
+    // (both sparsified pending and already-staged done); the position is the
     // difference, so a resumed run keeps showing prior progress.
     let workload = rt.db.count_all_stage_candidates()?;
     let pending = rt.db.count_files_in_phase(FilePhase::Sparsified)?;
