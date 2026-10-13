@@ -462,8 +462,7 @@ pub fn count_entries(conn: &Connection) -> Result<u64> {
     Ok(count as u64)
 }
 
-// TODO: select files explicitly
-pub fn count_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<u64> {
+pub fn count_files_entries_in_phase(conn: &Connection, phase: FilePhase) -> Result<u64> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files WHERE phase = :phase",
         named_params! { ":phase": phase.as_str() },
@@ -472,15 +471,16 @@ pub fn count_files_in_phase(conn: &Connection, phase: FilePhase) -> Result<u64> 
     Ok(count as u64)
 }
 
-// TODO: select files explicitly
-pub fn list_files_in_phase<R: SqlFileRow>(conn: &Connection, phase: FilePhase) -> Result<Vec<R>> {
+pub fn list_files_entries_in_phase<R: SqlFileRow>(conn: &Connection, phase: FilePhase) -> Result<Vec<R>> {
     let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!(
         "SELECT {cols} FROM files WHERE phase = :phase ORDER BY id"
     )).to_panic()?;
 
-    let rows = stmt.query_map(named_params! { ":phase": phase.as_str() }, |r| {
-        R::from_row(r, None)
+    let rows = stmt.query_map(
+        named_params! { ":phase": phase.as_str() },
+        |r| {
+            R::from_row(r, None)
     }).to_panic()?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .to_panic()
