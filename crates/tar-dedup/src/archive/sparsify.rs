@@ -83,7 +83,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     rt.db.populate_sparsify_queue(rt.config.sparse.min_pages)?;
 
     // The phase bar tracks the whole workload across sessions: `count_all` is
-    // phase-agnostic, `pending` the session "todo", and their difference the
+    // phase-agnostic, `pending` the session "pending", and their difference the
     // already-done position — so a resumed run still shows prior progress.
     let workload = rt.db.count_all_sparsify_candidates(rt.config.sparse.min_pages)?;
     let pending = rt.db.count_pending_sparsify_candidates(rt.config.sparse.min_pages)?;

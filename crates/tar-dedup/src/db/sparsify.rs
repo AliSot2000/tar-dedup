@@ -53,7 +53,7 @@ pub fn promote_non_sparsify_candidates_to_sparsified(
 /// self-canonical regular files with enough empty pages and the archive filter
 /// passed. Deliberately **no phase predicate**: the workload is stable across
 /// sessions, so a resume bar shows `count_all` (this) with position derived from
-/// the pending count (done = workload − todo). Params: `:min_pages`.
+/// the pending count (done = workload − pending). Params: `:min_pages`.
 fn sparsify_candidates_where() -> String {
     format!(
         "canonical_id = id
@@ -164,7 +164,7 @@ pub fn count_all_sparsify_candidates(conn: &Connection, min_pages: u64) -> Resul
 }
 
 /// Count the **remaining** sparsify work — candidates still in `deduped` with
-/// neither flag ("todo", matches `pull_…` without the limit). `done` follows as
+/// neither flag ("pending", matches `pull_…` without the limit). `done` follows as
 /// `count_all − count_pending`; equivalently the errored/success rows already
 /// left `deduped` at ingest, so this extra flag parity is belt-and-suspenders.
 pub fn count_pending_sparsify_candidates(conn: &Connection, min_pages: u64) -> Result<u64> {
@@ -403,7 +403,7 @@ mod tests {
 
         let rows = pull_pending_sparsify_rows::<StrippedRecord>(&conn, 0, 100)
             .expect("pull");
-        assert_eq!(rows.len() as u64, 1);   // only candidate 1 is todo
+        assert_eq!(rows.len() as u64, 1);   // only candidate 1 is pending
         assert_eq!(
             count_pending_sparsify_candidates(&conn, MIN_PAGES).expect("count pending"),
             1
