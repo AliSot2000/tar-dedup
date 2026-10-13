@@ -328,4 +328,535 @@ pub fn set_file_selinux_data(path: &Path, raw_ctx: &[u8]) -> FileStatResult<()> 
 //--------------------------------------------------------------------------------------------------
 // Testing
 //--------------------------------------------------------------------------------------------------
-// TODO!!!
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    // ---- environment / support probes ------------------------------------------
+
+    /// Per-test scratch dir. Honors `TAR_DEDUP_TEST_DIR` (a labelled filesystem on the
+    /// VM — SELinux cannot be stored on tmpfs); otherwise a tempdir. The returned
+    /// `TempDir` (when present) is kept alive by the caller.
+    fn ctx(name: &str) -> (Option<tempfile::TempDir>, PathBuf) {
+        match std::env::var_os("TAR_DEDUP_TEST_DIR") {
+            Some(base) => {
+                let base = PathBuf::from(base);
+                std::fs::create_dir_all(&base).expect("create TAR_DEDUP_TEST_DIR");
+                let dir = base.join(name);
+                std::fs::create_dir_all(&dir).expect("create per-test dir");
+                (None, dir)
+            }
+            None => {
+                let td = tempfile::tempdir().expect("tempdir");
+                let dir = td.path().join(name);
+                std::fs::create_dir_all(&dir).expect("create per-test dir");
+                (Some(td), dir)
+            }
+        }
+    }
+
+    /// Probe: can we store a user xattr here? Any failure means the fs lacks support.
+    fn probe_xattr(dir: &Path) -> Result<(), String> {
+        let probe = dir.join("probe_xattr");
+        std::fs::write(&probe, b"x").expect("write probe");
+        match symlink_set_xattr(probe.as_path(), "probe", b"v") {
+            Ok(()) => Ok(()),
+            Err(e) => Err(format!("{e}")),
+        }
+    }
+
+    /// Probe: can we store a POSIX ACL here? (`write_acl` fails on fs without ACLs.)
+    fn probe_acl(dir: &Path) -> Result<(), String> {
+        let probe = dir.join("probe_acl");
+        std::fs::write(&probe, b"x").expect("write probe");
+        let mut acl = posix_acl::PosixACL::empty();
+        acl.set(Qualifier::UserObj, 7);
+        acl.set(Qualifier::GroupObj, 5);
+        acl.set(Qualifier::Mask, 5);
+        acl.set(Qualifier::Other, 0);
+        match acl.write_acl(&probe) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(format!("{e}")),
+        }
+    }
+
+    /// Probe: can we read + re-apply a security context here? Reads whatever label a
+    /// fresh file got (proves labels exist) and writes it back (proves privilege).
+    fn probe_selinux(dir: &Path) -> Result<(), String> {
+        let probe = dir.join("probe_selinux");
+        std::fs::write(&probe, b"x").expect("write probe");
+        let octx = SecurityContext::of_path(&probe, false, false).map_err(|e| format!("{e}"))?;
+        match octx {
+            None => Err("no security context (filesystem lacks labels)".to_string()),
+            Some(ctx) => {
+                let bytes = ctx.as_bytes().to_vec();
+                set_file_selinux_data(&probe, &bytes).map_err(|e| format!("{e}"))?;
+                Ok(())
+            }
+        }
+    }
+
+    // ---- small writers / decoders ----------------------------------------------
+
+    fn write_user_xattr(path: &Path, name: &str, value: &[u8]) {
+        symlink_set_xattr(path, name, value).expect("set user xattr");
+    }
+
+    fn write_acl(path: &Path, entries: &[(Qualifier, u32)]) {
+        let mut acl = posix_acl::PosixACL::empty();
+        for (q, p) in entries {
+            acl.set(*q, *p);
+        }
+        acl.write_acl(path).expect("write acl");
+    }
+
+    fn parse_xattr_data(s: &str) -> HashMap<String, String> {
+        serdej_from_str::<XattrDump>(s).expect("parse xattr dump").data
+    }
+
+    /// Decode a dump's base64 keys/values back to plain strings (handles the
+    /// `debug-force-utf8` encoding too).
+    fn decoded_xattr_map(s: &str) -> HashMap<String, Vec<u8>> {
+        let dump: XattrDump = serdej_from_str(s).expect("parse xattr dump");
+        match dump.encoding {
+            Encoding::Utf8 => dump.data
+                .into_iter()
+                .map(|(k, v)| (k, v.into_bytes()))
+                .collect(),
+            Encoding::Base64 => dump.data
+                .into_iter()
+                .map(|(k, v)| {
+                    let k = String::from_utf8(STANDARD.decode(&k).expect("decode key"))
+                        .expect("utf8 key");
+                    (k, STANDARD.decode(&v).expect("decode value"))
+                })
+                .collect(),
+        }
+    }
+
+    fn parse_acl_map(s: &str) -> HashMap<String, u32> {
+        serdej_from_str::<HashMap<String, u32>>(s).expect("parse acl map")
+    }
+
+    /// Variants of a security context to exhaust: base, + MLS level, + categories,
+    /// + low-high range. Built from the default label so `user:role:type` are valid
+    /// for the running policy.
+    fn selinux_context_variants(default: &[u8]) -> Vec<Vec<u8>> {
+        let s = std::str::from_utf8(default).expect("selinux context is utf8");
+        let base: Vec<&str> = s.split(':').take(3).collect();
+        let base = base.join(":");
+        vec![
+            default.to_vec(),
+            format!("{base}:s0").into_bytes(),
+            format!("{base}:s0:c0.c1023").into_bytes(),
+            format!("{base}:s0-s15:c0.c1023").into_bytes(),
+        ]
+    }
+
+    /// capture(f1) -> restore(f2) -> recapture(f2) byte equality for SELinux.
+    fn assert_selinux_round_trip(dir: &Path, ctx: &[u8], idx: usize) {
+        let f1 = dir.join(format!("a{idx}.bin"));
+        let f2 = dir.join(format!("b{idx}.bin"));
+        std::fs::write(&f1, b"x").expect("write");
+        std::fs::write(&f2, b"x").expect("write");
+        set_file_selinux_data(&f1, ctx).expect("set context");
+        let captured = get_file_selinux_data(&f1).expect("capture context");
+        set_file_selinux_data(&f2, &captured).expect("restore context");
+        assert_eq!(captured, get_file_selinux_data(&f2).expect("recapture context"));
+    }
+
+    // ---- xattr round trips ------------------------------------------------------
+
+    #[test]
+    fn xattr_round_trip_single_utf8() {
+        let (_td, dir) = ctx("xattr_round_trip_single_utf8");
+        if let Err(e) = probe_xattr(&dir) {
+            eprintln!("skipped (unsupported): xattr: {e}");
+            return;
+        }
+        let f1 = dir.join("a.bin");
+        let f2 = dir.join("b.bin");
+        std::fs::write(&f1, b"x").expect("write");
+        std::fs::write(&f2, b"x").expect("write");
+        write_user_xattr(&f1, "meta.color", b"blue");
+
+        let raw = get_file_xattr(&f1).expect("capture xattrs");
+        set_file_xattrs(&f2, &raw).expect("restore xattrs");
+        assert_eq!(parse_xattr_data(&raw), parse_xattr_data(&get_file_xattr(&f2).expect("recapture")));
+    }
+
+    #[test]
+    fn xattr_round_trip_many_keys_and_binary_values() {
+        let (_td, dir) = ctx("xattr_round_trip_many_keys");
+        if let Err(e) = probe_xattr(&dir) {
+            eprintln!("skipped (unsupported): xattr: {e}");
+            return;
+        }
+        let f1 = dir.join("a.bin");
+        let f2 = dir.join("b.bin");
+        std::fs::write(&f1, b"x").expect("write");
+        std::fs::write(&f2, b"x").expect("write");
+        write_user_xattr(&f1, "meta.k1", b"hello");
+        write_user_xattr(&f1, "meta.k2", b"");
+        write_user_xattr(&f1, "meta.k3", &[0x00, 0xff, 0x80, 0x41]);
+        write_user_xattr(&f1, "meta.k4", &[0x7f; 512]);
+
+        let raw = get_file_xattr(&f1).expect("capture xattrs");
+        set_file_xattrs(&f2, &raw).expect("restore xattrs");
+        assert_eq!(parse_xattr_data(&raw), parse_xattr_data(&get_file_xattr(&f2).expect("recapture")));
+    }
+
+    #[test]
+    fn xattr_round_trip_both_encodings() {
+        let (_td, dir) = ctx("xattr_round_trip_both_encodings");
+        if let Err(e) = probe_xattr(&dir) {
+            eprintln!("skipped (unsupported): xattr: {e}");
+            return;
+        }
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+
+        // utf8 branch of set_file_xattrs.
+        set_file_xattrs(&f, r#"{"encoding":"utf8","data":{"meta.t":"tag","meta.e":""}}"#)
+            .expect("set utf8-encoded xattrs");
+        assert_eq!(
+            decoded_xattr_map(&get_file_xattr(&f).expect("capture")),
+            HashMap::from([
+                ("meta.t".to_string(), b"tag".to_vec()),
+                ("meta.e".to_string(), Vec::new()),
+            ]),
+        );
+
+        // base64 branch with a binary value (fresh file so the utf8 xattrs above
+        // don't accumulate).
+        let f2 = dir.join("b.bin");
+        std::fs::write(&f2, b"x").expect("write");
+        let key = STANDARD.encode("meta.bin");
+        let val = STANDARD.encode([0x00u8, 0xff, 0x80, 0x41]);
+        let json = serde_json::json!({ "encoding": "base64", "data": { key: val } }).to_string();
+        set_file_xattrs(&f2, &json).expect("set base64-encoded xattrs");
+        assert_eq!(
+            decoded_xattr_map(&get_file_xattr(&f2).expect("capture")),
+            HashMap::from([("meta.bin".to_string(), vec![0x00, 0xff, 0x80, 0x41])]),
+        );
+    }
+
+    // ---- ACL round trips --------------------------------------------------------
+
+    #[test]
+    fn acl_round_trip_minimal_mode() {
+        let (_td, dir) = ctx("acl_round_trip_minimal_mode");
+        if let Err(e) = probe_acl(&dir) {
+            eprintln!("skipped (unsupported): acl: {e}");
+            return;
+        }
+        let f1 = dir.join("a.bin");
+        let f2 = dir.join("b.bin");
+        std::fs::write(&f1, b"x").expect("write");
+        std::fs::write(&f2, b"x").expect("write");
+        write_acl(&f1, &[
+            (Qualifier::UserObj, 6),
+            (Qualifier::GroupObj, 4),
+            (Qualifier::Other, 0),
+        ]);
+
+        let raw = get_file_acl(&f1).expect("capture acl");
+        set_file_acl(&f2, &raw).expect("restore acl");
+        assert_eq!(parse_acl_map(&raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
+    }
+
+    #[test]
+    fn acl_round_trip_all_entry_types() {
+        let (_td, dir) = ctx("acl_round_trip_all_entry_types");
+        if let Err(e) = probe_acl(&dir) {
+            eprintln!("skipped (unsupported): acl: {e}");
+            return;
+        }
+        let f1 = dir.join("a.bin");
+        let f2 = dir.join("b.bin");
+        std::fs::write(&f1, b"x").expect("write");
+        std::fs::write(&f2, b"x").expect("write");
+        // mask = union of group-class perms (5 | 6 | 4 = 7) so fix_mask is a no-op.
+        write_acl(&f1, &[
+            (Qualifier::UserObj, 7),
+            (Qualifier::GroupObj, 5),
+            (Qualifier::Other, 4),
+            (Qualifier::Mask, 7),
+            (Qualifier::User(1000), 6),
+            (Qualifier::Group(2000), 4),
+        ]);
+
+        let raw = get_file_acl(&f1).expect("capture acl");
+        set_file_acl(&f2, &raw).expect("restore acl");
+        assert_eq!(parse_acl_map(&raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
+    }
+
+    #[test]
+    fn acl_round_trip_repeated_named_users() {
+        let (_td, dir) = ctx("acl_round_trip_repeated_named_users");
+        if let Err(e) = probe_acl(&dir) {
+            eprintln!("skipped (unsupported): acl: {e}");
+            return;
+        }
+        let f1 = dir.join("a.bin");
+        let f2 = dir.join("b.bin");
+        std::fs::write(&f1, b"x").expect("write");
+        std::fs::write(&f2, b"x").expect("write");
+        // union of group-class (6 | 4 | 2 = 6) -> mask 6.
+        write_acl(&f1, &[
+            (Qualifier::UserObj, 7),
+            (Qualifier::GroupObj, 0),
+            (Qualifier::Other, 0),
+            (Qualifier::Mask, 6),
+            (Qualifier::User(1000), 6),
+            (Qualifier::User(1001), 4),
+            (Qualifier::User(1002), 2),
+        ]);
+
+        let raw = get_file_acl(&f1).expect("capture acl");
+        set_file_acl(&f2, &raw).expect("restore acl");
+        assert_eq!(parse_acl_map(&raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
+    }
+
+    #[test]
+    fn acl_round_trip_repeated_named_groups() {
+        let (_td, dir) = ctx("acl_round_trip_repeated_named_groups");
+        if let Err(e) = probe_acl(&dir) {
+            eprintln!("skipped (unsupported): acl: {e}");
+            return;
+        }
+        let f1 = dir.join("a.bin");
+        let f2 = dir.join("b.bin");
+        std::fs::write(&f1, b"x").expect("write");
+        std::fs::write(&f2, b"x").expect("write");
+        // union of group-class (5 | 6 | 4 | 2 = 7) -> mask 7.
+        write_acl(&f1, &[
+            (Qualifier::UserObj, 7),
+            (Qualifier::GroupObj, 5),
+            (Qualifier::Other, 1),
+            (Qualifier::Mask, 7),
+            (Qualifier::Group(2000), 6),
+            (Qualifier::Group(2001), 4),
+            (Qualifier::Group(2002), 2),
+        ]);
+
+        let raw = get_file_acl(&f1).expect("capture acl");
+        set_file_acl(&f2, &raw).expect("restore acl");
+        assert_eq!(parse_acl_map(&raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
+    }
+
+    #[test]
+    fn acl_round_trip_perm_combinations() {
+        let (_td, dir) = ctx("acl_round_trip_perm_combinations");
+        if let Err(e) = probe_acl(&dir) {
+            eprintln!("skipped (unsupported): acl: {e}");
+            return;
+        }
+        let f1 = dir.join("a.bin");
+        let f2 = dir.join("b.bin");
+        std::fs::write(&f1, b"x").expect("write");
+        std::fs::write(&f2, b"x").expect("write");
+        // union of group-class (4 | 0..7 = 7) -> mask 7.
+        write_acl(&f1, &[
+            (Qualifier::UserObj, 7),
+            (Qualifier::GroupObj, 4),
+            (Qualifier::Other, 0),
+            (Qualifier::Mask, 7),
+            (Qualifier::User(1000), 0),
+            (Qualifier::User(1001), 1),
+            (Qualifier::User(1002), 2),
+            (Qualifier::User(1003), 3),
+            (Qualifier::User(1004), 4),
+            (Qualifier::User(1005), 5),
+            (Qualifier::User(1006), 6),
+            (Qualifier::User(1007), 7),
+        ]);
+
+        let raw = get_file_acl(&f1).expect("capture acl");
+        set_file_acl(&f2, &raw).expect("restore acl");
+        assert_eq!(parse_acl_map(&raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
+    }
+
+    // ---- SELinux round trips ---------------------------------------------------
+
+    #[test]
+    fn selinux_round_trip_all_context_shapes() {
+        let (_td, dir) = ctx("selinux_round_trip_shapes");
+        if let Err(e) = probe_selinux(&dir) {
+            eprintln!("skipped (unsupported): selinux: {e}");
+            return;
+        }
+        let probe = dir.join("ctx_probe");
+        std::fs::write(&probe, b"x").expect("write");
+        let default = get_file_selinux_data(&probe).expect("get default context");
+        for (i, variant) in selinux_context_variants(&default).into_iter().enumerate() {
+            assert_selinux_round_trip(&dir, &variant, i);
+        }
+    }
+
+    // ---- everything at once -----------------------------------------------------
+
+    #[test]
+    fn all_attributes_round_trip_on_single_file() {
+        let (_td, dir) = ctx("all_attributes_at_once");
+        if let Err(e) = probe_xattr(&dir) {
+            eprintln!("skipped (unsupported): xattr: {e}");
+            return;
+        }
+        if let Err(e) = probe_acl(&dir) {
+            eprintln!("skipped (unsupported): acl: {e}");
+            return;
+        }
+        let f1 = dir.join("a.bin");
+        let f2 = dir.join("b.bin");
+        std::fs::write(&f1, b"x").expect("write");
+        std::fs::write(&f2, b"x").expect("write");
+
+        // xattrs.
+        write_user_xattr(&f1, "meta.t", b"tag");
+        write_user_xattr(&f1, "meta.bin", &[0x00, 0xff, 0x01]);
+
+        // ACL: all entry types with repeated named users/groups (mask = 7|...| = 7).
+        write_acl(&f1, &[
+            (Qualifier::UserObj, 7),
+            (Qualifier::GroupObj, 5),
+            (Qualifier::Other, 4),
+            (Qualifier::Mask, 7),
+            (Qualifier::User(1000), 6),
+            (Qualifier::User(1001), 4),
+            (Qualifier::Group(2000), 4),
+            (Qualifier::Group(2001), 2),
+        ]);
+
+        // SELinux (best-effort; xattr + ACL must round-trip regardless).
+        let selinux_capture = match get_file_selinux_data(&f1) {
+            Ok(v) if !v.is_empty() => Some(v),
+            Ok(_) => None,
+            Err(e) => {
+                eprintln!("skipped (unsupported): selinux: {e}");
+                None
+            }
+        };
+
+        let xattr_raw = get_file_xattr(&f1).expect("capture xattrs");
+        let acl_raw = get_file_acl(&f1).expect("capture acl");
+
+        set_file_xattrs(&f2, &xattr_raw).expect("restore xattrs");
+        set_file_acl(&f2, &acl_raw).expect("restore acl");
+        if let Some(ctx) = &selinux_capture {
+            set_file_selinux_data(&f2, ctx).expect("restore selinux");
+        }
+
+        assert_eq!(parse_xattr_data(&xattr_raw), parse_xattr_data(&get_file_xattr(&f2).expect("recapture")));
+        assert_eq!(parse_acl_map(&acl_raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
+        if let Some(ctx) = selinux_capture {
+            assert_eq!(ctx, get_file_selinux_data(&f2).expect("recapture selinux"));
+        }
+    }
+
+    // ---- malformed: SELinux -----------------------------------------------------
+
+    #[test]
+    fn selinux_malformed_interior_nul() {
+        let (_td, dir) = ctx("selinux_malformed_nul");
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+        let res = set_file_selinux_data(&f, b"u:r:t\0s0");
+        assert!(matches!(res, Err(FileStatError::Io { .. })), "got {res:?}");
+    }
+
+    #[test]
+    fn selinux_malformed_empty() {
+        let (_td, dir) = ctx("selinux_malformed_empty");
+        if let Err(e) = probe_selinux(&dir) {
+            eprintln!("skipped (unsupported): selinux: {e}");
+            return;
+        }
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+        let res = set_file_selinux_data(&f, b"");
+        assert!(res.is_err(), "got {res:?}");
+    }
+
+    #[test]
+    fn selinux_malformed_context_loop() {
+        let (_td, dir) = ctx("selinux_malformed_context_loop");
+        if let Err(e) = probe_selinux(&dir) {
+            eprintln!("skipped (unsupported): selinux: {e}");
+            return;
+        }
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+        for bad in [
+            "not-a-valid-context",
+            "u:r",
+            "u:r:t:x",
+            ":::::",
+            "u:role:type:s0:c0.c1023:extra",
+        ] {
+            let res = set_file_selinux_data(&f, bad.as_bytes());
+            assert!(res.is_err(), "expected error for {bad:?}, got {res:?}");
+        }
+    }
+
+    // ---- malformed: POSIX ACL ---------------------------------------------------
+
+    #[test]
+    fn acl_malformed_bad_uid() {
+        let (_td, dir) = ctx("acl_malformed_bad_uid");
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+        let res = set_file_acl(&f, r#"{"user:abc":7}"#);
+        assert!(matches!(res, Err(FileStatError::PosixQualifierParser { .. })), "got {res:?}");
+    }
+
+    #[test]
+    fn acl_malformed_unknown_qualifier() {
+        let (_td, dir) = ctx("acl_malformed_unknown_qualifier");
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+        let res = set_file_acl(&f, r#"{"bogus":7}"#);
+        assert!(matches!(res, Err(FileStatError::PosixQualifierParser { .. })), "got {res:?}");
+    }
+
+    #[test]
+    fn acl_malformed_not_a_map() {
+        let (_td, dir) = ctx("acl_malformed_not_a_map");
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+        let res = set_file_acl(&f, "[1,2]");
+        assert!(matches!(res, Err(FileStatError::Json { .. })), "got {res:?}");
+    }
+
+    #[test]
+    fn acl_malformed_missing_mandatory() {
+        let (_td, dir) = ctx("acl_malformed_missing_mandatory");
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+        // Fails in-memory in write_acl's validate() (before any fs write).
+        let res = set_file_acl(&f, r#"{"user:1000":7}"#);
+        assert!(matches!(res, Err(FileStatError::PosixAcl { .. })), "got {res:?}");
+    }
+
+    #[test]
+    fn acl_malformed_repetition() {
+        let (_td, dir) = ctx("acl_malformed_repetition");
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+        // Several entries, one bad: the bad qualifier surfaces regardless of
+        // HashMap iteration order.
+        let res = set_file_acl(&f, r#"{"user:abc":7,"group-obj":4,"other":0}"#);
+        assert!(matches!(res, Err(FileStatError::PosixQualifierParser { .. })), "got {res:?}");
+    }
+
+    #[test]
+    fn acl_malformed_perm_out_of_range() {
+        let (_td, dir) = ctx("acl_malformed_perm_out_of_range");
+        let f = dir.join("a.bin");
+        std::fs::write(&f, b"x").expect("write");
+        // Guarded before PosixACL::set (which would panic via check_return).
+        let res = set_file_acl(&f, r#"{"user-obj":8}"#);
+        assert!(matches!(res, Err(FileStatError::General { .. })), "got {res:?}");
+    }
+}
