@@ -415,7 +415,6 @@ impl Database {
         dedup::unmark_inflight(&*self.conn(), ids)
     }
 
-    // TODO: Mark file and descendants in Phase
     pub fn set_canonical(&self, file_id: FileId, canonical_id: FileId) -> Result<()> {
         dedup::set_canonical(&*self.conn(), file_id, canonical_id)
     }
