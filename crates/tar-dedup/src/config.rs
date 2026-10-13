@@ -61,7 +61,8 @@ pub trait WorkLayout {
 }
 
 /// Where extract places `{stem}.estage` (builder-only).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+#[value(rename_all = "kebab-case")]
 pub enum ExtractStageLocation {
     #[default]
     BesideArchive,

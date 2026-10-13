@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common;
 use crate::common::perms::MapResolutionTarget;
+use crate::config::ExtractStageLocation;
 
 #[derive(Debug, Parser)]
 #[command(name = "tar-dedup", about = "Deduplicating archival pipeline")]
@@ -524,6 +525,16 @@ pub struct ExtractArgs {
     /// `{stem}.estage` next to the archive). Relative paths use `-C` / cwd.
     #[arg(long = "work-dir", value_name = "DIR", help_heading = "Archive Paths")]
     pub work_dir: Option<PathBuf>,
+
+    /// Where `{stem}.estage` is placed when `--work-dir` is not given:
+    /// `beside-archive` (default) or `beside-output` (next to the extraction root).
+    #[arg(
+        long = "stage-location",
+        value_enum,
+        default_value_t = ExtractStageLocation::BesideArchive,
+        help_heading = "Archive Paths"
+    )]
+    pub stage_location: ExtractStageLocation,
 
     /// Restore using absolute catalog paths (`-P`). Extraction join abs paths under
     /// the extraction root (leading `,/` stripped). To extract to file system root,
@@ -1073,6 +1084,15 @@ pub struct ExtractArgs {
     /// After success, keep the `{stem}.estage` work directory.
     #[arg(long = "keep-stage", help_heading = "Process Options")]
     pub keep_stage: bool,
+
+    /// Run through STAGE then exit cleanly (state saved).
+    #[arg(
+        long = "exit-after-stage",
+        value_name = "STAGE",
+        value_enum,
+        help_heading = "Process Options"
+    )]
+    pub exit_after_stage: Option<ExitAfterStageArg>,
 }
 
 /// Continue incomplete work. Policy comes from the work DB; only jobs, `--io-jobs`
