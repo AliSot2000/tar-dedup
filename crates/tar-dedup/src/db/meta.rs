@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(get_scan_tar_saw_manifest_db(&conn).unwrap(), Some(true));
         assert_eq!(get_scan_tar_last_member_index(&conn).unwrap(), 7);
         
-        // TODO Check if it works fine if we drop the delete function
+        // TODO Delete was removed, does this still work?
 
         upsert_meta(&conn, "mystery", "x").unwrap();
         upsert_meta(&conn, MetaKey::ArchivePhase.as_str(), "not-a-phase").unwrap();
