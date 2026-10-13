@@ -593,9 +593,6 @@ pub fn dump_meta(conn: &Connection) -> Result<MetaDump> {
     Ok(dump)
 }
 
-// TODO
-//  Add the archive version + archiver version
-
 #[cfg(test)]
 mod tests {
     use super::*;
