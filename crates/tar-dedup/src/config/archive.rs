@@ -162,7 +162,7 @@ impl Default for SparseOptions {
     }
 }
 
-// TODO merge into single file
+// INFO: Minor code duplication!
 impl Validate for SparseOptions {
     fn validate(&self) -> Result<()> {
         if self.sparsify && self.page_size == 0 {
