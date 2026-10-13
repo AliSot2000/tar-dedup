@@ -138,9 +138,16 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         debug_assert!(files_file.is_absolute(), "Input Dir must be absolute");
         debug_assert!(files_file.clean() == files_file.to_path_buf(), "Path should be minimal");
 
-        // TODO capture error
-        let file = fs::read(&files_file)
-            .map_err(|e| Error::io(files_file.to_path_buf(), e))?;
+        let file = match fs::read(&files_file) {
+            Ok(f) => f,
+            Err(e) => {
+                recorder.record_session(
+                    ERROR_PHASE,
+                    FileStatError::copy_io(&files_file, &e),
+                    ErrorFlags::default());
+                return Err(Error::io(&files_file, e));
+            }
+        };
 
         for element in files_from_records(&file, rt.config.inputs.files_from_null) {
             let (line, path) = element;
@@ -275,8 +282,12 @@ fn handle_dir(
                     },
                     ErrorFlags::default(),
                 );
-                tracing::error!("Failed to access element with error: {e}"); // TODO fail fast
-                continue;
+                if rt.config.process.fail_fast {
+                    return Err(Error::Config("Failed to access element with error: {e}".into()));
+                } else {
+                    tracing::error!("Failed to access element with error: {e}");
+                    continue;
+                }
             }
             Ok(entry) => entry,
         };
@@ -506,7 +517,19 @@ fn handle_entry(
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) => {
-            // TODO record error.
+            // File row cannot be created without metadata; record with the path
+            // alone so the failure is not lost when the phase aborts.
+            recorder.record_session(
+                ERROR_PHASE,
+                FileStatError::Io {
+                    path: PathBuf::from(&san.text),
+                    source: io::Error::new(e.kind(), e.to_string()),
+                },
+                ErrorFlags::default(),
+            );
+            // The recorder is shared per-pass; flush everything before returning
+            // the error so this record is not lost to the abort.
+            recorder.flush()?;
             return Err(Error::io(path, e));
         }
     };
@@ -571,7 +594,20 @@ fn handle_entry(
         *processed += 1;
         sub_bar.inc(1);
         tracing::debug!("inventoried {}", path.display());
-        // TODO deal with the error vec!
+    }
+    // Persist the accumulated per-file errors (xattr/ACL/SELinux/ftype/times/read-link).
+    if !enc_err.is_empty() {
+        // Row was just inserted above, so the id must exist.
+        let file_id = rt.db.file_id_by_abs_path(path)?.expect(
+            "INVARIANT ERROR: file was inserted, id lookup must succeed");
+        for error in enc_err {
+            recorder.record_file(
+                file_id,
+                ERROR_PHASE,
+                error,
+                ErrorFlags::default(),
+            );
+        }
     }
     Ok(())
 }
