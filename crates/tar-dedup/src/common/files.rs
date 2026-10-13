@@ -193,7 +193,7 @@ fn file_ctime(meta: &fs::Metadata) -> io::Result<DateTime<Utc>> {
     Ok(DateTime::<Utc>::from(meta.created()?))
 }
 
-/* TODO Handle Windows Version.
+/* FEATURE: Handle Windows Version.
 #[cfg(windows)]
 pub fn device_num<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     use winapi_util::{file, Handle};
