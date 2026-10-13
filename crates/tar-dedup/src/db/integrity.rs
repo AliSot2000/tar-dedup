@@ -4,7 +4,7 @@ use rusqlite::{Connection, named_params};
 
 use crate::config::{ExtractConfig, ExtractPipelinePhase, PipelinePhase};
 use crate::db::common::{
-    SqlFileRow, count_files_in_phase, generate_archive_and_extract_filter, generate_archive_filter,
+    SqlFileRow, count_files_entries_in_phase, generate_archive_and_extract_filter, generate_archive_filter,
 };
 use crate::db::dedup;
 use crate::db::flags::{FileFlag, OutTreeFlag};
@@ -579,7 +579,7 @@ fn check_archive_battery(conn: &Connection, gate: &ArchiveGate, phase: PipelineP
     if phase.index() >= PipelinePhase::Archive.index() {
         done("A7 canonical ⟹ AppendedPath XOR ErrorWhileArchive",
              count_append_flag_violations(conn)?);
-        done("A8 count_in_phase(Staged)", count_files_in_phase(conn, FilePhase::Staged)?);
+        done("A8 count_in_phase(Staged)", count_files_entries_in_phase(conn, FilePhase::Staged)?);
     }
     Ok(())
 }
@@ -675,7 +675,7 @@ pub fn check_after_extract_phase(conn: &Connection, config: &ExtractConfig,
          count_e1_payload_missing(conn)?);
     note("E2 FileExtracted OR ErrorWhileExtracting ⟹ AppendedPath",
          count_e2_stray_extracted(conn)?);
-    done("E3 count_in_phase(Archived)", count_files_in_phase(conn, FilePhase::Archived)?);
+    done("E3 count_in_phase(Archived)", count_files_entries_in_phase(conn, FilePhase::Archived)?);
     if phase.index() >= ExtractPipelinePhase::Rehash.index() && config.rehash {
         done("E4 rehash verdict exactly-one / none on non-elected",
              count_rehash_verdict_violations(conn)?);
