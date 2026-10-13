@@ -181,11 +181,11 @@ impl Database {
     }
 
     pub fn count_files_in_phase(&self, phase: FilePhase) -> Result<u64> {
-        common::count_files_in_phase(&*self.conn(), phase)
+        common::count_files_entries_in_phase(&*self.conn(), phase)
     }
 
     pub fn files_in_phase<R: SqlFileRow>(&self, phase: FilePhase) -> Result<Vec<R>> {
-        common::list_files_in_phase(&*self.conn(), phase)
+        common::list_files_entries_in_phase(&*self.conn(), phase)
     }
 
     pub fn global_mark_phase(&self, phase: FilePhase) -> Result<u64> {

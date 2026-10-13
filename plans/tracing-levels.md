@@ -64,7 +64,7 @@ recounts — accepted).
 
 ### `filter.rs` (common + archive + extract)
 - ADD: standard start in `archive/filter.rs` and `unarchive/filter.rs`
-  (`corpus=count_entries`, eligible/todo from `count_files_in_phase`).
+  (`corpus=count_entries`, eligible/todo from `count_files_entries_in_phase`).
 - Keep per-row `debug` (140/143/146), `:62` no-filter info,
   `unarchive/filter.rs:78` promote info.
 
