@@ -615,8 +615,7 @@ pub struct ExtractArgs {
         help_heading = "Overwrite Control"
     )]
     pub no_overwrite_dir: bool,
-
-    // TODO implement!
+    
     /// Also apply archived directory metadata to directories excluded by filters.
     /// Normally only placed members are updated (GNU tar equivalent); this flag
     /// matters because excluded paths remain in the catalog with full metadata.
