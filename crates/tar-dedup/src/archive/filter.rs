@@ -50,6 +50,7 @@ pub fn ingest_filters(db: &Database, config: &ArchiveConfig) -> Result<()> {
         &config.filter.exclude_from,
         config.filter.ignore_case,
         config.filter.no_unicode,
+        config.process.fail_fast,
         &mut recorder,
         phase,
         FilterSink {

@@ -98,6 +98,7 @@ pub fn ingest_filters(config: &ExtractConfig, recorder: &mut Recorder) -> Result
         &config.filter.exclude_from,
         config.filter.ignore_case,
         config.filter.no_unicode,
+        config.process.fail_fast,
         recorder,
         ERROR_PHASE,
         FilterSink {
