@@ -14,15 +14,13 @@ use crate::error::{Error, Result};
 
 use super::Validate;
 use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
-use super::compression::resolve_compression;
+use super::compression::{CompressionFormat, resolve_compression};
 use super::paths::PathLayout;
 use super::process::{CleanupSettings, ProcessOptions};
 use super::{
     ExtractStageLocation, default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path,
     validate_file,
 };
-
-// TODO check all paths for clean, and utf-8 compliance!
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacementOptions {
@@ -75,25 +73,25 @@ impl Validate for PlacementOptions {
             ));
         }
         if self.absolute_links && !self.link_tree {
-            return Err(Error::Config(
-                "--absolute-links requires --link-tree".into(),
-            ));
+            tracing::warn!(
+                "--absolute-links requires --link-tree to have an effect"
+            );
         }
         if self.absolute_links && self.use_hard_links {
             tracing::warn!("--absolute-links has no effect with --hard-links");
         }
         if let Some(ls) = self.link_source.as_ref() {
             if !self.link_tree {
-                return Err(Error::Config(
-                    "--link-source requires --link-tree".into(),
-                ));
+                tracing::warn!(
+                    "--link-source requires --link-tree to have an effect"
+                );
             }
             validate_name(ls, "--link-source")?;
         }
         if self.link_source.is_some() && !self.link_tree {
-            return Err(Error::Config(
-                "--link-source requires --link-tree".into(),
-            ));
+            tracing::warn!(
+                "--link-source requires --link-tree"
+            );
         }
         if self.clean_target && self.one_top_level.is_none() {
             tracing::warn!("--clean-target has no effect without --one-top-level");
@@ -212,7 +210,7 @@ impl Validate for ScanOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractConfig {
     pub paths: PathLayout,
-    pub decompression: super::compression::CompressionFormat,
+    pub decompression: CompressionFormat,
     pub placement: PlacementOptions,
     pub attributes: ExtractAttributeOptions,
     pub scan: ScanOptions,
@@ -234,7 +232,7 @@ impl Default for ExtractConfig {
     fn default() -> Self {
         Self {
             paths: PathLayout::default(),
-            decompression: super::compression::CompressionFormat::None,
+            decompression: CompressionFormat::None,
             placement: PlacementOptions::default(),
             attributes: ExtractAttributeOptions::default(),
             scan: ScanOptions::default(),
@@ -414,7 +412,17 @@ impl ExtractConfig {
         
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
         let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
-        
+
+        let c_one_top_level = match args.one_top_level.as_ref() {
+            None => None,
+            Some(otl) => Some(otl.clean())
+        };
+
+        let c_link_source = match args.link_source.as_ref() {
+            None => None,
+            Some(ls) => Some(ls.clean())
+        };
+
         Ok(Self {
             paths: PathLayout {
                 archive_path: c_archive_path,
@@ -425,7 +433,7 @@ impl ExtractConfig {
             decompression,
             placement: PlacementOptions {
                 absolute_names: args.absolute_names,
-                one_top_level: args.one_top_level.clone(),
+                one_top_level: c_one_top_level,
                 keep_dir_symlink: args.keep_dir_symlink,
                 unlink_first: args.unlink_first,
                 no_create_dir: args.no_create_dir,
@@ -436,7 +444,7 @@ impl ExtractConfig {
                 use_hard_links: args.use_hard_links,
                 absolute_links: args.absolute_links,
                 clean_target: args.clean_target,
-                link_source: args.link_source.clone(),
+                link_source: c_link_source,
                 no_reflink: args.no_reflink,
                 hard_link_grouping: args.hard_link_grouping,
                 recreate_none_file_entries: args.create_other_entries,
@@ -475,7 +483,7 @@ impl ExtractConfig {
                 relax_utf8: args.relax_utf8,
                 progress_mode: args.progress_mode,
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
-                exit_after_stage: None,
+                exit_after_stage: None, // TODO CLI:
             },
             owner_policy,
             owner_group: OwnerGroupOptions {
@@ -510,7 +518,7 @@ impl ExtractConfig {
                 output_dir: extraction_root,
                 work_dir: PathBuf::new(),
             },
-            decompression: super::compression::CompressionFormat::None,
+            decompression: CompressionFormat::None,
             placement: PlacementOptions {
                 absolute_names,
                 one_top_level: None,
@@ -551,7 +559,7 @@ impl ExtractConfig {
                 output_dir: directory,
                 work_dir,
             },
-            decompression: super::compression::CompressionFormat::None,
+            decompression: CompressionFormat::None,
             placement: PlacementOptions {
                 absolute_names: false,
                 one_top_level: None,
