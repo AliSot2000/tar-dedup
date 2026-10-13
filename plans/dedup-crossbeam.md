@@ -350,7 +350,7 @@ groups, advance on promote to deduped").
 | File | Change |
 |---|---|
 | `db/dedup.rs` | rewrite: fixed DDL (+TEMP `dedup_inflight`), `ready_to_searching` (atomic elect+flip+lone→done), `list_pending_comparisons`, `mark_inflight`/`unmark_inflight`, `count_pending_dedup_groups`, `count_dedup_phase_total`/`_done`, fixed transitions; drop dead helpers |
-| `db.rs` | facades for the above + keep `set_canonical`/`set_file_flag`/`count_files_in_phase` |
+| `db.rs` | facades for the above + keep `set_canonical`/`set_file_flag`/`count_files_entries_in_phase` |
 | `archive/dedup.rs` | crossbeam pipeline + per-group FSM loop; `compare_one`/`files_equal` buffer refactor; remove `prepare_round`/`load_pending_groups`/`establish_group_state`/`end_round`/rayon; keep `ComparePair`/`CompareOutcome`/`compare_error_file_id`/`warn_compare_pair_times`/`files_equal`/`sanity_check_flags` |
 | `Cargo.toml` | no change needed (crossbeam-channel already a dep) |
 | `plans/dedup-crossbeam.md` | this plan |
