@@ -16,10 +16,9 @@ use super::Validate;
 use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
 use super::compression::{CompressionFormat, resolve_compression};
 use super::paths::PathLayout;
-use super::process::{CleanupSettings, ProcessOptions};
+use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
 use super::{
-    ExtractStageLocation, default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path,
-    validate_file,
+    default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_file,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,8 +346,8 @@ impl ExtractConfig {
                 c_archive_path.display()
             )));
         }
-
-        let extract_stage_location = ExtractStageLocation::BesideArchive;
+        
+        let extract_stage_location = args.stage_location;
         let c_output_dir = match &args.extract_to {
             Some(path) => resolve_path_to_abs_path(path, &c_directory),
             None => c_directory.clone(),
@@ -483,7 +482,7 @@ impl ExtractConfig {
                 relax_utf8: args.relax_utf8,
                 progress_mode: args.progress_mode,
                 cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
-                exit_after_stage: None, // TODO CLI:
+                exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             },
             owner_policy,
             owner_group: OwnerGroupOptions {
