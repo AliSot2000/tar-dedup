@@ -4,7 +4,7 @@ use crate::common::batched_stepped_loop;
 use crate::db::flags::ErrorFlags;
 use crate::db::types::{FileId, FilePhase, FilterExpression, StrippedRecord};
 use crate::db::{Database, ErrorPhase, Recorder};
-use crate::error::{FileStatError, Result};
+use crate::error::{Error, FileStatError, Result};
 use crate::progress::{BarKind, ProgressBarSet};
 use indicatif::ProgressBar;
 use regex::{Regex, RegexBuilder};
@@ -266,6 +266,7 @@ pub fn ingest_filters(
     exclude_from: &[PathBuf],
     ignore_case: bool,
     no_unicode: bool,
+    fail_fast: bool,
     recorder: &mut Recorder,
     e_phase: ErrorPhase,
     sink: FilterSink<'_>)
@@ -276,6 +277,7 @@ pub fn ingest_filters(
         "include",
         ignore_case,
         no_unicode,
+        fail_fast,
         &sink.add_include,
         recorder,
         e_phase,
@@ -292,6 +294,7 @@ pub fn ingest_filters(
         "exclude",
         ignore_case,
         no_unicode,
+        fail_fast,
         &sink.add_exclude,
         recorder,
         e_phase,
@@ -307,6 +310,7 @@ fn handle_pattern_source(
     operation: &str,
     ignore_case: bool,
     no_unicode: bool,
+    fail_fast: bool,
     insert_fn: &dyn Fn(&str, Option<u64>, &str) -> Result<u64>,
     recorder: &mut Recorder,
     e_phase: ErrorPhase)
@@ -340,9 +344,13 @@ fn handle_pattern_source(
                     },
                     ErrorFlags::default(),
                 );
-                tracing::error!("Could not read {operation} file: {pp} with error {e}");
-                continue;
-                // TODO: Raise error without fail-fast
+                if fail_fast {
+                    return Err(Error::Config(format!(
+                        "Could not read {operation} file: {pp} with error {e}")))
+                } else {
+                    tracing::error!("Could not read {operation} file: {pp} with error {e}");
+                    continue;
+                }
             }
         };
         for (idx, expression) in file_content.split("\n").enumerate() {
