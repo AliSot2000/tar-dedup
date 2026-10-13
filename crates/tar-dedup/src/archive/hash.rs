@@ -603,10 +603,12 @@ struct TestWorld {
         assert_eq!(sparse, ((IO_BUF_SIZE + 2 * 4096) / 4096) as u64);
     }
 
-    #[ignore]
+    #[test]
     fn batch_size_parity_stub() {
-        // TODO(batch_size): once a `--batch_size` knob exists, slice the same
-        // DB with different batch sizes and assert identical result order.
+        // Invariant for the `feed_chunk` knob: slicing the hash queue with
+        // different batch limits must yield the identical set and order as a
+        // single unfettered pull. (DB-layer only — independent of the worker
+        // threading model; `handle_send_receive_loop`'s `pull` depends on it.)
         let world = TestWorld::new();
         for i in 0..5 {
             let payload = pattern(1024, i as u8);
