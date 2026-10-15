@@ -170,125 +170,16 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::files::original_extension;
-    use crate::config::{
-        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
-        ProcessOptions, SparseOptions,
-    };
-    use crate::db::Database;
     use crate::db::flags::FileFlag;
-    use crate::db::types::{FileId, FileType, NewFileRecord};
-    use crate::progress::{ARCHIVE_MULTIPLIER, ProgressBarSet};
-    use crate::shutdown::Shutdown;
+    use crate::db::types::{FileId, FilePhase};
+    use crate::test_support::TestWorld;
     use chrono::{DateTime, Utc};
     use nix::unistd::geteuid;
     use rusqlite::named_params;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
-    fn test_archive_config() -> ArchiveConfig {
-        ArchiveConfig {
-            indexing: IndexingOptions {
-                no_hardlink_detection: true,
-                ..IndexingOptions::default()
-            },
-            filter: FilterOptions { eager_filter: false, ..FilterOptions::default() },
-            capture: CaptureOptions {
-                do_xattrs: false,
-                do_posix_acl: false,
-                do_selinux: false,
-                ..CaptureOptions::default()
-            },
-            sparse: SparseOptions { sparsify: true, min_pages: 4, ..SparseOptions::default() },
-            process: ProcessOptions { jobs: 4, io_jobs: 1, ..ProcessOptions::default() },
-            pipeline: ArchivePipelineOptions {
-                max_shard_size: 0,
-                write_archive_footer: false,
-                ..ArchivePipelineOptions::default()
-            },
-            ..ArchiveConfig::default()
-        }
-    }
-
-
-struct TestWorld {
-        dir: tempfile::TempDir,
-        db: Database,
-        shutdown: Shutdown,
-        progress: ProgressBarSet,
-        config: ArchiveConfig,
-    }
-
     impl TestWorld {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let db = Database::open(&dir.path().join("test.sqlite")).expect("open db");
-            // The internal include rule the filter phase installs: without it
-            // `apply_no_filter` (-1) violates the FK.
-            db.with_transaction(|conn| {
-                conn.execute(
-                    "INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) \
-                     VALUES (-1, 'internal', NULL, '.*')", [],
-                ).expect("seed internal include rule");
-                Ok(())
-            }).expect("seed internal include rule tx");
-            let mut config = test_archive_config();
-            config.paths.work_dir = dir.path().join("astage");
-            // `run()` creates the stage dir itself (== work dir), so make it up
-            // front to also mirror a pre-existing resume layout.
-            fs::create_dir_all(&config.paths.work_dir).expect("create stage dir");
-            Self {
-                dir, db,
-                shutdown: Shutdown::detached(),
-                progress: ProgressBarSet::new(ARCHIVE_MULTIPLIER),
-                config,
-            }
-        }
-
-        fn rt(&self) -> ArchiveRTArgs<'_> {
-            ArchiveRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown: &self.shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn add_file(&self, name: &str, payload: &[u8]) -> FileId {
-            let path = self.dir.path().join(name);
-            std::fs::write(&path, payload).expect("write test payload");
-            self.db.insert_file(&NewFileRecord {
-                abs_path: PathBuf::from(&path),
-                ext: original_extension(&path),
-                size: payload.len() as u64,
-                mtime: None, atime: None, ctime: None,
-                uid: None, gid: None, mode: None,
-                ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
-                device_id: None, inode_id: None, major: None, minor: None,
-            }).expect("insert test file");
-            self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
-        }
-
-        fn add_file_recorded(
-            &self, name: &str, payload: &[u8],
-            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
-            -> FileId {
-            let path = self.dir.path().join(name);
-            std::fs::write(&path, payload).expect("write test payload");
-            self.db.insert_file(&NewFileRecord {
-                abs_path: PathBuf::from(&path),
-                ext: original_extension(&path),
-                size: payload.len() as u64,
-                mtime, atime, ctime,
-                uid: None, gid: None, mode: None,
-                ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
-                device_id: None, inode_id: None, major: None, minor: None,
-            }).expect("insert recorded file");
-            self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
-        }
-
         /// The canonical row for `id` as `sparsified`: the exact precondition the
         /// stage list evaluates. Sets the filter columns so the row is eligible.
         fn seed_stage_row(&self, id: FileId) {
@@ -309,50 +200,8 @@ struct TestWorld {
 
         /// Mark `id` as already staged (prior session) without touching its row
         /// further — the stage phase must leave it alone.
-        fn seed_staged_row(&self, id: FileId) {
-            self.db.with_transaction(|conn| {
-                let n = conn.execute(
-                    "UPDATE files SET phase = 'staged' WHERE id = :id",
-                    named_params! { ":id": id.0 },
-                ).expect("seed staged row");
-                assert_eq!(n, 1);
-                Ok(())
-            }).expect("seed staged row tx");
-        }
-
-        fn phase(&self, id: FileId) -> FilePhase {
-            self.db.get_file_by_id::<StrippedRecord>(id)
-                .expect("get row")
-                .expect("row present")
-                .phase
-        }
-
-        fn flag(&self, id: FileId, flag: FileFlag) -> bool {
-            self.db.get_file_flag(id, flag).expect("get flag")
-        }
-
-        fn record(&self, id: FileId) -> StrippedRecord {
-            self.db.get_file_by_id::<StrippedRecord>(id)
-                .expect("get row")
-                .expect("row present")
-        }
-
         fn errors_for(&self, id: FileId) -> Vec<crate::db::ErrorRecord> {
             self.db.get_records_by_file_id(id).expect("get records")
-        }
-
-        /// Absolute `{stage_dir}/{tar member}` target path for `id`.
-        fn target_path(&self, id: FileId) -> PathBuf {
-            let name = self.record(id).tar_member_name().expect("canonical");
-            self.config.paths.stage_dir().join(name)
-        }
-
-        /// Create the symlink stage would create, and return the path.
-        fn place_symlink(&self, id: FileId) -> PathBuf {
-            let rec = self.record(id);
-            let target = self.target_path(id);
-            symlink(rec.fs_path(), &target).expect("place symlink");
-            target
         }
     }
 

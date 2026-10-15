@@ -317,15 +317,10 @@ fn sanity_no_deduped(db: &Database) -> Result<()> {
 mod tests {
     use super::*;
     use crate::common::defaults::OUT_CAPACITY;
-    use crate::common::files::original_extension;
-    use crate::config::{
-        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
-        ProcessOptions, SparseOptions,
-    };
     use crate::db::flags::FileFlag;
-    use crate::db::types::{FileId, FileType, NewFileRecord};
+    use crate::db::types::{FileId, FilePhase};
     use crate::error::FileStatError;
-    use crate::progress::{ARCHIVE_MULTIPLIER, ProgressBarSet};
+    use crate::test_support::TestWorld;
     use chrono::{DateTime, Utc};
     use nix::unistd::geteuid;
     use rusqlite::named_params;
@@ -338,120 +333,7 @@ mod tests {
         vec![0u8; n]
     }
 
-    fn test_archive_config() -> ArchiveConfig {
-        ArchiveConfig {
-            indexing: IndexingOptions {
-                no_hardlink_detection: true,
-                ..IndexingOptions::default()
-            },
-            filter: FilterOptions { eager_filter: false, ..FilterOptions::default() },
-            capture: CaptureOptions {
-                do_xattrs: false,
-                do_posix_acl: false,
-                do_selinux: false,
-                ..CaptureOptions::default()
-            },
-            sparse: SparseOptions { sparsify: true, min_pages: 4, ..SparseOptions::default() },
-            process: ProcessOptions { jobs: 4, io_jobs: 1, ..ProcessOptions::default() },
-            pipeline: ArchivePipelineOptions {
-                max_shard_size: 0,
-                write_archive_footer: false,
-                ..ArchivePipelineOptions::default()
-            },
-            ..ArchiveConfig::default()
-        }
-    }
-
-
-struct TestWorld {
-        dir: tempfile::TempDir,
-        db: Database,
-        shutdown: Shutdown,
-        progress: ProgressBarSet,
-        config: ArchiveConfig,
-    }
-
     impl TestWorld {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let db = Database::open(&dir.path().join("test.sqlite")).expect("open db");
-            db.with_transaction(|conn| {
-                conn.execute(
-                    "INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) \
-                     VALUES (-1, 'internal', NULL, '.*')", [],
-                ).expect("seed internal include rule");
-                Ok(())
-            }).expect("seed internal include rule tx");
-            let mut config = test_archive_config();
-            config.paths.work_dir = dir.path().join("astage");
-            // `run()` creates the stage dir itself, but worker/loop-level tests
-            // drive the loop directly and still target it — make it up front.
-            fs::create_dir_all(&config.paths.work_dir).expect("create stage dir");
-            Self {
-                dir, db,
-                shutdown: Shutdown::detached(),
-                progress: ProgressBarSet::new(ARCHIVE_MULTIPLIER),
-                config,
-            }
-        }
-
-        fn rt(&self) -> ArchiveRTArgs<'_> {
-            ArchiveRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown: &self.shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn rt_with<'a>(&'a self, shutdown: &'a Shutdown) -> ArchiveRTArgs<'a> {
-            ArchiveRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn path(&self, name: &str) -> PathBuf {
-            self.dir.path().join(name)
-        }
-
-        fn add_file(&self, name: &str, payload: &[u8]) -> FileId {
-            let path = self.dir.path().join(name);
-            std::fs::write(&path, payload).expect("write test payload");
-            self.db.insert_file(&NewFileRecord {
-                abs_path: PathBuf::from(&path),
-                ext: original_extension(&path),
-                size: payload.len() as u64,
-                mtime: None, atime: None, ctime: None,
-                uid: None, gid: None, mode: None,
-                ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
-                device_id: None, inode_id: None, major: None, minor: None,
-            }).expect("insert test file");
-            self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
-        }
-
-        fn add_file_recorded(
-            &self, name: &str, payload: &[u8],
-            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
-            -> FileId {
-            let path = self.dir.path().join(name);
-            std::fs::write(&path, payload).expect("write test payload");
-            self.db.insert_file(&NewFileRecord {
-                abs_path: PathBuf::from(&path),
-                ext: original_extension(&path),
-                size: payload.len() as u64,
-                mtime, atime, ctime,
-                uid: None, gid: None, mode: None,
-                ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
-                device_id: None, inode_id: None, major: None, minor: None,
-            }).expect("insert recorded file");
-            self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
-        }
-
         /// Apply the include-all filter, then promote the row to a deduped
         /// self-canonical candidate with the given `sparse_count`. Sets the
         /// filter columns directly so repeated calls don't disturb siblings.
@@ -483,25 +365,8 @@ struct TestWorld {
             self.db.populate_sparsify_queue(self.config.sparse.min_pages).expect("populate");
         }
 
-        fn phase(&self, id: FileId) -> FilePhase {
-            self.db.get_file_by_id::<StrippedRecord>(id)
-                .expect("get row")
-                .expect("row present")
-                .phase
-        }
-
-        fn flag(&self, id: FileId, flag: FileFlag) -> bool {
-            self.db.get_file_flag(id, flag).expect("get flag")
-        }
-
         /// The canonical row's candidate so its `sp.{content_id}` stage file
         /// target can be checked on disk.
-        fn record(&self, id: FileId) -> StrippedRecord {
-            self.db.get_file_by_id::<StrippedRecord>(id)
-                .expect("get row")
-                .expect("row present")
-        }
-
         fn stage_path(&self, id: FileId) -> Option<PathBuf> {
             let name = self.record(id).sparse_member_name();
             name.map(|n| self.config.paths.work_dir.clone().join(n))
