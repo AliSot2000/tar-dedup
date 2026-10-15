@@ -353,7 +353,7 @@ groups, advance on promote to deduped").
 | `db.rs` | facades for the above + keep `set_canonical`/`set_file_flag`/`count_files_entries_in_phase` |
 | `archive/dedup.rs` | crossbeam pipeline + per-group FSM loop; `compare_one`/`files_equal` buffer refactor; remove `prepare_round`/`load_pending_groups`/`establish_group_state`/`end_round`/rayon; keep `ComparePair`/`CompareOutcome`/`compare_error_file_id`/`warn_compare_pair_times`/`files_equal`/`sanity_check_flags` |
 | `Cargo.toml` | no change needed (crossbeam-channel already a dep) |
-| `plans/dedup-crossbeam.md` | this plan |
+| `plans/036-dedup-crossbeam.md` | this plan |
 
 ## Verification
 

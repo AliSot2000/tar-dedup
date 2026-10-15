@@ -37,7 +37,7 @@ and `reset`. This pass is **scaffolding only**: register the commands, wire the
 1. cli.rs variants + arg structs.
 2. cmd.rs helpers + the five command stubs.
 3. lib.rs module decl; main.rs dispatch.
-4. `plans/catalog-commands-scaffold.md` (this file).
+4. `plans/005-catalog-commands-scaffold.md` (this file).
 5. Verify `cargo check -p tar-dedup`, `cargo check -p tar-dedup-cli`,
    `cargo check --features err-to-panic -p tar-dedup`.
 

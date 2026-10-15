@@ -6,7 +6,7 @@ lib suite is `244 passed / 4 failed`, the 4 failures being the pre-existing
 `db::inventory` + `unarchive::scan` WIP-test failures (untouched by this plan — see
 AGENTS.md's test disclaimer). Supersedes the four per-phase loop copies. Staging
 (user-confirmed): **Stage 1** = build the unified loop + generic tests + adopt into
-hash/dedup/sparsify/rehash; **Stage 2** = rehash tests (`plans/rehash-tests.md`, minus the
+hash/dedup/sparsify/rehash; **Stage 2** = rehash tests (`plans/018-rehash-tests.md`, minus the
 superseded loop-mechanics items); **Stage 3** = rework the extract place ("materialize")
 loops to adopt it (out of scope here, recorded as a follow-up).
 
@@ -170,7 +170,7 @@ channels; `FEED_CHUNK`/`DRAIN_CHUNK` are loop args).
 | `src/archive/dedup.rs` | delete `run_enqueue_dequeue_loop_dedup`; call shared loop with `list_pending_comparisons` pull, `mark_inflight` on_sent, FSM tick, `apply_on_partial=true`; adapt harness/tests. |
 | `src/archive/sparsify.rs` | delete `run_enqueue_dequeue_loop_sparsify`; call shared loop; adapt harness/tests. |
 | `src/unarchive/rehash.rs` | delete `handle_send_receive_loop`; call shared loop; adapt (rehash tests come in Stage 2). |
-| `plans/rehash-tests.md` | status → Stage 2; loop-contract tests rewritten against the shared loop (drop the ones G1–G10 cover). |
+| `plans/018-rehash-tests.md` | status → Stage 2; loop-contract tests rewritten against the shared loop (drop the ones G1–G10 cover). |
 
 ## Generic test suite (`common.rs` bottom; toy `W=u64`, `O=u64`, no DB/progress)
 
@@ -235,7 +235,7 @@ capture into local `Vec`s (pull count, on_sent items, applied slices, tick calls
 
 - **Stage 3**: extract `place` ("materialize") loops — turn the batched materialize phase
   into a channel pipeline and adopt `send_receive_loop`.
-- `plans/rehash-tests.md` (Stage 2): rehash test suite, loop-contract parts rewritten
+- `plans/018-rehash-tests.md` (Stage 2): rehash test suite, loop-contract parts rewritten
   against the shared loop.
 - hash's force `> DRAIN_CHUNK` loss and the no-join race are fixed for all phases by this
   plan (drain-to-empty + join) — no separate follow-up needed.

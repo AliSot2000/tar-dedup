@@ -4,7 +4,7 @@ Status: **implemented + green** (2026-10-03). All 28 tests land below; only outs
 change is the flagged `db/schema.rs` CHECK fix (see As built). Build:
 `cargo test -p tar-dedup --lib` → **272 passed / 4 failed** (the 4 = pre-existing
 `db::inventory` + `unarchive::scan` WIP-test failures, out of scope). The generic
-send/receive drain loop (`plans/unified-send-receive-loop.md`, Stage 1) is built, tested
+send/receive drain loop (`plans/017-unified-send-receive-loop.md`, Stage 1) is built, tested
 (G1–G10), and adopted by hash/dedup/sparsify/rehash. Rehash's `handle_send_receive_loop`
 is now a thin closure wrapper over `common::send_receive_loop`. This suite is therefore
 written **against the real wiring** (rehash's wrapper + its closures), not a future
@@ -38,7 +38,7 @@ There is **no test coverage yet** for the rehash pipeline or its DB layer. These
 ## Decisions locked with the user (2026-10-02, updated 2026-10-03)
 
 **D1 — Force/graceful final drain = copy the dedup/sparsify approach — SUPERSEDED, DONE.**
-`plans/unified-send-receive-loop.md` delivered the shared loop, which **joins every worker
+`plans/017-unified-send-receive-loop.md` delivered the shared loop, which **joins every worker
 then drains the results queue to empty before `drop(recv)`** (phase 2/3). That subsumes the
 old join-before-drop fix for rehash **and** fixes the two "known residuals" the old D1
 recorded: the force `> DRAIN_CHUNK` overflow is now fully drained (nothing dropped) and

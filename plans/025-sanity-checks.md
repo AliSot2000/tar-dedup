@@ -18,7 +18,7 @@ subset) during extraction.
 ## Behavior changes (prerequisites)
 
 ### B1 — scan promotes everything to `archived` → `unarchived`
-> **Superseded by `plans/scan-end-unarchived.md`** (2026-10-06): the blanket promote
+> **Superseded by `plans/024-scan-end-unarchived.md`** (2026-10-06): the blanket promote
 > became a principled end-of-scan gate with cause-bucketed remainders and a
 > force/panic split. Kept here for history.
 
