@@ -341,7 +341,7 @@ fn run_inner(
     // pipeline's phase-end convention. The intentional extract-filter-excluded
     // bucket (D) is promoted out first; the remaining rows (A/B/C) are real
     // violations and are triaged with a precise breakdown (see
-    // `plans/scan-end-unarchived.md`).
+    // `plans/024-scan-end-unarchived.md`).
     let tally = sdb.tally_scan_remainders(rt.config.filter.eager_filter)?;
     if tally.filter_excluded > 0 {
         let promoted = sdb.promote_filter_excluded_remainders()?;

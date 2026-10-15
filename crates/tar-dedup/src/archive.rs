@@ -238,7 +238,7 @@ fn enter_phase(progress: &ProgressBarSet, phase: &PipelinePhase) {
 }
 
 /// Run the cross-phase integrity battery against the archive invariants after
-/// `phase` completed successfully. See `db/integrity.rs` and `plans/sanity-checks.md`.
+/// `phase` completed successfully. See `db/integrity.rs` and `plans/025-sanity-checks.md`.
 fn verify_after_phase(rt: &ArchiveRTArgs, phase: PipelinePhase) -> Result<()> {
     let gate = crate::db::ArchiveGate {
         eager_filter: rt.config.filter.eager_filter,

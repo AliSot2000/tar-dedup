@@ -1248,7 +1248,7 @@ impl Database {
     pub fn count_missing_unix_infos(&self) -> Result<u64> {
         integrity::count_missing_unix_infos(&self.conn())
     }
-    // --- cross-phase invariant battery (`plans/sanity-checks.md`) ---
+    // --- cross-phase invariant battery (`plans/025-sanity-checks.md`) ---
 
     /// Run the archive battery after a completed phase. `progress` fires once
     /// per completed check (integrity counter bar); pass `None` to skip.

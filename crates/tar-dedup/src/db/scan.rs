@@ -68,7 +68,7 @@ pub fn promote_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
 }
 
 /// Triage of every row still outside `unarchived` at the end of the scan loop.
-/// See `plans/scan-end-unarchived.md` for the bucket semantics.
+/// See `plans/024-scan-end-unarchived.md` for the bucket semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ScanRemainderTally {
     /// Bucket A: candidates never confirmed by a final snapshot/footer (`staged`).
