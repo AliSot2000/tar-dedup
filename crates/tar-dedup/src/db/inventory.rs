@@ -165,7 +165,7 @@ pub fn set_hardlink_canonicals(conn: &Connection) -> Result<u64> {
 
 /// Clear the entire files table.
 pub fn purge_entries(conn: &Connection) -> Result<u64> {
-    let rows = conn.execute("DELETE * FROM files", []).to_panic()?;
+    let rows = conn.execute("DELETE FROM files", []).to_panic()?;
     Ok(rows as u64)
 }
 
