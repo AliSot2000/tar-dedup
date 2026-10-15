@@ -7,7 +7,7 @@ use crate::db::{Database, ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::progress::{BarKind, ProgressBarSet};
 use indicatif::ProgressBar;
-use regex::{Regex, RegexBuilder};
+use regex::bytes::{Regex, RegexBuilder};
 use std::fs;
 use std::path::PathBuf;
 
@@ -42,7 +42,11 @@ pub fn joint_filter_phase(
     apply_results: impl Fn(Vec<(FileId, i64, i64)>) -> Result<u64>)
     -> Result<()> {
 
-    let db_files = db.count_entries()?;
+    let already_filtered = db.count_files_in_phase(pv)?;
+    let total = db.count_entries()?;
+    pg.set_phase_total(total);
+    pg.inc_both(already_filtered);
+
     let include_count = count_filters(Some(false))?;
     let exclude_count = count_filters(Some(true))?;
 
@@ -50,7 +54,6 @@ pub fn joint_filter_phase(
     if include_count == 1 && exclude_count == 0 {
         let include_filter = &get_filters(false)?[0];
         if include_filter.is_internal() {
-            pg.set_phase_total(db_files);
             debug_assert_eq!(
                 include_filter.expression, ".*",
                 "Unexpected Filter expression. Filtering perhaps not working correctly?"
@@ -59,15 +62,16 @@ pub fn joint_filter_phase(
             let updated = apply_no_filter()?;
             pg.inc_global(updated);
             tracing::info!("No filters present. All {updated} files selected.");
-            debug_assert_eq!(db_files, updated, "Updated rows and total rows don't match");
-            pg.inc_both(db_files);
+            debug_assert_eq!(total, updated, "Updated rows and total rows don't match");
+            pg.inc_both(total);
             return Ok(());
         }
     };
     // Perform actual process of filtering. In case this is a noticeable bottleneck, it is a
     // separate function so we can swap in a rayon pool or a crossbeam ... whatever is better.
     step_filters(
-        anchored, ignore_case, no_unicode, batch_size, &pv, db, pg, get_rows_to_filter, apply_results
+        anchored, ignore_case, no_unicode, batch_size, &pv, db, pg, count_filters, get_filters,
+        get_rows_to_filter, apply_results
     )?;
 
     if update_hardlink_detection {
@@ -86,32 +90,29 @@ pub fn step_filters(
     pv: &FilePhase,
     db: &Database,
     pg: &ProgressBarSet,
+
     // Closures to stand in for the db
+    count_filters: impl Fn(Option<bool>) -> Result<u64>,
+    get_filters: impl Fn(bool) -> Result<Vec<FilterExpression>>,
     get_rows_to_filter: impl Fn(&FileId, u64) -> Result<Vec<StrippedRecord>>,
     apply_results: impl Fn(Vec<(FileId, i64, i64)>) -> Result<u64>)
     -> Result<()> {
-    // Filtering Progress Setup
-    let already_filtered = db.count_files_in_phase(*pv)?;
-    let total = db.count_entries()?;
-    pg.set_phase_total(total);
-    pg.inc_both(already_filtered);
 
     // Filter parsing
     let add_flt = pg.push_sub_bar(
         "Loading Filters from the DB...", BarKind::Count
     );
-    add_flt.set_length(db.count_filters_archive(Some(true))?
-        + db.count_filters_archive(Some(false))?);
+    add_flt.set_length(count_filters(Some(true))? + count_filters(Some(false))?);
 
     let include_filters = parse_filter(
-        &db.get_filters_archive(false)?,
+        &get_filters(false)?,
         "include",
         anchored,
         ignore_case,
         no_unicode,
         Some(&add_flt));
     let exclude_filters = parse_filter(
-        &db.get_filters_archive(true)?,
+        &get_filters(true)?,
         "exclude",
         anchored,
         ignore_case,
@@ -166,6 +167,7 @@ pub fn step_filters(
     )?;
 
     let rem = db.count_files_in_phase(*pv)?;
+    let total = db.count_entries()?;
     tracing::info!("Filtered {total} entries, deemed: {included} included, {exclude_by_include} \
         excluded by include filter, {exclude_by_exclude} excluded by exclude filter.");
     assert_eq!(0, rem, "INVARIANT ERROR: {rem} files in previous phase. Zero expected.");
