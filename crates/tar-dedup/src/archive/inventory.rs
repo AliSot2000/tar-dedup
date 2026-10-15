@@ -91,7 +91,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         )?;
         handle_dir(&rt, &sub_bar, source_id, &input_dir.absolute_path,
                    &mut processed, &mut recorder)?;
-        rt.progress.inc_both(1);
+        rt.progress.inc_global(1);
     }
 
     // Handle from-files
@@ -102,10 +102,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         if sanitize_path(
             rt.config.process.relax_utf8, rt.config.process.fail_fast,
             files_file, "files-from")?.is_none() {
+            rt.progress.inc_global(1);
             continue;
         }
         sub_bar.set_position(0);
         sub_bar.set_message(format!("{SUB_BAR_PREFIX}'{}'", files_file.display()));
+
+       // Deal with files from stdin.
         if files_file.to_path_buf() == PathBuf::from("-") {
             let br = BufReader::new(io::stdin());
             let ff_iter = files_from_reader(br, rt.config.inputs.files_from_null);
@@ -121,6 +124,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                             return Err(error)
                         } else {
                             tracing::error!("Processing input failed: {error}");
+                            rt.progress.inc_global(1);
                             continue
                         }
 
@@ -130,7 +134,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                 handle_from_files_line(&rt, &sub_bar, (line, &path), &files_file,
                                        &mut processed, &mut recorder)?
             }
-            rt.progress.inc_both(1);
+            rt.progress.inc_global(1);
             continue;
         }
         // Sanity check
@@ -154,7 +158,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             handle_from_files_line(&rt, &sub_bar, (line, &path), &files_file,
                                    &mut processed, &mut recorder)?
         }
-        rt.progress.inc_both(1);
+        rt.progress.inc_global(1);
     }
 
     // Set hardlink canonicals if and only if, we want to collapse the hardlinks and
@@ -195,6 +199,7 @@ fn handle_from_files_line<P: AsRef<Path>>(
     processed: &mut u64,
     recorder: &mut Recorder)
     -> Result<()> {
+
     let (line, ff) = element;
     let fpath: &Path = ff.as_ref();
     let from_files_disp_path = from_files_path.display();
@@ -217,6 +222,7 @@ fn handle_from_files_line<P: AsRef<Path>>(
     if abs_path.is_dir() {
         if let Some((_, existing)) = rt.db.find_overlapping_source(
             Path::new(&san_abs.text), rt.config.indexing.no_recursion)? {
+
             let err_str = format!(
                 "input directory `{}` overlaps `{}`; use `--no-strict-separation` to walk anyway",
                 Path::new(&san_abs.text).display(),
