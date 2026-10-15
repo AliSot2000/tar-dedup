@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+use crate::common::perms::OwnerGroupPolicy;
 use crate::config::{
     ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, RuntimeState,
 };
@@ -14,7 +15,6 @@ use crate::db::types::{
     OutTreeId, OutTreeRecord, SourceRecord,
 };
 use crate::error::{Error, FileStatError, Result, ToPanic};
-
 pub mod flags;
 pub mod types;
 
