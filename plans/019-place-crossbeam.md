@@ -224,7 +224,7 @@ source → `Errored`. Acceptable (the Place phase is not mid-phase-resumable tod
 | `db/place.rs` | + `create/populate/pull/drop_canonical_move_queue`, + `create/populate/pull/drop_materialize_queue`, + `count_canonical_files_for_move`; keep the existing listers |
 | `db.rs` | facade delegations for the new fns |
 | `unarchive/place.rs` | rewrite `copy_canonicals_to_source`; merge the materialize trio into `materialize_loop(…, kind)` + 3 thin wrappers; inner-loop progress + thread bars; `copy_single_file` gains a `pb: Option<&ProgressBar>` byte-progress hook |
-| `plans/place-crossbeam.md` | this plan; as-built filled at implementation time |
+| `plans/019-place-crossbeam.md` | this plan; as-built filled at implementation time |
 
 ## Open notes / follow-ups
 

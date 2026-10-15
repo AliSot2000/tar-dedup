@@ -67,7 +67,7 @@ Fix: one field = one flag; paired flags are **separate SetTrue fields**; umbrell
 ## Files & changes
 | # | File | Change |
 |---|------|--------|
-| 1 | `plans/cli-metadata-flags.md` | this plan |
+| 1 | `plans/003-cli-metadata-flags.md` | this plan |
 | 2 | `AGENTS.md` | plan-to-`plans/` workflow note |
 | 3 | `cli.rs` | all pairs as SetTrue-SetTrue fields; umbrellas; collapsed singles |
 | 4 | `config/archive.rs` | presets, bit resolution, validation, numeric move |

@@ -1,7 +1,7 @@
 # Plan: permissions-phase dir progress-count gate (`force_overwrite_dir` follow-up)
 
 Status: **agreed (2026-10-12), implementation round.** Follow-up to
-`plans/force-overwrite-dir.md` (population side already done).
+`plans/021-force-overwrite-dir.md` (population side already done).
 
 ## Problem
 

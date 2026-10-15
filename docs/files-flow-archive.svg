@@ -1,0 +1,193 @@
+<!--
+  Archive pipeline — `files` table entry flow.
+
+  Node rules (as requested):
+    * a node = the WHERE clause used to iterate rows for a phase/select
+    * more exclusive phase → fork a side lane for the excluded rows
+    * more inclusive phase → merge side lanes back into the main path
+    * terminal side lanes that never re-merge are duplicated at the end
+
+  eager_filter (default ON, `lazy-filter` flag to disable) swaps the reads:
+    eager : filter reads 'inventoried', then hash reads 'filtered'  (filter before hash)
+    lazy  : hash reads 'inventoried', then filter reads 'hashed'    (filter after hash)
+  Both compose to the same node set; only the phase literals differ.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 2860" font-family="monospace" font-size="12.5">
+  <style>
+    .box   { fill:#eaf6ff; stroke:#2b6cb0; stroke-width:1.5; rx:8; }
+    .side  { fill:#fff5e6; stroke:#b7791f; stroke-width:1.5; rx:8; }
+    .term  { fill:#fef2f2; stroke:#c53030; stroke-width:1.5; rx:8; }
+    .key   { fill:#ebf8ff; stroke:#3182ce; stroke-width:1.2; rx:6; }
+    .note  { fill:#f7fafc; stroke:#718096; stroke-width:1; rx:6; }
+    .edge  { stroke:#4a5568; stroke-width:1.4; fill:none; marker-end:url(#arw); }
+    .edge-side { stroke:#b7791f; stroke-width:1.4; fill:none; stroke-dasharray:5,3; marker-end:url(#arw); }
+    .label { font-size:12px; fill:#222; }
+    .sql   { font-size:11px; fill:#5f6b7a; }
+    .hdr   { font-size:16px; fill:#111; font-weight:bold; }
+    text    { dominant-baseline:middle; }
+  </style>
+  <defs>
+    <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L7,0 L7,3.5 L0,3.5 Z" fill="#4a5568"/>
+    </marker>
+  </defs>
+
+  <text x="30" y="30" class="hdr">Archive pipeline — `files` table entry flow</text>
+
+  <!-- ======== INVENTORY ======== -->
+  <rect x="520" y="70" width="400" height="50" class="box"/>
+  <text x="720" y="90" text-anchor="middle">inventory · insert one row / fs entry</text>
+  <text x="720" y="108" text-anchor="middle" class="sql">no WHERE — walkdir / -T feed</text>
+  <line x1="650" y1="120" x2="650" y2="158" class="edge"/>
+  <text x="150" y="120" class="label">everything enters the table</text>
+  <text x="150" y="138" class="label">→ phase = 'inventoried'</text>
+
+  <!-- ======== FILTER read node (multi-source) ======== -->
+  <rect x="300" y="158" width="760" height="66" class="box"/>
+  <text x="680" y="176" text-anchor="middle">filter · get_rows_to_filter   [id &gt; :last_id · batch]</text>
+  <text x="680" y="194" text-anchor="middle" class="sql">WHERE phase = 'inventoried'  (eager)   ∨   phase = 'hashed'  (lazy)</text>
+  <text x="680" y="210" text-anchor="middle" class="label">include/exclude regexes → include_reason, exclude_reason · phase = 'filtered'</text>
+
+  <line x1="560" y1="224" x2="560" y2="262" class="edge"/>
+  <line x1="800" y1="224" x2="820" y2="262" class="edge-side"/>
+
+  <rect x="330" y="262" width="470" height="52" class="box"/>
+  <text x="565" y="280" text-anchor="middle">filter-included (main)</text>
+  <text x="565" y="296" text-anchor="middle" class="sql">include_reason &lt; 0 ∧ exclude_reason = 0</text>
+
+  <rect x="850" y="262" width="420" height="52" class="side"/>
+  <text x="1060" y="280" text-anchor="middle">filter-excluded (side lane)</text>
+  <text x="1060" y="296" text-anchor="middle" class="sql">exclude_reason &gt; 0 ∨ include_reason = 0</text>
+
+  <!-- ======== HASH read node ======== -->
+  <line x1="520" y1="314" x2="520" y2="362" class="edge"/>
+  <rect x="280" y="362" width="600" height="62" class="box"/>
+  <text x="580" y="380" text-anchor="middle">hash · get_entries_to_hash</text>
+  <text x="580" y="396" text-anchor="middle" class="sql">WHERE phase = 'filtered' (eager) ∨ 'inventoried' (lazy)</text>
+  <text x="580" y="410" text-anchor="middle" class="sql">∧ ftype='file' ∧ sha1 IS NULL ∧ (flags&amp;sha_error)=0 ∧ include&lt;0 ∧ exclude=0</text>
+
+  <line x1="460" y1="424" x2="460" y2="468" class="edge"/>
+  <rect x="180" y="468" width="560" height="52" class="box"/>
+  <text x="460" y="486" text-anchor="middle">hash-processed (main)</text>
+  <text x="460" y="502" text-anchor="middle" class="sql">sha1+sparse set · phase='hashed'</text>
+
+  <rect x="800" y="468" width="480" height="52" class="side"/>
+  <text x="1040" y="486" text-anchor="middle">hash-not-processed (side lane)</text>
+  <text x="1040" y="502" text-anchor="middle" class="sql">ftype≠'file' ∨ hash error (sha_error flag)</text>
+
+  <!-- ======== DEDUP ======== -->
+  <line x1="460" y1="520" x2="460" y2="566" class="edge"/>
+  <rect x="180" y="566" width="560" height="56" class="box"/>
+  <text x="460" y="584" text-anchor="middle">dedup · list_filtered_in_group / pending_duplicate_groups</text>
+  <text x="460" y="600" text-anchor="middle" class="sql">phase='filtered' ∧ sha1 IS NOT NULL · group (sha1,size) [COUNT&gt;1]</text>
+
+  <line x1="390" y1="622" x2="390" y2="668" class="edge"/>
+  <rect x="110" y="668" width="420" height="52" class="box"/>
+  <text x="320" y="686" text-anchor="middle">dedup-canonical (main)</text>
+  <text x="320" y="702" text-anchor="middle" class="sql">canonical_id = id · phase='deduped'</text>
+
+  <rect x="560" y="668" width="440" height="52" class="side"/>
+  <text x="780" y="686" text-anchor="middle">dedup-duplicate (side lane)</text>
+  <text x="780" y="702" text-anchor="middle" class="sql">canonical_id=&lt;canonical&gt; · phase='deduped'</text>
+
+  <!-- excluded / singleton merge below dedup -->
+  <line x1="320" y1="720" x2="320" y2="792" class="edge"/>
+  <rect x="110" y="792" width="640" height="52" class="box"/>
+  <text x="430" y="810" text-anchor="middle">dedup-skip outcomes (merge)</text>
+  <text x="430" y="826" text-anchor="middle" class="sql">singleton (COUNT=1) ∨ sha1 IS NULL ∨ non-file ∨ excluded → phase='deduped'</text>
+
+  <!-- ======== SPARSIFY ======== -->
+  <line x1="430" y1="844" x2="430" y2="898" class="edge"/>
+  <rect x="130" y="898" width="700" height="62" class="box"/>
+  <text x="480" y="916" text-anchor="middle">sparsify · list_sparsify_candidates</text>
+  <text x="480" y="932" text-anchor="middle" class="sql">phase='deduped' ∧ canonical_id=id ∧ ftype='file' ∧ sha1 IS NOT NULL</text>
+  <text x="480" y="946" text-anchor="middle" class="sql">∧ sparse_count ≥ min_pages ∧ (flags&amp;HasSparse)=0 ∧ included</text>
+
+  <line x1="360" y1="960" x2="360" y2="1008" class="edge"/>
+  <rect x="110" y="1008" width="500" height="52" class="box"/>
+  <text x="360" y="1026" text-anchor="middle">sparsify-rewritten (main)</text>
+  <text x="360" y="1042" text-anchor="middle" class="sql">copy → (flags&amp;HasSparse) · phase='sparsified'</text>
+
+  <rect x="640" y="1008" width="500" height="52" class="side"/>
+  <text x="890" y="1026" text-anchor="middle">sparsify-skip (side lane)</text>
+  <text x="890" y="1042" text-anchor="middle" class="sql">¬candidate: min_pages / non-file / non-canonical / excluded → 'sparsified'</text>
+
+  <!-- ======== STAGE (inclusive merge) ======== -->
+  <line x1="360" y1="1060" x2="440" y2="1124" class="edge"/>
+  <line x1="890" y1="1060" x2="700" y2="1124" class="edge-side"/>
+  <rect x="150" y="1124" width="880" height="62" class="box"/>
+  <text x="590" y="1142" text-anchor="middle">stage · list_files_to_stage (merge: rewritten + skip both symlinked)</text>
+  <text x="590" y="1158" text-anchor="middle" class="sql">phase='sparsified' ∧ ftype='file' ∧ canonical_id=id ∧ included ∧ sha1 IS NOT NULL</text>
+  <text x="590" y="1172" text-anchor="middle" class="label">unstageable (dir/unknown/excluded/¬sha1) promote w/o linking → phase='staged'</text>
+
+  <line x1="480" y1="1186" x2="480" y2="1250" class="edge"/>
+  <rect x="300" y="1250" width="620" height="50" class="box"/>
+  <text x="610" y="1268" text-anchor="middle">symlink created in stage dir</text>
+  <text x="610" y="1284" text-anchor="middle" class="label">→ phase='staged'</text>
+
+  <!-- ======== ARCHIVE ======== -->
+  <line x1="610" y1="1300" x2="610" y2="1360" class="edge"/>
+  <rect x="330" y="1360" width="670" height="60" class="box"/>
+  <text x="665" y="1378" text-anchor="middle">archive · list_staged_canonical_ordered</text>
+  <text x="665" y="1394" text-anchor="middle" class="sql">phase='staged' ∧ canonical_id=id ∧ ftype='file' ∧ included ∧ sha1 IS NOT NULL</text>
+  <text x="665" y="1406" text-anchor="middle" class="sql">ORDER BY ext, size, id</text>
+
+  <line x1="560" y1="1420" x2="560" y2="1478" class="edge"/>
+  <rect x="280" y="1478" width="560" height="50" class="box"/>
+  <text x="560" y="1496" text-anchor="middle">tar slate append_path ok</text>
+  <text x="560" y="1512" text-anchor="middle" class="label">(flags&amp;AppendedPath) set → phase='archived'</text>
+
+  <rect x="880" y="1478" width="380" height="50" class="side"/>
+  <text x="1070" y="1496" text-anchor="middle">archive-append-error (side lane)</text>
+  <text x="1070" y="1512" text-anchor="middle" class="sql">(flags&amp;AppendedPath) not set · ErrorWhileArchive</text>
+
+  <line x1="560" y1="1528" x2="560" y2="1596" class="edge"/>
+  <rect x="330" y="1596" width="600" height="50" class="box"/>
+  <text x="630" y="1614" text-anchor="middle">promote_remainder_to_archived / promote_pending_archived (merge)</text>
+  <text x="630" y="1630" text-anchor="middle" class="label">everything else → phase='archived' (all rows)</text>
+
+  <line x1="630" y1="1646" x2="630" y2="1694" class="edge"/>
+  <rect x="410" y="1694" width="440" height="42" class="term"/>
+  <text x="630" y="1715" text-anchor="middle">archive complete · phase='archived'</text>
+
+  <!-- ======== eager / lazy annotation ======== -->
+  <g transform="translate(40,1780)">
+    <rect x="0" y="0" width="620" height="150" class="note"/>
+    <text x="16" y="24" class="hdr">Read compose order (eager_filter)</text>
+    <text x="16" y="52" class="label">eager (default · `--lazy-filter` off):</text>
+    <text x="36" y="74" class="sql">filter reads 'inventoried' → hash reads 'filtered'</text>
+    <text x="36" y="94" class="sql">   i.e. filter runs before hashing rows</text>
+    <text x="16" y="118" class="label">lazy (`--lazy-filter`):</text>
+    <text x="36" y="140" class="sql">hash reads 'inventoried' → filter reads 'hashed'</text>
+  </g>
+
+  <!-- ======== Terminal duplicates ======== -->
+  <g transform="translate(40,1960)">
+    <text x="0" y="24" class="hdr">Terminal duplicates — lanes that never re-merge into the main path</text>
+
+    <rect x="0" y="50" width="430" height="76" class="term"/>
+    <text x="215" y="72" text-anchor="middle">hash-not-processed (terminal)</text>
+    <text x="215" y="90" text-anchor="middle" class="label">non-files never hashed/deduped; reach</text>
+    <text x="215" y="106" text-anchor="middle" class="label">'archived' only via filter + remainder</text>
+
+    <rect x="460" y="50" width="430" height="76" class="term"/>
+    <text x="675" y="72" text-anchor="middle">dedup-duplicate (terminal)</text>
+    <text x="675" y="90" text-anchor="middle" class="label">canonical_id=&lt;canonical&gt; → no own payload</text>
+    <text x="675" y="106" text-anchor="middle" class="label">in tar; phase='archived' via remainder</text>
+
+    <rect x="920" y="50" width="430" height="76" class="term"/>
+    <text x="1135" y="72" text-anchor="middle">archive-append-error (terminal)</text>
+    <text x="1135" y="90" text-anchor="middle" class="label">ErrorWhileArchive · not in tar;</text>
+    <text x="1135" y="106" text-anchor="middle" class="label">phase='archived' by remainder</text>
+  </g>
+
+  <!-- ======== Legend ======== -->
+  <g transform="translate(40,2130)">
+    <text x="0" y="24" class="hdr">Legend</text>
+    <rect x="20" y="50" width="120" height="24" class="key"/><text x="180" y="62">main-path reader (WHERE)</text>
+    <rect x="20" y="90" width="120" height="24" class="side"/><text x="180" y="102">side lane (excluded by exclusivity)</text>
+    <rect x="20" y="130" width="120" height="24" class="term"/><text x="180" y="142">terminal (never re-merged)</text>
+    <line x1="20" y1="174" x2="120" y2="174" class="edge"/><text x="180" y="186">flow forward</text>
+    <line x1="20" y1="210" x2="120" y2="210" class="edge-side"/><text x="180" y="222">side / merge flow</text>
+  </g>
+</svg>

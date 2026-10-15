@@ -1,0 +1,141 @@
+<!--
+  Extract pipeline: entry flow through the `files` table.
+
+  The `files` table is installed as-is from the archive catalog (phase='archived').
+  Scan/rehash advance files.phase; place + permissions only propagate *flags*
+  back onto the files table (phase is no longer advanced after 'rehashed' today;
+  AtDestination/PermissionsRestored are the planned next hops).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 2160" font-family="monospace" font-size="13">
+  <style>
+    .box   { fill:#eaf6ff; stroke:#2b6cb0; stroke-width:1.5; rx:8; }
+    .side  { fill:#fff5e6; stroke:#b7791f; stroke-width:1.5; rx:8; }
+    .term  { fill:#fef2f2; stroke:#c53030; stroke-width:1.5; rx:8; }
+    .flag  { fill:#f0fff4; stroke:#2f855a; stroke-width:1.5; rx:8; }
+    .key   { fill:#ebf8ff; stroke:#3182ce; stroke-width:1.2; rx:6; }
+    .edge  { stroke:#4a5568; stroke-width:1.4; fill:none; marker-end:url(#arw); }
+    .edge-side { stroke:#b7791f; stroke-width:1.4; fill:none; stroke-dasharray:5,3; marker-end:url(#arw); }
+    .edge-flag { stroke:#2f855a; stroke-width:1.4; fill:none; stroke-dasharray:2,2; marker-end:url(#arw); }
+    .label { font-size:12.5px; fill:#222; }
+    .hdr   { font-size:16px; fill:#111; font-weight:bold; }
+    text    { dominant-baseline:middle; }
+  </style>
+  <defs>
+    <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L7,0 L7,3.5 L0,3.5 Z" fill="#4a5568"/>
+    </marker>
+    <marker id="arw-side" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L7,0 L7,3.5 L0,3.5 Z" fill="#b7791f"/>
+    </marker>
+    <marker id="arw-flag" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto">
+      <path d="M0,0 L7,0 L7,3.5 L0,3.5 Z" fill="#2f855a"/>
+    </marker>
+  </defs>
+
+  <text x="30" y="30" class="hdr">Extract pipeline — files table entry flow</text>
+
+  <!-- ============ INSTALL ============ -->
+  <rect x="430" y="70" width="470" height="52" class="box"/>
+  <text x="665" y="90" text-anchor="middle">scan — install catalog (footer / manifest / snapshot)</text>
+  <text x="665" y="110" text-anchor="middle" class="label">files copied verbatim from archive → phase='archived'</text>
+  <line x1="600" y1="122" x2="600" y2="158" class="edge"/>
+
+  <!-- ============ SCAN promote ============ -->
+  <rect x="330" y="158" width="700" height="62" class="box"/>
+  <text x="680" y="176" text-anchor="middle">scan — payload cache + promote</text>
+  <text x="680" y="192" text-anchor="middle" class="label">unpack → (flags&amp;FileExtracted) · snapshot/footer confirm</text>
+  <text x="680" y="206" text-anchor="middle" class="label">promotion: phase='archived' ∧ FileExtracted → phase='unarchived'</text>
+
+  <line x1="560" y1="220" x2="560" y2="258" class="edge"/>
+  <line x1="800" y1="220" x2="800" y2="258" class="edge-side"/>
+
+  <rect x="300" y="258" width="520" height="54" class="box"/>
+  <text x="560" y="278" text-anchor="middle">scan-confirmed (main path)</text>
+  <text x="560" y="294" text-anchor="middle" class="label">extracted ∧ confirmed → phase='unarchived'</text>
+
+  <rect x="840" y="258" width="420" height="54" class="side"/>
+  <text x="1050" y="278" text-anchor="middle">scan-missing / unconfirmed (side lane)</text>
+  <text x="1050" y="294" text-anchor="middle" class="label">AppendedPath ∧ ¬FileExtracted · stays 'archived'</text>
+
+  <line x1="560" y1="312" x2="560" y2="368" class="edge"/>
+  <rect x="300" y="368" width="520" height="54" class="box"/>
+  <text x="560" y="388" text-anchor="middle">rehash-reader input</text>
+  <text x="560" y="404" text-anchor="middle" class="label">phase='unarchived' (canonical + duplicates)</text>
+
+  <!-- ============ REHASH ============ -->
+  <line x1="460" y1="422" x2="460" y2="470" class="edge"/>
+  <rect x="250" y="470" width="650" height="60" class="box"/>
+  <text x="575" y="488" text-anchor="middle">rehash — list_files_to_rehash</text>
+  <text x="575" y="504" text-anchor="middle" class="label">phase='unarchived' ∧ canonical_id=id ∧ (flags&amp;FileExtracted)≠0</text>
+  <text x="575" y="518" text-anchor="middle" class="label">∧ ftype='file' ∧ included   [id stepping]</text>
+
+  <!-- side: duplicates + all-unarchived when skipped -->
+  <line x1="760" y1="422" x2="980" y2="470" class="edge-side"/>
+  <rect x="820" y="470" width="360" height="60" class="side"/>
+  <text x="1000" y="488" text-anchor="middle">duplicate rows (side lane)</text>
+  <text x="1000" y="504" text-anchor="middle" class="label">canonical_id ≠ id — not read by rehash;</text>
+  <text x="1000" y="518" text-anchor="middle" class="label">promoted by skip_rehash → 'rehashed'</text>
+
+  <line x1="460" y1="530" x2="460" y2="576" class="edge"/>
+  <rect x="250" y="576" width="650" height="56" class="box"/>
+  <text x="575" y="596" text-anchor="middle">rehash — apply outcomes</text>
+  <text x="575" y="612" text-anchor="middle" class="label">match/mismatch/error → phase='rehashed' + flags (RehashMismatch/ErrorWhileRehashing)</text>
+
+  <!-- side: duplicates + all-unarchived when skipped -->
+  <line x1="760" y1="422" x2="980" y2="470" class="edge-side"/>
+  <rect x="820" y="470" width="360" height="60" class="side"/>
+  <text x="1000" y="488" text-anchor="middle">duplicate rows (side lane)</text>
+  <text x="1000" y="504" text-anchor="middle" class="label">canonical_id ≠ id — not read by rehash;</text>
+  <text x="1000" y="518" text-anchor="middle" class="label">promoted by skip_rehash → 'rehashed'</text>
+
+  <line x1="575" y1="632" x2="575" y2="690" class="edge"/>
+  <line x1="1000" y1="630" x2="720" y2="690" class="edge-side"/>
+
+  <!-- ============ PLACE (reads files, writes out_tree + flags) ============ -->
+  <rect x="180" y="690" width="900" height="62" class="box"/>
+  <text x="630" y="708" text-anchor="middle">place — build out_tree from files (merge: rehashed + dupes)</text>
+  <text x="630" y="724" text-anchor="middle" class="label">list_materialized_entries: included ∧ ftype ∉ {'dir','unknown'}</text>
+  <text x="630" y="738" text-anchor="middle" class="label">→ out_tree rows (no phase change on files yet)</text>
+
+  <line x1="520" y1="752" x2="520" y2="812" class="edge"/>
+  <rect x="300" y="812" width="620" height="72" class="box"/>
+  <text x="610" y="830" text-anchor="middle">place — copy/link/hardlink materialization</text>
+  <text x="610" y="846" text-anchor="middle" class="label">files→out_tree materialize (reflink / sparse copy / link)</text>
+  <text x="610" y="862" text-anchor="middle" class="label">link_tree: list_canonical_files_for_move   phase='rehashed' ∧ ftype='file' ∧ FileExtracted ∧ ¬AtLinkSource</text>
+
+  <line x1="420" y1="884" x2="420" y2="940" class="edge"/>
+  <rect x="180" y="940" width="560" height="52" class="flag"/>
+  <text x="460" y="960" text-anchor="middle">apply_flags_to_files → files.flags</text>
+  <text x="460" y="976" text-anchor="middle" class="label">Placed · UsedRefLink · ErrorWhilePlacing · Skipped · AtLinkSource</text>
+
+  <rect x="820" y="940" width="400" height="52" class="term"/>
+  <text x="1020" y="960" text-anchor="middle">place-skip/error (terminal flags)</text>
+  <text x="1020" y="976" text-anchor="middle" class="label">Skipped / ErrorWhilePlacing (no phase advance)</text>
+
+  <line x1="460" y1="992" x2="460" y2="1050" class="edge"/>
+  <rect x="180" y="1050" width="560" height="52" class="box"/>
+  <text x="460" y="1070" text-anchor="middle">files.phase stays 'rehashed'</text>
+  <text x="460" y="1086" text-anchor="middle" class="label">(AtDestination is the planned next hop — not yet driven)</text>
+
+  <!-- ============ PERMISSIONS (flags only) ============ -->
+  <line x1="460" y1="1102" x2="460" y2="1168" class="edge"/>
+  <rect x="180" y="1168" width="700" height="56" class="flag"/>
+  <text x="530" y="1188" text-anchor="middle">permissions — restore metadata (out_tree driven)</text>
+  <text x="530" y="1204" text-anchor="middle" class="label">out_tree rows today; files.flags ← AppliedMetadata / ErrorWhileApplyingMetadata</text>
+
+  <line x1="460" y1="1224" x2="460" y2="1282" class="edge-flag"/>
+  <rect x="300" y="1282" width="560" height="46" class="box"/>
+  <text x="580" y="1305" text-anchor="middle">cleanup — phase stays 'rehashed' (flags carry outcome)</text>
+
+  <!-- ======== Legend ======== -->
+  <g transform="translate(30,1400)">
+    <text x="0" y="30" class="hdr">Legend</text>
+    <rect x="20" y="60" width="120" height="26" class="key"/><text x="180" y="73">main-path reader (WHERE that selects rows)</text>
+    <rect x="20" y="100" width="120" height="26" class="side"/><text x="180" y="113">side lane: excluded / unconfirmed rows</text>
+    <rect x="20" y="140" width="120" height="26" class="flag"/><text x="180" y="153">flag propagation only (phase unchanged)</text>
+    <rect x="20" y="180" width="120" height="26" class="term"/><text x="180" y="193">terminal: outcome only via flags</text>
+    <line x1="20" y1="230" x2="120" y2="230" class="edge"/><text x="180" y="243">flow forward</text>
+    <line x1="20" y1="270" x2="120" y2="270" class="edge-side"/><text x="180" y="283">side / merge flow</text>
+    <line x1="20" y1="310" x2="120" y2="310" class="edge-flag"/><text x="180" y="323">flag write-back</text>
+  </g>
+</svg>
