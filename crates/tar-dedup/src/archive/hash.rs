@@ -305,20 +305,13 @@ fn is_all_zero(chunk: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::common::defaults::IO_BUF_SIZE;
-    use crate::common::files::original_extension;
-    use crate::config::{
-        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
-        ProcessOptions, SparseOptions,
-    };
-    use crate::db::Database;
     use crate::db::flags::FileFlag;
-    use crate::db::types::{FileId, FilePhase, FileType, NewFileRecord};
-    use crate::progress::ProgressBarSet;
+    use crate::db::types::{FileId, FilePhase};
+    use crate::test_support::TestWorld;
     use chrono::{DateTime, Utc};
     use nix::unistd::geteuid;
     use rusqlite::named_params;
     use std::os::unix::fs::PermissionsExt;
-    use std::path::{Path, PathBuf};
 
     fn pattern(n: usize, seed: u8) -> Vec<u8> {
         (0..n).map(|i| ((i % 251) as u8) ^ seed).collect()
@@ -330,97 +323,14 @@ mod tests {
         hasher.finalize().into()
     }
 
-        fn test_archive_config() -> ArchiveConfig {
-        ArchiveConfig {
-            indexing: IndexingOptions {
-                no_hardlink_detection: true,
-                ..IndexingOptions::default()
-            },
-            filter: FilterOptions { eager_filter: false, ..FilterOptions::default() },
-            capture: CaptureOptions {
-                do_xattrs: false,
-                do_posix_acl: false,
-                do_selinux: false,
-                ..CaptureOptions::default()
-            },
-            sparse: SparseOptions::default(),
-            process: ProcessOptions { jobs: 4, io_jobs: 4, ..ProcessOptions::default() },
-            pipeline: ArchivePipelineOptions {
-                max_shard_size: 0,
-                write_archive_footer: false,
-                ..ArchivePipelineOptions::default()
-            },
-            ..ArchiveConfig::default()
-        }
-    }
-
-
-struct TestWorld {
-        dir: tempfile::TempDir,
-        db: Database,
-        shutdown: Shutdown,
-        progress: ProgressBarSet,
-        config: ArchiveConfig,
+    /// The hash phase sizes its worker pool off `effective_jobs()` =
+    /// `min(jobs, io_jobs)`; restore the original 4 io-bound workers that the
+    /// shared world's default (io_jobs = 1) would collapse down to one.
+    fn test_world() -> TestWorld {
+        TestWorld::tuned(|c| c.process.io_jobs = 4)
     }
 
     impl TestWorld {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let db = Database::open(&dir.path().join("test.sqlite")).expect("open db");
-            Self {
-                dir,
-                db,
-                shutdown: Shutdown::detached(),
-                progress: ProgressBarSet::new(7),
-                config: test_archive_config(),
-            }
-        }
-
-        fn rt(&self) -> ArchiveRTArgs<'_> {
-            ArchiveRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown: &self.shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn path(&self, name: &str) -> PathBuf {
-            self.dir.path().join(name)
-        }
-
-        fn add_file(&self, name: &str, payload: &[u8]) -> FileId {
-            let path = self.dir.path().join(name);
-            std::fs::write(&path, payload).expect("write test payload");
-            self.insert_recorded(&path, payload.len(), None, None, None)
-        }
-
-        fn add_file_recorded(
-            &self, name: &str, payload: &[u8],
-            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
-            -> FileId {
-            let path = self.dir.path().join(name);
-            std::fs::write(&path, payload).expect("write test payload");
-            self.insert_recorded(&path, payload.len(), mtime, atime, ctime)
-        }
-
-        fn insert_recorded(
-            &self, path: &Path, size: usize,
-            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
-            -> FileId {
-            self.db.insert_file(&NewFileRecord {
-                abs_path: PathBuf::from(path),
-                ext: original_extension(path),
-                size: size as u64,
-                mtime, atime, ctime,
-                uid: None, gid: None, mode: None,
-                ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
-                device_id: None, inode_id: None, major: None, minor: None,
-            }).expect("insert test file");
-            self.db.file_id_by_abs_path(path).expect("lookup test file").expect("file present")
-        }
-
         fn sparse_count(&self, id: FileId) -> i64 {
             self.db.with_transaction(|conn| {
                 let v: i64 = conn.query_row(
@@ -442,7 +352,7 @@ struct TestWorld {
 
     #[test]
     fn run_hashes_and_stores_digests() {
-        let world = TestWorld::new();
+        let world = test_world();
         let big = pattern(1024 * 1024, 3);
         let tiny = pattern(7, 9);
         let empty: Vec<u8> = Vec::<u8>::new();
@@ -484,7 +394,7 @@ struct TestWorld {
         if geteuid().is_root() {
             return;
         }
-        let world = TestWorld::new();
+        let world = test_world();
         let payload = pattern(64 * 1024, 1);
         let id_ok1 = world.add_file("ok1.bin", &payload);
         let id_bad = world.add_file("bad.bin", &payload);
@@ -519,7 +429,7 @@ struct TestWorld {
 
     #[test]
     fn modified_file_flagged() {
-        let world = TestWorld::new();
+        let world = test_world();
         let now = Utc::now();
         let stale = DateTime::from_timestamp(now.timestamp() - 3600, 0).expect("stale");
         let payload = pattern(128 * 1024, 4);
@@ -536,7 +446,7 @@ struct TestWorld {
 
     #[test]
     fn hash_order_is_size_desc() {
-        let world = TestWorld::new();
+        let world = test_world();
         let id_small = world.add_file("s.bin", &pattern(1024 * 1024, 1));
         let id_mid = world.add_file("m.bin", &pattern(4 * 1024 * 1024 + 1, 2));
         let id_big = world.add_file("b.bin", &pattern(8 * 1024 * 1024, 3));
@@ -554,7 +464,7 @@ struct TestWorld {
 
     #[test]
     fn zero_page_counter_partial_last_page() {
-        let world = TestWorld::new();
+        let world = test_world();
         let path = world.path("z1.bin");
         let payload = vec![0u8; 3 * 4096 + 4089];
         std::fs::write(&path, &payload).expect("write");
@@ -566,7 +476,7 @@ struct TestWorld {
 
     #[test]
     fn zero_page_counter_exact_multiple() {
-        let world = TestWorld::new();
+        let world = test_world();
         let path = world.path("z2.bin");
         let payload = vec![0u8; 40 * 4096];
         std::fs::write(&path, &payload).expect("write");
@@ -578,7 +488,7 @@ struct TestWorld {
 
     #[test]
     fn zero_page_counter_mixed_content() {
-        let world = TestWorld::new();
+        let world = test_world();
         let path = world.path("z3.bin");
         let mut payload = vec![0u8; 2 * 4096];
         for b in pattern(4096, 7) {
@@ -593,7 +503,7 @@ struct TestWorld {
 
     #[test]
     fn zero_page_counter_crosses_buffer_boundary() {
-        let world = TestWorld::new();
+        let world = test_world();
         let path = world.path("z4.bin");
         let payload = vec![0u8; IO_BUF_SIZE + 2 * 4096 + 4089];
         std::fs::write(&path, &payload).expect("write");
@@ -609,7 +519,7 @@ struct TestWorld {
         // different batch limits must yield the identical set and order as a
         // single unfettered pull. (DB-layer only — independent of the worker
         // threading model; `handle_send_receive_loop`'s `pull` depends on it.)
-        let world = TestWorld::new();
+        let world = test_world();
         for i in 0..5 {
             let payload = pattern(1024, i as u8);
             let name = format!("b{i}.bin");

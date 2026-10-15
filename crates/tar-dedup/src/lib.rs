@@ -12,3 +12,6 @@ pub mod shutdown;
 pub mod tar_reader;
 pub mod tar_writer;
 pub mod unarchive;
+
+#[cfg(test)]
+mod test_support;

@@ -493,21 +493,17 @@ fn files_equal(
 mod tests {
     use super::*;
     use crate::common::defaults::OUT_CAPACITY;
-    use crate::common::files::original_extension;
-    use crate::config::{
-        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
-        ProcessOptions, SparseOptions,
-    };
+    use crate::config::ProcessOptions;
     use crate::db::flags::{FileFlag, set_file_flag};
-    use crate::db::types::{FileId, FileType, NewFileRecord};
-    use crate::db::{Database, ErrorPhase, Recorder};
-    use crate::progress::{ARCHIVE_MULTIPLIER, ProgressBarSet};
+    use crate::db::types::{FileId, FilePhase};
+    use crate::db::{ErrorPhase, Recorder};
+    use crate::test_support::TestWorld;
     use chrono::{DateTime, Utc};
     use nix::unistd::geteuid;
     use rusqlite::named_params;
     use std::os::unix::fs::PermissionsExt;
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::time::Duration;
 
     fn pattern(n: usize, seed: u8) -> Vec<u8> {
@@ -518,112 +514,14 @@ mod tests {
         (io_buffer(), io_buffer())
     }
 
-        fn test_archive_config() -> ArchiveConfig {
-        ArchiveConfig {
-            indexing: IndexingOptions {
-                no_hardlink_detection: true,
-                ..IndexingOptions::default()
-            },
-            filter: FilterOptions { eager_filter: false, ..FilterOptions::default() },
-            capture: CaptureOptions {
-                do_xattrs: false,
-                do_posix_acl: false,
-                do_selinux: false,
-                ..CaptureOptions::default()
-            },
-            sparse: SparseOptions::default(),
-            process: ProcessOptions::default(),
-            pipeline: ArchivePipelineOptions {
-                max_shard_size: 0,
-                write_archive_footer: false,
-                ..ArchivePipelineOptions::default()
-            },
-            ..ArchiveConfig::default()
-        }
-    }
-
-
-struct TestWorld {
-        dir: tempfile::TempDir,
-        db: Database,
-        shutdown: Shutdown,
-        progress: ProgressBarSet,
-        config: ArchiveConfig,
+    /// Dedup sizes its rayon pool off `io_jobs`; the shared world's default
+    /// (jobs 4 / io_jobs 1) collapses it to a single worker. Restore the
+    /// original `ProcessOptions::default()` (io_jobs = num_cpus).
+    fn test_world() -> TestWorld {
+        TestWorld::tuned(|c| c.process = ProcessOptions::default())
     }
 
     impl TestWorld {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let db = Database::open(&dir.path().join("test.sqlite")).expect("open db");
-            // The internal include rule the filter phase installs: without it
-            // `apply_no_filter` (-1) violates the FK.
-            db.with_transaction(|conn| {
-                conn.execute(
-                    "INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) \
-                     VALUES (-1, 'internal', NULL, '.*')", [],
-                ).expect("seed internal include rule");
-                Ok(())
-            }).expect("seed internal include rule tx");
-            Self {
-                dir,
-                db,
-                shutdown: Shutdown::detached(),
-                progress: ProgressBarSet::new(ARCHIVE_MULTIPLIER),
-                config: test_archive_config(),
-            }
-        }
-
-        fn rt(&self) -> ArchiveRTArgs<'_> {
-            ArchiveRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown: &self.shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn rt_with<'a>(&'a self, shutdown: &'a Shutdown) -> ArchiveRTArgs<'a> {
-            ArchiveRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn path(&self, name: &str) -> PathBuf {
-            self.dir.path().join(name)
-        }
-
-        fn add_file(&self, name: &str, payload: &[u8]) -> FileId {
-            self.insert_recorded(&self.path(name), payload, None, None, None)
-        }
-
-        fn add_file_recorded(
-            &self, name: &str, payload: &[u8],
-            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
-            -> FileId {
-            self.insert_recorded(&self.path(name), payload, mtime, atime, ctime)
-        }
-
-        fn insert_recorded(
-            &self, path: &Path, payload: &[u8],
-            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
-            -> FileId {
-            std::fs::write(path, payload).expect("write test payload");
-            self.db.insert_file(&NewFileRecord {
-                abs_path: PathBuf::from(path),
-                ext: original_extension(path),
-                size: payload.len() as u64,
-                mtime, atime, ctime,
-                uid: None, gid: None, mode: None,
-                ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
-                device_id: None, inode_id: None, major: None, minor: None,
-            }).expect("insert test file");
-            self.db.file_id_by_abs_path(path).expect("lookup test file").expect("file present")
-        }
-
         fn seed_sha1(&self, id: FileId, sha1_byte: u8) {
             self.db.with_transaction(|conn| {
                 let n = conn.execute(
@@ -647,22 +545,11 @@ struct TestWorld {
             }).expect("seed eager tx");
         }
 
-        fn phase(&self, id: FileId) -> FilePhase {
-            self.db.get_file_by_id::<StrippedRecord>(id)
-                .expect("get row")
-                .expect("row present")
-                .phase
-        }
-
         fn canonical_of(&self, id: FileId) -> Option<FileId> {
             self.db.get_file_by_id::<StrippedRecord>(id)
                 .expect("get row")
                 .expect("row present")
                 .canonical_id
-        }
-
-        fn flag(&self, id: FileId, flag: FileFlag) -> bool {
-            self.db.get_file_flag(id, flag).expect("get flag")
         }
     }
 
@@ -689,7 +576,7 @@ struct TestWorld {
 
     #[test]
     fn files_equal_same_content() {
-        let world = TestWorld::new();
+        let world = test_world();
         let a = world.path("a.bin");
         let b = world.path("b.bin");
         let payload = pattern(1024 * 1024, 3);
@@ -704,7 +591,7 @@ struct TestWorld {
 
     #[test]
     fn files_equal_diff_length() {
-        let world = TestWorld::new();
+        let world = test_world();
         let a = world.path("a.bin");
         let b = world.path("b.bin");
         std::fs::write(&a, &pattern(1024 * 1024, 3)).expect("write a");
@@ -718,7 +605,7 @@ struct TestWorld {
 
     #[test]
     fn files_equal_diff_content_same_length() {
-        let world = TestWorld::new();
+        let world = test_world();
         let a = world.path("a.bin");
         let b = world.path("b.bin");
         std::fs::write(&a, &pattern(1024 * 1024, 3)).expect("write a");
@@ -732,7 +619,7 @@ struct TestWorld {
 
     #[test]
     fn files_equal_force_pre_set_interrupts() {
-        let world = TestWorld::new();
+        let world = test_world();
         let a = world.path("a.bin");
         let b = world.path("b.bin");
         let payload = pattern(1024 * 1024, 3);
@@ -749,7 +636,7 @@ struct TestWorld {
         if geteuid().is_root() {
             return;
         }
-        let world = TestWorld::new();
+        let world = test_world();
         let a = world.path("a.bin");
         let b = world.path("b.bin");
         std::fs::write(&a, &pattern(64 * 1024, 3)).expect("write a");
@@ -765,7 +652,7 @@ struct TestWorld {
 
     #[test]
     fn compare_error_file_id_canonical_side() {
-        let world = TestWorld::new();
+        let world = test_world();
         let id_a = world.add_file("a.bin", &pattern(1024, 1));
         let id_b = world.add_file("b.bin", &pattern(1024, 2));
         let pair = pair_for(&world, id_a, id_b);
@@ -783,7 +670,7 @@ struct TestWorld {
 
     #[test]
     fn compare_error_file_id_candidate_side() {
-        let world = TestWorld::new();
+        let world = test_world();
         let id_a = world.add_file("a.bin", &pattern(1024, 1));
         let id_b = world.add_file("b.bin", &pattern(1024, 2));
         let pair = pair_for(&world, id_a, id_b);
@@ -801,7 +688,7 @@ struct TestWorld {
 
     #[test]
     fn compare_error_file_id_unknown_path_panics() {
-        let world = TestWorld::new();
+        let world = test_world();
         let id_a = world.add_file("a.bin", &pattern(1024, 1));
         let id_b = world.add_file("b.bin", &pattern(1024, 2));
         let pair = pair_for(&world, id_a, id_b);
@@ -820,7 +707,7 @@ struct TestWorld {
 
     #[test]
     fn record_dedup_error_only_records_errors() {
-        let world = TestWorld::new();
+        let world = test_world();
         let id = world.add_file("e.bin", &pattern(1024, 1));
         let mut recorder = Recorder::new(&world.db, true, None);
         record_dedup_error(&mut recorder, &CompareOutcome {
@@ -862,7 +749,7 @@ struct TestWorld {
 
     #[test]
     fn compare_one_byte_compare_equal() {
-        let world = TestWorld::new();
+        let world = test_world();
         let payload = pattern(1024 * 1024, 3);
         let id_a = world.add_file("a.bin", &payload);
         let id_b = world.add_file("b.bin", &payload);
@@ -874,7 +761,7 @@ struct TestWorld {
 
     #[test]
     fn compare_one_byte_compare_unequal() {
-        let world = TestWorld::new();
+        let world = test_world();
         let id_a = world.add_file("a.bin", &pattern(1024 * 1024, 3));
         let id_b = world.add_file("b.bin", &pattern(1024 * 1024, 4));
         let outcome = compare_one_pair(&world, id_a, id_b, false);
@@ -883,7 +770,7 @@ struct TestWorld {
 
     #[test]
     fn compare_one_hardlink_preflight_short_circuits() {
-        let world = TestWorld::new();
+        let world = test_world();
         // Two *different-content* paths sharing a stored (dev, inode): the
         // preflight must short-circuit the byte compare, so it still yields
         // equal without reading either payload.
@@ -914,7 +801,7 @@ struct TestWorld {
 
     #[test]
     fn compare_one_times_modified_detected() {
-        let world = TestWorld::new();
+        let world = test_world();
         let now = Utc::now();
         let stale = DateTime::from_timestamp(now.timestamp() - 3600, 0).expect("stale");
         let payload = pattern(128 * 1024, 4);
@@ -929,7 +816,7 @@ struct TestWorld {
 
     #[test]
     fn compare_one_graceful_pre_set_interrupts() {
-        let world = TestWorld::new();
+        let world = test_world();
         let payload = pattern(1024 * 1024, 3);
         let id_a = world.add_file("a.bin", &payload);
         let id_b = world.add_file("b.bin", &payload);
@@ -944,7 +831,7 @@ struct TestWorld {
 
     #[test]
     fn compare_one_force_pre_set_interrupts() {
-        let world = TestWorld::new();
+        let world = test_world();
         let payload = pattern(1024 * 1024, 3);
         let id_a = world.add_file("a.bin", &payload);
         let id_b = world.add_file("b.bin", &payload);
@@ -962,7 +849,7 @@ struct TestWorld {
         if geteuid().is_root() {
             return;
         }
-        let world = TestWorld::new();
+        let world = test_world();
         let id_canon = world.add_file("a.bin", &pattern(64 * 1024, 3));
         let id_cand = world.add_file("b.bin", &pattern(64 * 1024, 3));
         std::fs::set_permissions(&world.path("b.bin"), std::fs::Permissions::from_mode(0))
@@ -982,7 +869,7 @@ struct TestWorld {
 
     #[test]
     fn compare_pair_maps_records() {
-        let world = TestWorld::new();
+        let world = test_world();
         let payload = pattern(4096, 3);
         let id_a = world.add_file("a.bin", &payload);
         let id_b = world.add_file("b.bin", &payload);
@@ -1007,7 +894,7 @@ struct TestWorld {
 
     #[test]
     fn compare_worker_sends_none_on_graceful_exit() {
-        let world = TestWorld::new();
+        let world = test_world();
         let id_a = world.add_file("a.bin", &pattern(4096, 1));
         let id_b = world.add_file("b.bin", &pattern(4096, 2));
         let pair = pair_for(&world, id_a, id_b);
@@ -1039,7 +926,7 @@ struct TestWorld {
 
     #[test]
     fn compare_worker_sends_none_after_force_mid_compare() {
-        let world = TestWorld::new();
+        let world = test_world();
         let payload = pattern(16 * 1024 * 1024, 3);
         let id_a = world.add_file("a.bin", &payload);
         let id_b = world.add_file("b.bin", &payload);
@@ -1119,7 +1006,7 @@ struct TestWorld {
 
     #[test]
     fn run_nothing_to_do_exits_early() {
-        let world = TestWorld::new();
+        let world = test_world();
         let id_a = world.add_file("a.bin", &pattern(1024 * 1024, 1));
         let id_b = world.add_file("b.bin", &pattern(1024 * 1024, 2));
         world.db.apply_no_filter_archive().expect("filter");
@@ -1136,7 +1023,7 @@ struct TestWorld {
     }
 
     fn seed_dedup_world(payload: &[u8], alt: u8) -> (TestWorld, Vec<(FileId, u8)>) {
-        let world = TestWorld::new();
+        let world = test_world();
         let e1 = world.add_file("e1.bin", payload);
         let e2 = world.add_file("e2.bin", payload);
         let e3 = world.add_file("e3.bin", payload);
@@ -1177,7 +1064,7 @@ struct TestWorld {
     fn run_multiround_group_completes() {
         // {A,B,C}: A differs from B and C (two comparisons), B == C. Round 2
         // elects B and re-compares C against B — the I1 end-to-end repro.
-        let world = TestWorld::new();
+        let world = test_world();
         let bc = pattern(512 * 1024, 5);
         let a_alt = pattern(512 * 1024, 3);
         let id_a = world.add_file("a.bin", &a_alt);
@@ -1207,7 +1094,7 @@ struct TestWorld {
         }
         let payload = pattern(512 * 1024, 5);
         let build = || {
-            let world = TestWorld::new();
+            let world = test_world();
             let id_a = world.add_file("a.bin", &payload);
             let id_b = world.add_file("b.bin", &payload);
             world.db.apply_no_filter_archive().expect("filter");
@@ -1232,7 +1119,7 @@ struct TestWorld {
     }
 
     fn run_interrupt_world() -> (TestWorld, Vec<FileId>) {
-        let mut world = TestWorld::new();
+        let mut world = test_world();
         world.config.process.io_jobs = 1;
         let big = pattern(16 * 1024 * 1024, 3);
         let mid = pattern(16 * 1024 * 1024, 5);
@@ -1340,7 +1227,7 @@ struct TestWorld {
 
     #[test]
     fn run_interrupt_before_start_returns_interrupted() {
-        let world = TestWorld::new();
+        let world = test_world();
         let payload = pattern(512 * 1024, 3);
         world.add_file("a.bin", &payload);
         world.add_file("b.bin", &payload);
@@ -1524,7 +1411,7 @@ conn.execute(
         if geteuid().is_root() {
             return;
         }
-        let mut world = TestWorld::new();
+        let mut world = test_world();
         world.config.indexing.no_hardlink_detection = false;
         world.config.pipeline.dedup_mode = DedupMode::Regular;
         let c = seed_mode_corpus(&world);
@@ -1568,7 +1455,7 @@ conn.execute(
 
     #[test]
     fn mode_hash_corpus_trusts_digest() {
-        let mut world = TestWorld::new();
+        let mut world = test_world();
         world.config.pipeline.dedup_mode = DedupMode::Hash;
         let c = seed_mode_corpus(&world);
         run(&world.rt()).expect("run hash mode");
@@ -1605,7 +1492,7 @@ conn.execute(
 
     #[test]
     fn mode_none_corpus_collapses_only_hardlinks() {
-        let mut world = TestWorld::new();
+        let mut world = test_world();
         world.config.indexing.no_hardlink_detection = false;
         world.config.pipeline.dedup_mode = DedupMode::None;
         let c = seed_mode_corpus(&world);
@@ -1632,7 +1519,7 @@ conn.execute(
 
     #[test]
     fn mode_none_no_hardlink_detection_all_self_canonical() {
-        let mut world = TestWorld::new();
+        let mut world = test_world();
         world.config.indexing.no_hardlink_detection = true;
         world.config.pipeline.dedup_mode = DedupMode::None;
         let c = seed_mode_corpus(&world);

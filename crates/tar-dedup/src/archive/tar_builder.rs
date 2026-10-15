@@ -404,153 +404,17 @@ fn check_archive_bytes_out(db: &Database, archive_len: u64) -> Result<()> {
 mod tests {
     use super::*;
     use crate::archive_footer;
-    use crate::common::files::original_extension;
-    use crate::config::{
-        ArchiveConfig, ArchivePipelineOptions, CaptureOptions, FilterOptions, IndexingOptions,
-        ProcessOptions, SparseOptions,
-    };
-    use crate::db::Database;
     use crate::db::flags::{ErrorScope, FileFlag};
-    use crate::db::types::{FileId, FileType, NewFileRecord};
-    use crate::progress::{ARCHIVE_MULTIPLIER, ProgressBarSet};
+    use crate::db::types::FileId;
     use crate::shutdown::Shutdown;
+    use crate::test_support::TestWorld;
     use chrono::{DateTime, Utc};
     use nix::unistd::geteuid;
     use rusqlite::named_params;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::PermissionsExt;
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::path::PathBuf;
-
-    fn test_archive_config() -> ArchiveConfig {
-        ArchiveConfig {
-            indexing: IndexingOptions {
-                no_hardlink_detection: true,
-                ..IndexingOptions::default()
-            },
-            filter: FilterOptions { eager_filter: false, ..FilterOptions::default() },
-            capture: CaptureOptions {
-                do_xattrs: false,
-                do_posix_acl: false,
-                do_selinux: false,
-                ..CaptureOptions::default()
-            },
-            sparse: SparseOptions { min_pages: 4, ..SparseOptions::default() },
-            process: ProcessOptions { jobs: 4, io_jobs: 1, ..ProcessOptions::default() },
-            pipeline: ArchivePipelineOptions {
-                max_shard_size: 0,
-                write_archive_footer: false,
-                ..ArchivePipelineOptions::default()
-            },
-            ..ArchiveConfig::default()
-        }
-    }
-
-
-struct TestWorld {
-        dir: tempfile::TempDir,
-        db: Database,
-        shutdown: Shutdown,
-        progress: ProgressBarSet,
-        config: ArchiveConfig,
-    }
 
     impl TestWorld {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let mut config = test_archive_config();
-            config.paths.work_dir = dir.path().join("astage");
-            config.paths.archive_path = dir.path().join("test.astar");
-            fs::create_dir_all(&config.paths.work_dir).expect("create stage dir");
-            // append_snapshot mirrors db_path() into the tar; the DB must live there.
-            let db = Database::open(&config.paths.db_path()).expect("open db");
-            // The internal include rule the filter phase installs: without it
-            // `apply_no_filter` (-1) violates the FK.
-            db.with_transaction(|conn| {
-                conn.execute(
-                    "INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) \
-                     VALUES (-1, 'internal', NULL, '.*')", [],
-                ).expect("seed internal include rule");
-                Ok(())
-            }).expect("seed internal include rule tx");
-            Self {
-                dir, db,
-                shutdown: Shutdown::detached(),
-                progress: ProgressBarSet::new(ARCHIVE_MULTIPLIER),
-                config,
-            }
-        }
-
-        fn rt(&self) -> ArchiveRTArgs<'_> {
-            ArchiveRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown: &self.shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn rt_with<'a>(&'a self, shutdown: &'a Shutdown) -> ArchiveRTArgs<'a> {
-            ArchiveRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn add_file(&self, name: &str, payload: &[u8]) -> FileId {
-            let path = self.dir.path().join(name);
-            fs::write(&path, payload).expect("write test payload");
-            self.db.insert_file(&NewFileRecord {
-                abs_path: PathBuf::from(&path),
-                ext: original_extension(&path),
-                size: payload.len() as u64,
-                mtime: None, atime: None, ctime: None,
-                uid: None, gid: None, mode: None,
-                ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
-                device_id: None, inode_id: None, major: None, minor: None,
-            }).expect("insert test file");
-            self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
-        }
-
-        fn add_file_recorded(
-            &self, name: &str, payload: &[u8],
-            mtime: Option<DateTime<Utc>>, atime: Option<DateTime<Utc>>, ctime: Option<DateTime<Utc>>)
-            -> FileId {
-            let path = self.dir.path().join(name);
-            fs::write(&path, payload).expect("write test payload");
-            self.db.insert_file(&NewFileRecord {
-                abs_path: PathBuf::from(&path),
-                ext: original_extension(&path),
-                size: payload.len() as u64,
-                mtime, atime, ctime,
-                uid: None, gid: None, mode: None,
-                ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
-                device_id: None, inode_id: None, major: None, minor: None,
-            }).expect("insert recorded file");
-            self.db.file_id_by_abs_path(&path).expect("lookup test file").expect("file present")
-        }
-
-        /// The canonical row for `id` as `staged`: the exact precondition the
-        /// archive queue evaluates. Sets the filter columns so the row is eligible.
-        fn seed_staged_row(&self, id: FileId) {
-            self.db.with_transaction(|conn| {
-                let n = conn.execute(
-                    "UPDATE files SET phase = 'staged', canonical_id = :id, \
-                     sha1 = :sha1, include_reason_archive = -1, exclude_reason_archive = 0 \
-                     WHERE id = :id",
-                    named_params! {
-                        ":id": id.0,
-                        ":sha1": [7u8; 20].as_slice(),
-                    },
-                ).expect("seed staged row");
-                assert_eq!(n, 1);
-                Ok(())
-            }).expect("seed staged row tx");
-        }
-
         /// Mark `id` canonical + already archived (prior session). Counts toward
         /// `already_archived`, which suppresses the init-manifest write in run().
         fn seed_archived_row(&self, id: FileId) {
@@ -569,35 +433,8 @@ struct TestWorld {
             }).expect("seed archived row tx");
         }
 
-        fn phase(&self, id: FileId) -> FilePhase {
-            self.db.get_file_by_id::<StrippedRecord>(id)
-                .expect("get row")
-                .expect("row present")
-                .phase
-        }
-
         fn flags(&self, id: FileId) -> crate::db::flags::FileFlags {
             self.db.get_file_flags(id).expect("get flags")
-        }
-
-        fn record(&self, id: FileId) -> StrippedRecord {
-            self.db.get_file_by_id::<StrippedRecord>(id)
-                .expect("get row")
-                .expect("row present")
-        }
-
-        /// Absolute `{stage_dir}/{tar member}` target path for `id`.
-        fn target_path(&self, id: FileId) -> PathBuf {
-            let name = self.record(id).tar_member_name().expect("canonical");
-            self.config.paths.stage_dir().join(name)
-        }
-
-        /// Create the symlink stage would create, and return the path.
-        fn place_symlink(&self, id: FileId) -> PathBuf {
-            let rec = self.record(id);
-            let target = self.target_path(id);
-            symlink(rec.fs_path(), &target).expect("place symlink");
-            target
         }
 
         /// Open a session row (open = finalized 0) and return its id.
