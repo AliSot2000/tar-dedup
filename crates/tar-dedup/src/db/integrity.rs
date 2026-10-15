@@ -119,7 +119,7 @@ pub fn count_missing_unix_infos(conn: &Connection) -> Result<u64> {
 }
 
 //==================================================================================================
-// Cross-phase invariant battery (`plans/sanity-checks.md`)
+// Cross-phase invariant battery (`plans/025-sanity-checks.md`)
 //
 // Each invariant is a dedicated `count_*` returning the number of offending rows;
 // the aggregators run the subset that became established by the completed phase
@@ -611,7 +611,7 @@ fn archive_battery_count(gate: &ArchiveGate, phase: PipelinePhase, include_hash:
 }
 
 /// Run the archive battery after `phase` completed successfully. Always-on
-/// (not gated behind debug assertions). See `plans/sanity-checks.md` A1–A8.
+/// (not gated behind debug assertions). See `plans/025-sanity-checks.md` A1–A8.
 pub fn check_after_archive_phase(conn: &Connection, gate: &ArchiveGate, phase: PipelinePhase,
     progress: Option<&dyn Fn()>) -> Result<()> {
     check_archive_battery(conn, gate, phase, true, progress)
@@ -646,7 +646,7 @@ fn extract_battery_count(config: &ExtractConfig, phase: ExtractPipelinePhase) ->
 
 /// Run the archive battery (config-free subset, the archive already completed on
 /// the producing side) followed by the extract battery, after `phase` finished.
-/// See `plans/sanity-checks.md` E1–E10.
+/// See `plans/025-sanity-checks.md` E1–E10.
 pub fn check_after_extract_phase(conn: &Connection, config: &ExtractConfig,
     phase: ExtractPipelinePhase, progress: Option<&dyn Fn()>) -> Result<()> {
     let gate = ArchiveGate {
