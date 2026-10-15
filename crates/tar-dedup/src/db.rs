@@ -141,8 +141,8 @@ impl Database {
         original_path: &Path,
         abs_path_raw: &Path,
         original_path_raw: &Path,
-        flags: SourceFlags,
-    ) -> Result<i64> {
+        flags: SourceFlags)
+        -> Result<i64> {
         source::add_get_source(
             &*self.conn(),
             abs_path,
@@ -158,8 +158,8 @@ impl Database {
     pub fn find_overlapping_source(
         &self,
         abs_path: &Path,
-        no_recursion: bool,
-    ) -> Result<Option<(i64, PathBuf)>> {
+        no_recursion: bool)
+        -> Result<Option<(i64, PathBuf)>> {
         source::find_overlapping_source(&*self.conn(), abs_path, no_recursion)
     }
 
@@ -167,8 +167,8 @@ impl Database {
         &self,
         only_dirs: Option<bool>,
         starting_id: i64,
-        batch_size: u64,
-    ) -> Result<Vec<SourceRecord>> {
+        batch_size: u64)
+        -> Result<Vec<SourceRecord>> {
         source::list_sources(&self.conn(), only_dirs, starting_id, batch_size)
     }
 
@@ -240,9 +240,8 @@ impl Database {
         flags::set_out_tree_flag(&*self.conn(), out_id, flag, on)
     }
 
-    pub fn promote_unhasheable_files(&self,
-                                     eager_filter: bool,
-                                     detect_hardlinks: bool) -> Result<u64> {
+    pub fn promote_unhasheable_files(
+        &self, eager_filter: bool, detect_hardlinks: bool) -> Result<u64> {
         hash::promote_unhasheable_files(&self.conn(), eager_filter, detect_hardlinks)
         
     }
@@ -282,8 +281,8 @@ impl Database {
     pub fn count_all_hashable_files(
         &self,
         eager_filter: bool,
-        detect_hardlinks: bool,
-    ) -> Result<u64> {
+        detect_hardlinks: bool)
+        -> Result<u64> {
         hash::count_all_hashable_files(&*self.conn(), eager_filter, detect_hardlinks)
     }
 
@@ -298,8 +297,8 @@ impl Database {
         file_id: FileId,
         digest: [u8; 20],
         sparse_count: u64,
-        update_hardlinks: bool,
-    ) -> Result<()> {
+        update_hardlinks: bool)
+        -> Result<()> {
         hash::update_file_inspection_per_id(
             &*self.conn(),
             file_id,
@@ -461,8 +460,8 @@ impl Database {
 
     pub fn apply_filter_result_archive<I: Iterator<Item = (FileId, i64, i64)>>(
         &self,
-        results: I,
-    ) -> Result<u64> {
+        results: I)
+        -> Result<u64> {
         filter::apply_filter_result_archive(&mut *self.conn_mut(), results)
     }
 
@@ -616,8 +615,8 @@ impl Database {
         tar_writer::reset_archive_state(&*self.conn())
     }
 
-    pub fn dump_meta(&self) -> Result<meta::MetaDump> {
-        meta::dump_meta(&*self.conn())
+    pub fn dump_meta(&self) -> Result<MetaDump> {
+        dump_meta(&*self.conn())
     }
 
     /// See [`meta::get_tar_dedup_version`].
@@ -662,14 +661,12 @@ impl Database {
 
     pub fn set_archive_owner_policy(
         &self,
-        policy: &crate::common::perms::OwnerGroupPolicy,
-    ) -> Result<()> {
+        policy: &OwnerGroupPolicy)
+        -> Result<()> {
         meta::set_archive_owner_policy(&*self.conn(), policy)
     }
 
-    pub fn get_archive_owner_policy(
-        &self,
-    ) -> Result<Option<crate::common::perms::OwnerGroupPolicy>> {
+    pub fn get_archive_owner_policy(&self) -> Result<Option<OwnerGroupPolicy>> {
         meta::get_archive_owner_policy(&*self.conn())
     }
 
@@ -697,11 +694,11 @@ impl Database {
         meta::get_archive_config(&*self.conn())
     }
 
-    pub fn set_extract_config(&self, config: &crate::config::ExtractConfig) -> Result<()> {
+    pub fn set_extract_config(&self, config: &ExtractConfig) -> Result<()> {
         meta::set_extract_config(&*self.conn(), config)
     }
 
-    pub fn get_extract_config(&self) -> Result<Option<crate::config::ExtractConfig>> {
+    pub fn get_extract_config(&self) -> Result<Option<ExtractConfig>> {
         meta::get_extract_config(&*self.conn())
     }
 
@@ -780,7 +777,7 @@ impl Database {
         scan::promote_extracted_to_unarchived(&*self.conn())
     }
 
-    pub fn tally_scan_remainders(&self, eager_filter: bool) -> Result<scan::ScanRemainderTally> {
+    pub fn tally_scan_remainders(&self, eager_filter: bool) -> Result<ScanRemainderTally> {
         scan::tally_scan_remainders(&self.conn(), eager_filter)
     }
 
@@ -1000,8 +997,8 @@ impl Database {
         &self,
         filter: bool,
         last_id: FileId,
-        batch_size: u64,
-    ) -> Result<Vec<R>> {
+        batch_size: u64)
+        -> Result<Vec<R>> {
         place::list_canonical_files_for_move(&self.conn(), filter, last_id, batch_size)
     }
 
@@ -1040,8 +1037,8 @@ impl Database {
         source_id: Option<i64>,
         only_dirs: Option<bool>,
         only_valid_new_name: bool,
-        apply_filters: bool,
-    ) -> Result<Vec<R>> {
+        apply_filters: bool)
+        -> Result<Vec<R>> {
         place_prologue::list_materialized_entries(
             &self.conn(), last_id, batch_size, source_id, only_dirs,
             only_valid_new_name, apply_filters)
@@ -1060,8 +1057,8 @@ impl Database {
         last_id: OutTreeId,
         batch_size: u64,
         source_id: Option<i64>,
-        only_dir: Option<bool>,
-    ) -> Result<Vec<OutTreeRecord>> {
+        only_dir: Option<bool>)
+        -> Result<Vec<OutTreeRecord>> {
         common::list_out_tree(&self.conn(), last_id, batch_size, source_id, only_dir)
     }
 
@@ -1206,8 +1203,8 @@ impl Database {
         scope: flags::ErrorScope,
         reemit: Option<(bool, i64)>,
         last_id: i64,
-        batch_size: u64,
-    ) -> Result<Vec<ErrorRecord>> {
+        batch_size: u64)
+        -> Result<Vec<ErrorRecord>> {
         errors::list_records(&self.conn(), scope, reemit, last_id, batch_size)
     }
 
@@ -1228,21 +1225,26 @@ impl Database {
     pub fn count_missing_dev_inode(&self) -> Result<u64> {
         integrity::count_missing_dev_inode(&self.conn())
     }
+
     pub fn list_missing_dev_inode<R: SqlFileRow>(&self, last_id: &FileId, batch_size: u64)
         -> Result<Vec<R>> {
         integrity::list_missing_dev_inode(&self.conn(), last_id, batch_size)
     }
+
     pub fn count_double_canonical_dev_inode_group(&self) -> Result<u64> {
         integrity::count_double_canonical_dev_inode_group(&self.conn())
     }
+
     pub fn list_double_canonical_dev_inode_group<R: SqlFileRow>(
         &self, last_id: &FileId, batch_size: u64)
         -> Result<Vec<R>> {
         integrity::list_double_canonical_dev_inode_group(&self.conn(), last_id, batch_size)
     }
+
     pub fn count_id_implication(&self) -> Result<u64> {
         integrity::count_id_implication(&self.conn())
     }
+
     pub fn count_missing_unix_infos(&self) -> Result<u64> {
         integrity::count_missing_unix_infos(&self.conn())
     }
