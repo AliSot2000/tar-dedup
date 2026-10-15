@@ -57,8 +57,9 @@
 - [X] Rehash cli argv
 - [X] Add DB Version (Version I'm putting in a const not makro et al)
 - [X] Implementation of force-overwrite-dir + rename
-- [ ] Capture Error Inventory
-- [ ] finish testing for [inventory]
+- [X] Capture Error Inventory
+- [X] finish testing for [inventory]
+- [ ] finish testing for [scan]
 - [ ] finish testing for [place_prologue]
 - [ ] finish testing for [place]
 - [ ] finish testing for [permissions]
