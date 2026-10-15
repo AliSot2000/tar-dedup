@@ -225,20 +225,24 @@ pub fn parse_filter(
 pub fn test_match(
     include: &[ParsedFilter],
     exclude: &[ParsedFilter],
-    record: &StrippedRecord,
-) -> FilterResult {
+    record: &StrippedRecord)
+    -> FilterResult {
+
     let mut include_reason = 0i64;
     let mut exclude_reason = 0i64;
 
-    let path = record.abs_path.to_string_lossy();
+    // Match the original path bytes (raw identity), not the lossy text form:
+    // byte-oriented filters (`--no-unicode`, `.` matches a byte) must be able to
+    // reach non-UTF-8 path bytes that `to_string_lossy()` would have replaced.
+    let haystack = record.fs_path().as_os_str().as_encoded_bytes();
     for filter in include {
-        if filter.expression.is_match(&path) {
+        if filter.expression.is_match(haystack) {
             include_reason = filter.id;
             break;
         }
     }
     for filter in exclude {
-        if filter.expression.is_match(&path) {
+        if filter.expression.is_match(haystack) {
             exclude_reason = filter.id;
             break;
         }
