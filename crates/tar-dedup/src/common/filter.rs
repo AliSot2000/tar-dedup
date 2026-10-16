@@ -323,6 +323,7 @@ fn handle_pattern_source(
     recorder: &mut Recorder,
     e_phase: ErrorPhase)
     -> Result<()> {
+
     // Scan single argument expressions.
     for (idx, query) in pattern.iter().enumerate() {
         handle_query(
@@ -394,6 +395,7 @@ fn handle_query(
     ignore_case: bool,
     no_unicode: bool)
     -> Result<()> {
+
     match RegexBuilder::new(query)
         .case_insensitive(ignore_case)
         .unicode(!no_unicode)
