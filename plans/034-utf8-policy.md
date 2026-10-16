@@ -92,7 +92,10 @@ accepted). `link_dst_raw` is stored for the faithful record only.
 - `db/scan.rs:212` snapshot-path assert; `unarchive/rehash.rs:456/479` test helpers.
 - Display-only `to_string_lossy` (`db/errors.rs`, `progress.rs`, `config.rs`,
   `config/compression.rs`, `common.rs`, `common/filter.rs:352`).
-- `common/filter.rs:231` filter haystack (working DB string, already valid UTF-8).
+- `common/filter.rs:231` filter haystack — **superseded (2026-10-15)**: `test_match`
+  now matches the raw path bytes (`fs_path()` / `regex::bytes::Regex`), so
+  byte-oriented `--no-unicode` filters reach non-UTF-8 path bytes. Patterns remain
+  UTF-8 text clues; the haystack is the original bytes.
 
 ## Edge cases (documented)
 
