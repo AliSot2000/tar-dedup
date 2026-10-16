@@ -78,7 +78,11 @@ pub fn joint_filter_phase(
         let (down, up) = db.fix_up_canonical_flag()?;
         assert_eq!(down, up, "Number of clusters with downgrades did not match numbers with upgrade");
     }
-    assert_eq!(0, db.count_files_in_phase(pv)?, "Files left over after the filtering");
+    // Archive-only, like the equivalent guard inside `step_filters`: extract rows
+    // stay in `pv` until the post-pass global promotion (`set_phase`).
+    if pv.is_archive_phase() {
+        assert_eq!(0, db.count_files_in_phase(pv)?, "Files left over after the filtering");
+    }
     Ok(())
 }
 
@@ -166,11 +170,16 @@ pub fn step_filters(
         }
     )?;
 
-    let rem = db.count_files_in_phase(*pv)?;
     let total = db.count_entries()?;
     tracing::info!("Filtered {total} entries, deemed: {included} included, {exclude_by_include} \
         excluded by include filter, {exclude_by_exclude} excluded by exclude filter.");
-    assert_eq!(0, rem, "INVARIANT ERROR: {rem} files in previous phase. Zero expected.");
+    // The zero-leftover invariant only holds for the archive pipeline, where the
+    // apply closure advances `phase`; extract rows stay in `pv` (Unarchived) until
+    // the global promotion that follows the pass.
+    if pv.is_archive_phase() {
+        let rem = db.count_files_in_phase(*pv)?;
+        assert_eq!(0, rem, "INVARIANT ERROR: {rem} files in previous phase. Zero expected.");
+    }
     Ok(())
 }
 
@@ -430,10 +439,15 @@ fn handle_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::PipelinePhase;
     use crate::db::flags::FileFlags;
     use crate::db::types::{FileId, FilePhase, FileType, StrippedRecord};
+    use crate::test_support::TestWorld;
+    use std::cell::RefCell;
     use std::ffi::OsString;
+    use std::fs;
     use std::os::unix::ffi::OsStringExt;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
 
     fn raw_record(name: &[u8]) -> StrippedRecord {
@@ -491,5 +505,383 @@ mod tests {
         let res = test_match(&include, &exclude, &record);
         assert_eq!(res.include_reason, -1);
         assert_eq!(res.exclude_reason, 1);
+    }
+
+    // ---- test_match matrix -------------------------------------------------
+
+    #[test]
+    fn test_match_base_cases_both_path_kinds() {
+        let utf8 = raw_record("/tree/café".as_bytes());
+        let raw = raw_record(b"/tree/bad-\xFF\xFE");
+        for record in [&utf8, &raw] {
+            let none: Vec<ParsedFilter> = Vec::new();
+            let inc = vec![filt(-1, ".*", false)];
+            let exc = vec![filt(1, ".*", false)];
+
+            // (no include, no exclude) -> (0, 0)
+            let r = test_match(&none, &none, record);
+            assert_eq!((r.include_reason, r.exclude_reason), (0, 0));
+
+            // (include, no exclude) -> (<0, 0)
+            let r = test_match(&inc, &none, record);
+            assert!(r.include_reason < 0 && r.exclude_reason == 0);
+
+            // (no include, exclude) -> (0, >0)
+            let r = test_match(&none, &exc, record);
+            assert!(r.include_reason == 0 && r.exclude_reason > 0);
+
+            // (include, exclude) -> (<0, >0)
+            let r = test_match(&inc, &exc, record);
+            assert!(r.include_reason < 0 && r.exclude_reason > 0);
+        }
+    }
+
+    #[test]
+    fn test_match_first_match_wins() {
+        let record = raw_record(b"/x/a-b");
+        let inc = vec![filt(-2, "a", false), filt(-1, ".*", false)];
+        let exc = vec![filt(1, "b", false), filt(2, ".*", false)];
+        let r = test_match(&inc, &exc, &record);
+        assert_eq!(r.include_reason, -2, "first matching include wins");
+        assert_eq!(r.exclude_reason, 1, "first matching exclude wins");
+    }
+
+    // ---- parse_filter ------------------------------------------------------
+
+    #[test]
+    fn parse_filter_anchored_once() {
+        let fe = |expr: &str| FilterExpression {
+            id: -1, from: "x".into(), line: Some(0), expression: expr.into(),
+        };
+        // `--anchored` prepends `^` exactly once...
+        let a = parse_filter(&[fe("foo")], "include", true, false, false, None);
+        assert_eq!(a[0].expression.as_str(), "^foo");
+        // ...and never double-anchors an already-anchored expression.
+        let b = parse_filter(&[fe("^foo")], "include", true, false, false, None);
+        assert_eq!(b[0].expression.as_str(), "^foo");
+        // Unanchored leaves the expression untouched.
+        let c = parse_filter(&[fe("foo")], "include", false, false, false, None);
+        assert_eq!(c[0].expression.as_str(), "foo");
+    }
+
+    #[test]
+    fn parse_filter_case_and_unicode_flags() {
+        let fe = FilterExpression {
+            id: -1, from: "x".into(), line: Some(0), expression: "keep".into(),
+        };
+        let ic = parse_filter(&[fe.clone()], "include", false, true, false, None);
+        assert!(ic[0].expression.is_match(b"KEEP"));
+        let cs = parse_filter(&[fe], "include", false, false, false, None);
+        assert!(!cs[0].expression.is_match(b"KEEP"));
+
+        // Byte escape only compiles under `--no-unicode` (unicode mode rejects it).
+        let nu_fe = FilterExpression {
+            id: -1, from: "x".into(), line: Some(0), expression: r"\xFF".into(),
+        };
+        let nu = parse_filter(&[nu_fe.clone()], "include", false, false, true, None);
+        assert!(nu[0].expression.is_match([0xFFu8].as_slice()));
+    }
+
+    #[test]
+    fn parse_filter_panics_on_invalid_regex() {
+        let fe = FilterExpression {
+            id: -1, from: "x".into(), line: Some(0), expression: "[".into(),
+        };
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            let _ = parse_filter(&[fe], "include", false, false, false, None);
+        }));
+        assert!(res.is_err(), "invalid regex must panic (INVARIANT ERROR)");
+    }
+
+    // ---- handle_query ------------------------------------------------------
+
+    type FilterTuple = (String, Option<u64>, String);
+
+    fn query_sink<'a>(
+        calls: &'a RefCell<Vec<FilterTuple>>) -> impl Fn(&str, Option<u64>, &str) -> crate::error::Result<u64> + 'a {
+        move |from, line, query| {
+            calls.borrow_mut().push((from.to_string(), line, query.to_string()));
+            Ok(1)
+        }
+    }
+
+    fn rec() -> Recorder<'static> {
+        Recorder::speculative(false, None)
+    }
+
+    #[test]
+    fn handle_query_inserts_valid_query() {
+        let calls = RefCell::new(Vec::new());
+        let insert = query_sink(&calls);
+        handle_query("--include", "keep", "include", 0, &insert, &mut rec(),
+            ErrorPhase::Pipeline(PipelinePhase::Filter), false, false).expect("ok");
+        drop(insert);
+        assert_eq!(calls.into_inner(), vec![("--include".into(), Some(0), "keep".into())]);
+    }
+
+    #[test]
+    fn handle_query_ignores_invalid_query() {
+        let calls = RefCell::new(Vec::new());
+        let insert = query_sink(&calls);
+        handle_query("--exclude", "[", "exclude", 3, &insert, &mut rec(),
+            ErrorPhase::Pipeline(PipelinePhase::Filter), false, false).expect("ok");
+        drop(insert);
+        assert!(calls.into_inner().is_empty(), "invalid regex must not reach the sink");
+    }
+
+    #[test]
+    fn handle_query_unicode_flags_reach_builder() {
+        // `\p{Greek}` is a unicode-only construct: it compiles under unicode mode
+        // (-> inserted) and is rejected under `--no-unicode` (-> recorded, not
+        // inserted), proving the flag is plumbed into the builder.
+        let ok = RefCell::new(Vec::new());
+        handle_query("--include", r"\p{Greek}", "include", 0, &query_sink(&ok), &mut rec(),
+            ErrorPhase::Pipeline(PipelinePhase::Filter), false, false).expect("ok");
+        assert_eq!(ok.into_inner().len(), 1);
+
+        let none = RefCell::new(Vec::new());
+        handle_query("--include", r"\p{Greek}", "include", 0, &query_sink(&none), &mut rec(),
+            ErrorPhase::Pipeline(PipelinePhase::Filter), false, true).expect("ok");
+        assert!(none.into_inner().is_empty(), "no_unicode must reject the unicode class");
+    }
+
+    // ---- ingest_filters matrix ---------------------------------------------
+
+    fn collecting_sink<'a>(
+        includes: &'a RefCell<Vec<FilterTuple>>,
+        excludes: &'a RefCell<Vec<FilterTuple>>,
+    ) -> FilterSink<'a> {
+        FilterSink {
+            add_include: Box::new(|from, line, query| {
+                includes.borrow_mut().push((from.to_string(), line, query.to_string()));
+                Ok(1)
+            }),
+            add_exclude: Box::new(|from, line, query| {
+                excludes.borrow_mut().push((from.to_string(), line, query.to_string()));
+                Ok(1)
+            }),
+            count_includes: Box::new(|| Ok(includes.borrow().len() as u64)),
+        }
+    }
+
+    #[test]
+    fn ingest_filters_matrix() {
+        // (cli patterns, expressions per file, from-files) sweep; the internal
+        // catch-all is appended iff no user include landed.
+        for &(cli, lines, files) in &[
+            (0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1), (0, 5, 2),
+            (1, 0, 0), (1, 0, 1), (1, 1, 1), (5, 5, 3),
+        ] {
+            let world = TestWorld::new();
+            let mut froms = Vec::new();
+            for fi in 0..files {
+                let p = world.path(&format!("inc{fi}.txt"));
+                let body = (0..lines).map(|l| format!("p{fi}l{l}")).collect::<Vec<_>>().join("\n");
+                fs::write(&p, body).expect("write");
+                froms.push(p);
+            }
+            let cli_pats: Vec<String> = (0..cli).map(|i| format!("cli{i}")).collect();
+
+            let includes = RefCell::new(Vec::new());
+            let excludes = RefCell::new(Vec::new());
+            ingest_filters(
+                &cli_pats, &froms, &[], &[],
+                false, false, false,
+                &mut rec(), ErrorPhase::Pipeline(PipelinePhase::Filter),
+                collecting_sink(&includes, &excludes),
+            ).expect("ingest");
+
+            let includes = includes.into_inner();
+            let user = cli + files * lines;
+            if user == 0 {
+                assert_eq!(includes.len(), 1, "internal catch-all expected");
+                assert_eq!(includes[0], ("internal".into(), None, ".*".into()));
+            } else {
+                assert_eq!(includes.len(), user, "no catch-all when user includes exist");
+                // every from-file line carries its 0-based line index
+                for f in 0..files {
+                    for l in 0..lines {
+                        let entry = &includes[cli + f * lines + l];
+                        assert_eq!(entry.1, Some(l as u64));
+                    }
+                }
+            }
+            assert!(excludes.into_inner().is_empty());
+        }
+    }
+
+    #[test]
+    fn ingest_filters_joint_single_call() {
+        let world = TestWorld::new();
+        let inc = world.path("inc.txt");
+        fs::write(&inc, "a\nb\n").expect("write");
+        let empty = world.path("empty.txt");
+        fs::write(&empty, "").expect("write");
+        let broken = world.path("broken.txt");
+
+        let includes = RefCell::new(Vec::new());
+        let excludes = RefCell::new(Vec::new());
+        ingest_filters(
+            &["cli".into()], &[inc.clone(), empty, broken.clone()],
+            &["exc".into()], &[inc.clone()],
+            false, false, false,
+            &mut rec(), ErrorPhase::Pipeline(PipelinePhase::Filter),
+            collecting_sink(&includes, &excludes),
+        ).expect("ingest");
+
+        // includes: 1 cli + 2 from inc (empty/broken contribute nothing)
+        let includes = includes.into_inner();
+        assert_eq!(includes.len(), 3);
+        assert_eq!(includes[0], ("--include".into(), Some(0), "cli".into()));
+        // excludes: 1 cli + 2 from the same populated file
+        let excludes = excludes.into_inner();
+        assert_eq!(excludes.len(), 3);
+        assert_eq!(excludes[0], ("--exclude".into(), Some(0), "exc".into()));
+    }
+
+    #[test]
+    fn ingest_filters_broken_from_file_fail_fast() {
+        let world = TestWorld::new();
+        let broken = world.path("nope.txt");
+        let includes = RefCell::new(Vec::new());
+        let excludes = RefCell::new(Vec::new());
+        let res = ingest_filters(
+            &[], &[broken], &[], &[],
+            false, false, true,
+            &mut rec(), ErrorPhase::Pipeline(PipelinePhase::Filter),
+            collecting_sink(&includes, &excludes),
+        );
+        assert!(matches!(res, Err(Error::Config(_))), "fail-fast must abort on a broken file");
+    }
+
+    // ---- step_filters / joint_filter_phase (DB-backed) ----------------------
+
+    fn seed_hashed(world: &TestWorld, names: &[&str]) {
+        for (i, name) in names.iter().enumerate() {
+            let id = world.add_file(name, &[i as u8]);
+            world.db.mark_file_phase(id, FilePhase::Hashed).expect("hashed");
+        }
+    }
+
+    fn reason_pairs(world: &TestWorld) -> Vec<(i64, i64)> {
+        world.db.with_transaction(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT include_reason_archive, exclude_reason_archive FROM files ORDER BY id",
+            ).expect("stmt");
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            }).expect("query").collect::<rusqlite::Result<Vec<_>>>().expect("collect");
+            Ok(rows)
+        }).expect("tx")
+    }
+
+    /// Drop the TestWorld-seeded internal `.*` include so the table matches
+    /// production when user filters are present (production only installs the
+    /// catch-all when there are no user includes at all).
+    fn clear_internal_include(world: &TestWorld) {
+        world.db.with_transaction(|conn| {
+            conn.execute("DELETE FROM filter_reason_archive WHERE id < 0", [])
+                .expect("clear internal");
+            Ok(())
+        }).expect("tx");
+    }
+
+    /// The archive-side closures `joint_filter_phase` is called with in production.
+    fn archive_closures(
+        world: &TestWorld,
+    ) -> (impl Fn(Option<bool>) -> Result<u64>,
+          impl Fn(bool) -> Result<Vec<FilterExpression>>,
+          impl Fn() -> Result<u64>,
+          impl Fn(&FileId, u64) -> Result<Vec<StrippedRecord>>,
+          impl Fn(Vec<(FileId, i64, i64)>) -> Result<u64>) {
+        (
+            move |is_exclude| world.db.count_filters_archive(is_exclude),
+            move |is_exclude| world.db.get_filters_archive(is_exclude),
+            move || world.db.apply_no_filter_archive(),
+            move |lid, batch_size| world.db.get_rows_to_filter_archive(lid, false, batch_size),
+            move |results| world.db.apply_filter_result_archive(results.into_iter()),
+        )
+    }
+
+    #[test]
+    fn joint_filter_phase_early_out_no_filters() {
+        let world = TestWorld::new();
+        // TestWorld seeds the internal `.*` include: 1 include, 0 excludes ->
+        // the apply_no_filter fast path, step_filters never runs.
+        seed_hashed(&world, &["a", "b"]);
+        let (c, g, a, r, w) = archive_closures(&world);
+        joint_filter_phase(
+            false, false, false, false, 1000, FilePhase::Hashed,
+            &world.db, &world.progress, c, g, a, r, w,
+        ).expect("filter");
+
+        assert_eq!(reason_pairs(&world), vec![(-1, 0), (-1, 0)]);
+        assert_eq!(world.db.count_files_in_phase(FilePhase::Filtered).expect("c"), 2);
+        assert_eq!(world.db.count_files_in_phase(FilePhase::Hashed).expect("c"), 0);
+    }
+
+    #[test]
+    fn joint_filter_phase_counts_via_db_outcome() {
+        let world = TestWorld::new();
+        clear_internal_include(&world);
+        seed_hashed(&world, &["keep_a", "keep_skip_b", "skip_c", "other_d"]);
+        world.db.add_include_pattern("--include", Some(0), "keep").expect("incl");
+        world.db.add_exclude_pattern("--exclude", Some(0), "skip").expect("excl");
+
+        let (c, g, a, r, w) = archive_closures(&world);
+        joint_filter_phase(
+            false, false, false, false, 1000, FilePhase::Hashed,
+            &world.db, &world.progress, c, g, a, r, w,
+        ).expect("filter");
+
+        // DB outcome, per the agreed cells (no internal `.*` in play):
+        //   keep_a:      include -1, exclude 0  -> included
+        //   keep_skip_b: include -1, exclude 1  -> excluded-by-exclude
+        //   skip_c:      include 0,  exclude 1  -> excluded-by-include
+        //   other_d:     include 0,  exclude 0  -> excluded-by-include
+        assert_eq!(reason_pairs(&world), vec![(-1, 0), (-1, 1), (0, 1), (0, 0)]);
+        assert_eq!(world.db.count_files_in_phase(FilePhase::Hashed).expect("c"), 0);
+        assert_eq!(world.db.count_files_in_phase(FilePhase::Filtered).expect("c"), 4);
+    }
+
+    // ---- assert battery (catch_unwind) -------------------------------------
+
+    #[test]
+    fn step_filters_assert_positive_include_reason() {
+        // A include filter carrying a positive id must trip the `include_reason <= 0`
+        // guard: the invariant is "includes negative, excludes positive".
+        let world = TestWorld::new();
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            let _ = step_filters(
+                false, false, false, 1000, &FilePhase::Hashed,
+                &world.db, &world.progress,
+                |is_exclude| Ok(if is_exclude == Some(true) { 0 } else { 1 }),
+                |_is_exclude| Ok(vec![FilterExpression {
+                    id: 5, from: "x".into(), line: None, expression: ".*".into(),
+                }]),
+                |_lid, _bs| Ok(vec![raw_record(b"/x")]),
+                |_res| Ok(0),
+            );
+        }));
+        assert!(res.is_err(), "a positive include id must trip the include_reason<=0 assert");
+    }
+
+    #[test]
+    fn step_filters_assert_leftover_rows() {
+        // A no-op apply_results leaves the hashed row in phase; the end-of-pass
+        // zero-leftover assert must fire.
+        let world = TestWorld::new();
+        seed_hashed(&world, &["x"]);
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            let _ = step_filters(
+                false, false, false, 1000, &FilePhase::Hashed,
+                &world.db, &world.progress,
+                |is_exclude| Ok(if is_exclude == Some(true) { 0 } else { 1 }),
+                |is_exclude| world.db.get_filters_archive(is_exclude),
+                |lid, batch_size| world.db.get_rows_to_filter_archive(lid, false, batch_size),
+                |results| Ok(results.len() as u64),
+            );
+        }));
+        assert!(res.is_err(), "leftover hashed rows must trip the zero-leftover assert");
     }
 }
