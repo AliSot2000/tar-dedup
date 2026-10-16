@@ -424,3 +424,72 @@ fn handle_query(
     }
     Ok(())
 }
+
+// TODO Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::flags::FileFlags;
+    use crate::db::types::{FileId, FilePhase, FileType, StrippedRecord};
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::PathBuf;
+
+    fn raw_record(name: &[u8]) -> StrippedRecord {
+        let path = PathBuf::from(OsString::from_vec(name.to_vec()));
+        StrippedRecord {
+            id: FileId(1),
+            abs_path: path.clone(),
+            abs_path_raw: Some(path),
+            ext: String::new(),
+            size: 0,
+            sha1: None,
+            mtime: None, atime: None, ctime: None,
+            ftype: FileType::File,
+            device_id: None, inode_id: None,
+            canonical_id: None,
+            flags: FileFlags::from_i64(0),
+            phase: FilePhase::Inventoried,
+            new_name: None,
+        }
+    }
+
+    fn filt(id: i64, pattern: &str, no_unicode: bool) -> ParsedFilter {
+        ParsedFilter {
+            id,
+            expression: RegexBuilder::new(pattern)
+                .unicode(!no_unicode)
+                .build()
+                .expect("filter compiles"),
+        }
+    }
+
+    #[test]
+    fn byte_filter_matches_raw_non_utf8_bytes() {
+        // `bad-` + raw 0xFF 0xFE. Lossy conversion would replace both with U+FFFD,
+        // so a byte-oriented pattern can only reach the original bytes.
+        let record = raw_record(b"bad-\xFF\xFE");
+        let include = vec![filt(-1, ".*", false)];
+        let exclude = vec![filt(1, r"bad-\xFF\xFE", true)];
+        let res = test_match(&include, &exclude, &record);
+        assert_eq!(res.include_reason, -1);
+        assert_eq!(res.exclude_reason, 1);
+
+        // Counter-factual: the same pattern does NOT match the lossy text form.
+        let lossy = record.abs_path.to_string_lossy();
+        assert!(!exclude[0].expression.is_match(lossy.as_bytes()));
+    }
+
+    #[test]
+    fn utf8_filter_matches_valid_utf8_path() {
+        // Valid-UTF-8 paths are byte-identical to their text form, so matching is
+        // unchanged from the lossy-string era.
+        let record = raw_record("/some/café dir".as_bytes());
+        let include = vec![filt(-1, ".*", false)];
+        let exclude = vec![filt(1, "café", false)];
+        let res = test_match(&include, &exclude, &record);
+        assert_eq!(res.include_reason, -1);
+        assert_eq!(res.exclude_reason, 1);
+    }
+}
