@@ -277,6 +277,7 @@ pub fn ingest_filters(
     e_phase: ErrorPhase,
     sink: FilterSink<'_>)
     -> Result<()> {
+
     handle_pattern_source(
         include_patterns,
         include_from,
@@ -290,7 +291,8 @@ pub fn ingest_filters(
     )?;
 
     if (sink.count_includes)()? == 0 {
-        let res = (sink.add_include)("internal", None, ".*")?;
+        let inc_fn = sink.add_include;
+        let res = inc_fn("internal", None, ".*")?;
         assert_eq!(res, 1, "DB Failed, expected 1 row to get added, got {res}")
     }
 
