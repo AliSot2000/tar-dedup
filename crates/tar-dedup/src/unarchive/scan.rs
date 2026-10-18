@@ -789,12 +789,15 @@ fn open_initial_database(
 /// Member names MUST follow the tar-dedup convention (a content id or a catalog
 /// name — both UTF-8); a non-UTF8 name is lossy-converted so that it provably
 /// fails `parse_content_id` and hits the `(other, _)` reject arm in `process_entry`.
+/// INFO: Explicit result desired, since failure here means user error not internal programming
+///     error.
 fn entry_name(path: &Path) -> Result<String> {
     let cleaned = path.clean();
     let file = cleaned.file_name();
     let name = match file {
         Some(f) => f.to_string_lossy().into_owned(),
-        None => return Err(Error::Config("invalid tar entry name".into())),
+        None => return Err(Error::Config(format!("Invalid tar archive format. Tar member path \
+        contained entry without a valid file name. Offending member name: {}", path.display()))),
     };
     debug_assert!(
         !(name.contains('/') || name.contains('\\') || name == ".." || name == "."),
