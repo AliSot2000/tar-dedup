@@ -220,7 +220,8 @@ fn run_inner(
         // INFO: iterating entries will lead to the body being consumed too (no copy to sink needed)
         let member_index = m_idx as u64;
         if skip_processed_until.is_some_and(|last| member_index <= last) {
-            // TODO LLM: Can I also drop this wrapped entry here and not check if it errored out
+            // INFO: Still mapping error to record issues when recovering and file got corrupted
+            //  midway
             wrapped_entry.map_err(|e| {
                 io_error_with_session_scan_error(&rt.config.paths.archive_path, recorder, e)
             })?;
