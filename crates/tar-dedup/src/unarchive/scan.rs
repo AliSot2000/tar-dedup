@@ -808,17 +808,18 @@ fn entry_name(path: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::path::PathBuf;
-
     use super::*;
     use crate::config::ExtractConfig;
     use crate::db::flags::FileFlag;
     use crate::db::types::{FileId, FilePhase, FileRecord, FileType, StrippedRecord};
+    use crate::progress;
     use crate::test_support::{
         add_archived_canonical, append_member, build_archive, insert, seed_filter_reasons,
         write_catalog,
     };
+    use progress::EXTRACT_MULTIPLIER;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::path::PathBuf;
 
     /// Multi-session counter-example: the last tar member IS a snapshot, but it
     /// is a mid-archive checkpoint that only confirms the first candidate. The
@@ -898,8 +899,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db = run(&config, &db_path, &Shutdown::detached(),
                      &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
-                     &crate::progress::ProgressBarSet::new(
-                         crate::progress::EXTRACT_MULTIPLIER))
+                     &ProgressBarSet::new(
+                         EXTRACT_MULTIPLIER))
             .expect("scan completes under force");
 
         // Row 1 is the canonical in `write_catalog`.
@@ -923,8 +924,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db = run(&config, &db_path, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
-                     &crate::progress::ProgressBarSet::new(
-                         crate::progress::EXTRACT_MULTIPLIER))
+                     &ProgressBarSet::new(
+                         EXTRACT_MULTIPLIER))
             .expect("scan completes under force");
 
         let rec = db.get_file_by_id::<StrippedRecord>(FileId(1))
@@ -992,8 +993,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db = run(&config, &db_path, &Shutdown::detached(),
                      &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
-                     &crate::progress::ProgressBarSet::new(
-                         crate::progress::EXTRACT_MULTIPLIER))
+                     &ProgressBarSet::new(
+                         EXTRACT_MULTIPLIER))
             .expect("scan");
 
         assert!(config.paths.extract_cache_dir().join(&member).is_file());
@@ -1031,8 +1032,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db = run(&config, &db_path, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
-                     &crate::progress::ProgressBarSet::new(
-                         crate::progress::EXTRACT_MULTIPLIER))
+                     &ProgressBarSet::new(
+                         EXTRACT_MULTIPLIER))
             .expect("scan completes under force");
 
         // Row 1 is the canonical in `write_catalog`: tolerated, not extracted.
@@ -1059,8 +1060,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db = run(&config, &db_path, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
-                     &crate::progress::ProgressBarSet::new(
-                         crate::progress::EXTRACT_MULTIPLIER))
+                     &ProgressBarSet::new(
+                         EXTRACT_MULTIPLIER))
             .expect("scan completes under force");
 
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("count"), 2);
@@ -1084,8 +1085,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db = run(&config, &db_path, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
-                     &crate::progress::ProgressBarSet::new(
-                         crate::progress::EXTRACT_MULTIPLIER))
+                     &ProgressBarSet::new(EXTRACT_MULTIPLIER))
             .expect("scan completes under force");
 
         assert_eq!(db.count_files_in_phase(FilePhase::Staged).expect("staged"), 0);
@@ -1106,8 +1106,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
             run(&config, &db_path, &Shutdown::detached(),
                 &mut Recorder::speculative(false, None),
                 &mut Some(ParseFilterBuffer::default()),
-                &crate::progress::ProgressBarSet::new(
-                    crate::progress::EXTRACT_MULTIPLIER))
+                &ProgressBarSet::new(
+                    EXTRACT_MULTIPLIER))
         }));
         let err = res.err().expect("scan must panic without --force");
         let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();
@@ -1124,7 +1124,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let name = entry_name(&path).expect("lossy conversion always succeeds");
         assert!(name.contains('\u{FFFD}'));
         // Lossy names are not content ids → the caller's `(other, _)` arm rejects.
-        assert!(crate::db::content_id::parse_content_id(&name).is_err());
+        assert!(parse_content_id(&name).is_err());
     }
 
     #[test]
@@ -1141,8 +1141,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
             run(&config, &db_path, &Shutdown::detached(),
                 &mut Recorder::speculative(false, None),
                 &mut Some(ParseFilterBuffer::default()),
-                &crate::progress::ProgressBarSet::new(
-                    crate::progress::EXTRACT_MULTIPLIER))
+                &ProgressBarSet::new(
+                    EXTRACT_MULTIPLIER))
         }));
         let err = res.err().expect("scan must panic without --force");
         let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();
@@ -1163,13 +1163,13 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         run(&config, &db_path, &Shutdown::detached(),
             &mut Recorder::speculative(false, None),
             &mut Some(ParseFilterBuffer::default()),
-            &crate::progress::ProgressBarSet::new(crate::progress::EXTRACT_MULTIPLIER))
+            &ProgressBarSet::new(EXTRACT_MULTIPLIER))
             .expect("first scan");
 
         // Interrupt before the first member: state is saved, Interrupted propagates.
         let shutdown = Shutdown::detached();
         shutdown.request_graceful();
-        let progress = crate::progress::ProgressBarSet::new(crate::progress::EXTRACT_MULTIPLIER);
+        let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
         match run(&config, &db_path, &shutdown,
                   &mut Recorder::speculative(false, None),
                   &mut Some(ParseFilterBuffer::default()), &progress) {
@@ -1195,8 +1195,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db = run(&config, &db_path, &Shutdown::detached(),
                      &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
-                     &crate::progress::ProgressBarSet::new(
-                         crate::progress::EXTRACT_MULTIPLIER))
+                     &ProgressBarSet::new(
+                         EXTRACT_MULTIPLIER))
             .expect("resumed scan");
         assert_eq!(
             db.count_files_in_phase(FilePhase::Unarchived).expect("count"),
