@@ -93,6 +93,7 @@ fn store_filter_buffer(
                 rt.db.add_include_pattern_extract(from, line, query)),
             Box::new(|from, line, query|
                 rt.db.add_exclude_pattern_extract(from, line, query)))?;
+
     tracing::info!("Flushed: {result} filter rows to db");
     *fb = None;
     if rt.config.filter.eager_filter {
