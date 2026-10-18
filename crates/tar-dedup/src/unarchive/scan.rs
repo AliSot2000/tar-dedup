@@ -146,7 +146,7 @@ fn run_inner(
     let footer_this_pass = !resume_db && opt_db.is_ok();
 
     rt.db = if resume_db {
-        open_resume_database(&db_path, &rt.config.paths.temp_db(), recorder)?
+        open_resume_database(&db_path)?
     } else if footer_this_pass {
         Some(open_initial_database(&rt, db_path, filter_buffer)?)
     } else {
@@ -705,25 +705,6 @@ fn store_progress_in_db(rt: &ScanRTState, scan: &ExtractScanState) -> Result<()>
     Ok(())
 }
 
-/// Remove temp database and handle errors. If database does not exist, now error is emitted.
-fn captured_remove_temp_db(recorder: &mut Recorder, temp_db: &Path) -> () {
-    if !temp_db.exists() {
-        return ();
-    }
-
-    let res = fs::remove_file(temp_db);
-    match res {
-        Ok(_) => (),
-        Err(e) => {
-            tracing::warn!("Failed to remove temp database with error: {e}");
-            record_session_error(
-                recorder,
-                FileStatError::copy_io(temp_db, &e),
-            );
-        }
-    }
-}
-
 /// Copy the database out of the archive to `dst`, capturing an io failure in the
 /// persistent error log (best-effort; a failed record is ignored) before re-raising.
 fn captured_extract_database<R: Read> (
@@ -752,12 +733,11 @@ fn captured_extract_database<R: Read> (
     }
 }
 
-fn open_resume_database(db_path: &Path, temp_db: &Path, recorder: &mut Recorder)
+/// Open a preexisting database. Thin wrapper that also initializes the runtime state.
+fn open_resume_database(db_path: &Path)
     -> Result<Option<Database>> {
-
     let opened = Database::open(db_path)?;
     opened.init_extract_runtime_state()?;
-    captured_remove_temp_db(recorder, temp_db);
 
     Ok(Some(opened))
 }
