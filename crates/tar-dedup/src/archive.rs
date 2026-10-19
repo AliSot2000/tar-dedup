@@ -70,7 +70,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             state
         }
         StartAction::RunFresh => {
-            let state = RuntimeState::new(config.process.jobs);
+            let state = RuntimeState::new();
             db.save_runtime_state(&state)?;
             db.set_archive_config(&config)?;
             filter::ingest_filters(&db, &config)?;
