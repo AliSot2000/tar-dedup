@@ -190,12 +190,6 @@ pub fn record_snapshot_ingested(conn: &mut Connection) -> Result<u32> {
     scan.snapshots_ingested = scan.snapshots_ingested.saturating_add(1);
     save_extract_scan_state(conn, &scan)?;
 
-    // Keep ExtractRuntimeState in sync when present.
-    if let Some(mut runtime) = load_extract_runtime_state(conn)? {
-        runtime.snapshots_ingested = scan.snapshots_ingested;
-        save_extract_runtime_state(conn, &runtime)?;
-    }
-
     Ok(scan.snapshots_ingested)
 }
 
