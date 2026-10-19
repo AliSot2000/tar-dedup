@@ -364,17 +364,41 @@ pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool
     Ok(res > 0)
 }
 
-// TODO this should not technically be necessary. The we should be able to run the integrity checks
-//  when extracting
 /// Normalize a freshly installed catalog so stream handling is provenance-agnostic.
-/// Clears [`FileFlag::FileExtracted`]; promotes every scan-phase **non-participant**
-/// straight to `unarchived` (dup / non-file / sha-less / archive-filter-failed rows,
-/// and anything the archive pipeline left before `staged`); the scan-phase
-/// **participants** (self-canonical `file` with digest passing the archive filter)
-/// keep their install phase — `staged` (leading-manifest provenance, awaiting a
-/// confirmation snapshot) or `archived` (footer provenance) — so a payload that is
-/// present-but-unconfirmed stays visible and attributable at the end of the scan.
-/// Must not run on a resumed work DB.
+///
+/// Contract stance: a **normal archive has a footer** — the footer DB is the final,
+/// internally consistent state of a completed archive run. A footer-less archive
+/// (leading `manifest.sqlite`, or mid-archive snapshots) means the run was incomplete
+/// or truncated, i.e. `--force` / salvage territory. Either way the installed catalog
+/// is made scan-ready here; the real invariant ("every row ends `unarchived`") is
+/// enforced by the end-of-scan gate, not inside this function.
+///
+/// Runs only on a freshly installed catalog (footer or leading manifest), never on a
+/// resumed work DB.
+///
+/// The three statements, oldest-to-newest:
+///
+/// 1. **Clear `FileExtracted`** — the flag is extract-side only; the archive
+///    pipeline never sets it, so on a valid catalog this is a no-op. A catalog
+///    carrying it would already be a contract violation; we clear it defensively
+///    here and let the extract-side integrity checks (E1/E2) flag inconsistencies
+///    after the fact instead of aborting at install time.
+/// 2. **Sweep mid-flight archive phases → `unarchived`** — a no-op for every
+///    finalized catalog (a completed run only ever stores `staged` + `archived`
+///    rows). This is the future-compat line: once archiving becomes an orchestrated
+///    flow graph, snapshot DBs will legitimately contain rows still in
+///    `inventoried`…`sparsified` (not yet encoded). They have no payload, so for
+///    extraction they are simply not extractable → `unarchived`. Do not remove or
+///    gate this behind `--force`.
+/// 3. **Sweep `archived` non-participants → `unarchived`** — always load-bearing:
+///    `promote_ineligible_to_archived` force-promotes non-payload rows (duplicates,
+///    non-files, sha-less, archive-filter-failed) to `archived`, so *every* catalog
+///    carries archived non-participants that must be swept here. The scan-phase
+///    **participants** (self-canonical `file` with digest passing the archive
+///    filter) keep their install phase — `staged` (leading-manifest provenance,
+///    awaiting a confirmation snapshot) or `archived` (footer provenance) — so a
+///    payload that is present-but-unconfirmed stays visible and attributable at the
+///    end of the scan.
 pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
     let bit = FileFlag::FileExtracted.mask_i64();
     conn.execute(
