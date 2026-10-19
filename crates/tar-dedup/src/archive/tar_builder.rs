@@ -12,6 +12,7 @@ use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FilePhase, StrippedRecord};
 use crate::db::{Database, Recorder};
 use crate::error::{Error, FileStatError, Result};
+use crate::progress::BarKind;
 use crate::tar_writer::TarWriter;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Archive);
@@ -339,9 +340,13 @@ fn end_session(
             if write_tar_eof && rt.config.pipeline.write_archive_footer {
                 rt.db.checkpoint()?;
                 // Footer catalog is always xz -9e, independent of tar stream compression.
+                // The content-integrity hash reads the finished archive back, so give
+                // it a bar on top of the phase + global bars.
+                let hash_bar = rt.progress.push_sub_bar("archive integrity: ", BarKind::Bytes);
                 match archive_footer::write_footer(
                     &rt.config.paths.archive_path,
-                    &rt.config.paths.db_path()) {
+                    &rt.config.paths.db_path(),
+                    Some(&hash_bar)) {
                     Ok(()) => (),
                     Err(e) => {
                         recorder.record_session(
