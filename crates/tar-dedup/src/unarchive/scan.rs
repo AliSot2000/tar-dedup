@@ -81,6 +81,23 @@ fn flush_scan_recorder(recorder: &mut Recorder, db: Option<&Database>) -> Result
     }
 }
 
+/// Account a freshly loaded scan DB against the progress bars. Called after every
+/// `rt.db = Some(...)` assignment: the global bar is sized to the full table
+/// (`count_entries`, later refined by place_prologue), the phase bar is scoped to
+/// the encoded payloads (one tar member each) and switched from spinner to a
+/// fraction bar, non-encoded rows are promoted eagerly (`inc_global`), and rows
+/// already extracted in a prior pass seed the phase position (`inc_both`).
+fn attach_db_progress(db: &Database, progress: &ProgressBarSet) -> Result<()> {
+    let total = db.count_entries()?;
+    let encoded = db.count_encoded_payloads()?;
+    progress.set_table_size(total);
+    progress.set_phase_kind(BarKind::Count);
+    progress.set_phase_total(encoded);
+    progress.inc_global(total.saturating_sub(encoded));
+    progress.inc_both(db.count_extracted_canonical()?);
+    Ok(())
+}
+
 /// Drain the filter_buffer and write it to the db.
 fn store_filter_buffer(
     fb: &mut Option<ParseFilterBuffer>, rt: &ExtractRTArgs)
