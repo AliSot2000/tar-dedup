@@ -262,6 +262,20 @@ pub fn count_missing_payloads(conn: &Connection) -> Result<u64> {
     Ok(count as u64)
 }
 
+/// Encoded payloads: self-canonical rows that were appended to the archive. Each
+/// is exactly one tar member in the stream, so this is the scan-phase bar total.
+pub fn count_encoded_payloads(conn: &Connection) -> Result<u64> {
+    let appended = FileFlag::AppendedPath.mask_i64();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files
+         WHERE canonical_id = id
+           AND (flags & :appended) != 0",
+        named_params! { ":appended": appended },
+        |row| row.get("count"),
+    ).to_panic()?;
+    Ok(count as u64)
+}
+
 /// Rows still `archived` whose canonical has `FileExtracted` (awaiting confirmation).
 pub fn count_unconfirmed_extracted(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
