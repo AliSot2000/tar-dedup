@@ -59,10 +59,12 @@
 - [X] Implementation of force-overwrite-dir + rename
 - [X] Capture Error Inventory
 - [X] finish testing for [inventory]
+- [X] finish testing for [filter]
 - [ ] finish testing for [scan]
 - [ ] finish testing for [place_prologue]
 - [ ] finish testing for [place]
 - [ ] finish testing for [permissions]
+- [ ] fix flush / try_flush
 - [ ] finish the readme
 - [ ] publish to crates.io
 - [ ] publish to gh releases
