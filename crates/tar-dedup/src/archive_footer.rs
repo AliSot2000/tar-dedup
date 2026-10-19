@@ -16,6 +16,7 @@ use indicatif::ProgressBar;
 use sha1::{Digest, Sha1};
 
 use crate::common::defaults::ARCHIVE_IO_BUF_SIZE;
+use crate::common::hash::HashingReader;
 use crate::compression::{compress_footer_bytes, decompress_footer_bytes};
 use crate::error::{Error, Result};
 
@@ -31,29 +32,28 @@ fn footer_fixed_overhead() -> u64 {
 /// `ARCHIVE_IO_BUF_SIZE`, reporting progress on `bar` when given.
 fn hash_archive_bytes(archive_path: &Path, len: u64, bar: Option<&ProgressBar>)
     -> Result<[u8; 20]> {
-    let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
+    let file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
     if let Some(bar) = bar {
         bar.set_length(len);
         bar.set_position(0);
     }
-    let mut hasher = Sha1::new();
+    let mut reader = HashingReader::new(file);
     let mut buf = vec![0u8; ARCHIVE_IO_BUF_SIZE];
     let mut remaining = len;
     while remaining > 0 {
         let want = remaining.min(buf.len() as u64) as usize;
-        let n = file
+        let n = reader
             .read(&mut buf[..want])
             .map_err(|e| Error::io(archive_path, e))?;
         if n == 0 {
             break;
         }
-        hasher.update(&buf[..n]);
         remaining -= n as u64;
         if let Some(bar) = bar {
             bar.inc(n as u64);
         }
     }
-    Ok(hasher.finalize().into())
+    Ok(reader.finalize())
 }
 
 /// Locate the footer in `file`: `Some(offset)` when a footer is present (trailing
