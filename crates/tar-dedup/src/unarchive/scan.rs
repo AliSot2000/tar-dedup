@@ -87,14 +87,36 @@ fn flush_scan_recorder(recorder: &mut Recorder, db: Option<&Database>) -> Result
 /// the encoded payloads (one tar member each) and switched from spinner to a
 /// fraction bar, non-encoded rows are promoted eagerly (`inc_global`), and rows
 /// already extracted in a prior pass seed the phase position (`inc_both`).
-fn attach_db_progress(db: &Database, progress: &ProgressBarSet) -> Result<()> {
+/// When `announce` is `Some((resume_db, last_processed_member_index))` — the
+/// initial catalog load only; the mid-scan force install passes `None` — the
+/// "starting scan" log line is emitted with the real total/processing/pending.
+fn attach_db_progress(
+    db: &Database,
+    progress: &ProgressBarSet,
+    announce: Option<(bool, u64)>)
+    -> Result<()> {
     let total = db.count_entries()?;
-    let encoded = db.count_encoded_payloads()?;
+    let processing = db.count_encoded_payloads()?;
+    let extracted = db.count_extracted_canonical()?;
     progress.set_table_size(total);
     progress.set_phase_kind(BarKind::Count);
-    progress.set_phase_total(encoded);
-    progress.inc_global(total.saturating_sub(encoded));
-    progress.inc_both(db.count_extracted_canonical()?);
+    progress.set_phase_total(processing);
+    progress.inc_global(total.saturating_sub(processing));
+    progress.inc_both(extracted);
+    if let Some((resume_db, last_processed)) = announce {
+        let pending = processing.saturating_sub(extracted);
+        if resume_db {
+            tracing::info!(
+                "starting scan: total {total}, processing {processing}, pending {pending} \
+                 (resume from member {})",
+                last_processed + 1, // Human readable
+            );
+        } else {
+            tracing::info!(
+                "starting scan: total {total}, processing {processing}, pending {pending}"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -214,45 +236,16 @@ fn run_inner(
         None
     };
 
-    if let Some(edb) = rt.db.as_ref() {
-        attach_db_progress(edb, rt.progress)?;
-        // The scan recorder's auto-flush limit comes from the extract config that
-        // governs this run (applied once a fresh-from-disk DB is in hand).
+    let mut scan = if let Some(edb) = rt.db.as_ref() {
+        let s = edb.load_extract_scan_state()?;
+        attach_db_progress(edb, rt.progress, Some((resume_db, s.last_member_index)))?;
         recorder.set_flush_limit(rt.config.process.auto_flush_limit);
-    }
-
-    let mut force_buffer: Option<(Vec<FileId>, Vec<FileId>)> = if rt.config.process.force {
-        Some((Vec::new(), Vec::new()))
+        s
     } else {
-        None
-    };
-
-    // Single source of truth for everything the scan knows about the archive.
-    // `footer_this_pass` is folded in here and never consulted again.
-    let mut scan = match rt.db {
-        Some(ref d) => d.load_extract_scan_state()?,
-        None => ExtractScanState::default(),
+        tracing::info!("starting scan: no catalog yet (awaiting manifest)");
+        ExtractScanState::default()
     };
     scan.from_footer |= footer_this_pass;
-    scan.scan_complete = false; // Set when archive iterator is empty.
-
-    let corpus = match rt.db {
-        Some(ref d) => d.count_entries()?,
-        None => 0u64,
-    };
-    if resume_db {
-        tracing::info!(
-            "starting scan: total {}, processing {}, pending {} \
-             (resume from member {})",
-            corpus, corpus, corpus,
-            scan.last_member_index.saturating_add(1),
-        );
-    } else {
-        tracing::info!(
-            "starting scan: total {}, processing {}, pending {}",
-            corpus, corpus, corpus,
-        );
-    }
 
     let mut archive = open_tar_archive(
         &rt.config.paths.archive_path, &rt.config.decompression
