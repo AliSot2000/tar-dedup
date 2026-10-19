@@ -797,6 +797,10 @@ impl Database {
         scan::count_missing_payloads(&*self.conn())
     }
 
+    pub fn count_encoded_payloads(&self) -> Result<u64> {
+        scan::count_encoded_payloads(&*self.conn())
+    }
+
     pub fn count_unconfirmed_extracted(&self) -> Result<u64> {
         scan::count_unconfirmed_extracted(&*self.conn())
     }
