@@ -159,8 +159,20 @@ fn run_inner(
     // Only a first pass installs the footer catalog; later passes inherit the fact
     // that it came from a footer through `ExtractScanState::from_footer`.
     // INFO: read into a temp file first; installed below via rename to `db_path`.
-    let opt_db = read_footer(&rt.config.paths.archive_path, &rt.config.paths.temp_db());
-    let footer_this_pass = !resume_db && opt_db.is_ok();
+    // A footer structure present but failing to extract is a real anomaly: record
+    // it as a session error and fall back to footer-less handling.
+    let footer = match read_footer(&rt.config.paths.archive_path, &rt.config.paths.temp_db()) {
+        Ok(present) => present,
+        Err(e @ Error::FileStat(_)) => {
+            record_session_error(
+                recorder,
+                e.to_file_stat(Some(&rt.config.paths.archive_path)),
+            );
+            false
+        },
+        Err(e) => return Err(e)
+    };
+    let footer_this_pass = !resume_db && footer;
 
     rt.db = if resume_db {
         open_resume_database(&db_path)?
