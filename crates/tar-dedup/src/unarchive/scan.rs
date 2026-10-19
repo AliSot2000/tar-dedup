@@ -547,6 +547,9 @@ fn process_entry(
                 // Ingest any scan errors buffered while no DB existed (recorded
                 // during the no-DB window) now that one has materialized.
                 flush_scan_recorder(recorder, Some(&ref_db))?;
+                // Account the payloads extracted during the pre-DB window; the
+                // loop could not count them (no DB to scope against yet).
+                rt.progress.inc_both(ref_db.count_extracted_canonical()?);
             } else {
                 assert!(rt.config.process.force || rt.db.is_some(),
                         "INVARIANT ERROR: without force, the first member of an archive MUST be an \
@@ -564,6 +567,12 @@ fn process_entry(
                     "first tar member is canonical file {cid} not manifest.sqlite; \
                      bypass available with --force"
                 )));
+            }
+            // One phase unit per payload member (filter-skipped and force-failed
+            // ones included, matching the encoded total). Skipped while no DB
+            // exists: the --force mid-scan attach seeds those post-flag.
+            if rt.db.is_some() {
+                rt.progress.inc_both(1);
             }
             // Extraction gated due to not selected by filter
             if let Some(db) = rt.db.as_ref() {
