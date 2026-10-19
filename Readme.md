@@ -211,9 +211,10 @@ Compile hints on Debian:
 ### Returned Archive
 Note on the returned file. The file is a valid archive with an appended footer. This looks like this:
 ```
-[ compressed(tar archive) | MAGIC | xz(-9e) of final-database.sqlite | sha1 of xz blob | MAGIC | u64 offset ]
+[ compressed(tar archive) | MAGIC | sha1 of archive content | xz(-9e) of final-database.sqlite | sha1 of xz blob | MAGIC | u64 offset ]
 ```
 - `MAGIC` is `"Tar-Dedup-SQLite-Footer"` - to make finding the footer by hand analyzing the file with a program like `less`.
+- `sha1 of archive content` is the hash of the finished compressed archive (the bytes before the footer) to detect corruption of the stream. It is verified once when the footer catalog is first installed during extraction; under `--force` a mismatch is downgraded to a warning.
 - `xz(-9e) of final-database.sqlite` is the finalized work database compressed with a fixed `xz -9 -e` preset (independent of tar stream compression). It contains the finished session info and allows tar-dedup to instantly have the manifest in the correct state rather than having to apply one snapshot after the other.
 - `sha1 of xz blob` is the hash of the compressed footer payload (not the raw sqlite) to check for corruption.
 - `u64 offset` is the offset of the first `MAGIC` string relative to the beginning of the file

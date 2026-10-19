@@ -98,12 +98,12 @@ delegates to a per-area module function taking a raw `&Connection`. Batch reads 
 ## Archive container format
 
 ```
-[ compressed(tar archive) | MAGIC | xz(-9e) sqlite | sha1(xz blob) | MAGIC | u64 offset ]
+[ compressed(tar archive) | MAGIC | sha1(archive content) | xz(-9e) sqlite | sha1(xz blob) | MAGIC | u64 offset ]
 ```
 - `MAGIC` = `b"Tar-Dedup-SQLite-Footer"` across both sides.
 - Footer payload is the finalized work DB (compressed with fixed `xz -9e`, independent of the stream compression).
 - `u64 offset` (little-endian) points at the first `MAGIC`; used to locate the trailer via `SeekFrom::End`.
-- Integrity: sha1 over the `xz` blob; corrupted/missing footer fails validation (`has_valid_footer`).
+- Integrity: sha1 over the finished compressed archive (verified once at first footer install during extract; `--force` downgrades a mismatch to a warning) and sha1 over the `xz` blob; corrupted/missing footer fails validation (`has_valid_footer`).
 - First tar member must be `manifest.sqlite` (the initial DB); later `snapshot.sqlite` DBs mark progress checkpoints. See `archive_footer.rs` and `common.rs` names.
 
 ### Canonical payload naming
