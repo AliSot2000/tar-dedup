@@ -281,7 +281,6 @@ fn run_inner(
             recorder,
             filter_buffer)?;
 
-        rt.progress.inc_both(1);
         scan.saw_any_members = true;
         scan.last_member_index = member_index;
         scan.last_member_was_snapshot = name == SNAPSHOT_TAR_NAME;
