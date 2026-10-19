@@ -171,6 +171,11 @@ fn run_inner(
     filter_buffer: &mut Option<ParseFilterBuffer>) -> Result<Database>  {
 
     let mut rt = outer_rt;
+    let mut force_buffer: Option<(Vec<FileId>, Vec<FileId>)> = if rt.config.process.force {
+        Some((Vec::new(), Vec::new()))
+    } else {
+        None
+    };
 
     // INFO: Noop if dir exists!
     // INFO: If we can't create an extract stage, we can only abort.
@@ -196,9 +201,7 @@ fn run_inner(
     };
     let footer_this_pass = !resume_db && footer;
 
-    // First-time footer install: verify the finished compressed archive against the
-    // digest stored in the footer. A mismatch is an integrity violation — abort
-    // unless `--force` downgrades it to a warning.
+    // Verify the integrity of the archive by the footer sha, if the sha is present
     if footer_this_pass {
         match verify_archive_integrity(&rt.config.paths.archive_path) {
             Ok(true) => (),
@@ -252,11 +255,7 @@ fn run_inner(
     )?;
 
     // Resume skip bound: members up to **and including** the last one fully
-    // processed by an earlier pass are skipped (re-ingesting `manifest.sqlite`
-    // would be rejected as "not at the beginning"). `saw_any_members` as loaded
-    // (not the live flag) distinguishes a fresh db (`last == 0`, nothing
-    // processed) from a resume that already consumed the leading manifest
-    // (`last == 0`, a member was seen) — both store `last_member_index == 0`.
+    // processed by an earlier pass are skipped 
     let skip_processed_until = scan.saw_any_members.then_some(scan.last_member_index);
 
     // FEATURE: Switch to seek for tar
