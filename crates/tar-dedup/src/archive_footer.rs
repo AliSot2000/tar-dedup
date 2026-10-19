@@ -62,13 +62,17 @@ pub fn has_valid_footer(archive_path: &Path) -> bool {
         "tar-dedup-footer-check-{}-{nanos}.sqlite",
         std::process::id()
     ));
-    let ok = read_footer(archive_path, &tmp).is_ok();
+    let ok = matches!(read_footer(archive_path, &tmp), Ok(true));
     let _ = std::fs::remove_file(&tmp);
     ok
 }
 
 /// Extract the footer sqlite to `dest` if a valid footer is present.
-pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
+///
+/// Returns `Ok(true)` when a valid footer was present and extracted to `dest`,
+/// `Ok(false)` when no footer is present, and `Err(_)` when a footer structure is
+/// present but failed to extract (corrupt magic/sha1/xz, decompress, or I/O).
+pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<bool> {
     // Get file length and check if it's long enough for valid footer.
     let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
     let len = file
@@ -78,30 +82,36 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
     let magic_len = FOOTER_MAGIC.len() as u64;
     let min_len = footer_fixed_overhead();
     if len < min_len {
-        return Err(Error::Config(format!(
-            "archive too small for footer: {}",
-            archive_path.display()
-        )));
+        return Ok(false);
     }
 
-    // Get offset and validate it.
-    file.seek(SeekFrom::End(-(OFFSET_LEN as i64)))
+    // Presence gate: the trailing MAGIC (right before the u64 offset) must be
+    // present and the offset it stores must resolve to a valid point inside the
+    // file. A plain tar tail fails both cheaply -> "no footer".
+    let trailing_magic_pos = len - OFFSET_LEN - magic_len;
+    file.seek(SeekFrom::Start(trailing_magic_pos))
+        .map_err(|e| Error::io(archive_path, e))?;
+    let mut magic = vec![0u8; FOOTER_MAGIC.len()];
+    file.read_exact(&mut magic)
+        .map_err(|e| Error::io(archive_path, e))?;
+    if magic != FOOTER_MAGIC {
+        return Ok(false);
+    }
+
+    file.seek(SeekFrom::Start(len - OFFSET_LEN))
         .map_err(|e| Error::io(archive_path, e))?;
     let mut off_buf = [0u8; 8];
     file.read_exact(&mut off_buf)
         .map_err(|e| Error::io(archive_path, e))?;
     let offset = u64::from_le_bytes(off_buf);
-    if offset + min_len > len {
-        return Err(Error::Config(format!(
-            "invalid footer offset {offset} in {}",
-            archive_path.display()
-        )));
+    if offset.checked_add(min_len).is_none_or(|end| end > len) {
+        return Ok(false);
     }
 
-    // Check Magic is first
+    // Footer structure committed from here on; every failure is a real error.
+    // Check the leading Magic is at the offset.
     file.seek(SeekFrom::Start(offset))
         .map_err(|e| Error::io(archive_path, e))?;
-    let mut magic = vec![0u8; FOOTER_MAGIC.len()];
     file.read_exact(&mut magic)
         .map_err(|e| Error::io(archive_path, e))?;
     if magic != FOOTER_MAGIC {
@@ -131,16 +141,6 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         )));
     }
 
-    // Check file ends in footer (prior to the u64 for the offset)
-    file.read_exact(&mut magic)
-        .map_err(|e| Error::io(archive_path, e))?;
-    if magic != FOOTER_MAGIC {
-        return Err(Error::Config(format!(
-            "trailing footer magic mismatch in {}",
-            archive_path.display()
-        )));
-    }
-
     // Decompress opaque catalog blob; sqlite validity is checked when the DB is opened.
     let db_bytes = decompress_footer_bytes(&xz_bytes)?;
 
@@ -149,12 +149,16 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<()> {
         std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
     }
     std::fs::write(dest, &db_bytes).map_err(|e| Error::io(dest, e))?;
-    Ok(())
+    Ok(true)
 }
 
 /// Convenience: extract footer DB next to the archive under a given name.
-pub fn extract_footer_db(archive_path: &Path, dest_dir: &Path) -> Result<PathBuf> {
+/// Returns `None` when the archive carries no footer.
+pub fn extract_footer_db(archive_path: &Path, dest_dir: &Path) -> Result<Option<PathBuf>> {
     let dest = dest_dir.join("footer-snapshot.sqlite");
-    read_footer(archive_path, &dest)?;
-    Ok(dest)
+    if read_footer(archive_path, &dest)? {
+        Ok(Some(dest))
+    } else {
+        Ok(None)
+    }
 }
