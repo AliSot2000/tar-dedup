@@ -140,10 +140,11 @@ pub fn run(args: &ArchiveInputArgs) -> Result<()> {
             let mut db: Option<Database> = None;
             let mut footer_err: Option<String> = None;
             match read_footer(&path, &dest) {
-                Ok(_) => {
+                Ok(true) => {
                     db = Some(Database::open(&dest)?);
                     rep.catalog.source = "footer".to_string();
                 }
+                Ok(false) => {}
                 Err(e) => footer_err = Some(e.to_string()),
             }
 
@@ -160,12 +161,12 @@ pub fn run(args: &ArchiveInputArgs) -> Result<()> {
                         .as_ref()
                         .map(|n| format!("`{n}`"))
                         .unwrap_or_else(|| String::from("(nothing)"));
-                    let footer_note = match footer_err.as_ref() {
-                        Some(e) if !e.starts_with("archive too small") => format!(
-                            "footer unusable ({e}); "
-                        ),
-                        _ => String::new(),
-                    };
+                    // Only a corrupt/present footer lands in `footer_err` now;
+                    // a missing footer is `Ok(false)` and needs no note.
+                    let footer_note = footer_err
+                        .as_ref()
+                        .map(|e| format!("footer unusable ({e}); "))
+                        .unwrap_or_default();
                     rep.catalog.note = Some(format!(
                         "{footer_note}first tar member is {first} — not the leading \
                          manifest.sqlite. Use inspect --force (once implemented) to scan \
