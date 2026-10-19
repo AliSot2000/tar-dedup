@@ -4,7 +4,9 @@ use std::path::Path;
 
 use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
+use tar::Archive;
 use xz2::read::XzDecoder;
+use zstd::stream::read::Decoder as ZstdDecoder;
 
 use crate::config::CompressionFormat;
 use crate::error::{Error, Result};
@@ -18,7 +20,7 @@ pub fn open_decompressed(path: &Path, format: &CompressionFormat) -> Result<Box<
         CompressionFormat::Gz => Box::new(GzDecoder::new(file)),
         CompressionFormat::Bz2 => Box::new(BzDecoder::new(file)),
         CompressionFormat::Zstd => Box::new(
-            zstd::stream::read::Decoder::new(file)
+            ZstdDecoder::new(file)
                 .map_err(|e| Error::Other(anyhow::anyhow!("zstd decoder: {e}")))?,
         ),
         CompressionFormat::None => Box::new(file),
@@ -27,7 +29,7 @@ pub fn open_decompressed(path: &Path, format: &CompressionFormat) -> Result<Box<
 }
 
 pub fn open_tar_archive(path: &Path, format: &CompressionFormat)
-    -> Result<tar::Archive<BufReader<Box<dyn Read>>>> {
+    -> Result<Archive<BufReader<Box<dyn Read>>>> {
     let raw = open_decompressed(path, format)?;
-    Ok(tar::Archive::new(BufReader::with_capacity(4 * 1024 * 1024, raw)))
+    Ok(Archive::new(BufReader::with_capacity(4 * 1024 * 1024, raw)))
 }
