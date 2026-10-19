@@ -53,10 +53,6 @@ impl PathLayout {
         self.work_dir.join("temp-tar-dedup.sqlite")
     }
 
-    pub fn temp_snapshot(&self) -> PathBuf {
-        self.work_dir.join(".snapshot-ingest.tmp")
-    }
-
     pub fn stage_archive_snapshot(&self) -> PathBuf {
         self.work_dir.join(".snapshot-for-tar.sqlite")
     }
