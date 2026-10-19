@@ -1,6 +1,6 @@
 //! Scan/untar: footer-first catalog, else leading `manifest.sqlite`; cache payloads.
 
-use crate::archive_footer::read_footer;
+use crate::archive_footer::{read_footer, verify_archive_integrity};
 use crate::common::defaults::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::common::files::copy_reader_batched;
 use crate::config::ExtractConfig;
@@ -173,6 +173,38 @@ fn run_inner(
         Err(e) => return Err(e)
     };
     let footer_this_pass = !resume_db && footer;
+
+    // First-time footer install: verify the finished compressed archive against the
+    // digest stored in the footer. A mismatch is an integrity violation — abort
+    // unless `--force` downgrades it to a warning.
+    if footer_this_pass {
+        match verify_archive_integrity(&rt.config.paths.archive_path) {
+            Ok(true) => (),
+            Ok(false) => {
+                let msg = format!(
+                    "archive content sha1 mismatch (footer vs stream) in {}",
+                    rt.config.paths.archive_path.display()
+                );
+                record_session_error(recorder, FileStatError::general(None, msg.clone()));
+                if rt.config.process.force {
+                    tracing::warn!("{msg}; continuing (--force)");
+                } else {
+                    return Err(Error::Config(msg));
+                }
+            }
+            Err(e) => {
+                record_session_error(
+                    recorder,
+                    e.to_file_stat(Some(&rt.config.paths.archive_path)),
+                );
+                if rt.config.process.force {
+                    tracing::warn!("archive integrity check failed; continuing (--force)");
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
 
     rt.db = if resume_db {
         open_resume_database(&db_path)?
