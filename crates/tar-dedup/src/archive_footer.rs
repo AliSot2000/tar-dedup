@@ -74,6 +74,8 @@ fn locate_footer(archive_path: &Path, file: &mut File, len: u64) -> Result<Optio
     if magic != FOOTER_MAGIC {
         return Ok(None);
     }
+
+    // Parse the offset from the last 8 bytes.
     file.seek(SeekFrom::Start(len - OFFSET_LEN))
         .map_err(|e| Error::io(archive_path, e))?;
     let mut off_buf = [0u8; 8];
@@ -83,6 +85,8 @@ fn locate_footer(archive_path: &Path, file: &mut File, len: u64) -> Result<Optio
     if offset.checked_add(min_len).is_none_or(|end| end > len) {
         return Ok(None);
     }
+
+    // Parse the first MAGIC Bytes.
     file.seek(SeekFrom::Start(offset))
         .map_err(|e| Error::io(archive_path, e))?;
     file.read_exact(&mut magic)
@@ -108,13 +112,13 @@ pub fn write_footer(
         .and_then(|mut f| f.read_to_end(&mut db_bytes))
         .map_err(|e| Error::io(sqlite_path, e))?;
 
-    let xz_bytes = compress_footer_bytes(&db_bytes)?;
+    let xz_db_bytes = compress_footer_bytes(&db_bytes)?;
     let offset = std::fs::metadata(archive_path)
         .map_err(|e| Error::io(archive_path, e))?
         .len();
     // Integrity of the finished compressed archive: hash [0..offset).
     let content_digest = hash_archive_bytes(archive_path, offset, bar)?;
-    let xz_digest = Sha1::digest(&xz_bytes);
+    let xz_db_digest = Sha1::digest(&xz_db_bytes);
 
     let mut out = OpenOptions::new()
         .append(true)
@@ -123,8 +127,8 @@ pub fn write_footer(
 
     out.write_all(FOOTER_MAGIC)
         .and_then(|_| out.write_all(&content_digest))
-        .and_then(|_| out.write_all(&xz_bytes))
-        .and_then(|_| out.write_all(&xz_digest))
+        .and_then(|_| out.write_all(&xz_db_bytes))
+        .and_then(|_| out.write_all(&xz_db_digest))
         .and_then(|_| out.write_all(FOOTER_MAGIC))
         .and_then(|_| out.write_all(&offset.to_le_bytes()))
         .and_then(|_| out.sync_all())
