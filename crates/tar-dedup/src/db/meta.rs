@@ -26,7 +26,6 @@ pub enum MetaKey {
     ExtractSnapshotsIngested,
     ScanTarSawManifestDb,
     ScanTarSawAnyMembers,
-    ScanTarComplete,
     ScanTarFromFooter,
     ScanTarLastMemberIndex,
     ScanTarLastMemberWasSnapshot,
@@ -54,7 +53,6 @@ impl MetaKey {
             Self::ExtractSnapshotsIngested => "extract_snapshots_ingested",
             Self::ScanTarSawManifestDb => "scan_tar_saw_manifest_db",
             Self::ScanTarSawAnyMembers => "scan_tar_saw_any_members",
-            Self::ScanTarComplete => "scan_tar_complete",
             Self::ScanTarFromFooter => "scan_tar_from_footer",
             Self::ScanTarLastMemberIndex => "scan_tar_last_member_index",
             Self::ScanTarLastMemberWasSnapshot => "scan_tar_last_member_was_snapshot",
@@ -82,7 +80,6 @@ impl MetaKey {
             "extract_snapshots_ingested" => Self::ExtractSnapshotsIngested,
             "scan_tar_saw_manifest_db" => Self::ScanTarSawManifestDb,
             "scan_tar_saw_any_members" => Self::ScanTarSawAnyMembers,
-            "scan_tar_complete" => Self::ScanTarComplete,
             "scan_tar_from_footer" => Self::ScanTarFromFooter,
             "scan_tar_last_member_index" => Self::ScanTarLastMemberIndex,
             "scan_tar_last_member_was_snapshot" => Self::ScanTarLastMemberWasSnapshot,
@@ -111,7 +108,6 @@ impl MetaKey {
             Self::ExtractSnapshotsIngested,
             Self::ScanTarSawManifestDb,
             Self::ScanTarSawAnyMembers,
-            Self::ScanTarComplete,
             Self::ScanTarFromFooter,
             Self::ScanTarLastMemberIndex,
             Self::ScanTarLastMemberWasSnapshot,
@@ -141,7 +137,6 @@ pub enum MetaEntry {
     ExtractSnapshotsIngested(u32),
     ScanTarSawManifestDb(bool),
     ScanTarSawAnyMembers(bool),
-    ScanTarComplete(bool),
     ScanTarFromFooter(bool),
     ScanTarLastMemberIndex(u64),
     ScanTarLastMemberWasSnapshot(bool),
@@ -169,7 +164,6 @@ impl MetaEntry {
             Self::ExtractSnapshotsIngested(_) => MetaKey::ExtractSnapshotsIngested,
             Self::ScanTarSawManifestDb(_) => MetaKey::ScanTarSawManifestDb,
             Self::ScanTarSawAnyMembers(_) => MetaKey::ScanTarSawAnyMembers,
-            Self::ScanTarComplete(_) => MetaKey::ScanTarComplete,
             Self::ScanTarFromFooter(_) => MetaKey::ScanTarFromFooter,
             Self::ScanTarLastMemberIndex(_) => MetaKey::ScanTarLastMemberIndex,
             Self::ScanTarLastMemberWasSnapshot(_) => MetaKey::ScanTarLastMemberWasSnapshot,
@@ -198,7 +192,6 @@ impl MetaEntry {
             Self::ExtractSnapshotsIngested(v) => v.to_string(),
             Self::ScanTarSawManifestDb(v)
             | Self::ScanTarSawAnyMembers(v)
-            | Self::ScanTarComplete(v)
             | Self::ScanTarFromFooter(v)
             | Self::ScanTarLastMemberWasSnapshot(v)
             | Self::OutTreeBuilt(v)
@@ -235,7 +228,6 @@ impl MetaEntry {
             }
             MetaKey::ScanTarSawManifestDb => Ok(Self::ScanTarSawManifestDb(parse_bool(key, raw)?)),
             MetaKey::ScanTarSawAnyMembers => Ok(Self::ScanTarSawAnyMembers(parse_bool(key, raw)?)),
-            MetaKey::ScanTarComplete => Ok(Self::ScanTarComplete(parse_bool(key, raw)?)),
             MetaKey::ScanTarFromFooter => Ok(Self::ScanTarFromFooter(parse_bool(key, raw)?)),
             MetaKey::ScanTarLastMemberIndex => {
                 Ok(Self::ScanTarLastMemberIndex(parse_u64(key, raw)?))
@@ -394,17 +386,6 @@ pub fn get_scan_tar_saw_any_members(conn: &Connection) -> Result<Option<bool>> {
 
 pub fn set_scan_tar_saw_any_members(conn: &Connection, value: bool) -> Result<()> {
     set_entry(conn, &MetaEntry::ScanTarSawAnyMembers(value))
-}
-
-pub fn get_scan_tar_complete(conn: &Connection) -> Result<Option<bool>> {
-    get_typed(conn, MetaKey::ScanTarComplete, |e| match e {
-        MetaEntry::ScanTarComplete(v) => Some(v),
-        _ => None,
-    })
-}
-
-pub fn set_scan_tar_complete(conn: &Connection, value: bool) -> Result<()> {
-    set_entry(conn, &MetaEntry::ScanTarComplete(value))
 }
 
 pub fn get_scan_tar_from_footer(conn: &Connection) -> Result<Option<bool>> {

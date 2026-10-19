@@ -12,8 +12,6 @@ use crate::error::{Result, ToPanic};
 pub struct ExtractScanState {
     pub saw_manifest_db: bool,
     pub saw_any_members: bool,
-    /// Set only when the tar entry iterator is exhausted.
-    pub scan_complete: bool,
     /// Index of the last tar member that was fully processed; `None` while no member
     /// has been. A resumed pass restarts at the following index.
     pub last_member_index: u64,
