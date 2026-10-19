@@ -330,10 +330,6 @@ fn run_inner(
         scan.last_member_was_snapshot = name == SNAPSHOT_TAR_NAME;
     }
 
-    if !scan.nt_stopped {
-        scan.scan_complete = true;
-    }
-
     // Persist observations before any early return / interrupt propagation.
     store_progress_in_db(&rt, &scan)?;
 
@@ -770,19 +766,10 @@ fn report_scan_completeness(db: &Database, from_footer: bool, force: bool) -> Re
     Ok(())
 }
 
-/// Store progress in db
+/// Store progress in db. Overwrite any preexisting progress in the db.
 fn store_progress_in_db(rt: &ScanRTState, scan: &ExtractScanState) -> Result<()> {
     if let Some(d) = rt.db.as_ref() {
-        let mut persisted = d.load_extract_scan_state()?;
-        persisted.saw_manifest_db |= scan.saw_manifest_db;
-        persisted.saw_any_members |= scan.saw_any_members;
-        persisted.scan_complete = scan.scan_complete;
-        // `None` sorts below every `Some`, so this keeps the furthest point reached.
-        persisted.last_member_index = persisted.last_member_index.max(scan.last_member_index);
-        persisted.from_footer |= scan.from_footer;
-        persisted.last_member_was_snapshot = scan.last_member_was_snapshot;
-        // snapshots_ingested already updated via record_snapshot_ingested.
-        d.save_extract_scan_state(&persisted)?;
+        d.save_extract_scan_state(scan)?;
         d.checkpoint()?;
     }
     Ok(())
