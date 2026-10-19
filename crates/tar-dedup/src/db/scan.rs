@@ -446,7 +446,6 @@ pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState)
     with_transaction(conn, |conn| {
         meta::set_scan_tar_saw_manifest_db(conn, state.saw_manifest_db)?;
         meta::set_scan_tar_saw_any_members(conn, state.saw_any_members)?;
-        meta::set_scan_tar_complete(conn, state.scan_complete)?;
         meta::set_scan_tar_last_member_index(conn, state.last_member_index)?;
         meta::set_scan_tar_from_footer(conn, state.from_footer)?;
         meta::set_scan_tar_last_member_was_snapshot(conn, state.last_member_was_snapshot)?;
@@ -470,7 +469,6 @@ pub fn load_extract_scan_state(conn: &Connection) -> Result<ExtractScanState> {
     Ok(ExtractScanState {
         saw_manifest_db: meta::get_scan_tar_saw_manifest_db(conn)?.unwrap_or(false),
         saw_any_members: meta::get_scan_tar_saw_any_members(conn)?.unwrap_or(false),
-        scan_complete: meta::get_scan_tar_complete(conn)?.unwrap_or(false),
         last_member_index: meta::get_scan_tar_last_member_index(conn)?,
         from_footer: meta::get_scan_tar_from_footer(conn)?.unwrap_or(false),
         last_member_was_snapshot: meta::get_scan_tar_last_member_was_snapshot(conn)?
