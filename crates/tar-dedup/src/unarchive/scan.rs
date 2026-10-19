@@ -493,12 +493,14 @@ fn process_entry(
             }
             let ref_db = rt.db.as_ref().expect(OPT_DB_ERROR);
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
+            tracing::info!("snapshot {} applied", scan.snapshots_ingested);
         }
         (SNAPSHOT_TAR_NAME, true) => {
             if rt.config.process.force && rt.db.is_none() {
                 install_db(rt)?;
                 let ref_db = rt.db.as_ref().expect(OPT_DB_ERROR);
                 scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
+                tracing::info!("snapshot {} applied", scan.snapshots_ingested);
 
                 if let Some(buf) = force_buffer.as_mut() {
                     for fid in buf.0.drain(..) {
@@ -521,6 +523,7 @@ fn process_entry(
                 let _ = captured_extract_database(&rt.config.paths.temp_snapshot(), entry, recorder)?;
                 ldb.apply_snapshot_promote_unarchived(&rt.config.paths.temp_snapshot())?;
                 scan.snapshots_ingested = ldb.record_snapshot_ingested()?;
+                tracing::info!("snapshot {} applied", scan.snapshots_ingested);
             }
         }
         (cid, saw_first) if let Ok((_, _, fid, _)) = parse_content_id(cid) => {
