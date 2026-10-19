@@ -171,7 +171,7 @@ fn run_inner(
     };
 
     if let Some(edb) = rt.db.as_ref() {
-        rt.progress.set_phase_total(edb.count_entries()?);
+        attach_db_progress(edb, rt.progress)?;
         // The scan recorder's auto-flush limit comes from the extract config that
         // governs this run (applied once a fresh-from-disk DB is in hand).
         recorder.set_flush_limit(rt.config.process.auto_flush_limit);
@@ -773,6 +773,7 @@ fn install_database(
     match open_initial_database(rt, db_path, fb) {
         Ok(opened) => {
             rt.db = Some(opened);
+            attach_db_progress(rt.db.as_ref().expect(OPT_DB_ERROR), rt.progress)?;
             Ok(())
         },
         Err(e) => {
