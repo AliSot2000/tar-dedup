@@ -265,6 +265,7 @@ fn run_inner(
             io_error_with_session_scan_error(&rt.config.paths.archive_path, recorder, e)
         })?
         .enumerate() {
+
         if rt.shutdown.is_interrupted() {
             scan.nt_stopped = true;
             break;
