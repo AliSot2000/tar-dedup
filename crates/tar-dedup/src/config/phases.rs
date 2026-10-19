@@ -175,7 +175,7 @@ pub struct RuntimeState {
 }
 
 impl RuntimeState {
-    pub fn new(max_workers: usize) -> Self {
+    pub fn new() -> Self {
         Self {
             snapshot_taken_at: Utc::now(),
             phase: PipelinePhase::Inventory,
