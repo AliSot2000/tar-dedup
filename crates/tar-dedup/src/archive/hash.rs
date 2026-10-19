@@ -1,5 +1,6 @@
 use crate::archive::ArchiveRTArgs;
 use crate::common::files::warn_if_times_changed;
+use crate::common::hash::HashingReader;
 use crate::common::io_buffer;
 use crate::common::send_receive_loop;
 use crate::db::Recorder;
@@ -11,7 +12,6 @@ use crate::progress::BarKind;
 use crate::shutdown::Shutdown;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use indicatif::ProgressBar;
-use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io::Read;
 use std::mem::take;
@@ -233,9 +233,9 @@ fn hash_one(
     shutdown: &Shutdown,
     pb: Option<&ProgressBar>)
     -> Result<([u8; 20], u64)> {
-    let mut file = File::open(path).map_err(|e| Error::io(path, e))?;
+    let file = File::open(path).map_err(|e| Error::io(path, e))?;
+    let mut reader = HashingReader::new(file);
 
-    let mut hasher = Sha1::new();
     let mut zero_blocks = 0u64;
     // Incomplete page spanning the previous read: length so far, and whether
     // those bytes were all zero. `carry_len > 0` is the "cut off by buffer" flag.
@@ -250,11 +250,10 @@ fn hash_one(
                 return Err(e);
             }
         };
-        let n = file.read(buf).map_err(|e| Error::io(path, e))?;
+        let n = reader.read(buf).map_err(|e| Error::io(path, e))?;
         if n == 0 {
             break;
         }
-        hasher.update(&buf[..n]);
 
         let mut i = 0usize;
 
@@ -293,7 +292,7 @@ fn hash_one(
         }
     }
 
-    Ok((hasher.finalize().into(), zero_blocks))
+    Ok((reader.finalize(), zero_blocks))
 }
 
 #[inline]
@@ -311,6 +310,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use nix::unistd::geteuid;
     use rusqlite::named_params;
+    use sha1::{Digest, Sha1};
     use std::os::unix::fs::PermissionsExt;
 
     fn pattern(n: usize, seed: u8) -> Vec<u8> {

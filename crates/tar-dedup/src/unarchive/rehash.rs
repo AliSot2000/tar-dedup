@@ -1,5 +1,6 @@
 //! Rehash: verify extract-cache payloads against catalog SHA-1 digests.
 
+use crate::common::hash::HashingReader;
 use crate::common::io_buffer;
 use crate::common::send_receive_loop;
 use crate::config::ExtractPipelinePhase;
@@ -13,7 +14,6 @@ use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use indicatif::ProgressBar;
-use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io::Read;
 use std::mem::take;
@@ -287,22 +287,21 @@ fn rehash_one(
 /// SHA-1 only (no sparse / hole accounting); advances the worker's byte bar.
 fn hash_file(path: &Path, buf: &mut Vec<u8>, shutdown: &Shutdown, pb: Option<&ProgressBar>)
     -> Result<[u8; 20]> {
-    let mut file = File::open(path).map_err(|e| Error::io(path, e))?;
-    let mut hasher = Sha1::new();
+    let file = File::open(path).map_err(|e| Error::io(path, e))?;
+    let mut reader = HashingReader::new(file);
 
     loop {
         shutdown.check_in_flight()?;
-        let n = file.read(buf).map_err(|e| Error::io(path, e))?;
+        let n = reader.read(buf).map_err(|e| Error::io(path, e))?;
         if n == 0 {
             break;
         }
-        hasher.update(&buf[..n]);
         if let Some(pb) = pb {
             pb.inc(n as u64);
         }
     }
 
-    Ok(hasher.finalize().into())
+    Ok(reader.finalize())
 }
 
 #[cfg(test)]
@@ -318,6 +317,7 @@ mod tests {
     use crate::error::FileStatError;
     use crate::progress::{EXTRACT_MULTIPLIER, ProgressBarSet};
     use rusqlite::named_params;
+    use sha1::{Digest, Sha1};
     use std::time::Duration;
 
     fn pattern(n: usize, seed: u8) -> Vec<u8> {
