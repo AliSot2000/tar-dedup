@@ -555,8 +555,10 @@ fn process_entry(
                         "INVARIANT ERROR: without force, the first member of an archive MUST be an \
                         initial db");
                 let ldb = rt.db.as_ref().expect(OPT_DB_ERROR);
-                let _ = captured_extract_database(&rt.config.paths.temp_snapshot(), entry, recorder)?;
-                ldb.apply_snapshot_promote_unarchived(&rt.config.paths.temp_snapshot())?;
+                // Snapshot ingested into the shared temp_db scratch: the catalog is
+                // already installed at db_path, so temp_db is dead at this point.
+                let _ = captured_extract_database(&rt.config.paths.temp_db(), entry, recorder)?;
+                ldb.apply_snapshot_promote_unarchived(&rt.config.paths.temp_db())?;
                 scan.snapshots_ingested = ldb.record_snapshot_ingested()?;
                 tracing::info!("snapshot {} applied", scan.snapshots_ingested);
             }
