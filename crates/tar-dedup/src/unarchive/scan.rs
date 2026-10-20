@@ -412,8 +412,7 @@ fn run_inner(
              last tar member was {last_member}, from_footer={})\n\
              \x20 - {} file(s) failed to extract their payload (ErrorWhileExtracting)\n\
              \x20 - {} file(s) were marked as archived/added but their payload was not \
-             found in the archive stream\n\
-             Run with --force to proceed (affected files will be skipped).",
+             found in the archive stream",
             violations,
             tally.staged,
             scan.from_footer,
@@ -427,7 +426,7 @@ fn run_inner(
             debug_assert!(promoted >= violations, "promote count must cover the violations");
             flush_scan_recorder(recorder, Some(&sdb))?;
         } else {
-            panic!("{msg}");
+            panic!("{msg}\nRun with --force to proceed (affected files will be skipped).");
         }
     }
 
