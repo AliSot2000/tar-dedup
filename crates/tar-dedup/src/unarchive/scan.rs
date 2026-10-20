@@ -341,6 +341,7 @@ fn run_inner(
         return Err(Error::Config("Archive is Empty".to_string()));
     }
 
+    // PRECONDITION: nt_stopped == false && saw_any_members == true
     // Abort case, we have members but we don't want to keep them
     if rt.db.is_none() {
         // Remove stage if necesssary
@@ -362,10 +363,9 @@ fn run_inner(
             );
         }
     }
-    // PRECONDITION: Archive contained at least one element and at least a database and we
-    //   fully consumed the archive.
     validate_result(&scan, resume_db)?;
 
+    // PRECONDITION: nt_stopped == false && saw_any_members == true && db.is_some() == true
     let sdb = rt.db.expect(OPT_DB_ERROR);
     let trust_catalog = scan.from_footer || scan.saw_manifest_db || rt.config.process.force;
 
@@ -392,11 +392,8 @@ fn run_inner(
         }
     }
 
-    // End-of-scan gate: every row must be `unarchived`, mirroring the archive
-    // pipeline's phase-end convention. The intentional extract-filter-excluded
-    // bucket (D) is promoted out first; the remaining rows (A/B/C) are real
-    // violations and are triaged with a precise breakdown (see
-    // `plans/024-scan-end-unarchived.md`).
+    // On successful exit, all rows should be in 'unarchived' state and all rows with a AppendedPath
+    // flag set should have an associated `FileExtracted` or `ErrorWhileExtracting` Flag
     let tally = sdb.tally_scan_remainders(rt.config.filter.eager_filter)?;
     if tally.filter_excluded > 0 {
         let promoted = sdb.promote_filter_excluded_remainders()?;
@@ -714,55 +711,6 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
     }
     Ok(())
 }
-
-fn report_scan_completeness(db: &Database, from_footer: bool, force: bool) -> Result<()> {
-    // INFO: AppendedPath = true, FileExtracted = false
-    let missing = db.count_missing_payloads()?;
-    if missing > 0 {
-        let msg = format!(
-            "{missing} canonical file(s) have AppendedPath but were not extracted from the archive"
-        );
-        if force { tracing::warn!("{msg}"); } else { return Err(Error::Config(msg)); }
-    }
-    // INFO: rows FileExtracted = True || parent i.e. id = canonical_id has FileExtracted = True
-    let unconfirmed = db.count_unconfirmed_extracted()?;
-    let confirmed = db.count_files_in_phase(FilePhase::Unarchived)?;
-    // TODO Sanity Check confirmed I.e. no extracted where
-    if unconfirmed > 0 {
-        if from_footer {
-            tracing::warn!(
-                "{unconfirmed} extracted file(s) were not promoted to unarchived; \
-                 footer catalog was trusted for salvage"
-            );
-        } else if confirmed > 0 {
-            tracing::warn!(
-                "{confirmed} path(s) were confirmed by a snapshot but {unconfirmed} \
-                 extracted file(s) were not; the archive tail is incomplete"
-            );
-        } else {
-            tracing::warn!(
-                "{unconfirmed} extracted file(s) were not promoted to unarchived and \
-                 no snapshot confirmed any path; the archive is most likely incomplete"
-            );
-        }
-    }
-    // INFO: ONLY canonical_id = id, FileExtracted = true
-    let canonical = db.count_extracted_canonical()?;
-    // INFO: Select FileExtracted = true or parent (where canonical_id = id)
-    let paths = db.count_extracted_paths()?;
-    tracing::info!(
-        canonical,
-        paths,
-        "extract: extracted payloads — {canonical} canonical, {paths} path(s) in groups"
-    );
-
-    for (ftype, count) in db.count_non_appended_by_ftype()? {
-        tracing::info!(count, "extract: non-AppendedPath entries ftype={ftype}");
-    }
-
-    Ok(())
-}
-
 
 /// Copy the database out of the archive to `dst`, capturing an io failure in the
 /// persistent error log (best-effort; a failed record is ignored) before re-raising.
