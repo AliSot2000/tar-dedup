@@ -142,8 +142,8 @@ pub fn get_rows_to_filter_archive<R: SqlFileRow>(
 pub fn get_rows_to_filter_extract<R: SqlFileRow>(
     conn: &Connection,
     last_id: FileId,
-    batch_size: u64,
-) -> Result<Vec<R>> {
+    batch_size: u64)
+    -> Result<Vec<R>> {
     debug_assert!(last_id.0 >= 0, "Unexpected last id");
     let mut stmt = conn.prepare(&format!(
         "SELECT {} FROM files \
@@ -194,8 +194,8 @@ pub fn apply_filter_result_archive<I: Iterator<Item = (FileId, i64, i64)>>(
 /// The results must have the structure (FileId, include_reason, exclude_reason)!
 pub fn apply_filter_result_extract<I: Iterator<Item = (FileId, i64, i64)>>(
     conn: &mut Connection,
-    results: I,
-) -> Result<u64> {
+    results: I)
+    -> Result<u64> {
     let mut rows_updated = 0u64;
     let transaction = conn.transaction().to_panic()?;
     let mut stmt = transaction.prepare_cached(
