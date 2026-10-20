@@ -95,14 +95,17 @@ fn attach_db_progress(
     progress: &ProgressBarSet,
     announce: Option<(bool, u64)>)
     -> Result<()> {
+
     let total = db.count_entries()?;
     let processing = db.count_encoded_payloads()?;
     let extracted = db.count_extracted_canonical()?;
+
     progress.set_table_size(total);
     progress.set_phase_kind(BarKind::Count);
     progress.set_phase_total(processing);
     progress.inc_global(total.saturating_sub(processing));
     progress.inc_both(extracted);
+
     if let Some((resume_db, last_processed)) = announce {
         let pending = processing.saturating_sub(extracted);
         if resume_db {
