@@ -40,7 +40,7 @@ Remainders are partitioned into precise, actionable buckets and either triage-pr
    panic with `Error::Config("tar member … neither a catalog nor a content id …")`.
    `--relax-utf8` has no effect on extract members anymore (stays for archive-side walks).
 
-5. **`last_member_was_snapshot`** in `ExtractScanState` (persisted meta key): `true` iff
+5. **`last_member_was_snapshot`** in `ScanState` (persisted meta key): `true` iff
    the most recently processed member was `snapshot.sqlite`. Message enrichment only —
    **not** a correctness gate (multi-session counter-example: a mid-archive session
    snapshot can be the last member while later-session candidates stay `staged`).
