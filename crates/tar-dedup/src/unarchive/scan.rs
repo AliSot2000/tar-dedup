@@ -511,12 +511,30 @@ fn process_entry(
             scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
             tracing::info!("snapshot {} applied", scan.snapshots_ingested);
         }
-        (SNAPSHOT_TAR_NAME, true) => {
-            if rt.config.process.force && rt.db.is_none() {
+        (SNAPSHOT_TAR_NAME, true) => match (rt.config.process.force, rt.db.is_none()) {
+            // Regardless of force state - with a database, apply the snapshot.
+            (false, false) | (true, false) => {
+                let ldb = rt.db.as_ref().expect(OPT_DB_ERROR);
+                // Ingest the snapshot data into the working database.
+                captured_extract_database(&rt.config.paths.temp_db(), entry, recorder)?;
+                ldb.apply_snapshot_promote_unarchived(&rt.config.paths.temp_db())?;
+                scan.snapshots_ingested = ldb.record_snapshot_ingested()?;
+                tracing::info!("snapshot {} applied", scan.snapshots_ingested);
+            }
+            (false, true) => panic!(
+                "INVARIANT ERROR: without force, the first member of an archive MUST be an \
+                initial db"),
+            (true, true) => {
                 install_db(rt)?;
                 let ref_db = rt.db.as_ref().expect(OPT_DB_ERROR);
                 scan.snapshots_ingested = ref_db.record_snapshot_ingested()?;
                 tracing::info!("snapshot {} applied", scan.snapshots_ingested);
+
+                // Number of buffered members from force buffer.
+                let window_members = match &force_buffer {
+                    Some(buf) => buf.0.len() + buf.1.len(),
+                    None => 0,
+                };
 
                 if let Some(buf) = force_buffer.as_mut() {
                     for fid in buf.0.drain(..) {
@@ -526,25 +544,10 @@ fn process_entry(
                         ref_db.set_file_flag(fid, FileFlag::ErrorWhileExtracting, true)?;
                     }
                 }
-                // Confirm from this snapshot after marking buffered extracts.
-                ref_db.apply_snapshot_promote_unarchived(&rt.config.paths.temp_db())?;
-                // Ingest any scan errors buffered while no DB existed (recorded
-                // during the no-DB window) now that one has materialized.
+                // Dump buffered errors into the db.
                 flush_scan_recorder(recorder, Some(&ref_db))?;
-                // Account the payloads extracted during the pre-DB window; the
-                // loop could not count them (no DB to scope against yet).
-                rt.progress.inc_both(ref_db.count_extracted_canonical()?);
-            } else {
-                assert!(rt.config.process.force || rt.db.is_some(),
-                        "INVARIANT ERROR: without force, the first member of an archive MUST be an \
-                        initial db");
-                let ldb = rt.db.as_ref().expect(OPT_DB_ERROR);
-                // Snapshot ingested into the shared temp_db scratch: the catalog is
-                // already installed at db_path, so temp_db is dead at this point.
-                let _ = captured_extract_database(&rt.config.paths.temp_db(), entry, recorder)?;
-                ldb.apply_snapshot_promote_unarchived(&rt.config.paths.temp_db())?;
-                scan.snapshots_ingested = ldb.record_snapshot_ingested()?;
-                tracing::info!("snapshot {} applied", scan.snapshots_ingested);
+                // INFO: without db, the phase is only incremented. With db, both are incremented.
+                rt.progress.inc_global(window_members as u64);
             }
         }
         (cid, saw_first) if let Ok((_, _, fid, _)) = parse_content_id(cid) => {
@@ -628,6 +631,17 @@ fn process_entry(
                 }
                 Err(e) => return Err(e),
             };
+            extract_canonical_member(force_buffer, entry, recorder, rt, fid, name)?
+        }
+        (other, _) => {
+            return Err(Error::Config(format!(
+                "tar member `{other}` is neither a catalog \
+                nor a content id; not a tar-dedup archive?"
+            )));
+        }
+    }
+    Ok(())
+}
 
             if rt.config.process.force && rt.db.is_none() {
                 let buf = force_buffer
