@@ -1859,11 +1859,20 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let err = entry_name(Path::new("/")).expect_err("no file name on root");
         assert!(matches!(err, Error::Config(_)), "{err:?}");
         // `Path::file_name()` is None for a trailing ".." too, so the same
-        // Config error arm is reached; the in-function debug_assert on ".."
-        // / "." / embedded separators is unreachable via `file_name()` and is
-        // deliberately not tested.
+        // Config error arm is reached.
         let err = entry_name(Path::new("..")).expect_err("no file name on '..'");
         assert!(matches!(err, Error::Config(_)), "{err:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entry_name_debug_assert_on_backslash_filename() {
+        // On Unix `\` is a literal filename char (not a separator), so a tar
+        // member name like `a\b` survives clean()/file_name() intact and trips
+        // the `contains('\\')` debug_assert. Only in debug builds; tests run in
+        // the dev profile.
+        let res = catch_unwind(AssertUnwindSafe(|| entry_name(Path::new("a\\b"))));
+        assert!(res.is_err(), "backslash filename must trip the debug_assert");
     }
 
     /// Reader that fails after `remaining` bytes — forces the `io::copy` error arm.
