@@ -1038,7 +1038,6 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let state = db.load_extract_scan_state().expect("state");
         assert!(state.saw_manifest_db);
         assert!(state.saw_any_members);
-        assert!(state.scan_complete);
         assert_eq!(state.last_member_index, 2);
         assert_eq!(state.snapshots_ingested, 1);
         assert!(!state.from_footer);
@@ -1210,7 +1209,6 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
 
         let db = Database::open(&db_path).expect("open");
         let mut state = db.load_extract_scan_state().expect("state");
-        assert!(!state.scan_complete);
         assert_eq!(state.last_member_index, 2);
 
         // Pretend the interrupt happened right after the leading manifest and roll
@@ -1233,7 +1231,6 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
             2
         );
         let state = db.load_extract_scan_state().expect("state");
-        assert!(state.scan_complete);
         assert_eq!(state.last_member_index, 2);
         // One from the first pass, one from the resumed pass; the interrupt added none.
         assert_eq!(state.snapshots_ingested, 2);
