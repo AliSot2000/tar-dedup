@@ -448,7 +448,8 @@ fn run_inner(
         match fs::remove_file(rt.config.paths.temp_db()) {
             Ok(()) => tracing::info!("Deleted the temp_db"),
             Err(e) => {
-                let err = io_error_with_session_scan_error(&rt.config.paths.temp_db(), recorder, e);
+                let err = io_error_with_session_scan_error(
+                    &rt.config.paths.temp_db(), recorder, e);
                 tracing::warn!("Failed to delete temp_db: {err}")
             }
         }
