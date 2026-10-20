@@ -376,7 +376,7 @@ pub fn count_extracted_paths(conn: &Connection) -> Result<u64> {
 
 /// Determine if this canonical_id is required by a filtered value
 pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool>{
-    let filter_cols = crate::db::common::generate_archive_and_extract_filter(None);
+    let filter_cols = generate_archive_and_extract_filter(None);
     let res = conn.query_row(&format!(
         "SELECT COUNT(*) AS count
         FROM files
@@ -470,7 +470,7 @@ pub fn install_initial_manifest(snapshot_path: &Path, db_path: &Path) -> Result<
     Ok(())
 }
 
-pub fn save_extract_scan_state(conn: &mut Connection, state: &ExtractScanState)
+pub fn save_extract_scan_state(conn: &mut Connection, state: &ScanState)
     -> Result<()> {
     with_transaction(conn, |conn| {
         meta::set_scan_tar_saw_manifest_db(conn, state.saw_manifest_db)?;
@@ -493,9 +493,9 @@ pub fn init_extract_runtime_state(conn: &mut Connection) -> Result<()> {
 /// The two nt variables are populated for the run as follows:
 /// nt_snapshot_before = snapshots_ingested
 /// nt_stopped = false
-pub fn load_extract_scan_state(conn: &Connection) -> Result<ExtractScanState> {
+pub fn load_extract_scan_state(conn: &Connection) -> Result<ScanState> {
     let snapshot_ingested = meta::get_extract_snapshots_ingested(conn)?.unwrap_or(0);
-    Ok(ExtractScanState {
+    Ok(ScanState {
         saw_manifest_db: meta::get_scan_tar_saw_manifest_db(conn)?.unwrap_or(false),
         saw_any_members: meta::get_scan_tar_saw_any_members(conn)?.unwrap_or(false),
         last_member_index: meta::get_scan_tar_last_member_index(conn)?,
