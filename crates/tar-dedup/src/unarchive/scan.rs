@@ -557,80 +557,6 @@ fn process_entry(
                      bypass available with --force"
                 )));
             }
-            // One phase unit per payload member (filter-skipped and force-failed
-            // ones included, matching the encoded total). Skipped while no DB
-            // exists: the --force mid-scan attach seeds those post-flag.
-            if rt.db.is_some() {
-                rt.progress.inc_both(1);
-            }
-            // Extraction gated due to not selected by filter
-            if let Some(db) = rt.db.as_ref() {
-                if rt.config.filter.eager_filter && !db.should_extract_canonical_id(fid)? {
-                    return Ok(())
-                }
-            }
-            // PRECONDITION: either force && no db is true or we saw at least one member.
-            let entry_dst = rt.config.paths.extract_cache_dir().join(name);
-            // Stepped member write: sparse copy preserves holes when requested
-            // (hole-detection block = `--page-size`), plain batched copy otherwise;
-            // both report per-member byte progress on the shared sub-bar.
-            let member_total = entry.size();
-            rt.pb.set_position(0);
-            rt.pb.set_length(member_total);
-            let mut prev = 0u64;
-            let mut on_bytes = |bytes: u64| -> Result<()> {
-                rt.pb.inc(bytes - prev);
-                prev = bytes;
-                rt.shutdown.check_in_flight()
-            };
-            let sp_res = if rt.config.scan.sparsify {
-                let mut buf = vec![0u8; rt.config.scan.page_size];
-                match sparse_cp::sparse_copy_reader(
-                    entry,
-                    &entry_dst,
-                    member_total,
-                    &mut buf,
-                    |bytes, _size: u64, _dur: Duration| on_bytes(bytes)) {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e),
-                }
-            } else {
-                copy_reader_batched(entry, &entry_dst, on_bytes)
-            };
-            match sp_res {
-                Ok(_) => {
-                    tracing::debug!("extracted cache payload {}", entry_dst.display());
-                    ()
-                },
-                // Clean exit on interrupt: no file error recorded, caller saves state.
-                Err(Error::Interrupted) => return Err(Error::Interrupted),
-                // Re-attach the destination path (copy helpers lose it) and record.
-                Err(Error::FileStat(FileStatError::Io { source, .. })) => {
-                    record_file_scan_error(recorder, fid, FileStatError::copy_io(&entry_dst, &source));
-                    // B2: under `--force` a failed payload is tolerated — mark the
-                    // row `ErrorWhileExtracting` and move on; the missing-payload
-                    // report stays visible in the completeness pass.
-                    if rt.config.process.force {
-                        tracing::warn!(
-                            "failed to extract cache payload {}; continuing (--force)",
-                            entry_dst.display()
-                        );
-                        match rt.db.as_ref() {
-                            Some(ldb) => {
-                                ldb.set_file_flag(fid, FileFlag::ErrorWhileExtracting, true)?;
-                            }
-                            None => force_buffer
-                                .as_mut()
-                                .expect("INVARIANT ERROR: Buffer must be Some(_) iff --force is set")
-                                .1
-                                .push(fid),
-                        }
-                        return Ok(());
-                    }
-                    return Err(Error::io(&entry_dst, source));
-                }
-                Err(e) => return Err(e),
-            };
             extract_canonical_member(force_buffer, entry, recorder, rt, fid, name)?
         }
         (other, _) => {
@@ -643,22 +569,97 @@ fn process_entry(
     Ok(())
 }
 
-            if rt.config.process.force && rt.db.is_none() {
-                let buf = force_buffer
-                    .as_mut()
-                    .expect("INVARIANT ERROR: Buffer must be Some(_) iff --force is set");
-                buf.0.push(fid);
-            } else {
-                let ldb = rt.db.as_ref().expect(OPT_DB_ERROR);
-                ldb.set_file_flag(fid, FileFlag::FileExtracted, true)?;
+/// Provided we have an entry to extract, extract the entry to the computed destination. Uses
+/// either batched_copy or sparse_copy
+fn extract_canonical_member(
+    force_buffer: &mut Option<(Vec<FileId>, Vec<FileId>)>,
+    entry: &mut Entry<BufReader<Box<dyn Read>>>,
+    recorder: &mut Recorder,
+    rt: &ScanRTState,
+    fid: FileId,
+    name: &str)
+    -> Result<()> {
+    // Pre-DB window (--force, no catalog yet): advance only the phase bar so it
+    // counts payload members as a spinner; the global bar has no total to
+    // advance against until the catalog installs (`attach_db_progress`). Once a
+    // DB is present, count the member on phase + global as usual.
+    if rt.db.is_some() {
+        rt.progress.inc_both(1);
+    } else {
+        rt.progress.inc_phase(1);
+    }
+    // Extraction gated due to not selected by filter
+    if let Some(db) = rt.db.as_ref() {
+        if rt.config.filter.eager_filter && !db.should_extract_canonical_id(fid)? {
+            return Ok(())
+        }
+    }
+    // PRECONDITION: either force && no db is true or we saw at least one member.
+    let entry_dst = rt.config.paths.extract_cache_dir().join(name);
+    let member_total = entry.size();
+    rt.pb.set_position(0);
+    rt.pb.set_length(member_total);
+    let mut prev = 0u64;
+    let mut on_bytes = |bytes: u64| -> Result<()> {
+        rt.pb.inc(bytes - prev);
+        prev = bytes;
+        rt.shutdown.check_in_flight()
+    };
+    // TODO: Subset checks.
+    let sp_res = if rt.config.scan.sparsify {
+        let mut buf = vec![0u8; rt.config.scan.page_size];
+        match sparse_cp::sparse_copy_reader(
+            entry,
+            &entry_dst,
+            member_total,
+            &mut buf,
+            |bytes, _size: u64, _dur: Duration| on_bytes(bytes)) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    } else {
+        copy_reader_batched(entry, &entry_dst, on_bytes)
+    };
+
+    match sp_res {
+        Ok(_) => {
+            tracing::debug!("extracted cache payload {}", entry_dst.display());
+            ()
+        },
+        // Clean exit on interrupt: no file error recorded, caller saves state.
+        Err(Error::Interrupted) => return Err(Error::Interrupted),
+        // Process error to recorder and raise or warn + set flag
+        Err(Error::FileStat(FileStatError::Io { source, .. })) => {
+            record_file_scan_error(recorder, fid, FileStatError::copy_io(&entry_dst, &source));
+            if rt.config.process.force {
+                tracing::warn!("failed to extract cache payload {}; continuing (--force)",
+                    entry_dst.display());
+                match rt.db.as_ref() {
+                    Some(ldb) => {
+                        ldb.set_file_flag(fid, FileFlag::ErrorWhileExtracting, true)?;
+                    }
+                    None => force_buffer
+                        .as_mut()
+                        .expect("INVARIANT ERROR: Buffer must be Some(_) iff --force is set")
+                        .1
+                        .push(fid),
+                }
+                return Ok(());
             }
+            return Err(Error::io(&entry_dst, source));
         }
-        (other, _) => {
-            return Err(Error::Config(format!(
-                "tar member `{other}` is neither a catalog \
-                nor a content id; not a tar-dedup archive?"
-            )));
-        }
+        // TODO: Subset checks.
+        Err(e) => return Err(e),
+    };
+
+    if rt.db.is_none() {
+        let buf = force_buffer
+            .as_mut()
+            .expect("INVARIANT ERROR: Buffer must be Some(_) iff --force is set");
+        buf.0.push(fid);
+    } else {
+        let ldb = rt.db.as_ref().expect(OPT_DB_ERROR);
+        ldb.set_file_flag(fid, FileFlag::FileExtracted, true)?;
     }
     Ok(())
 }
