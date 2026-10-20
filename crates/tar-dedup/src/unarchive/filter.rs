@@ -56,13 +56,13 @@ impl ParseFilterBuffer {
 //  filter pass is a deliberate no-op: there is nothing to match against, and filters
 //  stay in `ExtractConfig`. Verified via the row count.
 pub fn run(rt: &ExtractRTArgs, set_phase: bool) -> Result<()> {
-    let eligible = rt.db.count_files_in_phase(Unarchived)?;
-    tracing::info!(
-        "starting filter: total {}, processing {}, pending {}",
-        rt.db.count_entries()?,
-        eligible,
-        eligible,
-    );
+    // TODO:
+    //  - tracing is missleading and should be dropped
+    //  - option should exist to provide the progress bars separately. (Extra progress bars when
+    //    extracting during scan)
+    //  - Phase should only be set in during the actual filter phase
+    //  - a meta key should exist to track if the filters were already applied. In this case,
+    //    skip the joint_filter_phase and
     joint_filter_phase(
         false,
         rt.config.filter.anchored,
