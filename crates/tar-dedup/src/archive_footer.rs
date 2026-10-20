@@ -237,3 +237,83 @@ pub fn extract_footer_db(archive_path: &Path, dest_dir: &Path) -> Result<Option<
         Ok(None)
     }
 }
+
+//==================================================================================================
+// Testing
+//==================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use crate::test_support::{build_archive, build_footer_archive, corrupt_byte};
+
+    /// The footer's `u64 offset` (LE) lives in the last 8 bytes of the file and
+    /// points at the leading `FOOTER_MAGIC` (the start of the trailer).
+    fn footer_offset(path: &Path) -> u64 {
+        let mut f = File::open(path).expect("open");
+        let len = f.metadata().expect("meta").len();
+        f.seek(SeekFrom::Start(len - 8)).expect("seek");
+        let mut buf = [0u8; 8];
+        f.read_exact(&mut buf).expect("read");
+        u64::from_le_bytes(buf)
+    }
+
+    #[test]
+    fn verify_integrity_true_on_valid_footer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_footer_archive(dir.path());
+        assert!(verify_archive_integrity(&config.paths.archive_path).expect("verify"));
+    }
+
+    #[test]
+    fn verify_integrity_false_on_content_corruption() {
+        // A byte flipped in the hashed content region [0, offset) changes the
+        // digest without breaking the footer structure → Ok(false).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_footer_archive(dir.path());
+        corrupt_byte(&config.paths.archive_path, 1024);
+        assert!(!verify_archive_integrity(&config.paths.archive_path).expect("verify"));
+    }
+
+    #[test]
+    fn verify_integrity_err_on_leading_magic_corruption() {
+        // The presence gate (trailing MAGIC + offset) passes but the leading
+        // MAGIC at `offset` no longer matches → locate_footer Err(Config).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_footer_archive(dir.path());
+        corrupt_byte(&config.paths.archive_path, footer_offset(&config.paths.archive_path));
+        assert!(matches!(
+            verify_archive_integrity(&config.paths.archive_path),
+            Err(Error::Config(_)),
+        ));
+    }
+
+    #[test]
+    fn verify_integrity_false_without_footer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_archive(dir.path());
+        assert!(!verify_archive_integrity(&config.paths.archive_path).expect("verify"));
+    }
+
+    #[test]
+    fn read_footer_roundtrip_extracts_openable_db() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_footer_archive(dir.path());
+        let dest = dir.path().join("extracted.sqlite");
+        assert!(read_footer(&config.paths.archive_path, &dest).expect("read footer"));
+        assert!(dest.is_file());
+        // The payload decompresses to a real sqlite catalog.
+        let db = Database::open(&dest).expect("open extracted footer db");
+        assert!(db.count_entries().expect("entries") >= 2);
+    }
+
+    #[test]
+    fn read_footer_none_without_footer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_archive(dir.path());
+        let dest = dir.path().join("nope.sqlite");
+        assert!(!read_footer(&config.paths.archive_path, &dest).expect("no footer"));
+        assert!(!dest.exists());
+    }
+}
