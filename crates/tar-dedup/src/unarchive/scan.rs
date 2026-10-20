@@ -393,9 +393,8 @@ fn run_inner(
         let promoted = sdb.promote_filter_excluded_remainders()?;
         debug_assert_eq!(promoted, tally.filter_excluded);
         tracing::info!(
-            count = tally.filter_excluded,
             "scan: {} file(s) excluded by the extract filter (not extracted by design)",
-            tally.filter_excluded
+            tally.filter_excluded,
         );
     }
 
