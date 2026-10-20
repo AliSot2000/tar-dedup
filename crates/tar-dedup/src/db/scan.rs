@@ -4,14 +4,68 @@ use crate::db::common::{
     generate_archive_and_extract_filter, generate_archive_filter, with_transaction,
 };
 use crate::db::content_id::parse_content_id;
-use crate::db::extract::{load_extract_runtime_state, save_extract_runtime_state};
 use crate::db::flags::FileFlag;
 use crate::db::types::FileId;
-use crate::db::{ExtractScanState, flags, meta};
+use crate::db::{SqlFileRow, flags, meta};
 use crate::error::{Error, Result, ToPanic};
 use rusqlite::{Connection, named_params};
 use std::fs;
 use std::path::Path;
+
+/// INFO: nt -> not tracked i.e. runtime variables that are set with each run which do not make
+///  sense saving
+/// Cumulative + per-pass extract scan observations persisted in `meta`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ScanState {
+    pub saw_manifest_db: bool,
+    pub saw_any_members: bool,
+    /// Index of the last tar member that was fully processed; `None` while no member
+    /// has been. A resumed pass restarts at the following index.
+    pub last_member_index: u64,
+    pub from_footer: bool,
+    /// True iff the most recently processed tar member was `snapshot.sqlite`.
+    /// Recomputed per member; message enrichment only (a mid-archive session
+    /// snapshot can be the last member of a truncated stream).
+    pub last_member_was_snapshot: bool,
+    /// Cumulative `snapshot.sqlite` members ingested (persisted).
+    pub snapshots_ingested: u32,
+
+    /// To keep track of how many snapshots were ingested in this run
+    pub nt_snapshot_before: u32,
+    /// Mark, if the run was interrupted rather than finished consuming the iterator.
+    pub nt_stopped: bool,
+}
+
+pub fn list_files_to_restore<R: SqlFileRow>(conn: &Connection) -> Result<Vec<R>> {
+    let cols = R::sql_columns(None);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {cols} FROM files WHERE phase = 'rehashed' ORDER BY id"
+    )).to_panic()?;
+    let rows = stmt.query_map(
+        [], |r| R::from_row(r, None)).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
+}
+
+pub fn load_extract_runtime_state(conn: &Connection) -> Result<Option<ExtractRuntimeState>> {
+    let Some(phase) = meta::get_extract_phase(conn)? else {
+        return Ok(None);
+    };
+    let snapshots_ingested = meta::get_extract_snapshots_ingested(conn)?.unwrap_or(0);
+
+    Ok(Some(ExtractRuntimeState {
+        phase,
+        snapshots_ingested,
+    }))
+}
+
+pub fn save_extract_runtime_state(conn: &mut Connection, state: &ExtractRuntimeState) -> Result<()> {
+    with_transaction(conn, |conn| {
+        meta::set_extract_phase(conn, state.phase)?;
+        meta::set_extract_snapshots_ingested(conn, state.snapshots_ingested)?;
+        Ok(())
+    })
+}
+
 
 /// Iterate over the extraction dir twice to check for files we missed and for files that are missing
 pub fn check_cached_payloads(conn: &mut Connection, cache_dir: &Path) -> Result<(u64, u64)> {

@@ -24,7 +24,6 @@ mod common;
 pub mod content_id;
 pub(crate) mod dedup;
 mod errors;
-mod extract;
 mod filter;
 pub(crate) mod hash;
 mod integrity;
@@ -43,7 +42,7 @@ mod stats;
 mod tar_writer;
 
 pub use common::SqlFileRow;
-pub use extract::ExtractScanState;
+pub use scan::ScanState;
 pub use integrity::{
     ArchiveGate, archive_phase_check_count, extract_phase_check_count,
 };
@@ -871,20 +870,20 @@ impl Database {
         scan::should_extract_canonical_id(&self.conn(), id)
     }
 
-    pub fn load_extract_scan_state(&self) -> Result<ExtractScanState> {
+    pub fn load_extract_scan_state(&self) -> Result<ScanState> {
         scan::load_extract_scan_state(&*self.conn())
     }
 
-    pub fn save_extract_scan_state(&self, state: &ExtractScanState) -> Result<()> {
+    pub fn save_extract_scan_state(&self, state: &ScanState) -> Result<()> {
         scan::save_extract_scan_state(&mut *self.conn_mut(), state)
     }
 
     pub fn load_extract_runtime_state(&self) -> Result<Option<ExtractRuntimeState>> {
-        extract::load_extract_runtime_state(&*self.conn())
+        scan::load_extract_runtime_state(&*self.conn())
     }
 
     pub fn save_extract_runtime_state(&self, state: &ExtractRuntimeState) -> Result<()> {
-        extract::save_extract_runtime_state(&mut *self.conn_mut(), state)
+        scan::save_extract_runtime_state(&mut *self.conn_mut(), state)
     }
 
     pub fn record_snapshot_ingested(&self) -> Result<u32> {
@@ -892,7 +891,7 @@ impl Database {
     }
 
     pub fn list_files_to_restore<R: SqlFileRow>(&self) -> Result<Vec<R>> {
-        extract::list_files_to_restore(&*self.conn())
+        scan::list_files_to_restore(&*self.conn())
     }
 
     /// See [`rehash::count_files_to_rehash`].
