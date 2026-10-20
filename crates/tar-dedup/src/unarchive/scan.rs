@@ -250,6 +250,7 @@ fn run_inner(
         scn.from_footer |= footer_this_pass;
         scn
     };
+    scan.from_footer |= footer_this_pass;
 
     let mut archive = open_tar_archive(
         &rt.config.paths.archive_path, &rt.config.decompression
