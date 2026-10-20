@@ -366,7 +366,6 @@ fn run_inner(
     // PRECONDITION: nt_stopped == false && saw_any_members == true && db.is_some() == true
     validate_result(&scan, resume_db, rt.config.process.force)?;
     let sdb = rt.db.expect(OPT_DB_ERROR);
-    let trust_catalog = scan.from_footer || scan.saw_manifest_db || rt.config.process.force;
 
     // Check for any payloads that were extracted but somehow not recorded
     let (present, new) = sdb.check_cached_payloads(&rt.config.paths.extract_cache_dir())?;
@@ -379,16 +378,12 @@ fn run_inner(
         }
     }
 
-    // TODO we cannot assert that we have all entries in the files table in 'archived' no?
-    report_scan_completeness(&sdb, scan.from_footer, rt.config.process.force)?;
-    if trust_catalog {
-        let n = sdb.promote_extracted_to_unarchived()?;
-        if n > 0 {
-            tracing::warn!(
-                "promoted {n} extracted row(s) to unarchived without snapshot confirmation \
-                 (footer and/or --force)"
-            );
-        }
+    // Deal with unfinished promotion (e.g. snapshot missing) -> Blanket prmote here.
+    let n = sdb.promote_extracted_to_unarchived()?;
+    if n > 0 {
+        tracing::warn!(
+            "promoted {n} extracted row(s) to unarchived without snapshot confirmation"
+        );
     }
 
     // On successful exit, all rows should be in 'unarchived' state and all rows with a AppendedPath
