@@ -325,7 +325,10 @@ fn run_inner(
     }
 
     // Persist observations before any early return / interrupt propagation.
-    store_progress_in_db(&rt, &scan)?;
+    if let Some(d) = rt.db.as_ref() {
+        d.save_extract_scan_state(&scan)?;
+        d.checkpoint()?;
+    }
 
     if scan.nt_stopped {
         // Best-effort persist whatever was buffered against the pass's database.
@@ -760,14 +763,6 @@ fn report_scan_completeness(db: &Database, from_footer: bool, force: bool) -> Re
     Ok(())
 }
 
-/// Store progress in db. Overwrite any preexisting progress in the db.
-fn store_progress_in_db(rt: &ScanRTState, scan: &ExtractScanState) -> Result<()> {
-    if let Some(d) = rt.db.as_ref() {
-        d.save_extract_scan_state(scan)?;
-        d.checkpoint()?;
-    }
-    Ok(())
-}
 
 /// Copy the database out of the archive to `dst`, capturing an io failure in the
 /// persistent error log (best-effort; a failed record is ignored) before re-raising.
