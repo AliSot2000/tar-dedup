@@ -779,9 +779,9 @@ fn install_database(
 
     captured_extract_database(&rt.config.paths.temp_db(), entry, recorder)?;
     match open_initial_database(rt, db_path, fb) {
-        Ok(opened) => {
-            rt.db = Some(opened);
-            attach_db_progress(rt.db.as_ref().expect(OPT_DB_ERROR), rt.progress)?;
+        Ok(db) => {
+            rt.db = Some(db);
+            attach_db_progress(rt.db.as_ref().expect(OPT_DB_ERROR), rt.progress, None)?;
             Ok(())
         },
         Err(e) => {
@@ -803,10 +803,10 @@ fn open_initial_database(
     let opened = Database::open(target)?;
     opened.init_extract_runtime_state()?;
     opened.normalize_installed_catalog()?;
-    let rt = ExtractRTArgs {
+    let irt = ExtractRTArgs {
         config: rt.config, db: &opened, shutdown: rt.shutdown, progress: rt.progress
     };
-    store_filter_buffer(fb, &rt)?;
+    store_filter_buffer(fb, &irt)?;
     Ok(opened)
 }
 
