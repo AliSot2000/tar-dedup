@@ -812,10 +812,6 @@ impl Database {
         scan::count_extracted_paths(&*self.conn())
     }
 
-    pub fn count_non_appended_by_ftype(&self) -> Result<Vec<(String, u64)>> {
-        scan::count_non_appended_by_ftype(&*self.conn())
-    }
-
     /// `(ftype, count)` for every row in `files`.
     pub fn inspect_by_ftype(&self) -> Result<Vec<(String, u64)>> {
         stats::count_by_ftype(&*self.conn())

@@ -375,30 +375,6 @@ pub fn count_extracted_paths(conn: &Connection) -> Result<u64> {
     Ok(count as u64)
 }
 
-/// `(ftype_label, count)` for rows that lack `AppendedPath` which aren't file. Also excludes the
-/// number of filter_excluded files
-pub fn count_non_appended_by_ftype(conn: &Connection) -> Result<Vec<(String, u64)>> {
-    let bit = FileFlag::AppendedPath.mask_i64();
-    let mut stmt = conn.prepare(&format!(
-        "SELECT ftype AS ft, COUNT(*) AS count
-         FROM files
-         WHERE (flags & :bit) = 0
-            AND {}
-         GROUP BY ftype
-         ORDER BY ft",
-        crate::db::common::generate_archive_filter(None),
-    )).to_panic()?;
-    let rows = stmt.query_map(
-        named_params! { ":bit": bit },
-        |row| {
-            Ok((
-                row.get::<_, String>("ft")?,
-                row.get::<_, i64>("count")? as u64,
-            ))
-    }).to_panic()?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
-}
-
 /// Determine if this canonical_id is required by a filtered value
 pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool>{
     let filter_cols = crate::db::common::generate_archive_and_extract_filter(None);
