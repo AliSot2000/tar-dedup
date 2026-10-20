@@ -845,9 +845,11 @@ mod tests {
     use crate::db::types::{FileId, FilePhase, FileRecord, FileType, StrippedRecord};
     use crate::progress;
     use crate::test_support::{
-        add_archived_canonical, append_member, build_archive, insert, seed_filter_reasons,
+        add_archived_canonical, append_member, build_archive, build_footer_archive,
+        build_multi_catalog, content_id_name, corrupt_byte, insert, seed_filter_reasons,
         write_catalog,
     };
+    use crate::unarchive::filter::ingest_filters;
     use progress::EXTRACT_MULTIPLIER;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
