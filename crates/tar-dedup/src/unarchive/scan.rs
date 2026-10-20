@@ -1238,4 +1238,679 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // One from the first pass, one from the resumed pass; the interrupt added none.
         assert_eq!(state.snapshots_ingested, 2);
     }
+
+    // ---------------------------------------------------------------------
+    // Resume: rewind the saved scan state and re-run.
+    // ---------------------------------------------------------------------
+
+    fn run_scan(config: &ExtractConfig, db_path: &Path) -> Database {
+        run(config, db_path, &Shutdown::detached(),
+            &mut Recorder::speculative(false, None),
+            &mut Some(ParseFilterBuffer::default()),
+            &ProgressBarSet::new(EXTRACT_MULTIPLIER))
+            .expect("scan")
+    }
+
+    /// Rewind the saved scan state so the next pass skips members `0..=last_index`
+    /// (the resume bound). When `keep_extracted` is false, `FileExtracted` is
+    /// cleared (mirroring a scan interrupted before any payload completed), so the
+    /// resumed pass re-extracts from scratch; when true, already-extracted rows
+    /// keep their flag and only the later members are reprocessed.
+    fn rewind_scan_to(db_path: &Path, last_index: u64, keep_extracted: bool) {
+        let db = Database::open(db_path).expect("open");
+        let mut state = db.load_extract_scan_state().expect("state");
+        state.last_member_index = last_index;
+        db.save_extract_scan_state(&state).expect("save");
+        if !keep_extracted {
+            db.normalize_installed_catalog().expect("clear extract flags");
+        }
+        db.checkpoint().expect("checkpoint");
+        drop(db);
+    }
+
+    #[test]
+    fn scan_resume_zero_extracted_reextracts_everything() {
+        // Full run, then rewind to "only the manifest was processed": the resumed
+        // pass must re-extract every payload member.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _members) = build_multi_catalog(dir.path(), 3);
+        let db_path = config.paths.db_path();
+
+        let db = run_scan(&config, &db_path);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 4);
+        drop(db);
+
+        rewind_scan_to(&db_path, 0, false);
+        let db = run_scan(&config, &db_path);
+        assert_eq!(db.count_extracted_canonical().expect("extracted"), 3);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 4);
+        let state = db.load_extract_scan_state().expect("state");
+        // manifest(0) + 3 payloads(1..=3) + snapshot(4)
+        assert_eq!(state.last_member_index, 4);
+        assert_eq!(state.snapshots_ingested, 2);
+    }
+
+    #[test]
+    fn scan_resume_one_extracted_reapplies_trailing_snapshot() {
+        // Rewind after the payload member but keep its `FileExtracted` flag: the
+        // resumed pass only has to reprocess the trailing snapshot.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _member) = build_archive(dir.path());
+        let db_path = config.paths.db_path();
+
+        run_scan(&config, &db_path);
+        rewind_scan_to(&db_path, 1, true);
+        let db = run_scan(&config, &db_path);
+        assert_eq!(db.count_extracted_canonical().expect("extracted"), 1);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
+        let state = db.load_extract_scan_state().expect("state");
+        assert_eq!(state.last_member_index, 2);
+        assert_eq!(state.snapshots_ingested, 2);
+    }
+
+    #[test]
+    fn scan_resume_many_extracted_skips_already_processed_members() {
+        // >10 payloads; rewind mid-stream and keep the flags of the already
+        // extracted ones. The resumed pass re-processes only the tail members.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _members) = build_multi_catalog(dir.path(), 12);
+        let db_path = config.paths.db_path();
+
+        run_scan(&config, &db_path);
+        // manifest(0) + payloads 1..=6 processed → 6 extracted, tail = 7..=13.
+        rewind_scan_to(&db_path, 6, true);
+        let db = run_scan(&config, &db_path);
+        assert_eq!(db.count_extracted_canonical().expect("extracted"), 12);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 13);
+        let state = db.load_extract_scan_state().expect("state");
+        assert_eq!(state.last_member_index, 13);
+        assert_eq!(state.snapshots_ingested, 2);
+    }
+
+    // ---------------------------------------------------------------------
+    // Footer + archive integrity.
+    // ---------------------------------------------------------------------
+
+    /// The footer's `u64 offset` (LE) lives in the last 8 bytes of the file and
+    /// points at the leading `FOOTER_MAGIC` (the start of the trailer).
+    fn footer_offset(archive_path: &Path) -> u64 {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = fs::File::open(archive_path).expect("open");
+        let len = f.metadata().expect("meta").len();
+        f.seek(SeekFrom::Start(len - 8)).expect("seek");
+        let mut buf = [0u8; 8];
+        f.read_exact(&mut buf).expect("read");
+        u64::from_le_bytes(buf)
+    }
+
+    #[test]
+    fn scan_footer_archive_succeeds_and_records_provenance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, member) = build_footer_archive(dir.path());
+        let db_path = config.paths.db_path();
+
+        let db = run_scan(&config, &db_path);
+        assert!(config.paths.extract_cache_dir().join(&member).is_file());
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
+        let state = db.load_extract_scan_state().expect("state");
+        assert!(state.from_footer, "footer provenance must be recorded");
+        assert!(
+            state.saw_manifest_db,
+            "the in-tar manifest member is still walked (no-op install)"
+        );
+        assert_eq!(state.snapshots_ingested, 1);
+    }
+
+    #[test]
+    fn scan_footer_content_corruption_aborts_unless_force() {
+        // Flip a byte in the archive content region [0, offset): the stored
+        // content sha1 no longer matches → verify_archive_integrity returns
+        // Ok(false), a Config error without --force. Byte 1024 sits inside the
+        // manifest member's data (never opened — the footer wins), so the tar
+        // stream itself stays readable.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut config, _member) = build_footer_archive(dir.path());
+        let db_path = config.paths.db_path();
+        config.process.force = false;
+        corrupt_byte(&config.paths.archive_path, 1024);
+
+        let mut rec = Recorder::speculative(true, None);
+        let err = match run(&config, &db_path, &Shutdown::detached(), &mut rec,
+                            &mut Some(ParseFilterBuffer::default()),
+                            &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
+            Ok(_) => panic!("content corruption must abort without --force"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+        assert!(!rec.is_empty(), "integrity mismatch must be recorded");
+    }
+
+    #[test]
+    fn scan_footer_content_corruption_warns_under_force() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, member) = build_footer_archive(dir.path());
+        let db_path = config.paths.db_path();
+        corrupt_byte(&config.paths.archive_path, 1024);
+
+        // for_scan_test defaults force=true → warn + continue.
+        let db = run_scan(&config, &db_path);
+        assert!(config.paths.extract_cache_dir().join(&member).is_file());
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
+    }
+
+    #[test]
+    fn scan_footer_leading_magic_corruption_aborts_regardless_of_force() {
+        // Corrupt the leading MAGIC at `offset`. The footer's presence gate
+        // (trailing MAGIC + offset) still passes, so locate_footer reads the
+        // leading MAGIC, hits a mismatch and returns Err(Config) — which
+        // run_inner propagates unconditionally (only Err(FileStat) is downgraded
+        // to footer-less handling at load time).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _member) = build_footer_archive(dir.path());
+        let db_path = config.paths.db_path();
+        corrupt_byte(&config.paths.archive_path, footer_offset(&config.paths.archive_path));
+
+        let err = match run(&config, &db_path, &Shutdown::detached(),
+                            &mut Recorder::speculative(false, None),
+                            &mut Some(ParseFilterBuffer::default()),
+                            &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
+            Ok(_) => panic!("corrupt leading magic must abort"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+    }
+
+    // ---------------------------------------------------------------------
+    // Abort / edge paths: empty archive, payload-only (no catalog), stray cache file.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn scan_empty_archive_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive_path = dir.path().join("empty.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        builder.finish().expect("finish empty tar");
+        let config = ExtractConfig::for_scan_test(
+            archive_path, dir.path().join("work"), dir.path().join("out"));
+        let db_path = config.paths.db_path();
+
+        let err = match run(&config, &db_path, &Shutdown::detached(),
+                            &mut Recorder::speculative(false, None),
+                            &mut Some(ParseFilterBuffer::default()),
+                            &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
+            Ok(_) => panic!("empty archive must error"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+        assert!(err.to_string().contains("Empty"), "{err}");
+    }
+
+    #[test]
+    fn scan_payload_only_aborts_and_removes_cache_under_force() {
+        // A stream of only a canonical payload (no manifest/snapshot/footer) can
+        // never produce a catalog. Under --force the run aborts with a Config
+        // error and the cache dir is cleaned up.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive_path = dir.path().join("payload-only.tar");
+        let member = content_id_name(FileId(1), [7u8; 20], 4);
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, &member, b"data");
+        builder.finish().expect("finish tar");
+        let config = ExtractConfig::for_scan_test(
+            archive_path, dir.path().join("work"), dir.path().join("out"));
+        let db_path = config.paths.db_path();
+
+        let cache = config.paths.extract_cache_dir();
+        let err = match run(&config, &db_path, &Shutdown::detached(),
+                            &mut Recorder::speculative(false, None),
+                            &mut Some(ParseFilterBuffer::default()),
+                            &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
+            Ok(_) => panic!("payload-only archive must abort"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+        assert!(
+            !cache.exists(),
+            "cache dir must be removed on the no-DB abort"
+        );
+    }
+
+    #[test]
+    fn scan_payload_only_rejected_at_first_member_gate_without_force() {
+        // Without --force the first member gate rejects a leading canonical
+        // before any extraction; the `rt.db.is_none()` panic path further down
+        // is unreachable (no-force forces a leading manifest, which installs a
+        // DB), so this documents the reachable behavior.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive_path = dir.path().join("payload-only.tar");
+        let member = content_id_name(FileId(1), [7u8; 20], 4);
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, &member, b"data");
+        builder.finish().expect("finish tar");
+        let mut config = ExtractConfig::for_scan_test(
+            archive_path, dir.path().join("work"), dir.path().join("out"));
+        config.process.force = false;
+        let db_path = config.paths.db_path();
+
+        let err = match run(&config, &db_path, &Shutdown::detached(),
+                            &mut Recorder::speculative(false, None),
+                            &mut Some(ParseFilterBuffer::default()),
+                            &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
+            Ok(_) => panic!("leading canonical without force must be rejected"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+        assert!(err.to_string().contains("first tar member"), "{err}");
+    }
+
+    #[test]
+    fn scan_stray_cached_payload_panics_without_force() {
+        // check_cached_payloads: a payload-shaped file in the cache dir whose row
+        // is not marked FileExtracted is an anomaly. Without --force it panics.
+        // The stray names the *duplicate* row (id 2): it exists in the catalog
+        // but is never extracted.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut config, _member) = build_archive(dir.path());
+        config.process.force = false;
+        let db_path = config.paths.db_path();
+        let cache = config.paths.extract_cache_dir();
+        fs::create_dir_all(&cache).expect("cache dir");
+        fs::write(
+            cache.join(content_id_name(FileId(2), [8u8; 20], 4)),
+            b"stray",
+        ).expect("plant stray");
+
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            run(&config, &db_path, &Shutdown::detached(),
+                &mut Recorder::speculative(false, None),
+                &mut Some(ParseFilterBuffer::default()),
+                &ProgressBarSet::new(EXTRACT_MULTIPLIER))
+        }));
+        let err = res.err().expect("scan must panic on a stray payload");
+        let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(msg.contains("not recorded as extracted"), "{msg}");
+    }
+
+    #[test]
+    fn scan_stray_cached_payload_warns_under_force() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _member) = build_archive(dir.path());
+        let db_path = config.paths.db_path();
+        let cache = config.paths.extract_cache_dir();
+        fs::create_dir_all(&cache).expect("cache dir");
+        fs::write(
+            cache.join(content_id_name(FileId(2), [8u8; 20], 4)),
+            b"stray",
+        ).expect("plant stray");
+
+        let db = run_scan(&config, &db_path);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
+    }
+
+    // ---------------------------------------------------------------------
+    // Extract filters × eager/lazy gating of the payload members.
+    // ---------------------------------------------------------------------
+
+    /// Run the scan with user include/exclude patterns ingested into the filter
+    /// buffer (matching the real pipeline: `ingest_filters` → `scan::run`).
+    fn run_scan_filtered(
+        config: &ExtractConfig,
+        db_path: &Path,
+        recorder: &mut Recorder,
+    ) -> Database {
+        let fb = ingest_filters(config, recorder).expect("ingest filters");
+        run(config, db_path, &Shutdown::detached(), recorder,
+            &mut Some(fb), &ProgressBarSet::new(EXTRACT_MULTIPLIER))
+            .expect("scan")
+    }
+
+    #[test]
+    fn scan_eager_filter_skips_excluded_payload_member() {
+        // `/f_0.txt` is excluded by the extract filter; with eager_filter on the
+        // scan gate skips its payload member (no FileExtracted) and the
+        // end-of-scan bucket-D promotion sweeps it to `unarchived`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut config, members) = build_multi_catalog(dir.path(), 2);
+        config.filter.eager_filter = true;
+        config.filter.exclude_patterns = vec!["/f_0\\.txt".into()];
+        let db_path = config.paths.db_path();
+
+        let mut rec = Recorder::speculative(true, None);
+        let db = run_scan_filtered(&config, &db_path, &mut rec);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 3);
+        assert_eq!(db.count_extracted_canonical().expect("extracted"), 1);
+
+        // f_0 (id 1) is excluded: no FileExtracted, and its member is not cached.
+        let f0 = db.get_file_by_id::<StrippedRecord>(FileId(1)).expect("get").expect("row");
+        assert!(!f0.flags.get(FileFlag::FileExtracted), "excluded member must be skipped");
+        assert!(!config.paths.extract_cache_dir().join(&members[0]).exists());
+        // f_1 (id 2) is extracted normally.
+        let f1 = db.get_file_by_id::<StrippedRecord>(FileId(2)).expect("get").expect("row");
+        assert!(f1.flags.get(FileFlag::FileExtracted));
+        assert!(config.paths.extract_cache_dir().join(&members[1]).is_file());
+    }
+
+    #[test]
+    fn scan_lazy_filter_extracts_all_payloads() {
+        // Same patterns but eager_filter off: the scan gate does not consult the
+        // extract filter, so every payload member is extracted; the filter only
+        // takes effect in the later place phase.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut config, members) = build_multi_catalog(dir.path(), 2);
+        config.filter.eager_filter = false;
+        config.filter.exclude_patterns = vec!["/f_0\\.txt".into()];
+        let db_path = config.paths.db_path();
+
+        let mut rec = Recorder::speculative(true, None);
+        let db = run_scan_filtered(&config, &db_path, &mut rec);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 3);
+        assert_eq!(db.count_extracted_canonical().expect("extracted"), 2);
+        assert!(config.paths.extract_cache_dir().join(&members[0]).is_file());
+        assert!(config.paths.extract_cache_dir().join(&members[1]).is_file());
+    }
+
+    // ---------------------------------------------------------------------
+    // process_entry member-ordering rules.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn scan_manifest_not_first_rejected() {
+        // Spec violation: a manifest after any member is unconditionally rejected
+        // (the initial db MUST be the first element of the stream).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let catalog = dir.path().join("catalog.sqlite");
+        let member = write_catalog(&catalog);
+        let catalog_bytes = fs::read(&catalog).expect("read catalog");
+        let archive_path = dir.path().join("archive.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, &member, b"data"); // payload first
+        append_member(&mut builder, SNAPSHOT_INIT_TAR_NAME, &catalog_bytes); // manifest second
+        builder.finish().expect("finish tar");
+        let config = ExtractConfig::for_scan_test(
+            archive_path, dir.path().join("work"), dir.path().join("out"));
+        let db_path = config.paths.db_path();
+
+        let err = match run(&config, &db_path, &Shutdown::detached(),
+                            &mut Recorder::speculative(false, None),
+                            &mut Some(ParseFilterBuffer::default()),
+                            &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
+            Ok(_) => panic!("manifest not first must be rejected"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+        assert!(err.to_string().contains("not at the beginning"), "{err}");
+    }
+
+    #[test]
+    fn scan_snapshot_first_rejected_without_force() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let catalog = dir.path().join("catalog.sqlite");
+        let member = write_catalog(&catalog);
+        let catalog_bytes = fs::read(&catalog).expect("read catalog");
+        let archive_path = dir.path().join("archive.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, SNAPSHOT_TAR_NAME, &catalog_bytes);
+        append_member(&mut builder, &member, b"data");
+        builder.finish().expect("finish tar");
+        let mut config = ExtractConfig::for_scan_test(
+            archive_path, dir.path().join("work"), dir.path().join("out"));
+        config.process.force = false;
+        let db_path = config.paths.db_path();
+
+        let err = match run(&config, &db_path, &Shutdown::detached(),
+                            &mut Recorder::speculative(false, None),
+                            &mut Some(ParseFilterBuffer::default()),
+                            &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
+            Ok(_) => panic!("snapshot-first must be rejected without --force"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+        assert!(err.to_string().contains("first tar member is snapshot"), "{err}");
+    }
+
+    #[test]
+    fn scan_snapshot_first_installs_catalog_under_force() {
+        // Head-truncated archive under --force: the snapshot body is treated as
+        // the catalog, so the payload member is extracted and the end-of-scan
+        // promote lands everything in `unarchived`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let catalog = dir.path().join("catalog.sqlite");
+        let member = write_catalog(&catalog);
+        let catalog_bytes = fs::read(&catalog).expect("read catalog");
+        let archive_path = dir.path().join("archive.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, SNAPSHOT_TAR_NAME, &catalog_bytes);
+        append_member(&mut builder, &member, b"data");
+        builder.finish().expect("finish tar");
+        let config = ExtractConfig::for_scan_test(
+            archive_path, dir.path().join("work"), dir.path().join("out"));
+        let db_path = config.paths.db_path();
+
+        let db = run_scan(&config, &db_path);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
+        assert!(config.paths.extract_cache_dir().join(&member).is_file());
+    }
+
+    // ---------------------------------------------------------------------
+    // extract_canonical_member: sparse-vs-regular copy, mid-copy interrupt.
+    // ---------------------------------------------------------------------
+
+    /// One canonical with a `size`-byte all-zero payload: `manifest + payload +
+    /// snapshot`, returned as the config + member name. The row's DB size stays 4
+    /// (unused by extraction — the tar member's own `size()` drives the copy).
+    fn archive_with_large_payload(dir: &Path, size: usize) -> (ExtractConfig, String) {
+        let catalog = dir.join("catalog.sqlite");
+        let db = Database::open(&catalog).expect("open catalog");
+        let id = add_archived_canonical(&db, "/big.txt", 9, FilePhase::Archived);
+        let member = db
+            .get_file_by_id::<FileRecord>(id)
+            .expect("get")
+            .expect("row")
+            .tar_member_name()
+            .expect("content id");
+        db.checkpoint().expect("checkpoint");
+        drop(db);
+
+        let catalog_bytes = fs::read(&catalog).expect("read catalog");
+        let archive_path = dir.join("archive.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, SNAPSHOT_INIT_TAR_NAME, &catalog_bytes);
+        let payload = vec![0u8; size];
+        append_member(&mut builder, &member, &payload);
+        append_member(&mut builder, SNAPSHOT_TAR_NAME, &catalog_bytes);
+        builder.finish().expect("finish tar");
+
+        let config = ExtractConfig::for_scan_test(
+            archive_path, dir.join("work"), dir.join("out"));
+        (config, member)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_sparse_vs_regular_copy_same_content() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config0, member) = archive_with_large_payload(dir.path(), 8 * 1024 * 1024);
+
+        // Regular copy (default: sparsify off).
+        let mut config = config0.clone();
+        config.scan.sparsify = false;
+        let db_path = config.paths.db_path();
+        let db = run_scan(&config, &db_path);
+        drop(db);
+        let regular = config.paths.extract_cache_dir().join(&member);
+        assert_eq!(fs::metadata(&regular).expect("meta").len(), 8 * 1024 * 1024);
+
+        // Sparse copy into a fresh work dir.
+        let mut config = config0;
+        config.paths.work_dir = dir.path().join("work_sparse");
+        config.scan.sparsify = true;
+        let db_path = config.paths.db_path();
+        let db = run_scan(&config, &db_path);
+        drop(db);
+        let sparse = config.paths.extract_cache_dir().join(&member);
+        assert_eq!(fs::metadata(&sparse).expect("meta").len(), 8 * 1024 * 1024);
+
+        // The content must be byte-identical regardless of copy strategy.
+        assert_eq!(
+            fs::read(&regular).expect("read regular"),
+            fs::read(&sparse).expect("read sparse"),
+        );
+
+        // Allocated blocks: the sparse copy must never allocate more than the
+        // regular one. Whether it allocates *less* depends on the filesystem
+        // transparently sparsifying zero writes (the caveat in plans/046): only
+        // when the regular copy stays fully allocated is a strict reduction
+        // required.
+        let regular_blocks = fs::metadata(&regular).expect("meta").blocks();
+        let sparse_blocks = fs::metadata(&sparse).expect("meta").blocks();
+        assert!(sparse_blocks <= regular_blocks, "sparse must not allocate more");
+        if regular_blocks * 512 >= 8 * 1024 * 1024 / 2 {
+            assert!(
+                sparse_blocks < regular_blocks,
+                "sparse copy must punch holes when the fs does not sparsify zero writes"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_force_interrupt_mid_copy_returns_interrupted() {
+        // A large payload gives the copy enough time for a force request to land
+        // in-flight. `request_force` makes `check_in_flight` raise Interrupted;
+        // a graceful request would NOT (it only stops between members), so the
+        // force path is the one that exercises the mid-copy abort.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _member) = archive_with_large_payload(dir.path(), 64 * 1024 * 1024);
+        let db_path = config.paths.db_path();
+
+        let shutdown = Shutdown::detached();
+        let armed = shutdown.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(5));
+            armed.request_force();
+        });
+
+        let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+        match run(&config, &db_path, &shutdown,
+                  &mut Recorder::speculative(false, None),
+                  &mut Some(ParseFilterBuffer::default()), &progress) {
+            Err(Error::Interrupted) => {}
+            Err(other) => panic!("expected Interrupted, got {other:?}"),
+            Ok(_) => panic!("expected Interrupted, scan returned Ok"),
+        }
+    }
+
+    // Pure-fn battery: validate_result / entry_name / captured_extract_database.
+    // ---------------------------------------------------------------------
+
+    fn scan_state(saw_manifest_db: bool, snapshots: u32, from_footer: bool) -> ScanState {
+        ScanState {
+            saw_manifest_db,
+            snapshots_ingested: snapshots,
+            from_footer,
+            ..ScanState::default()
+        }
+    }
+
+    #[test]
+    fn validate_result_no_provenance_panics() {
+        // (false, false, false, false): the loop "succeeded" without any DB —
+        // an internal invariant, so a panic (never a force-able Config error).
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            validate_result(&scan_state(false, 0, false), false, false)
+        }));
+        assert!(res.is_err(), "no provenance + no resume DB must panic");
+    }
+
+    #[test]
+    fn validate_result_provenance_violations_config_or_warn() {
+        // Provenance mismatches are corruption: Config error without --force,
+        // warn + Ok under --force.
+        for (saw_manifest_db, snapshots, from_footer, resume_db, label) in [
+            (false, 0, false, true, "resumed work DB without provenance"),
+            (false, 0, true, false, "footer present, no snapshot"),
+            (true, 0, true, false, "footer + manifest, no snapshot"),
+        ] {
+            let state = scan_state(saw_manifest_db, snapshots, from_footer);
+            let err = validate_result(&state, resume_db, false)
+                .expect_err(&format!("{label}: no force must Err"));
+            assert!(matches!(err, Error::Config(_)), "{label}: {err:?}");
+            validate_result(&state, resume_db, true)
+                .expect(&format!("{label}: force must warn + Ok"));
+        }
+    }
+
+    #[test]
+    fn validate_result_benign_combinations_ok() {
+        // Truncation signals that only downgrade to a warning (no Config error).
+        validate_result(&scan_state(false, 1, false), false, false).expect("snapshot only");
+        validate_result(&scan_state(false, 1, true), false, false).expect("footer + snapshot");
+        validate_result(&scan_state(true, 0, false), false, false).expect("manifest only");
+        validate_result(&scan_state(true, 1, false), false, false).expect("manifest + snapshot");
+        validate_result(&scan_state(true, 1, true), false, false).expect("manifest + snapshot + footer");
+    }
+
+    #[test]
+    fn entry_name_ok_and_missing_file_name() {
+        assert_eq!(entry_name(Path::new("abc.txt")).expect("name"), "abc.txt");
+        let err = entry_name(Path::new("/")).expect_err("no file name on root");
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+        // `Path::file_name()` is None for a trailing ".." too, so the same
+        // Config error arm is reached; the in-function debug_assert on ".."
+        // / "." / embedded separators is unreachable via `file_name()` and is
+        // deliberately not tested.
+        let err = entry_name(Path::new("..")).expect_err("no file name on '..'");
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
+    }
+
+    /// Reader that fails after `remaining` bytes — forces the `io::copy` error arm.
+    struct FailingReader {
+        remaining: usize,
+    }
+    impl Read for FailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(io::Error::new(io::ErrorKind::Other, "boom"));
+            }
+            let n = buf.len().min(self.remaining);
+            buf[..n].fill(0);
+            self.remaining -= n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn captured_extract_database_ok() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dst = dir.path().join("out.sqlite");
+        let mut rec = Recorder::speculative(true, None);
+        let mut reader = &b"hello"[..];
+        captured_extract_database(&dst, &mut reader, &mut rec).expect("copy");
+        assert_eq!(fs::read(&dst).expect("read"), b"hello");
+        assert!(rec.is_empty(), "no error recorded on success");
+    }
+
+    #[test]
+    fn captured_extract_database_copy_error_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dst = dir.path().join("out.sqlite");
+        let mut rec = Recorder::speculative(true, None);
+        let mut reader = FailingReader { remaining: 3 };
+        let err = captured_extract_database(&dst, &mut reader, &mut rec)
+            .expect_err("copy must fail");
+        assert!(matches!(err, Error::FileStat(_)), "{err:?}");
+        assert!(!rec.is_empty(), "session error must be recorded");
+    }
+
+    #[test]
+    fn captured_extract_database_create_error_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dst = dir.path(); // existing directory → File::create fails
+        let mut rec = Recorder::speculative(true, None);
+        let mut reader = &b"hello"[..];
+        let err = captured_extract_database(&dst, &mut reader, &mut rec)
+            .expect_err("create must fail");
+        assert!(matches!(err, Error::FileStat(_)), "{err:?}");
+        assert!(!rec.is_empty(), "session error must be recorded");
+    }
 }
