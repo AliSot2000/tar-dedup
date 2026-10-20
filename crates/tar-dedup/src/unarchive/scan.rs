@@ -370,7 +370,8 @@ fn run_inner(
     // Check for any payloads that were extracted but somehow not recorded
     let (present, new) = sdb.check_cached_payloads(&rt.config.paths.extract_cache_dir())?;
     if new > 0 {
-        let msg = format!("Found {new} archive payload(s) which were not recorded as extracted.");
+        let msg = format!(
+            "Found {new} archive payload(s) which were not recorded as extracted.");
         if rt.config.process.force {
             tracing::warn!("{msg}");
         } else {
