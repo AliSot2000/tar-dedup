@@ -68,6 +68,37 @@ and `sparse_copy_reader` both propagate that error (the former removes the parti
 destination). So mid-copy aborts require `request_force` — which is what
 `scan_force_interrupt_mid_copy_returns_interrupted` uses.
 
+## Deferred: function mocking (mockall + `#[double]`)
+
+Explicitly **not** introduced in this plan. The only scan arm that stays uncovered is
+`verify_archive_integrity` returning `Err` *through `run_inner`* (scan.rs:220-230):
+unreachable with real files because the same corruption makes `read_footer` fail first,
+and the real-world trigger is the archive being mutated between the two reads (a race).
+Its behavior is behaviorally identical to the tested `Ok(false)` arms (record session
+error; `force → warn+continue` / `no-force → return Err`), so end-to-end coverage of the
+decision tree already exists; the delta is only which `Error` variant propagates.
+
+Deferred follow-up if we ever want that arm (or general race injection): add
+`mockall` + `mockall_double` as a dev-dependency and route the two footer fns through a
+narrow seam so `run_inner` keeps calling a stable path. Notes from research:
+
+- `#[double] use crate::archive_footer::integrity;` swaps the **module name binding** at
+  compile time (`cfg(test)` only) — calls must be written `integrity::verify(...)` in the
+  module holding the doubled `use`; bare `verify(...)` imports or absolute paths
+  (`crate::archive_footer::...::verify(...)`) always hit the real fn.
+- Module/static fns are **global expectations** (a scoped `Context`); with no
+  expectation set they panic — they do **not** fall through to the real impl. So module-
+  mocking toggles between mock behaviors, never mock↔real.
+- For per-test mock↔real toggling on the same path, prefer a **trait/generic injection**
+  (e.g. `trait Integrity { fn verify(&self,..); fn read_footer(&self,..); }` with
+  `RealIntegrity` + `MockIntegrity`), which makes the toggle a value instead of a
+  global. `faux` is a poor fit here: it only mocks public methods on structs (no free
+  functions), and intercepts at the instance level only.
+
+Also reachable *without* mocking if ever wanted: `read_footer`'s `Err(FileStat)`
+downgrade arm (scan.rs:193-199) via a bogus/nonexistent archive path (falls back
+footer-less, then `open_tar_archive` errors).
+
 ## Goal
 
 Systematically cover the scan phase entry points and error arms. Where a case is already
