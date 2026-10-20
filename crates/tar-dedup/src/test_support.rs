@@ -15,6 +15,7 @@ use crate::config::{
     IndexingOptions, ProcessOptions, SparseOptions,
 };
 use crate::db::Database;
+use crate::db::content_id::content_id_from_digest;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, FileRecord, FileType, NewFileRecord, StrippedRecord};
 use crate::progress::{ARCHIVE_MULTIPLIER, ProgressBarSet};
@@ -372,4 +373,82 @@ pub fn build_archive(dir: &Path) -> (ExtractConfig, String) {
         dir.join("out"),
     );
     (config, member)
+}
+
+/// `manifest.sqlite`, `n` payloads, `snapshot.sqlite` — an uncompressed archive
+/// with `n` self-canonical archived files (`/f_{i}.txt`, distinct digest) plus one
+/// duplicate pointing at the last canonical. Returns the config and the member names
+/// in stream order.
+pub fn build_multi_catalog(dir: &Path, n: usize) -> (ExtractConfig, Vec<String>) {
+    let catalog = dir.join("catalog.sqlite");
+    let db = Database::open(&catalog).expect("open catalog");
+    let mut members = Vec::new();
+    let mut last_id = FileId(0);
+    for i in 0..n {
+        let id = add_archived_canonical(&db, &format!("/f_{i}.txt"), i as u8, FilePhase::Archived);
+        last_id = id;
+        let member = db
+            .get_file_by_id::<FileRecord>(id)
+            .expect("get")
+            .expect("row")
+            .tar_member_name()
+            .expect("content id");
+        members.push(member);
+    }
+    let dup = insert(&db, "/dup.txt", 4, FileType::File);
+    seed_filter_reasons(&db, dup);
+    db.set_canonical(dup, last_id).expect("canonical");
+    db.mark_file_phase(dup, FilePhase::Archived).expect("phase");
+    db.checkpoint().expect("checkpoint");
+    drop(db);
+
+    let catalog_bytes = fs::read(&catalog).expect("read catalog");
+    let archive_path = dir.join("archive.tar");
+    let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+    append_member(&mut builder, SNAPSHOT_INIT_TAR_NAME, &catalog_bytes);
+    for member in &members {
+        append_member(&mut builder, member, b"data");
+    }
+    append_member(&mut builder, SNAPSHOT_TAR_NAME, &catalog_bytes);
+    builder.finish().expect("finish tar");
+
+    let config = ExtractConfig::for_scan_test(
+        archive_path,
+        dir.join("work"),
+        dir.join("out"),
+    );
+    (config, members)
+}
+
+/// `build_archive` plus a seekable sqlite footer appended via
+/// [`crate::archive_footer::write_footer`].
+pub fn build_footer_archive(dir: &Path) -> (ExtractConfig, String) {
+    let (config, member) = build_archive(dir);
+    let catalog = dir.join("catalog.sqlite");
+    crate::archive_footer::write_footer(&config.paths.archive_path, &catalog, None)
+        .expect("write footer");
+    (config, member)
+}
+
+/// Mint a tar member name for a canonical row (not necessarily present in any
+/// catalog) — used to plant a *stray* file in the extract cache dir.
+pub fn content_id_name(fid: FileId, sha: [u8; 20], size: u64) -> String {
+    content_id_from_digest(Some(&sha), size, fid, Path::new("f.txt")).0
+}
+
+/// Flip a single byte in `path` at `offset` — the archive-corruption primitive for
+/// the footer-integrity tests.
+pub fn corrupt_byte(path: &Path, offset: u64) {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let mut f = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("open for corruption");
+    f.seek(SeekFrom::Start(offset)).expect("seek");
+    let mut b = [0u8; 1];
+    f.read_exact(&mut b).expect("read byte");
+    b[0] ^= 0xFF;
+    f.seek(SeekFrom::Start(offset)).expect("seek");
+    f.write_all(&b).expect("write byte");
 }
