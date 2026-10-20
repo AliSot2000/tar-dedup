@@ -363,9 +363,8 @@ fn run_inner(
             );
         }
     }
-    validate_result(&scan, resume_db)?;
-
     // PRECONDITION: nt_stopped == false && saw_any_members == true && db.is_some() == true
+    validate_result(&scan, resume_db, rt.config.process.force)?;
     let sdb = rt.db.expect(OPT_DB_ERROR);
     let trust_catalog = scan.from_footer || scan.saw_manifest_db || rt.config.process.force;
 
@@ -657,7 +656,18 @@ fn process_entry(
 
 /// Check if the returned state at the end of scanning the archive matches our expectations and add
 /// associated errors if something is unexpected.
-fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
+fn validate_result(scan: &ScanState, resume_db: bool, force: bool) -> Result<()> {
+    // Provenance mismatches are corruption, not internal invariants: stop unless
+    // `--force` downgrades them to warnings. See the integrity-check convention.
+    let provenance_violation = |msg: &str| -> Result<()> {
+        if force {
+            tracing::warn!("{msg}");
+            Ok(())
+        } else {
+            // TODO Different error.
+            Err(Error::Config(msg.to_string()))
+        }
+    };
     match (
         scan.saw_manifest_db,
         scan.snapshots_ingested > 0,
@@ -669,17 +679,16 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
         }
         // INFO: DB present from restart!
         (false, false, false, true) => {
-            // TODO Technically impossible.
-            tracing::warn!(
+            provenance_violation(
                 "resumed extract over a work DB that has no recorded manifest, \
                  snapshot or footer provenance"
-            );
+            )?;
         }
         (false, false, true, _) => {
-            tracing::warn!(
-                "footer present but the archive never contained a snapshot.sqlite. \
-                 Truncated archive?"
-            );
+            provenance_violation(
+                "footer present but the archive never contained a snapshot.sqlite or \
+                 manifest.sqlite. Truncated archive?"
+            )?;
         }
         (false, true, false, _) => {
             tracing::warn!(
@@ -695,17 +704,17 @@ fn validate_result(scan: &ExtractScanState, resume_db: bool) -> Result<()> {
             tracing::warn!("manifest present, no snapshot ingested. Truncated archive?");
         }
         (true, false, true, _) => {
-            tracing::warn!(
+            provenance_violation(
                 "footer present with manifest but no snapshot.sqlite; \
-                 archive truncated or corrupt? \
+                 archive truncated or corrupt?
                  => a footer should only be appended after a finishing snapshot!"
-            );
+            )?;
         }
         (true, true, footer, _) => {
-            let footer_string = if footer { "footer," } else { "" };
+            let footer_string = if footer { "footer, " } else { "" };
             tracing::debug!(
                 snapshots_ingested = scan.snapshots_ingested,
-                "expected scan outcome: {footer_string} manifest and at least one snapshot"
+                "expected scan outcome: {footer_string}manifest and at least one snapshot"
             );
         }
     }
