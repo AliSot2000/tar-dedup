@@ -125,14 +125,13 @@ pub fn promote_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
 /// See `plans/024-scan-end-unarchived.md` for the bucket semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ScanRemainderTally {
-    /// Bucket A: candidates never confirmed by a final snapshot/footer (`staged`).
+    /// Bucket A: rows with phase = `staged`
     pub staged: u64,
-    /// Bucket B: `archived` rows whose payload copy failed (`ErrorWhileExtracting`).
+    /// Bucket B: rows with phase = `archived` && `ErrorWhileExtracting` == true
     pub extracting_err: u64,
-    /// Bucket C: `archived` rows marked added whose payload was never found in
-    /// the stream (no error recorded, not extract-filter-excluded).
+    /// Bucket C: rows with phase = `archived` && `ErrorWhileExtracting` == false && FileExtracted == false && `filter_exclude_archive_extract` if selected.-
     pub missing_member: u64,
-    /// Bucket D: `archived` rows excluded by the extract filter (intentional).
+    /// Bucket D: rows with phase = `archived` && NOT (`archive` && `extract` filters)
     pub filter_excluded: u64,
 }
 
