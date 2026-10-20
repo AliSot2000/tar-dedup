@@ -7,7 +7,7 @@ use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
 use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FileId, FilePhase};
-use crate::db::{Database, ErrorPhase, ExtractScanState, Recorder};
+use crate::db::{Database, ErrorPhase, Recorder, ScanState};
 use crate::error::{Error, FileStatError, Result};
 use crate::progress::{BarKind, ProgressBarSet};
 use crate::shutdown::Shutdown;
@@ -246,7 +246,9 @@ fn run_inner(
         s
     } else {
         tracing::info!("starting scan: no catalog yet (awaiting manifest)");
-        ExtractScanState::default()
+        let mut scn = ScanState::default();
+        scn.from_footer |= footer_this_pass;
+        scn
     };
     scan.from_footer |= footer_this_pass;
 
@@ -471,7 +473,7 @@ fn process_entry(
     name: &str,
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
     force_buffer: &mut Option<(Vec<FileId>, Vec<FileId>)>,
-    scan: &mut ExtractScanState,
+    scan: &mut ScanState,
     recorder: &mut Recorder,
     fb: &mut Option<ParseFilterBuffer>)
     -> Result<()> {
