@@ -256,7 +256,7 @@ fn run_inner(
     )?;
 
     // Resume skip bound: members up to **and including** the last one fully
-    // processed by an earlier pass are skipped 
+    // processed by an earlier pass are skipped
     let skip_processed_until = scan.saw_any_members.then_some(scan.last_member_index);
 
     // FEATURE: Switch to seek for tar
