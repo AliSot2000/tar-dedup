@@ -30,6 +30,7 @@
           pkgs.libselinux # headers + lib for selinux / selinux-sys crates
           pkgs.llvmPackages.libclang # needed by bindgen (selinux-sys build script)
           pkgs.llvmPackages.clang    # optional, but useful to have the driver too
+          pkgs.cargo-llvm-cov        # coverage reports (`cargo llvm-cov`)
         ];
 
         # Ensures dynamically linked C libs are findable at runtime
