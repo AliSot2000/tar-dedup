@@ -57,30 +57,30 @@ impl ParseFilterBuffer {
 //  stay in `ExtractConfig`. Verified via the row count.
 pub fn run(rt: &ExtractRTArgs, eager_filter: bool) -> Result<()> {
     // TODO:
-    //  - tracing is missleading and should be dropped
     //  - option should exist to provide the progress bars separately. (Extra progress bars when
     //    extracting during scan)
     //  - Phase should only be set in during the actual filter phase
-    //  - a meta key should exist to track if the filters were already applied. In this case,
-    //    skip the joint_filter_phase and
-    joint_filter_phase(
-        false,
-        rt.config.filter.anchored,
-        rt.config.filter.ignore_case,
-        rt.config.filter.no_unicode,
-        rt.config.process.batch_size,
-        Unarchived,
-        &rt.db,
-        rt.progress,
-        |is_exclude| rt.db.count_filters_extract(is_exclude),
-        |is_exclude| rt.db.get_filters_extract(is_exclude),
-        || rt.db.apply_no_filter_extract(),
-        |lid, batch_size| rt.db.get_rows_to_filter_extract(
-            *lid, batch_size
-        ),
-        |results| rt.db.apply_filter_result_extract(results.into_iter())
-    )?;
-    if set_phase {
+    if !rt.db.get_extract_filters_applied()? {
+        joint_filter_phase(
+            false,
+            rt.config.filter.anchored,
+            rt.config.filter.ignore_case,
+            rt.config.filter.no_unicode,
+            rt.config.process.batch_size,
+            Unarchived,
+            &rt.db,
+            rt.progress,
+            |is_exclude| rt.db.count_filters_extract(is_exclude),
+            |is_exclude| rt.db.get_filters_extract(is_exclude),
+            || rt.db.apply_no_filter_extract(),
+            |lid, batch_size| rt.db.get_rows_to_filter_extract(
+                *lid, batch_size
+            ),
+            |results| rt.db.apply_filter_result_extract(results.into_iter())
+        )?;
+        rt.db.set_extract_filters_applied(true)?;
+    }
+    if !eager_filter {
         let updated = rt.db.global_mark_phase(FilePhase::ExtractFiltered)?;
         tracing::info!("Promoted {updated} entries to ExtractFiltered");
     }
