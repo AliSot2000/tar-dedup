@@ -1,12 +1,11 @@
 use crate::common::utf8::require_utf8;
-use crate::config::ExtractRuntimeState;
 use crate::db::common::{
     generate_archive_and_extract_filter, generate_archive_filter, with_transaction,
 };
 use crate::db::content_id::parse_content_id;
 use crate::db::flags::FileFlag;
 use crate::db::types::FileId;
-use crate::db::{SqlFileRow, flags, meta};
+use crate::db::{flags, meta};
 use crate::error::{Error, Result, ToPanic};
 use rusqlite::{Connection, named_params};
 use std::fs;
@@ -36,41 +35,11 @@ pub struct ScanState {
     pub nt_stopped: bool,
 }
 
-pub fn list_files_to_restore<R: SqlFileRow>(conn: &Connection) -> Result<Vec<R>> {
-    let cols = R::sql_columns(None);
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {cols} FROM files WHERE phase = 'rehashed' ORDER BY id"
-    )).to_panic()?;
-    let rows = stmt.query_map(
-        [], |r| R::from_row(r, None)).to_panic()?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
-}
-
-pub fn load_extract_runtime_state(conn: &Connection) -> Result<Option<ExtractRuntimeState>> {
-    let Some(phase) = meta::get_extract_phase(conn)? else {
-        return Ok(None);
-    };
-    let snapshots_ingested = meta::get_extract_snapshots_ingested(conn)?.unwrap_or(0);
-
-    Ok(Some(ExtractRuntimeState {
-        phase,
-        snapshots_ingested,
-    }))
-}
-
-pub fn save_extract_runtime_state(conn: &mut Connection, state: &ExtractRuntimeState) -> Result<()> {
-    with_transaction(conn, |conn| {
-        meta::set_extract_phase(conn, state.phase)?;
-        meta::set_extract_snapshots_ingested(conn, state.snapshots_ingested)?;
-        Ok(())
-    })
-}
-
-
 /// Iterate over the extraction dir twice to check for files we missed and for files that are missing
 pub fn check_cached_payloads(conn: &mut Connection, cache_dir: &Path) -> Result<(u64, u64)> {
     let err_cap = |e| Error::io(cache_dir, e);
     let result = if cache_dir.is_dir() {
+        // INFO: Transaction is why this function is here.
         with_transaction(conn, |int_conn| {
             let mut new = 0u64;
             let mut present = 0u64;
@@ -104,7 +73,7 @@ pub fn check_cached_payloads(conn: &mut Connection, cache_dir: &Path) -> Result<
 
 /// End-of-scan salvage: promote every `FileExtracted` canonical (and dependents)
 /// that is still `archived` → `unarchived`. Used when `from_footer || force`.
-pub fn promote_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
+pub fn promote_cascade_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
     let n = conn.execute(
         "UPDATE files
@@ -117,6 +86,35 @@ pub fn promote_extracted_to_unarchived(conn: &Connection) -> Result<u64> {
                  )
            )",
         named_params! { ":bit": bit },
+    ).to_panic()?;
+    Ok(n as u64)
+}
+
+
+/// Promote the intentional extract-filter-excluded `archived` rows to `unarchived`
+/// (they are never extracted by design). Returns the promoted count.
+pub fn promote_filter_excluded_remainders(conn: &Connection) -> Result<u64> {
+    let joint = generate_archive_and_extract_filter(None);
+    let n = conn.execute(
+        &format!(
+            "UPDATE files
+             SET phase = 'unarchived'
+             WHERE phase = 'archived' AND NOT ({joint})"
+        ),
+        [],
+    ).to_panic()?;
+    Ok(n as u64)
+}
+
+/// Force-salvage: blanket-promote every remaining `staged`/`archived` row to
+/// `unarchived` so the post-scan invariant holds. Called only by the end-of-scan
+/// gate once the violation buckets have been triaged.
+pub fn promote_scan_remainders(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files
+         SET phase = 'unarchived'
+         WHERE phase IN ('staged', 'archived')",
+        [],
     ).to_panic()?;
     Ok(n as u64)
 }
@@ -210,34 +208,6 @@ pub fn tally_scan_remainders(conn: &Connection, eager_filter: bool) -> Result<Sc
     })
 }
 
-/// Promote the intentional extract-filter-excluded `archived` rows to `unarchived`
-/// (they are never extracted by design). Returns the promoted count.
-pub fn promote_filter_excluded_remainders(conn: &Connection) -> Result<u64> {
-    let joint = generate_archive_and_extract_filter(None);
-    let n = conn.execute(
-        &format!(
-            "UPDATE files
-             SET phase = 'unarchived'
-             WHERE phase = 'archived' AND NOT ({joint})"
-        ),
-        [],
-    ).to_panic()?;
-    Ok(n as u64)
-}
-
-/// Force-salvage: blanket-promote every remaining `staged`/`archived` row to
-/// `unarchived` so the post-scan invariant holds. Called only by the end-of-scan
-/// gate once the violation buckets have been triaged.
-pub fn promote_scan_remainders(conn: &Connection) -> Result<u64> {
-    let n = conn.execute(
-        "UPDATE files
-         SET phase = 'unarchived'
-         WHERE phase IN ('staged', 'archived')",
-        [],
-    ).to_panic()?;
-    Ok(n as u64)
-}
-
 pub fn record_snapshot_ingested(conn: &mut Connection) -> Result<u32> {
     let mut scan = load_extract_scan_state(conn)?;
     scan.snapshots_ingested = scan.snapshots_ingested.saturating_add(1);
@@ -329,45 +299,12 @@ pub fn count_encoded_payloads(conn: &Connection) -> Result<u64> {
     Ok(count as u64)
 }
 
-/// Rows still `archived` whose canonical has `FileExtracted` (awaiting confirmation).
-pub fn count_unconfirmed_extracted(conn: &Connection) -> Result<u64> {
-    let bit = FileFlag::FileExtracted.mask_i64();
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) AS count FROM files
-         WHERE phase = 'archived'
-           AND (
-                 (flags & :bit) != 0
-              OR canonical_id IN (
-                     SELECT id FROM files WHERE (flags & :bit) != 0
-                 )
-           )",
-        named_params! { ":bit": bit },
-        |row| row.get("count"),
-    ).to_panic()?;
-    Ok(count as u64)
-}
-
 /// Canonical rows carrying `FileExtracted`.
 pub fn count_extracted_canonical(conn: &Connection) -> Result<u64> {
     let bit = FileFlag::FileExtracted.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
          WHERE canonical_id = id AND (flags & :bit) != 0",
-        named_params! { ":bit": bit },
-        |row| row.get("count"),
-    ).to_panic()?;
-    Ok(count as u64)
-}
-
-/// All rows in canonical groups that have `FileExtracted` on the canonical.
-pub fn count_extracted_paths(conn: &Connection) -> Result<u64> {
-    let bit = FileFlag::FileExtracted.mask_i64();
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) AS count FROM files
-         WHERE (flags & :bit) != 0
-            OR canonical_id IN (
-                   SELECT id FROM files WHERE (flags & :bit) != 0
-               )",
         named_params! { ":bit": bit },
         |row| row.get("count"),
     ).to_panic()?;
@@ -481,13 +418,6 @@ pub fn save_extract_scan_state(conn: &mut Connection, state: &ScanState)
         meta::set_extract_snapshots_ingested(conn, state.snapshots_ingested)?;
         Ok(())
     })
-}
-
-pub fn init_extract_runtime_state(conn: &mut Connection) -> Result<()> {
-    if load_extract_runtime_state(conn)?.is_none() {
-        save_extract_runtime_state(conn, &ExtractRuntimeState::new())?;
-    }
-    Ok(())
 }
 
 /// The two nt variables are populated for the run as follows:

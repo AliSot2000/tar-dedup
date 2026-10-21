@@ -70,6 +70,10 @@
 - [ ] publish to gh releases
 - [ ] publish to flatpak
 
+## Strip
+- [ ] Drop unused db functions
+- [ ] Degrate ExtractRuntimeState - ArchiveRuntimeState what is the snapshot doing??? 
+
 ## General:
 - [ ] Testing
 - [ ] Rework error handling and log policy as well as log levels
@@ -82,9 +86,9 @@
 
 ## Phases
 ### CLI:
-- [ ] Add all flags / subcommand to the cli parse
-- [ ] Add validation for all flags for the cli parser
-- [ ] Add basic CLI tests
+- [X] Add all flags / subcommand to the cli parse
+- [X] Add validation for all flags for the cli parser
+- [X] Add basic CLI tests
 
 ### Inventory
 - [X] Support arbitrary file types (file, dir, symlink, hardlink, socket, pipe, block device, char device)

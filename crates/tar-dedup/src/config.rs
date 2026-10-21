@@ -2,7 +2,7 @@ mod archive;
 mod compression;
 mod extract;
 mod paths;
-mod phases;
+pub mod phases;
 mod process;
 mod resume;
 mod common;
@@ -20,7 +20,7 @@ pub use extract::{
     ExtractAttributeOptions, ExtractConfig, OwnerGroupOptions, PlacementOptions, ScanOptions,
 };
 pub use paths::{PathLayout, PathSource};
-pub use phases::{ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, RuntimeState};
+pub use phases::{ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, ArchiveRuntimeState};
 pub use process::{CleanupSettings, ExitAfterStage, ProcessOptions, ResumeOverrides};
 pub use resume::ResumeConfig;
 

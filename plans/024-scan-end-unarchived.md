@@ -32,7 +32,7 @@ Remainders are partitioned into precise, actionable buckets and either triage-pr
 3. **Snapshot confirms the catalog:** `apply_snapshot_promote_unarchived` first promotes
    `staged` → `archived` for rows listed as archived in the snapshot, then runs the
    existing `archived` → `unarchived` (FileExtracted / canonical fan-out) promotions.
-   End-of-scan `promote_extracted_to_unarchived` stays as the footer-provenance catch-all
+   End-of-scan `promote_cascade_extracted_to_unarchived` stays as the footer-provenance catch-all
    (`archived ∧ FileExtracted → unarchived`).
 
 4. **Tar member names are always UTF-8:** remove the `Ok(None)` skip branch in
@@ -48,7 +48,7 @@ Remainders are partitioned into precise, actionable buckets and either triage-pr
 ## End-of-scan gate (`unarchive/scan.rs::run_inner`)
 
 After `check_cached_payloads`, `report_scan_completeness`, and the normal
-`promote_extracted_to_unarchived`:
+`promote_cascade_extracted_to_unarchived`:
 
 1. **D — excluded by extract filter** (eager mode only): `archived` ∧
    `NOT(generate_archive_and_extract_filter)` → promote to `unarchived`, emit an
@@ -86,7 +86,7 @@ Run with --force to proceed (affected files will be skipped).
   `apply_snapshot_promote_unarchived` (`staged → archived` step);
   add `promote_scan_remainders` (`staged/archived → unarchived`);
   add `tally_scan_remainders(conn, eager)` → `(staged, extracting_err, missing_member, filter_excluded)`;
-  `promote_extracted_to_unarchived` unchanged; persist/load `last_member_was_snapshot`.
+  `promote_cascade_extracted_to_unarchived` unchanged; persist/load `last_member_was_snapshot`.
 - `db/extract.rs` — `ExtractScanState.last_member_was_snapshot: bool`.
 - `db/meta.rs` — `scan_tar_last_member_was_snapshot` key + getter/setter.
 - `db.rs` — facade entries for the new db/scan.rs helpers.

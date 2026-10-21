@@ -139,13 +139,7 @@ fn store_filter_buffer(
     tracing::info!("Flushed: {result} filter rows to db");
     *fb = None;
     if rt.config.filter.eager_filter {
-        // Dedicated `filter` sub-bar (stacked above the scan bar) for the eager
-        // filter — including the trivial fast path, which still advances
-        // progress (inc_both on the filter's row count). The guard routes the
-        // shared filter progress to the sub-bar and removes it on drop; the scan
-        // bar and the global stay untouched. `filter_run` itself no-ops when the
-        // filters were already applied (resume), in which case the bar never
-        // advances and is simply removed here.
+        // Due to preemptive execution of the filter, we don't have a phase and total set now.
         let fbar = rt.progress.push_sub_bar("filter", BarKind::Counter);
         let _guard = rt.progress.redirect_phase(fbar);
         filter_run(rt, true)?;
@@ -272,7 +266,6 @@ fn run_inner(
     // processed by an earlier pass are skipped
     let skip_processed_until = scan.saw_any_members.then_some(scan.last_member_index);
 
-    // FEATURE: Switch to seek for tar
     for (m_idx, wrapped_entry) in archive
         .entries()
         .map_err(|e| {
@@ -340,17 +333,15 @@ fn run_inner(
     // Persist observations before any early return / interrupt propagation.
     if let Some(d) = rt.db.as_ref() {
         d.save_extract_scan_state(&scan)?;
+        flush_scan_recorder(recorder, rt.db.as_ref())?;
         d.checkpoint()?;
     }
 
     if scan.nt_stopped {
-        // Best-effort persist whatever was buffered against the pass's database.
-        flush_scan_recorder(recorder, rt.db.as_ref())?;
         return Err(Error::Interrupted);
     }
 
     if !scan.saw_any_members {
-        flush_scan_recorder(recorder, rt.db.as_ref())?;
         return Err(Error::Config("Archive is Empty".to_string()));
     }
 
@@ -393,7 +384,7 @@ fn run_inner(
     }
 
     // Deal with unfinished promotion (e.g. snapshot missing) -> Blanket prmote here.
-    let n = sdb.promote_extracted_to_unarchived()?;
+    let n = sdb.promote_cascade_extracted_to_unarchived()?;
     if n > 0 {
         tracing::warn!(
             "promoted {n} extracted row(s) to unarchived without snapshot confirmation"
@@ -592,10 +583,7 @@ fn extract_canonical_member(
     fid: FileId,
     name: &str)
     -> Result<()> {
-    // Pre-DB window (--force, no catalog yet): advance only the phase bar so it
-    // counts payload members as a spinner; the global bar has no total to
-    // advance against until the catalog installs (`attach_db_progress`). Once a
-    // DB is present, count the member on phase + global as usual.
+
     if rt.db.is_some() {
         rt.progress.inc_both(1);
     } else {
@@ -610,32 +598,32 @@ fn extract_canonical_member(
     // PRECONDITION: either force && no db is true or we saw at least one member.
     let entry_dst = rt.config.paths.extract_cache_dir().join(name);
     let member_total = entry.size();
+
     rt.pb.set_position(0);
     rt.pb.set_length(member_total);
+
     let mut prev = 0u64;
     let mut on_bytes = |bytes: u64| -> Result<()> {
         rt.pb.inc(bytes - prev);
         prev = bytes;
         rt.shutdown.check_in_flight()
     };
+
     // TODO: Subset checks.
     let sp_res = if rt.config.scan.sparsify {
         let mut buf = vec![0u8; rt.config.scan.page_size];
-        match sparse_cp::sparse_copy_reader(
+        sparse_cp::sparse_copy_reader(
             entry,
             &entry_dst,
             member_total,
             &mut buf,
-            |bytes, _size: u64, _dur: Duration| on_bytes(bytes)) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e),
-        }
+            |bytes, _size: u64, _dur: Duration| on_bytes(bytes)).map(|_| ())
     } else {
         copy_reader_batched(entry, &entry_dst, on_bytes)
     };
 
     match sp_res {
-        Ok(_) => {
+        Ok(()) => {
             tracing::debug!("extracted cache payload {}", entry_dst.display());
             ()
         },

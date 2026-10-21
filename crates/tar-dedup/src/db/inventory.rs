@@ -1,10 +1,9 @@
 use crate::common::utf8::require_utf8;
-use crate::config::RuntimeState;
-use crate::db::common::{path_bytes, with_transaction};
+use crate::db::common::path_bytes;
 use crate::db::flags::ErrorFlags;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FileType, NewFileRecord};
-use crate::db::{ErrorPhase, Recorder, meta};
+use crate::db::{ErrorPhase, Recorder};
 use crate::error::{FileStatError, Result, ToPanic};
 use path_clean::PathClean;
 use rusqlite::{Connection, OptionalExtension, named_params};
@@ -78,30 +77,6 @@ pub fn insert_file(conn: &Connection, record: &NewFileRecord) -> Result<bool> {
         },
     ).to_panic()?;
     Ok(changed > 0)
-}
-
-pub fn load_runtime_state(conn: &Connection) -> Result<Option<RuntimeState>> {
-    let Some(phase) = meta::get_archive_phase(conn)? else {
-        return Ok(None);
-    };
-    let snapshot_taken_at = meta::get_archive_snapshot_taken_at(conn)?
-        .ok_or_else(|| {
-            crate::error::Error::Config("missing archive_snapshot_taken_at in meta".into())
-        })
-        .to_panic()?;
-
-    Ok(Some(RuntimeState {
-        snapshot_taken_at,
-        phase,
-    }))
-}
-
-pub fn save_runtime_state(conn: &mut Connection, state: &RuntimeState) -> Result<()> {
-    with_transaction(conn, |conn| {
-        meta::set_archive_phase(conn, state.phase)?;
-        meta::set_archive_snapshot_taken_at(conn, state.snapshot_taken_at)?;
-        Ok(())
-    })
 }
 
 fn get_all_uids(conn: &Connection) -> Result<Vec<u32>> {
