@@ -169,12 +169,12 @@ impl Default for ExtractRuntimeState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeState {
+pub struct ArchiveRuntimeState {
     pub snapshot_taken_at: DateTime<Utc>,
     pub phase: PipelinePhase,
 }
 
-impl RuntimeState {
+impl ArchiveRuntimeState {
     pub fn new() -> Self {
         Self {
             snapshot_taken_at: Utc::now(),

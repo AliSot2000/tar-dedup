@@ -17,7 +17,7 @@ use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
     ProductPresence, StartAction, StartPolicy, WorkPresence, resolve_start,
 };
-use crate::config::{ArchiveConfig, ExitAfterStage, PipelinePhase, RuntimeState};
+use crate::config::{ArchiveConfig, ArchiveRuntimeState, ExitAfterStage, PipelinePhase};
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::progress::{ARCHIVE_MULTIPLIER, BarKind, BarScope, ProgressBarSet, register_mpb};
@@ -70,7 +70,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             state
         }
         StartAction::RunFresh => {
-            let state = RuntimeState::new();
+            let state = ArchiveRuntimeState::new();
             db.save_runtime_state(&state)?;
             db.set_archive_config(&config)?;
             filter::ingest_filters(&db, &config)?;

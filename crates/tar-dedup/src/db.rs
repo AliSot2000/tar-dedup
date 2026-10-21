@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 
 use crate::common::perms::OwnerGroupPolicy;
-use crate::config::{
-    ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, RuntimeState,
+use crate::config::{ArchiveRuntimeState,
+                    ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase,
 };
 use crate::db::flags::{FileFlag, FileFlags, OutTreeFlag, OutTreeFlags, SourceFlags};
 use crate::db::types::{
@@ -41,6 +41,7 @@ pub(crate) mod sparsify;
 mod stage;
 mod stats;
 mod tar_writer;
+mod state;
 
 pub use common::SqlFileRow;
 pub use recorder::Recorder;
@@ -563,12 +564,12 @@ impl Database {
         stage::list_files_to_stage_after(&self.conn(), last_id, limit)
     }
 
-    pub fn load_runtime_state(&self) -> Result<Option<RuntimeState>> {
-        inventory::load_runtime_state(&*self.conn())
+    pub fn load_runtime_state(&self) -> Result<Option<ArchiveRuntimeState>> {
+        state::load_archive_runtime_state(&*self.conn())
     }
 
-    pub fn save_runtime_state(&self, state: &RuntimeState) -> Result<()> {
-        inventory::save_runtime_state(&mut *self.conn_mut(), state)
+    pub fn save_runtime_state(&self, state: &ArchiveRuntimeState) -> Result<()> {
+        state::save_archive_runtime_state(&mut *self.conn_mut(), state)
     }
 
     pub fn begin_archive_session(&self, archive_offset: u64) -> Result<i64> {
@@ -781,8 +782,8 @@ impl Database {
         scan::apply_snapshot_promote_unarchived(&*self.conn(), snapshot_path)
     }
 
-    pub fn promote_extracted_to_unarchived(&self) -> Result<u64> {
-        scan::promote_extracted_to_unarchived(&*self.conn())
+    pub fn promote_cascade_extracted_to_unarchived(&self) -> Result<u64> {
+        scan::promote_cascade_extracted_to_unarchived(&*self.conn())
     }
 
     pub fn tally_scan_remainders(&self, eager_filter: bool) -> Result<ScanRemainderTally> {
@@ -809,16 +810,8 @@ impl Database {
         scan::count_encoded_payloads(&*self.conn())
     }
 
-    pub fn count_unconfirmed_extracted(&self) -> Result<u64> {
-        scan::count_unconfirmed_extracted(&*self.conn())
-    }
-
     pub fn count_extracted_canonical(&self) -> Result<u64> {
         scan::count_extracted_canonical(&*self.conn())
-    }
-
-    pub fn count_extracted_paths(&self) -> Result<u64> {
-        scan::count_extracted_paths(&*self.conn())
     }
 
     /// `(ftype, count)` for every row in `files`.
@@ -884,19 +877,15 @@ impl Database {
     }
 
     pub fn load_extract_runtime_state(&self) -> Result<Option<ExtractRuntimeState>> {
-        scan::load_extract_runtime_state(&*self.conn())
+        state::load_extract_runtime_state(&*self.conn())
     }
 
     pub fn save_extract_runtime_state(&self, state: &ExtractRuntimeState) -> Result<()> {
-        scan::save_extract_runtime_state(&mut *self.conn_mut(), state)
+        state::save_extract_runtime_state(&mut *self.conn_mut(), state)
     }
 
     pub fn record_snapshot_ingested(&self) -> Result<u32> {
         scan::record_snapshot_ingested(&mut *self.conn_mut())
-    }
-
-    pub fn list_files_to_restore<R: SqlFileRow>(&self) -> Result<Vec<R>> {
-        scan::list_files_to_restore(&*self.conn())
     }
 
     /// See [`rehash::count_files_to_rehash`].
@@ -946,7 +935,7 @@ impl Database {
     }
 
     pub fn init_extract_runtime_state(&self) -> Result<()> {
-        scan::init_extract_runtime_state(&mut *self.conn_mut())
+        state::init_extract_runtime_state(&mut *self.conn_mut())
     }
 
     /// See [`place::count_files_to_move`].
