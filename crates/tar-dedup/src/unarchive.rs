@@ -105,7 +105,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
             }
             ExtractPipelinePhase::Filter if let Some(ref edb) = db => {
                 let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
-                filter::run(&rt, true)?;
+                filter::run(&rt, false)?;
             }
             ExtractPipelinePhase::Rehash if let Some(ref edb) = db => {
                 let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };

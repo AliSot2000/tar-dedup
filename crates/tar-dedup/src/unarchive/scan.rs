@@ -139,7 +139,7 @@ fn store_filter_buffer(
     tracing::info!("Flushed: {result} filter rows to db");
     *fb = None;
     if rt.config.filter.eager_filter {
-        filter_run(rt, false)?
+        filter_run(rt, true)?
     }
     Ok(result)
 }
