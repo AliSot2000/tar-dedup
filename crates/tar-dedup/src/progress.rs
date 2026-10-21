@@ -67,6 +67,11 @@ pub struct ProgressBarSet {
     mp: Arc<MultiProgress>,
     global: ProgressBar,
     phase: Mutex<Option<ProgressBar>>,
+    /// While `Some`, every phase-targeting operation drives this bar instead of the
+    /// real phase bar, and `inc_both`/`inc_global` stop advancing the global. Used
+    /// to show a self-contained sub-step (e.g. the eager extract filter) above a
+    /// running phase without disturbing it. See [`Self::redirect_phase`].
+    override_phase: Mutex<Option<ProgressBar>>,
     subs: Mutex<Vec<ProgressBar>>,
     thread_bars: Mutex<ThreadBars>,
     table_size: Mutex<u64>,
@@ -82,6 +87,7 @@ struct ThreadBars {
     bars: Vec<Option<ProgressBar>>,
 }
 
+// TODO think through the phase redirect.
 // INFO: To share the ProgressBarSet amongst multiple threads all elements inside need to be thread safe. Rust does not
 //  know that ProgressBar is thread safe -> MutEx
 impl ProgressBarSet {
@@ -97,6 +103,7 @@ impl ProgressBarSet {
             mp,
             global,
             phase: Mutex::new(None),
+            override_phase: Mutex::new(None),
             subs: Mutex::new(Vec::new()),
             thread_bars: Mutex::new(ThreadBars {
                 kind: None,
@@ -126,21 +133,30 @@ impl ProgressBarSet {
         *self.phase.lock().expect("progress phase lock poisoned") = Some(bar);
     }
 
+    /// The current phase target: the override bar while a redirect is active,
+    /// otherwise the real phase bar.
+    fn phase_target(&self) -> Option<ProgressBar> {
+        match self.override_phase.lock().expect("progress override lock poisoned").as_ref() {
+            Some(o) => Some(o.clone()),
+            None => self.phase.lock().expect("progress phase lock poisoned").clone(),
+        }
+    }
+
     pub fn set_phase_total(&self, n: u64) {
-        if let Some(p) = self.phase.lock().expect("progress phase lock poisoned").as_ref() {
-            p.set_length(n);
+        if let Some(b) = self.phase_target() {
+            b.set_length(n);
         }
     }
 
     pub fn set_phase_position(&self, pos: u64) {
-        if let Some(p) = self.phase.lock().expect("progress phase lock poisoned").as_ref() {
-            p.set_position(pos);
+        if let Some(b) = self.phase_target() {
+            b.set_position(pos);
         }
     }
 
     pub fn set_phase_msg(&self, s: &str) {
-        if let Some(p) = self.phase.lock().expect("progress phase lock poisoned").as_ref() {
-            p.set_message(s.to_string());
+        if let Some(b) = self.phase_target() {
+            b.set_message(s.to_string());
         }
     }
 
@@ -154,23 +170,41 @@ impl ProgressBarSet {
     /// Switch the phase bar style without dropping it (spinner → bar once a
     /// total is known). Keeps the current position.
     pub fn set_phase_kind(&self, kind: BarKind) {
-        if let Some(p) = self.phase.lock().expect("progress phase lock poisoned").as_ref() {
-            p.set_style(style_for(kind));
+        if let Some(b) = self.phase_target() {
+            b.set_style(style_for(kind));
         }
     }
 
-    /// Insert a sub-bar just above the phase bar (used for complex phases).
+    /// Insert a sub-bar on top of the sub-bar stack (newest above older ones,
+    /// above the phase bar / global). Used for complex phases.
     pub fn push_sub_bar(&self, msg: &str, kind: BarKind) -> ProgressBar {
         let bar = make_bar(kind, msg);
-        {
-            let phase = self.phase.lock().expect("progress phase lock poisoned");
-            match phase.as_ref() {
-                Some(p) => self.mp.insert_before(p, bar.clone()),
-                None => self.mp.add(bar.clone()),
-            };
-        }
+        self.mp.insert(0, bar.clone());
         self.subs.lock().expect("progress subs lock poisoned").push(bar.clone());
         bar
+    }
+
+    /// Finish and remove a sub-bar (and drop it from the tracked list). Used once a
+    /// transient step (e.g. filter loading) completes so it stops drawing.
+    pub fn hide_bar(&self, bar: &ProgressBar) {
+        bar.finish_and_clear();
+        self.mp.remove(bar);
+        self.subs
+            .lock()
+            .expect("progress subs lock poisoned")
+            .retain(|b| !std::ptr::eq(b, bar));
+    }
+
+    /// Redirect phase-targeting operations to `bar` (typically a sub-bar) and
+    /// decouple them from the global until the returned guard is dropped. On drop
+    /// the previous override is restored and `bar` is finished + removed.
+    pub fn redirect_phase(&self, bar: ProgressBar) -> PhaseRedirect<'_> {
+        let prev = self
+            .override_phase
+            .lock()
+            .expect("progress override lock poisoned")
+            .replace(bar.clone());
+        PhaseRedirect { set: self, prev, bar }
     }
 
     /// Start a fraction bar for a self-contained step between phases (e.g. the
@@ -248,29 +282,53 @@ impl ProgressBarSet {
         tb.kind = None;
     }
 
-    /// Advance the phase bar and the global by `n`.
+    /// Advance the phase bar and the global by `n`. While a redirect is active,
+    /// advances only the override bar (global decoupled).
     pub fn inc_both(&self, n: u64) {
-        if let Some(p) = self.phase
+        let redirected = self.override_phase
             .lock()
-            .expect("progress phase lock poisoned").as_ref() {
-            p.inc(n);
+            .expect("progress override lock poisoned")
+            .is_some();
+        if let Some(b) = self.phase_target() {
+            b.inc(n);
+            if !redirected {
+                self.global.inc(n);
+            }
+        } else {
+            self.global.inc(n);
         }
-        self.global.inc(n);
     }
 
     /// Advance only the global (bulk SQL promotions of rows leaving the phase).
+    /// While a redirect is active, advances the override bar instead.
     pub fn inc_global(&self, n: u64) {
-        self.global.inc(n);
+        if let Some(o) = self.override_phase
+            .lock()
+            .expect("progress override lock poisoned")
+            .as_ref()
+        {
+            o.inc(n);
+        } else {
+            self.global.inc(n);
+        }
     }
 
     /// Advance only the phase bar (byte-level progress inside a file).
     pub fn inc_phase(&self, n: u64) {
-        if let Some(p) = self.phase
-            .lock()
-            .expect("progress phase lock poisoned")
-            .as_ref() {
-            p.inc(n);
+        if let Some(b) = self.phase_target() {
+            b.inc(n);
         }
+    }
+
+    /// Current position of the active phase bar (the override bar while a
+    /// redirect is active, else the real phase bar).
+    pub fn phase_position(&self) -> u64 {
+        self.phase_target().map_or(0, |b| b.position())
+    }
+
+    /// Current position of the global bar.
+    pub fn global_position(&self) -> u64 {
+        self.global.position()
     }
 
     /// Complete every bar; the global ends at 100%.
@@ -308,6 +366,25 @@ impl ProgressBarSet {
             self.mp.remove(&s);
         }
         self.drop_thread_bars();
+    }
+}
+
+/// Scoped phase override: while alive, phase-targeting operations drive the
+/// override bar and the global stays put. Restores the previous override and
+/// finishes + removes the override bar on drop.
+pub struct PhaseRedirect<'a> {
+    set: &'a ProgressBarSet,
+    prev: Option<ProgressBar>,
+    bar: ProgressBar,
+}
+
+impl Drop for PhaseRedirect<'_> {
+    fn drop(&mut self) {
+        *self.set
+            .override_phase
+            .lock()
+            .expect("progress override lock poisoned") = self.prev.take();
+        self.set.hide_bar(&self.bar);
     }
 }
 
@@ -540,4 +617,63 @@ fn truncate_middle(s: &str, max_chars: usize) -> String {
         .rev()
         .collect();
     format!("{prefix}…{suffix}")
+}
+
+//==================================================================================================
+// Testing
+//==================================================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_sub_bar_creates_independent_handles() {
+        // Sub-bars are independent handles tracked alongside the phase bar;
+        // advancing one never moves the phase or global bar.
+        let set = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+        set.begin_phase(0, "scan", BarKind::Counter);
+        let a = set.push_sub_bar("a", BarKind::Counter);
+        let b = set.push_sub_bar("b", BarKind::Counter);
+        a.inc(2);
+        b.inc(3);
+        assert_eq!(a.position(), 2);
+        assert_eq!(b.position(), 3);
+        assert_eq!(set.phase_position(), 0);
+        assert_eq!(set.global_position(), 0);
+    }
+
+    #[test]
+    fn redirect_phase_routes_progress_decouples_global_and_restores() {
+        let set = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+        set.begin_phase(0, "scan", BarKind::Counter);
+        set.set_phase_total(100);
+        set.set_phase_position(10);
+        set.inc_both(5);
+        let base_phase = set.phase_position();
+        let base_global = set.global_position();
+        assert_eq!(base_phase, 15, "10 seeded + 5 inc_both");
+        assert_eq!(base_global, 5);
+
+        // While redirected, everything drives the override bar; global + real
+        // phase bar stay frozen.
+        let fbar = set.push_sub_bar("filter", BarKind::Count);
+        let guard = set.redirect_phase(fbar.clone());
+        set.set_phase_total(50);
+        set.inc_both(7);
+        set.inc_global(3);
+        set.inc_phase(2);
+        assert_eq!(fbar.position(), 12, "7 inc_both + 3 inc_global + 2 inc_phase");
+        assert_eq!(fbar.length().unwrap_or(0), 50, "set_phase_total redirects");
+        assert_eq!(set.global_position(), base_global, "global decoupled");
+        assert_eq!(set.phase_position(), 12, "phase_position follows the override");
+        drop(guard);
+
+        // Restored: phase ops hit the real phase bar again, global untouched.
+        assert_eq!(set.phase_position(), base_phase, "real phase bar restored");
+        assert_eq!(set.global_position(), base_global);
+        set.inc_both(1);
+        assert_eq!(set.phase_position(), base_phase + 1);
+        assert_eq!(set.global_position(), base_global + 1);
+    }
 }

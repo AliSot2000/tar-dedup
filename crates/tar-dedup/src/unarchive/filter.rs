@@ -15,7 +15,9 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(crate::config::ExtractPipeli
 
 #[derive(Clone, Debug, Default)]
 pub struct ParseFilterBuffer {
+    /// Content is `from`, `line`, `query`
     include_filters: Vec<(String, Option<u64>, String)>,
+    /// Content is `from`, `line`, `query`
     exclude_filters: Vec<(String, Option<u64>, String)>,
 }
 
@@ -210,8 +212,12 @@ mod tests {
             !world.config.process.no_errors, Some(world.config.process.auto_flush_limit));
         let buf = ingest_filters(&world.config, &mut rec).expect("ingest");
         buf.write_to_db(
-            Box::new(|from, line, query| world.db.add_include_pattern_extract(from, line, query)),
-            Box::new(|from, line, query| world.db.add_exclude_pattern_extract(from, line, query)),
+            Box::new(
+                |from, line, query| world.db.add_include_pattern_extract(
+                    from, line, query)),
+            Box::new(
+                |from, line, query| world.db.add_exclude_pattern_extract(
+                    from, line, query)),
         ).expect("write");
         buf
     }

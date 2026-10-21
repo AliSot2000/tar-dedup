@@ -139,7 +139,16 @@ fn store_filter_buffer(
     tracing::info!("Flushed: {result} filter rows to db");
     *fb = None;
     if rt.config.filter.eager_filter {
-        filter_run(rt, true)?
+        // Dedicated `filter` sub-bar (stacked above the scan bar) for the eager
+        // filter — including the trivial fast path, which still advances
+        // progress (inc_both on the filter's row count). The guard routes the
+        // shared filter progress to the sub-bar and removes it on drop; the scan
+        // bar and the global stay untouched. `filter_run` itself no-ops when the
+        // filters were already applied (resume), in which case the bar never
+        // advances and is simply removed here.
+        let fbar = rt.progress.push_sub_bar("filter", BarKind::Counter);
+        let _guard = rt.progress.redirect_phase(fbar);
+        filter_run(rt, true)?;
     }
     Ok(result)
 }
@@ -1591,6 +1600,26 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let f1 = db.get_file_by_id::<StrippedRecord>(FileId(2)).expect("get").expect("row");
         assert!(f1.flags.get(FileFlag::FileExtracted));
         assert!(config.paths.extract_cache_dir().join(&members[1]).is_file());
+        // The eager filter ran and persisted its bookkeeping.
+        assert!(db.get_extract_filters_applied().expect("get"));
+    }
+
+    #[test]
+    fn scan_eager_no_user_filters_takes_fast_path() {
+        // `eager_filter` on but no user patterns: the internal `.*` catch-all
+        // triggers the apply_no_filter fast path, so the eager call shows no
+        // filter sub-bar and every payload is still extracted.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut config, members) = build_multi_catalog(dir.path(), 2);
+        config.filter.eager_filter = true;
+        let db_path = config.paths.db_path();
+
+        let db = run_scan(&config, &db_path);
+        assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 3);
+        assert_eq!(db.count_extracted_canonical().expect("extracted"), 2);
+        assert!(config.paths.extract_cache_dir().join(&members[0]).is_file());
+        assert!(config.paths.extract_cache_dir().join(&members[1]).is_file());
+        assert!(db.get_extract_filters_applied().expect("get"));
     }
 
     #[test]
