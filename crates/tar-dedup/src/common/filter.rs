@@ -45,7 +45,6 @@ pub fn joint_filter_phase(
     let already_filtered = db.count_files_in_phase(pv)?;
     let total = db.count_entries()?;
     pg.set_phase_total(total);
-    pg.inc_both(already_filtered);
 
     let include_count = count_filters(Some(false))?;
     let exclude_count = count_filters(Some(true))?;
@@ -59,14 +58,18 @@ pub fn joint_filter_phase(
                 "Unexpected Filter expression. Filtering perhaps not working correctly?"
             );
 
+            // Fast path: apply_no_filter updates every row in one shot, so the
+            // phase bar goes straight from zero (no pre-seed) to `total`.
             let updated = apply_no_filter()?;
-            pg.inc_global(updated);
+            pg.inc_both(updated);
             tracing::info!("No filters present. All {updated} files selected.");
             debug_assert_eq!(total, updated, "Updated rows and total rows don't match");
-            pg.inc_both(total);
             return Ok(());
         }
     };
+    // Real filtering: seed the bars with the rows already in the target phase
+    // (accounted by an earlier pass), then step through the rest.
+    pg.inc_both(already_filtered);
     // Perform actual process of filtering. In case this is a noticeable bottleneck, it is a
     // separate function so we can swap in a rayon pool or a crossbeam ... whatever is better.
     step_filters(
@@ -103,10 +106,14 @@ pub fn step_filters(
     -> Result<()> {
 
     // Filter parsing
-    let add_flt = pg.push_sub_bar(
-        "Loading Filters from the DB...", BarKind::Count
-    );
-    add_flt.set_length(count_filters(Some(true))? + count_filters(Some(false))?);
+    let filter_total = count_filters(Some(true))? + count_filters(Some(false))?;
+    // Only show a loading bar when there is more than a single trivial rule to
+    // parse; hide it again as soon as parsing finishes.
+    let add_flt = (filter_total > 1)
+        .then(|| pg.push_sub_bar("Loading Filters from the DB...", BarKind::Count));
+    if let Some(bar) = add_flt.as_ref() {
+        bar.set_length(filter_total);
+    }
 
     let include_filters = parse_filter(
         &get_filters(false)?,
@@ -114,16 +121,18 @@ pub fn step_filters(
         anchored,
         ignore_case,
         no_unicode,
-        Some(&add_flt));
+        add_flt.as_ref());
     let exclude_filters = parse_filter(
         &get_filters(true)?,
         "exclude",
         anchored,
         ignore_case,
         no_unicode,
-        Some(&add_flt));
+        add_flt.as_ref());
 
-    drop(add_flt);
+    if let Some(bar) = add_flt.as_ref() {
+        pg.hide_bar(bar);
+    }
 
     // Perform filtering
     let mut included = 0u64;
@@ -165,7 +174,6 @@ pub fn step_filters(
                 "INVARIANT ERROR: Number of rows updated does not match rows queried. \
                    Rows vanished?"
             );
-            pg.inc_both(updated);
             Ok(())
         }
     )?;
