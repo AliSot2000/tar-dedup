@@ -643,6 +643,14 @@ impl Database {
         meta::get_extract_phase(&*self.conn())
     }
 
+    pub fn get_extract_filters_applied(&self) -> Result<bool> {
+        Ok(meta::get_extract_filters_applied(&self.conn())?.unwrap_or(false))
+    }
+
+    pub fn set_extract_filters_applied(&self, value: bool) -> Result<()> {
+        meta::set_extract_filters_applied(&self.conn(), value)
+    }
+
     /// See [`meta::get_archive_snapshot_taken_at`].
     pub fn get_archive_snapshot_taken_at(&self) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
         meta::get_archive_snapshot_taken_at(&*self.conn())
