@@ -55,7 +55,7 @@ impl ParseFilterBuffer {
 // INFO: When no manifest DB was found (truncated / non-conform archive), the extract
 //  filter pass is a deliberate no-op: there is nothing to match against, and filters
 //  stay in `ExtractConfig`. Verified via the row count.
-pub fn run(rt: &ExtractRTArgs, set_phase: bool) -> Result<()> {
+pub fn run(rt: &ExtractRTArgs, eager_filter: bool) -> Result<()> {
     // TODO:
     //  - tracing is missleading and should be dropped
     //  - option should exist to provide the progress bars separately. (Extra progress bars when
@@ -252,7 +252,7 @@ mod tests {
         world.add_unarchived("a");
         world.add_unarchived("b");
 
-        run(&world.rt(), true).expect("run");
+        run(&world.rt(), false).expect("run");
 
         assert_eq!(extract_reason_pairs(&world), vec![(-1, 0), (-1, 0)]);
         assert_eq!(world.db.count_files_in_phase(FilePhase::ExtractFiltered).expect("c"), 2);
@@ -271,7 +271,7 @@ mod tests {
         world.add_unarchived("skip_c");
         world.add_unarchived("other_d");
 
-        run(&world.rt(), true).expect("run");
+        run(&world.rt(), false).expect("run");
 
         assert_eq!(extract_reason_pairs(&world), vec![(-1, 0), (-1, 1), (0, 1), (0, 0)]);
         assert_eq!(world.db.count_files_in_phase(FilePhase::ExtractFiltered).expect("c"), 4);
