@@ -24,6 +24,7 @@ pub enum MetaKey {
     TarWriterBytesOut,
     ExtractPhase,
     ExtractSnapshotsIngested,
+    ExtractFiltersApplied,
     ScanTarSawManifestDb,
     ScanTarSawAnyMembers,
     ScanTarFromFooter,
@@ -51,6 +52,7 @@ impl MetaKey {
             Self::TarWriterBytesOut => "tar_writer_bytes_out",
             Self::ExtractPhase => "extract_phase",
             Self::ExtractSnapshotsIngested => "extract_snapshots_ingested",
+            Self::ExtractFiltersApplied => "extract_filters_applied",
             Self::ScanTarSawManifestDb => "scan_tar_saw_manifest_db",
             Self::ScanTarSawAnyMembers => "scan_tar_saw_any_members",
             Self::ScanTarFromFooter => "scan_tar_from_footer",
@@ -78,6 +80,7 @@ impl MetaKey {
             "tar_writer_bytes_out" => Self::TarWriterBytesOut,
             "extract_phase" => Self::ExtractPhase,
             "extract_snapshots_ingested" => Self::ExtractSnapshotsIngested,
+            "extract_filters_applied" => Self::ExtractFiltersApplied,
             "scan_tar_saw_manifest_db" => Self::ScanTarSawManifestDb,
             "scan_tar_saw_any_members" => Self::ScanTarSawAnyMembers,
             "scan_tar_from_footer" => Self::ScanTarFromFooter,
@@ -106,6 +109,7 @@ impl MetaKey {
             Self::TarWriterBytesOut,
             Self::ExtractPhase,
             Self::ExtractSnapshotsIngested,
+            Self::ExtractFiltersApplied,
             Self::ScanTarSawManifestDb,
             Self::ScanTarSawAnyMembers,
             Self::ScanTarFromFooter,
@@ -135,6 +139,7 @@ pub enum MetaEntry {
     TarWriterBytesOut(u64),
     ExtractPhase(ExtractPipelinePhase),
     ExtractSnapshotsIngested(u32),
+    ExtractFiltersApplied(bool),
     ScanTarSawManifestDb(bool),
     ScanTarSawAnyMembers(bool),
     ScanTarFromFooter(bool),
@@ -162,6 +167,7 @@ impl MetaEntry {
             Self::TarWriterBytesOut(_) => MetaKey::TarWriterBytesOut,
             Self::ExtractPhase(_) => MetaKey::ExtractPhase,
             Self::ExtractSnapshotsIngested(_) => MetaKey::ExtractSnapshotsIngested,
+            Self::ExtractFiltersApplied(_) => MetaKey::ExtractFiltersApplied,
             Self::ScanTarSawManifestDb(_) => MetaKey::ScanTarSawManifestDb,
             Self::ScanTarSawAnyMembers(_) => MetaKey::ScanTarSawAnyMembers,
             Self::ScanTarFromFooter(_) => MetaKey::ScanTarFromFooter,
@@ -194,6 +200,7 @@ impl MetaEntry {
             | Self::ScanTarSawAnyMembers(v)
             | Self::ScanTarFromFooter(v)
             | Self::ScanTarLastMemberWasSnapshot(v)
+            | Self::ExtractFiltersApplied(v)
             | Self::OutTreeBuilt(v)
             | Self::DirTreeBuilt(v)
             | Self::PlacementPrologueDone(v) => if *v { "1" } else { "0" }.to_string(),
@@ -225,6 +232,9 @@ impl MetaEntry {
                     Error::Config(format!("invalid meta `{}`: {raw}", key.as_str()))
                 })?;
                 Ok(Self::ExtractSnapshotsIngested(n))
+            }
+            MetaKey::ExtractFiltersApplied => {
+                Ok(Self::ExtractFiltersApplied(parse_bool(key, raw)?))
             }
             MetaKey::ScanTarSawManifestDb => Ok(Self::ScanTarSawManifestDb(parse_bool(key, raw)?)),
             MetaKey::ScanTarSawAnyMembers => Ok(Self::ScanTarSawAnyMembers(parse_bool(key, raw)?)),
@@ -364,6 +374,17 @@ pub fn get_extract_snapshots_ingested(conn: &Connection) -> Result<Option<u32>> 
 
 pub fn set_extract_snapshots_ingested(conn: &Connection, value: u32) -> Result<()> {
     set_entry(conn, &MetaEntry::ExtractSnapshotsIngested(value))
+}
+
+pub fn get_extract_filters_applied(conn: &Connection) -> Result<Option<bool>> {
+    get_typed(conn, MetaKey::ExtractFiltersApplied, |e| match e {
+        MetaEntry::ExtractFiltersApplied(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_extract_filters_applied(conn: &Connection, value: bool) -> Result<()> {
+    set_entry(conn, &MetaEntry::ExtractFiltersApplied(value))
 }
 
 pub fn get_scan_tar_saw_manifest_db(conn: &Connection) -> Result<Option<bool>> {
@@ -606,6 +627,7 @@ mod tests {
         set_tar_writer_bytes_out(&conn, 22).unwrap();
         set_extract_phase(&conn, ExtractPipelinePhase::Place).unwrap();
         set_extract_snapshots_ingested(&conn, 3).unwrap();
+        set_extract_filters_applied(&conn, true).unwrap();
         set_scan_tar_saw_manifest_db(&conn, true).unwrap();
         set_scan_tar_last_member_index(&conn, 7).unwrap();
 
@@ -618,6 +640,7 @@ mod tests {
             Some(ExtractPipelinePhase::Place)
         );
         assert_eq!(get_extract_snapshots_ingested(&conn).unwrap(), Some(3));
+        assert_eq!(get_extract_filters_applied(&conn).unwrap(), Some(true));
         assert_eq!(get_scan_tar_saw_manifest_db(&conn).unwrap(), Some(true));
         assert_eq!(get_scan_tar_last_member_index(&conn).unwrap(), 7);
         
