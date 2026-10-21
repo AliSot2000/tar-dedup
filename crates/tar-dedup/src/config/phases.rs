@@ -147,6 +147,7 @@ impl ExtractPipelinePhase {
     }
 }
 
+// TODO: Drop this useless stuff!
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractRuntimeState {
     pub phase: ExtractPipelinePhase,
