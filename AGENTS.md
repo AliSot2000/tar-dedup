@@ -119,6 +119,18 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
     signature to one-arg-per-line.
   - Do not run `cargo fmt` on existing files; when editing, mimic the surrounding style
     (tabs/spaces, wrapping, blank-line rhythm) — do not reformat the rest of the file.
+- **Line length: 120 chars max.** No line may spill past column 120; wrap long lines
+  instead. This applies to code, docs, and banner headers alike.
+- **Banner section headers** (full-width `//` rules spanning to column 120) label regions,
+  e.g. `// STAGE` / `// SUBSTAGE` / `// UTIL`. A `#[cfg(test)]` module **must** be introduced
+  by a `// TEST` banner:
+```
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+```
+  Nested/sub-section headers inside a region may be indented, but their dash lines must
+  still extend to column 120.
 - **One function when asked for one** — do not split into helpers/wrappers unless asked.
 - **`expect` for contract violations, `Result` for user/input faults.** Schema init, prior-stage invariants, FK rows inserted by the caller → `expect("…")`. Do not sprinkle `ok_or_else(|| Error::Config(...))` in leaf functions.
 - **Read the call site before editing pipeline code.** Leaf pipeline functions assume preconditions established upstream; don't "fix" them by re-inserting rows or weakening invariants.
