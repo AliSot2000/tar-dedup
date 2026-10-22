@@ -255,7 +255,8 @@ fn populate_out_tree_abs(
 
         rt.db.insert_out_tree_rows(&processed)?;
         rt.progress.inc_phase(processed.len() as u64);
-        // INFO ref table is left empty since we are working with abs_paths
+        // INFO ref table is left empty since we are working with abs_paths and one source row can
+        //  have at most one child
         Ok(())
     };
     stepped_dirs_then_rest(rt, None, use_new_name, &mut apply)
