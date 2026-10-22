@@ -232,6 +232,7 @@ fn apply_renames(
     transform: Option<&TransformExpr>,
     path_rel_converter: impl Fn(&Path) -> PathBuf)
     -> Result<()> {
+
     for entry in entries {
         let member = path_rel_converter(&entry.abs_path);
         let mut name = member.to_string_lossy().into_owned();
@@ -244,6 +245,7 @@ fn apply_renames(
         // marks the empty-name skip sentinel consumed by the out_tree filter.
         rt.db.set_file_new_name(entry.id, Some(&name))?;
     }
+    
     Ok(())
 }
 
