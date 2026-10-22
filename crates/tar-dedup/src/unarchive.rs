@@ -180,7 +180,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         tracing::info!("exit-after-stage `cleanup`: finished");
     }
 
-    tracing::info!("extracted to {}", config.paths.extraction_root().display());
+    tracing::info!("extracted to {}", config.effective_extraction_root().display());
     Ok(())
 }
 
