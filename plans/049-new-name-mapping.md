@@ -75,5 +75,12 @@ writing, so even a transform that injects `../` cannot escape the extraction roo
   accidentally dropped the `[strip as usize..]` slice too, so component stripping was a
   no-op (the existing strip tests caught it). Restored the slice, keeping the dead-check
   removal.
-- `strip_leading_up` asserts its input is already clean (no `.`); the `clamped_rel_prefix`
-  helper does the `clean()` step before delegating.
+- **Structure (post-review):** no single-use wrappers. `clamped_rel_prefix` was merged
+  into `rel_rel_path` (which now takes `original_path` and derives the clamped prefix
+  itself — it had exactly two call sites, both immediately feeding `rel_rel_path`), and
+  `clean_new_name` was removed in favour of calling `strip_leading_up(...).clean()`
+  directly at its single out_tree call site. Documentation reduced to why/invariants
+  only (`abs_rel_path` none; `rel_rel_path` notes the clamping invariant; the out_tree
+  comment explains the re-clamp rationale).
+- `strip_leading_up` asserts its input is already clean (no `.`); `rel_rel_path` does
+  the `clean()` step before delegating to it.
