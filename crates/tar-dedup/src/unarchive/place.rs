@@ -167,14 +167,11 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
     rt.db.create_canonical_move_queue()?;
     rt.db.populate_canonical_move_queue(true)?;
 
-    // Progress: one per-worker byte bar for the in-flight copy plus a dedicated
-    // files-done sub-bar. Neither the phase bar nor the global is touched here —
-    // both are owned by `materialize_link_tree` (a moved canonical counts there,
-    // exactly once).
-    rt.progress.create_thread_bars(BarKind::Bytes, rt.config.process.io_jobs);
     let moved_bar = rt.progress.push_sub_bar("files moved", BarKind::Count);
     moved_bar.set_length(total);
     moved_bar.set_position(done);
+
+    rt.progress.create_thread_bars(BarKind::Bytes, rt.config.process.io_jobs);
     let mut bars = Vec::<ProgressBar>::new();
     for i in 0..rt.config.process.io_jobs {
         bars.push(rt.progress.thread_bar(i));
