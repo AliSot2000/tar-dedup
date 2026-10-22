@@ -99,6 +99,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         match capture_error(
             &mut recorder,
             &cache_dir.to_path_buf(), |p| fs::remove_dir_all(p)) {
+
             Ok(()) => (),
             Err(e) => {
                 if rt.config.process.fail_fast {
@@ -1028,17 +1029,19 @@ fn build_path(
                   "INVARIANT ERROR: build_path may not be called with no_create_dir");
     let mut prefix = PathBuf::new();
     let mut start = 0u64;
-    let mut capture_error = |path: &PathBuf, iof: fn(&Path) -> io::Result<()>| match iof(&path) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            recorder.record_out_tree(
-                out_tree_id,
-                ERROR_PHASE,
-                FileStatError::copy_io(&path, &e),
-                ErrorFlags::default(),
-            );
-            return Err(Error::io(&path, e));
-        }
+    let mut capture_error = |path: &PathBuf, iof: fn(&Path) -> io::Result<()>|
+        match iof(&path) {
+
+            Ok(_) => Ok(()),
+            Err(e) => {
+                recorder.record_out_tree(
+                    out_tree_id,
+                    ERROR_PHASE,
+                    FileStatError::copy_io(&path, &e),
+                    ErrorFlags::default(),
+                );
+                return Err(Error::io(&path, e));
+            }
     };
     let iter = already_checked
         .components()
