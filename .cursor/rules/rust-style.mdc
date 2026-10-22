@@ -51,6 +51,23 @@ let last = batch.last().expect("non-empty batch");
 
 Before changing core pipeline code, read the **call site and upstream setup** (often a few lines above). Do not patch symptoms in leaf functions when the caller already guarantees the precondition.
 
+## Line length & section headers
+
+- **Max 120 columns per line.** Wrap long lines; never let a line spill past column 120
+  (code, docs, and banner headers alike).
+- **Banner section headers** are full-width `//` rules that span to column 120, labelling a
+  region: `// STAGE` / `// SUBSTAGE` / `// UTIL`. A `#[cfg(test)]` module **must** be
+  introduced by a `// TEST` banner:
+
+```
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+```
+
+  Nested/sub-section headers inside a region may be indented, but their dash lines must
+  still extend to column 120.
+
 ## Tests
 
 Test helpers may call production setup (`ingest_filters`, etc.) instead of reimplementing or weakening invariants in library code.
