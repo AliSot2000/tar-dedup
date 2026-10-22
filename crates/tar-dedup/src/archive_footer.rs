@@ -316,4 +316,57 @@ mod tests {
         assert!(!read_footer(&config.paths.archive_path, &dest).expect("no footer"));
         assert!(!dest.exists());
     }
+
+    #[cfg(feature = "test-compression")]
+    #[test]
+    fn compressed_stream_with_footer_reads_back() {
+        use crate::config::{CompressionFormat, CompressionSettings};
+        use crate::shutdown::Shutdown;
+        use crate::tar_reader::open_tar_archive;
+        use crate::tar_writer::TarWriter;
+        use crate::test_support::{TEST_PAYLOAD_SIZE_BYTES, pseudo_random};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // A real xz -9e archive stream (compressed tar), not the uncompressed fixture.
+        let payload = pseudo_random(TEST_PAYLOAD_SIZE_BYTES);
+        let in_file = dir.path().join("payload.bin");
+        std::fs::write(&in_file, &payload).expect("write payload");
+        let archive_path = dir.path().join("archive.tar.xz");
+        let settings = CompressionSettings {
+            format: CompressionFormat::Xz,
+            level: 9,
+            xz_extreme: true,
+            memlimit_compress: None,
+        };
+        let mut writer = TarWriter::open(
+            archive_path.clone(),
+            &settings,
+            1,
+            Shutdown::detached(),
+            false,
+        ).expect("open xz writer");
+        writer.append_path(&in_file, "payload.bin", |_| {}).expect("append");
+        writer.finalize_archive().expect("finalize xz stream");
+
+        let catalog = dir.path().join("catalog.sqlite");
+        crate::test_support::write_catalog(&catalog);
+        write_footer(&archive_path, &catalog, None).expect("write footer");
+
+        assert!(
+            verify_archive_integrity(&archive_path).expect("verify"),
+            "compressed archive content must hash clean against the footer"
+        );
+        let dest = dir.path().join("extracted.sqlite");
+        assert!(read_footer(&archive_path, &dest).expect("read footer"));
+        assert!(dest.is_file());
+
+        let mut ar = open_tar_archive(&archive_path, &CompressionFormat::Xz).expect("open tar");
+        let mut entries = ar.entries().expect("entries");
+        let mut entry = entries.next().expect("one member").expect("entry");
+        assert_eq!(entry.path().expect("path").to_string_lossy(), "payload.bin");
+        let mut got = Vec::new();
+        entry.read_to_end(&mut got).expect("read member");
+        assert_eq!(got, payload);
+    }
 }
