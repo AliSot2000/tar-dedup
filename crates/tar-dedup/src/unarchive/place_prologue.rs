@@ -480,6 +480,240 @@ fn strip_leading_up(path: &Path) -> (PathBuf, u64) {
 mod tests {
     use super::*;
 
+    use crate::config::ExtractConfig;
+    use crate::db::flags::{FileFlags, SourceFlag, SourceFlags};
+    use crate::db::types::{FilePhase, LinkType, NewFileRecord};
+    use crate::progress::{EXTRACT_MULTIPLIER, ProgressBarSet};
+    use crate::shutdown::Shutdown;
+    use crate::test_support::seed_filter_reasons;
+    use rusqlite::named_params;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    /// Extract-side prologue test world: tempdir DB + a mutatable
+    /// [`ExtractConfig`] (via `for_place_test`) + detached shutdown/progress.
+    /// Mirrors the archive `test_support::TestWorld`; the extract pipeline has no
+    /// shared world, so this is local to the module.
+    struct PrologueWorld {
+        // Held only to keep the DB file alive for the test's duration.
+        #[allow(dead_code)]
+        dir: tempfile::TempDir,
+        db: Database,
+        shutdown: Shutdown,
+        progress: ProgressBarSet,
+        config: ExtractConfig,
+    }
+
+    impl PrologueWorld {
+        fn new(root: &Path, absolute_names: bool, tune: impl FnOnce(&mut ExtractConfig)) -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Database::open(&dir.path().join("test.sqlite")).expect("open db");
+            let mut config = ExtractConfig::for_place_test(root.to_path_buf(), absolute_names, 4);
+            tune(&mut config);
+            Self {
+                dir,
+                db,
+                shutdown: Shutdown::detached(),
+                progress: ProgressBarSet::new(EXTRACT_MULTIPLIER),
+                config,
+            }
+        }
+
+        fn rt(&self) -> ExtractRTArgs<'_> {
+            ExtractRTArgs {
+                config: &self.config,
+                db: &self.db,
+                shutdown: &self.shutdown,
+                progress: &self.progress,
+            }
+        }
+
+        fn add_source(&self, abs: &str, original: &str) -> i64 {
+            self.db.add_get_source(
+                Path::new(abs), "test", Some(1), Path::new(original),
+                Path::new(abs), Path::new(original),
+                SourceFlags::default().with(SourceFlag::IsDirectory, true),
+            ).expect("add source")
+        }
+
+        fn add_file(&self, source_id: Option<i64>, abs: &str, size: u64, ftype: FileType) -> FileId {
+            let rec = NewFileRecord {
+                abs_path: PathBuf::from(abs),
+                abs_path_raw: None,
+                ext: String::new(),
+                size,
+                mtime: None, atime: None, ctime: None,
+                uid: None, gid: None, mode: None,
+                ftype: Some(ftype),
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None,
+                link_dst: None, link_dst_raw: None,
+                device_id: None, inode_id: None, major: None, minor: None,
+            };
+            match source_id {
+                Some(sid) => {
+                    self.db.insert_file_and_ref(sid, &rec).expect("insert file+ref");
+                }
+                None => {
+                    self.db.insert_file(&rec).expect("insert file");
+                }
+            }
+            let id = self.db.file_id_by_abs_path(Path::new(abs))
+                .expect("lookup").expect("row present");
+            seed_filter_reasons(&self.db, id);
+            id
+        }
+
+        /// Seed both `filter_reason_*` tables with the internal include sentinel
+        /// (-1) so a `files.include_reason_* = -1` row satisfies the FK.
+        fn seed_filter_tables(&self) {
+            self.db.with_transaction(|conn| {
+                for table in ["archive", "extract"] {
+                    conn.execute(
+                        &format!(
+                            "INSERT OR IGNORE INTO filter_reason_{table} \
+                             (id, source, line, expression) VALUES (-1, 'internal', NULL, '.*')"
+                        ),
+                        [],
+                    ).expect("seed internal include rule");
+                }
+                Ok(())
+            }).expect("filter seed tx");
+        }
+
+        /// Raw-SQL `files` insert bypassing `insert_file`'s
+        /// `debug_assert!(abs_path.is_absolute())` — lets tests hand the prologue
+        /// malformed rows on purpose (debug_assert tripping).
+        fn raw_insert(&self, id: i64, abs_path: &str) {
+            self.seed_filter_tables();
+            self.db.with_transaction(|conn| {
+                conn.execute(
+                    "INSERT INTO files (id, abs_path, abs_path_raw, ftype, ext, size, \
+                     include_reason_archive, include_reason_extract) \
+                     VALUES (:id, :abs, :raw, 'file', '', 0, -1, -1)",
+                    named_params! { ":id": id, ":abs": abs_path, ":raw": abs_path.as_bytes().to_vec() },
+                ).expect("raw insert file");
+                Ok(())
+            }).expect("raw insert tx");
+        }
+
+        fn raw_out_tree(&self) -> Vec<(String, i64, Option<i64>, Option<i64>)> {
+            self.db.with_transaction(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT abs_path, flags, file_id, canonical_id FROM out_tree ORDER BY abs_path"
+                ).expect("prepare");
+                let rows = stmt.query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?,
+                        r.get::<_, Option<i64>>(2)?, r.get::<_, Option<i64>>(3)?))
+                }).expect("query");
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>().expect("collect"))
+            }).expect("read out_tree")
+        }
+    }
+
+    /// Minimal `StrippedRecord` for the pure `build_new_out_tree_rows` tests.
+    fn mk_stripped(id: i64, abs: &str, ftype: FileType, new_name: Option<&str>) -> StrippedRecord {
+        StrippedRecord {
+            id: FileId(id),
+            abs_path: PathBuf::from(abs),
+            abs_path_raw: None,
+            ext: String::new(),
+            size: 0,
+            sha1: None,
+            mtime: None, atime: None, ctime: None,
+            ftype,
+            device_id: None, inode_id: None,
+            canonical_id: None,
+            flags: FileFlags::default(),
+            phase: FilePhase::Unarchived,
+            new_name: new_name.map(str::to_string),
+        }
+    }
+
+    fn all_file_types() -> Vec<FileType> {
+        vec![
+            FileType::File,
+            FileType::Directory,
+            FileType::Socket,
+            FileType::FIFO,
+            FileType::CharacterDevice,
+            FileType::BlockDevice,
+            FileType::Unknown,
+            FileType::Symlink(LinkType::File),
+            FileType::Symlink(LinkType::Directory),
+            FileType::Symlink(LinkType::Socket),
+            FileType::Symlink(LinkType::FIFO),
+            FileType::Symlink(LinkType::CharacterDevice),
+            FileType::Symlink(LinkType::BlockDevice),
+            FileType::Symlink(LinkType::Dangling),
+            FileType::Symlink(LinkType::Cycle),
+            FileType::Symlink(LinkType::Unknown),
+        ]
+    }
+
+    // ---- resolve_transform --------------------------------------------------
+
+    #[test]
+    fn resolve_transform_none_is_none() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |_| {});
+        assert!(resolve_transform(&world.rt()).expect("resolve").is_none());
+    }
+
+    #[test]
+    fn resolve_transform_cli_parses() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+            c.transform_policy = TransformSource::Cli("s,a,b,".to_string());
+        });
+        let t = resolve_transform(&world.rt()).expect("resolve").expect("some");
+        assert_eq!(t.apply("a/c.txt"), "b/c.txt");
+    }
+
+    #[test]
+    fn resolve_transform_cli_bad_expr_errors() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+            c.transform_policy = TransformSource::Cli("garbage".to_string());
+        });
+        assert!(resolve_transform(&world.rt()).is_err());
+    }
+
+    #[test]
+    fn resolve_transform_stored_reads_meta() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+            c.transform_policy = TransformSource::Stored;
+        });
+        world.db.set_archive_transform("s,a,b,").expect("set meta");
+        let t = resolve_transform(&world.rt()).expect("resolve").expect("some");
+        assert_eq!(t.apply("a/c.txt"), "b/c.txt");
+    }
+
+    #[test]
+    fn resolve_transform_stored_without_meta_is_none() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+            c.transform_policy = TransformSource::Stored;
+        });
+        assert!(resolve_transform(&world.rt()).expect("resolve").is_none());
+    }
+
+    // ---- populate_new_names (debug_assert trips) ----------------------------
+
+    #[test]
+    fn populate_new_names_panics_on_relative_abs_path() {
+        let world = PrologueWorld::new(Path::new("/ed"), true, |_| {});
+        world.raw_insert(1, "relative/x");
+        let result = catch_unwind(AssertUnwindSafe(|| populate_new_names(&world.rt(), None)));
+        assert!(result.is_err(), "abs_rel_path must reject relative abs_paths");
+    }
+
+    #[test]
+    fn populate_new_names_panics_on_unclean_abs_path() {
+        let world = PrologueWorld::new(Path::new("/ed"), true, |_| {});
+        // `..` is resolved by clean() but not by Path::eq -> assert trips.
+        // (`/a/./b` would NOT: Path::eq normalizes `.` away like clean does.)
+        world.raw_insert(1, "/a/b/../c");
+        let result = catch_unwind(AssertUnwindSafe(|| populate_new_names(&world.rt(), None)));
+        assert!(result.is_err(), "abs_rel_path must reject non-normalized abs_paths");
+    }
+
+    // ---- strip_relative_member ----------------------------------------------
+
     #[test]
     fn strip_relative_member_counts_components() {
         assert_eq!(strip_relative_member("a/b/c.txt", 1), "b/c.txt");
@@ -491,6 +725,32 @@ mod tests {
     #[test]
     fn strip_relative_member_zero_is_noop() {
         assert_eq!(strip_relative_member("a/b", 0), "a/b");
+    }
+
+    /// Only `Normal` components are legal in a relative member; anything else
+    /// (root dir, `..`, `.`) panics with a descriptive message.
+    #[test]
+    fn strip_relative_member_panics_on_absolute_path() {
+        let err = catch_unwind(AssertUnwindSafe(|| strip_relative_member("/a/b", 1)))
+            .expect_err("absolute member must panic");
+        let msg = err.downcast_ref::<String>().expect("panic payload");
+        assert!(msg.contains("root-dir"), "got: {msg}");
+    }
+
+    #[test]
+    fn strip_relative_member_panics_on_parent_dir() {
+        let err = catch_unwind(AssertUnwindSafe(|| strip_relative_member("a/../b", 1)))
+            .expect_err("`..` member must panic");
+        let msg = err.downcast_ref::<String>().expect("panic payload");
+        assert!(msg.contains("parent-dir"), "got: {msg}");
+    }
+
+    #[test]
+    fn strip_relative_member_panics_on_cur_dir() {
+        let err = catch_unwind(AssertUnwindSafe(|| strip_relative_member("./a", 1)))
+            .expect_err("leading `.` member must panic");
+        let msg = err.downcast_ref::<String>().expect("panic payload");
+        assert!(msg.contains("current-dir"), "got: {msg}");
     }
 
     /// GNU order: transform is applied first, then the required number of
@@ -567,5 +827,198 @@ mod tests {
         let final_path = PathBuf::from("/ed")
             .join(strip_leading_up(&Path::new(&mangled).clean()).0);
         assert_eq!(final_path, PathBuf::from("/ed/Pics/Best-Movie-Ever.mp4"));
+    }
+
+    // ---- apply_renames ------------------------------------------------------
+
+    #[test]
+    fn apply_renames_writes_new_name_no_transform() {
+        let world = PrologueWorld::new(Path::new("/ed"), true, |_| {});
+        world.add_file(None, "/a/x/one.txt", 1, FileType::File);
+        world.add_file(None, "/a/x/two.txt", 2, FileType::File);
+        let entries = world.db.list_materialized_entries::<StrippedRecord>(
+            FileId(0), 100, None, None, false, true,
+        ).expect("materialized");
+        apply_renames(&world.rt(), &entries, None, |abs: &Path| abs_rel_path(abs))
+            .expect("rename");
+        let one = world.db.get_file_by_id::<StrippedRecord>(FileId(1))
+            .expect("get").expect("row");
+        assert_eq!(one.new_name.as_deref(), Some("a/x/one.txt"));
+    }
+
+    #[test]
+    fn apply_renames_applies_transform_then_strip() {
+        let world = PrologueWorld::new(Path::new("/ed"), true, |c| {
+            c.strip_components = 1;
+        });
+        world.add_file(None, "/a/x/two.txt", 2, FileType::File);
+        let entries = world.db.list_materialized_entries::<StrippedRecord>(
+            FileId(0), 100, None, None, false, true,
+        ).expect("materialized");
+        let t = parse_transform_expr("s,^a,b,").unwrap();
+        apply_renames(&world.rt(), &entries, Some(&t), |abs: &Path| abs_rel_path(abs))
+            .expect("rename");
+        let two = world.db.get_file_by_id::<StrippedRecord>(FileId(1))
+            .expect("get").expect("row");
+        assert_eq!(two.new_name.as_deref(), Some("x/two.txt"));
+    }
+
+    // ---- populate_out_tree_abs / rel ----------------------------------------
+
+    #[test]
+    fn populate_out_tree_abs_maps_and_leaves_ref_out_empty() {
+        let world = PrologueWorld::new(Path::new("/ed"), true, |_| {});
+        world.add_file(None, "/var/docker/cache/one.txt", 1, FileType::File);
+        world.add_file(None, "/var/docker/cache/two.txt", 2, FileType::File);
+        populate_out_tree_abs(&world.rt(), false).expect("abs out tree");
+        let rows = world.raw_out_tree();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|(p, _, _, _)| p == "/ed/var/docker/cache/one.txt"));
+        assert!(rows.iter().any(|(p, _, _, _)| p == "/ed/var/docker/cache/two.txt"));
+        assert_eq!(world.db.count_ref_out_rows().expect("count"), 0);
+    }
+
+    #[test]
+    fn populate_out_tree_rel_clamps_and_populates_ref_out() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |_| {});
+        let sid = world.add_source("/home/user/Movies", "../../Movies");
+        world.add_file(Some(sid), "/home/user/Movies/Best-Movie-Ever.mp4", 3, FileType::File);
+        world.add_file(Some(sid), "/home/user/Movies/sub/x.mp4", 4, FileType::File);
+        populate_out_tree_rel(&world.rt(), false).expect("rel out tree");
+        let rows = world.raw_out_tree();
+        assert_eq!(rows.len(), 2);
+        // leading `..` of the original path is clamped away.
+        assert!(rows.iter().any(|(p, _, _, _)| p == "/ed/Movies/Best-Movie-Ever.mp4"));
+        assert!(rows.iter().any(|(p, _, _, _)| p == "/ed/Movies/sub/x.mp4"));
+        assert_eq!(world.db.count_ref_out_rows().expect("count"), 2);
+    }
+
+    /// `--files-from` file whose parent is not covered by any source: the
+    /// `ensure_parent` step of `populate_out_tree` must mint the missing dir rows.
+    #[test]
+    fn populate_out_tree_ensures_parents_for_orphan_file() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |_| {});
+        let sid = world.add_source("/x", "./x");
+        world.add_file(Some(sid), "/x/y/z.txt", 5, FileType::File);
+        populate_out_tree(&world.rt(), false).expect("out tree");
+        let rows = world.raw_out_tree();
+        let file_row = rows.iter()
+            .find(|(p, _, _, _)| p == "/ed/x/y/z.txt")
+            .expect("file row present");
+        assert!(file_row.2.is_some(), "file row must carry its file_id");
+        assert!(rows.iter().any(|(p, flags, fid, _)| {
+            p == "/ed/x/y"
+                && fid.is_none()
+                && (flags & OutTreeFlag::IsDirectory.mask_i64()) != 0
+        }), "parent `/ed/x/y` must be minted as a dir row");
+    }
+
+    // ---- build_new_out_tree_rows --------------------------------------------
+
+    #[test]
+    fn build_new_out_tree_rows_clamps_mangled_new_names() {
+        let root = Path::new("/ed");
+        let entries = vec![
+            mk_stripped(1, "/a/b.txt", FileType::File, Some(".././../evil.txt")),
+            mk_stripped(2, "/etc/passwd", FileType::File, Some("/etc/passwd")),
+            mk_stripped(3, "/x", FileType::File, Some("../../..")),
+        ];
+        let rows = build_new_out_tree_rows(&entries, root, None, true);
+        let paths: Vec<String> = rows.iter()
+            .map(|r| r.abs_path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(paths, vec!["/ed/evil.txt", "/ed/etc/passwd", "/ed/"]);
+    }
+
+    #[test]
+    fn build_new_out_tree_rows_dir_flag_only_for_directories() {
+        let root = Path::new("/ed");
+        for (i, ftype) in all_file_types().into_iter().enumerate() {
+            let entries = vec![mk_stripped(i as i64 + 1, "/x", ftype, None)];
+            let rows = build_new_out_tree_rows(&entries, root, None, false);
+            assert_eq!(rows.len(), 1);
+            let is_dir = rows[0].flags.get(OutTreeFlag::IsDirectory);
+            assert_eq!(is_dir, ftype == FileType::Directory,
+                       "IsDirectory for {ftype:?} must be {}", ftype == FileType::Directory);
+        }
+    }
+
+    // ---- prepare_hardlink_canonicals ----------------------------------------
+
+    #[test]
+    fn prepare_hardlink_canonicals_none_marks_all_files_self_canonical() {
+        let world = PrologueWorld::new(Path::new("/ed"), true, |c| {
+            c.placement.hard_link_grouping = HardLinkGrouping::None;
+        });
+        let f1 = world.add_file(None, "/a/one.txt", 1, FileType::File);
+        world.add_file(None, "/a/dir", 0, FileType::Directory);
+        let entries = world.db.list_materialized_entries::<StrippedRecord>(
+            FileId(0), 100, None, None, false, true,
+        ).expect("materialized");
+        let rows = build_new_out_tree_rows(&entries, Path::new("/ed"), None, false);
+        world.db.insert_out_tree_rows(&rows).expect("insert out tree");
+        prepare_hardlink_canonicals(&world.rt()).expect("canonical election");
+
+        let ot = world.raw_out_tree();
+        let file_row = ot.iter().find(|(p, _, _, _)| p == "/ed/a/one.txt").expect("file row");
+        // out_tree ids follow insertion order: the file row is id 1.
+        assert_eq!(file_row.3, Some(f1.0 as i64), "file row must be self-canonical");
+        let dir_row = ot.iter().find(|(p, _, _, _)| p == "/ed/a/dir").expect("dir row");
+        assert_eq!(dir_row.3, None, "dir rows are never canonical");
+    }
+
+    // ---- stepped_dirs_then_rest ---------------------------------------------
+
+    #[test]
+    fn stepped_dirs_then_rest_orders_dirs_first_and_visits_all() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |_| {});
+        let sid = world.add_source("/t", "./t");
+        let dir = world.add_file(Some(sid), "/t/sub", 0, FileType::Directory);
+        let f1 = world.add_file(Some(sid), "/t/a.txt", 1, FileType::File);
+        let sl = world.add_file(Some(sid), "/t/link", 0, FileType::Symlink(LinkType::File));
+        let unk = world.add_file(Some(sid), "/t/u", 0, FileType::Unknown);
+
+        let mut seen: Vec<(i64, FileType)> = Vec::new();
+        let mut collect = |entries: &Vec<StrippedRecord>| -> Result<()> {
+            for e in entries {
+                seen.push((e.id.0, e.ftype));
+            }
+            Ok(())
+        };
+        stepped_dirs_then_rest(&world.rt(), Some(sid), false, &mut collect).expect("stepped");
+
+        let expected = vec![
+            (dir.0 as i64, FileType::Directory),
+            (f1.0 as i64, FileType::File),
+            (sl.0 as i64, FileType::Symlink(LinkType::File)),
+            (unk.0 as i64, FileType::Unknown),
+        ];
+        assert_eq!(seen, expected, "dirs first, then the rest, each exactly once");
+    }
+
+    // ---- run() smoke + idempotency ------------------------------------------
+
+    #[test]
+    fn run_builds_out_tree_and_is_idempotent() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+            c.transform_policy = TransformSource::Cli("s,^Movies,Pics,".to_string());
+            c.strip_components = 1;
+        });
+        let sid = world.add_source("/home/user/Movies", "../../Movies");
+        world.add_file(Some(sid), "/home/user/Movies/Best-Movie-Ever.mp4", 3, FileType::File);
+        run(&world.rt()).expect("prologue");
+
+        assert!(world.db.placement_prologue_done().expect("done"));
+        assert!(world.db.out_tree_is_built().expect("built"));
+        // new_name = rel("Movies/Best-Movie-Ever.mp4") -> transform ^Movies=Pics
+        // -> strip 1 -> "Best-Movie-Ever.mp4" -> re-clamped under `<ed>`.
+        let ot = world.raw_out_tree();
+        assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/Best-Movie-Ever.mp4"));
+        assert_eq!(world.db.count_ref_out_rows().expect("count"), 1);
+        let n = world.db.count_out_tree_rows().expect("count");
+
+        // Resume: the `placement_prologue_done` gate short-circuits.
+        run(&world.rt()).expect("second run");
+        assert_eq!(world.db.count_out_tree_rows().expect("count"), n);
     }
 }
