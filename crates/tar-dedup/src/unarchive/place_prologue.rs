@@ -48,10 +48,9 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         prepare_hardlink_canonicals(rt)?;
     }
     rt.db.set_placement_prologue_done()?;
+    let count = rt.db.count_out_tree_rows()?;
     tracing::info!(
-        "placement_prologue done: processed {} of {}, {} error(s)",
-        rt.db.count_out_tree_rows()?,
-        rt.db.count_out_tree_rows()?,
+        "placement_prologue done: processed {count} of {count}, {} error(s)",
         rt.db.count_errors(Some("placement_prologue"))?,
     );
     Ok(())
