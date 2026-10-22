@@ -235,6 +235,7 @@ fn apply_renames(
         // In new-name mode every row gets a (possibly identity) member; `""`
         // marks the empty-name skip sentinel consumed by the out_tree filter.
         rt.db.set_file_new_name(entry.id, Some(&name))?;
+        rt.progress.inc_phase(1);
     }
     
     Ok(())
@@ -253,7 +254,7 @@ fn populate_out_tree_abs(
         );
 
         rt.db.insert_out_tree_rows(&processed)?;
-        rt.progress.inc_both(processed.len() as u64);
+        rt.progress.inc_phase(processed.len() as u64);
         // INFO ref table is left empty since we are working with abs_paths
         Ok(())
     };
