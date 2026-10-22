@@ -45,21 +45,6 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         pc + ph + po,
     );
 
-    let capture_error = |rec: &mut Recorder, path: &PathBuf, iof: fn(&Path)
-        -> io::Result<()>| {
-        match iof(&path) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                rec.record_session(
-                    ERROR_PHASE,
-                    FileStatError::copy_io(&path, &e),
-                    ErrorFlags::default(),
-                );
-                return Err(Error::io(&path, e));
-            }
-        }
-    };
-
     // Step 1.1 empty out source root prior to starting extraction.
     if rt.config.placement.clean_target && rt.config.placement.one_top_level.is_some() {
         assert!(!rt.config.placement.no_create_dir,
@@ -1254,6 +1239,21 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         }
     } else {
         Ok((true, true, false))
+    }
+}
+
+fn capture_error(rec: &mut Recorder, path: &PathBuf, iof: fn(&Path) -> io::Result<()>)
+    -> Result<()> {
+    match iof(&path) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            rec.record_session(
+                ERROR_PHASE,
+                FileStatError::copy_io(&path, &e),
+                ErrorFlags::default(),
+            );
+            Err(Error::io(&path, e))
+        }
     }
 }
 
