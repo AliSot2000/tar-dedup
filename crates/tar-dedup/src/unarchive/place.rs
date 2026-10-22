@@ -52,7 +52,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
             Err(e) => {
                 rec.record_session(
                     ERROR_PHASE,
-                    FileStatError::io(&path, io::Error::new(e.kind(), e.to_string())),
+                    FileStatError::copy_io(&path, &e),
                     ErrorFlags::default(),
                 );
                 return Err(Error::io(&path, e));
@@ -1034,7 +1034,7 @@ fn build_path(
             recorder.record_out_tree(
                 out_tree_id,
                 ERROR_PHASE,
-                FileStatError::io(&path, io::Error::new(e.kind(), e.to_string())),
+                FileStatError::copy_io(&path, &e),
                 ErrorFlags::default(),
             );
             return Err(Error::io(&path, e));
