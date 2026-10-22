@@ -24,7 +24,7 @@ use crate::unarchive::ExtractRTArgs;
 /// Run the pure-DB placement preparation once (idempotent via meta flag).
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     // Resume display: the out_tree already exists, show its real size.
-    rt.progress.set_phase_total(rt.db.count_out_tree_rows()?);
+    rt.progress.set_phase_total(rt.db.count_entries()?);
     if rt.db.placement_prologue_done()? {
         return Ok(());
     }
