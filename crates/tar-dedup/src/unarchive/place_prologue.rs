@@ -1022,4 +1022,45 @@ mod tests {
         run(&world.rt()).expect("second run");
         assert_eq!(world.db.count_out_tree_rows().expect("count"), n);
     }
+
+    // ---- one_top_level -------------------------------------------------------
+
+    #[test]
+    fn one_top_level_prefixes_abs_out_tree() {
+        let world = PrologueWorld::new(Path::new("/ed"), true, |c| {
+            c.placement.one_top_level = Some(PathBuf::from("otl"));
+        });
+        world.add_file(None, "/var/cache/one.txt", 1, FileType::File);
+        populate_out_tree_abs(&world.rt(), false).expect("abs out tree");
+        let rows = world.raw_out_tree();
+        assert_eq!(rows.len(), 1);
+        assert!(rows.iter().any(|(p, _, _, _)| p == "/ed/otl/var/cache/one.txt"));
+    }
+
+    #[test]
+    fn one_top_level_prefixes_rel_out_tree() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+            c.placement.one_top_level = Some(PathBuf::from("otl"));
+        });
+        let sid = world.add_source("/home/user/Movies", "../../Movies");
+        world.add_file(Some(sid), "/home/user/Movies/Best-Movie-Ever.mp4", 3, FileType::File);
+        populate_out_tree_rel(&world.rt(), false).expect("rel out tree");
+        let rows = world.raw_out_tree();
+        assert_eq!(rows.len(), 1);
+        assert!(rows.iter().any(|(p, _, _, _)| p == "/ed/otl/Movies/Best-Movie-Ever.mp4"));
+    }
+
+    #[test]
+    fn one_top_level_run_maps_under_subdir() {
+        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+            c.placement.one_top_level = Some(PathBuf::from("otl"));
+            c.transform_policy = TransformSource::Cli("s,^Movies,Pics,".to_string());
+            c.strip_components = 1;
+        });
+        let sid = world.add_source("/home/user/Movies", "../../Movies");
+        world.add_file(Some(sid), "/home/user/Movies/Best-Movie-Ever.mp4", 3, FileType::File);
+        run(&world.rt()).expect("prologue");
+        let ot = world.raw_out_tree();
+        assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/otl/Best-Movie-Ever.mp4"));
+    }
 }
