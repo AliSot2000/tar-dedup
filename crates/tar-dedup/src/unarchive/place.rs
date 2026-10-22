@@ -63,9 +63,9 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     if rt.config.placement.clean_target && rt.config.placement.one_top_level.is_some() {
         assert!(!rt.config.placement.no_create_dir,
                 "INVARIANT ERROR: clean_target => no_create_dir is false");
-        let root = rt.config.paths.extraction_root();
-        capture_error(&mut recorder, &root.to_path_buf(), |p| fs::remove_dir_all(p))?;
-        capture_error(&mut recorder, &root.to_path_buf(), |p| fs::create_dir_all(p))?;
+        let root = rt.config.effective_extraction_root();
+        capture_error(&mut recorder, &root, |p| fs::remove_dir_all(p))?;
+        capture_error(&mut recorder, &root, |p| fs::create_dir_all(p))?;
     }
     // Step 1.2 Create directoris if required
     if !rt.config.placement.no_create_dir && !rt.db.dir_tree_is_built()? {

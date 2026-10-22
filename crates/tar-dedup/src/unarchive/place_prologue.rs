@@ -249,8 +249,9 @@ fn populate_out_tree_abs(
 
     let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
         // Process the entries
+        let root = rt.config.effective_extraction_root();
         let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-            entries, &rt.config.paths.extraction_root(), None, use_new_name
+            entries, &root, None, use_new_name
         );
 
         rt.db.insert_out_tree_rows(&processed)?;
@@ -271,7 +272,7 @@ fn populate_out_tree_rel(
     rt: &ExtractRTArgs,
     use_new_name: bool)
     -> Result<()> {
-    let root = rt.config.paths.extraction_root();
+    let root = rt.config.effective_extraction_root();
     batched_stepped_loop(
         rt.config.process.batch_size,
         || 0i64,
