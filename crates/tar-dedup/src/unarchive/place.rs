@@ -1105,6 +1105,7 @@ fn build_path(
                 "INVARIANT ERROR: Directory should be created or error raised.")
     }
 
+    assert_eq!(target, prefix, "target and prefix must be identical");
     *already_checked = target.to_path_buf();
     Ok(())
 }
