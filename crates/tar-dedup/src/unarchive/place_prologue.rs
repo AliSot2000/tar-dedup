@@ -230,10 +230,10 @@ fn apply_renames(
     rt: &ExtractRTArgs,
     entries: &[StrippedRecord],
     transform: Option<&TransformExpr>,
-    member_of: impl Fn(&Path) -> PathBuf)
+    path_rel_converter: impl Fn(&Path) -> PathBuf)
     -> Result<()> {
     for entry in entries {
-        let member = member_of(&entry.abs_path);
+        let member = path_rel_converter(&entry.abs_path);
         let mut name = member.to_string_lossy().into_owned();
         if let Some(t) = transform {
             name = t.apply(&name);
