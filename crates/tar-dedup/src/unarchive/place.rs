@@ -44,6 +44,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         ac + ah + ao,
         pc + ph + po,
     );
+
     let capture_error = |rec: &mut Recorder, path: &PathBuf, iof: fn(&Path)
         -> io::Result<()>| {
         match iof(&path) {
@@ -67,6 +68,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         capture_error(&mut recorder, &root, |p| fs::remove_dir_all(p))?;
         capture_error(&mut recorder, &root, |p| fs::create_dir_all(p))?;
     }
+
     // Step 1.2 Create directoris if required
     if !rt.config.placement.no_create_dir && !rt.db.dir_tree_is_built()? {
         prepare_extraction_dir(&rt, &mut recorder)?;
@@ -79,9 +81,6 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         // INFO: For linking, we ignore the canonical_id
         materialize_link_tree(rt, &mut recorder)?;
     } else {
-        // Step 2, first copy files, then hardlink, then create other types
-        // (symlinks, char-dev, block-dev, FIFO). Canonical election ran in
-        // the PlacementPrologue phase.
         materialize_files(rt, &mut recorder)?;
         materialize_hardlinks(rt, &mut recorder)?;
         materialize_others(rt, &mut recorder)?;
@@ -1024,6 +1023,7 @@ fn build_path(
     out_tree_id: OutTreeId,
     recorder: &mut Recorder)
     -> Result<()> {
+
     debug_assert!(!config.placement.no_create_dir,
                   "INVARIANT ERROR: build_path may not be called with no_create_dir");
     let mut prefix = PathBuf::new();
