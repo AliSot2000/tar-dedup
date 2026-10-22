@@ -74,6 +74,8 @@
 - [ ] Drop unused db functions
 - [ ] Degrate ExtractRuntimeState - ArchiveRuntimeState what is the snapshot doing??? 
 - [ ] Restructure db.rs
+- [ ] Batched rename / transaction
+- [ ] Visibility of functions.
 
 ## General:
 - [ ] Testing
