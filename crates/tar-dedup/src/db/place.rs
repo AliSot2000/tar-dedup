@@ -823,3 +823,89 @@ pub fn ingest_copy_results(conn: &mut Connection, results: &Vec<CopyOutcome>) ->
     }).to_panic()?;
     Ok(results.len() as u64)
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Real schema (same pattern as `db/place_prologue.rs::tests::conn`).
+    fn conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::initialize(&conn).unwrap();
+        conn
+    }
+
+    fn insert_file(conn: &Connection, id: i64, abs: &str, dev: Option<i64>, inode: Option<i64>, canonical: i64, ftype: &str) {
+        conn.execute(
+            "INSERT INTO files (id, abs_path, abs_path_raw, ftype, ext, size, dev, inode, canonical_id) \
+             VALUES (:id, :abs, :abs, :ftype, '', 0, :dev, :inode, :canonical)",
+            named_params! {
+                ":id": id, ":abs": abs, ":ftype": ftype,
+                ":dev": dev, ":inode": inode, ":canonical": canonical,
+            },
+        ).unwrap();
+    }
+
+    fn insert_out(conn: &Connection, id: i64, abs: &str, file_id: i64) {
+        conn.execute(
+            "INSERT INTO out_tree (id, abs_path, file_id) VALUES (:id, :abs, :fid)",
+            named_params! { ":id": id, ":abs": abs, ":fid": file_id },
+        ).unwrap();
+    }
+
+    fn insert_source(conn: &Connection, id: i64, abs: &str) {
+        conn.execute(
+            "INSERT INTO source (id, source, abs_path, original_path, abs_path_raw, original_path_raw) \
+             VALUES (:id, 'test', :abs, :abs, :abs, :abs)",
+            named_params! { ":id": id, ":abs": abs },
+        ).unwrap();
+    }
+
+    fn insert_ref_out(conn: &Connection, out_id: i64, source_id: i64) {
+        conn.execute(
+            "INSERT INTO ref_out (out_id, source_id) VALUES (:o, :s)",
+            named_params! { ":o": out_id, ":s": source_id },
+        ).unwrap();
+    }
+
+    fn canonical_ids(conn: &Connection) -> Vec<(i64, Option<i64>)> {
+        let mut stmt = conn.prepare("SELECT id, canonical_id FROM out_tree ORDER BY id").unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    }
+
+    #[test]
+    fn mark_global_canonical_elects_one_per_hardlink_group() {
+        let conn = conn();
+        // Dedup content canonical 1 is self-linked; file 2 shares its (dev, inode)
+        // hardlink group and points at it as content canonical.
+        insert_file(&conn, 1, "/a/link_a", Some(1), Some(100), 1, "file");
+        insert_file(&conn, 2, "/a/link_b", Some(1), Some(100), 1, "file");
+        insert_out(&conn, 1, "/ed/a/link_a", 1);
+        insert_out(&conn, 2, "/ed/a/link_b", 2);
+
+        let updated = mark_global_canonical(&conn).unwrap();
+        let ids = canonical_ids(&conn);
+        // One out_tree row elected self-canonical; the other points at it.
+        assert_eq!(ids, vec![(1, Some(1)), (2, Some(1))]);
+        assert_eq!(updated, 2);
+    }
+
+    #[test]
+    fn mark_source_canonical_only_groups_rows_of_that_source() {
+        let conn = conn();
+        insert_source(&conn, 1, "/a");
+        insert_source(&conn, 2, "/b");
+        insert_file(&conn, 1, "/a/x", Some(1), Some(100), 1, "file");
+        insert_file(&conn, 2, "/b/y", Some(2), Some(200), 2, "file");
+        insert_out(&conn, 1, "/ed/a/x", 1);
+        insert_out(&conn, 2, "/ed/b/y", 2);
+        insert_ref_out(&conn, 1, 1); // out 1 under source 1
+        insert_ref_out(&conn, 2, 2); // out 2 under source 2
+
+        let updated = mark_source_canonical(&conn, 1).unwrap();
+        let ids = canonical_ids(&conn);
+        // Only source-1's group elects; source-2's row is untouched.
+        assert_eq!(ids, vec![(1, Some(1)), (2, None)]);
+        assert_eq!(updated, 1);
+    }
+}
