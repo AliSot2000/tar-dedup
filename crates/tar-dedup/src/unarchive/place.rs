@@ -354,9 +354,17 @@ fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<
 
             // Apply results to db
             rt.db.ingest_results_link_tree(&linked)?;
+            let _: Vec<()> = linked.into_iter()
+                .filter(|(_id, err)| err.is_some())
+                .map(|(id, err)| {
+                    let e = err.expect("INVARIANT ERROR: Must be Some here.");
+                    recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default())
+                })
+                .collect();
+
             for (id, err) in linked {
                 match err {
-                    None => { let _ = rt.db.set_out_tree_flag(id, OutTreeFlag::Placed, true)?; }
+                    None => (),
                     Some(e) => {
                         recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default());
                     }
@@ -857,6 +865,7 @@ fn copy_canonical_worker(
     shutdown: Shutdown,
     work: Receiver<StrippedRecord>,
     out: Sender<Option<CopyOutcome>>) -> () {
+
     loop {
         match work.recv() {
             Ok(row) => {
@@ -868,6 +877,7 @@ fn copy_canonical_worker(
                 bar.set_message(format!("Moving {}", row.abs_path.display()));
                 match copy_one_to_source(
                     &base_dir, &cache_dir, keep_stage, no_reflink, &row, &shutdown, Some(&bar)) {
+
                     Some(outcome) => {
                         out.send(Some(outcome)).expect("copy worker: result channel closed");
                     }
@@ -896,6 +906,7 @@ fn copy_one_to_source(
     let cid = row.content_id().expect("Content id existed, when extracting.");
     let src = cache_dir.join(&cid.0);
     let dst = base_dir.join(&cid.0);
+
     match copy_single_file(row.id, &src, &dst, shutdown, no_reflink, pb) {
         Ok((fid, is_copy)) => {
             // The `.sources` copy is what the link tree links FROM and must
@@ -917,7 +928,12 @@ fn copy_one_to_source(
 /// `pb` (when present) is advanced by copied byte deltas, so the caller's bar
 /// shows live progress on big files.
 /// INFO: Function returns Variants Interrupted and FileStatError
-fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no_reflink: bool,
+fn copy_single_file<ID>(
+    fid: ID,
+    src: &Path,
+    dst: &Path,
+    shutdown: &Shutdown,
+    no_reflink: bool,
     pb: Option<&ProgressBar>)
     -> std::result::Result<(ID, bool), (ID, Error)> {
     // Attempt to reflink
@@ -947,14 +963,14 @@ fn copy_single_file<ID>(fid: ID, src: &Path, dst: &Path, shutdown: &Shutdown, no
         Ok(_) => Ok((fid, true)),
         Err(e) => {
             let _ = fs::remove_file(dst);
-            Err((fid, annotate_copy_error(e, dst)))
+            Err((fid, annotate_path(e, dst)))
         }
     }
 }
 
 /// Attach `dst` to a copy error. `Interrupted` is preserved verbatim (the phase
 /// loop branches on it); other `FileStat` error kinds pass through untouched.
-fn annotate_copy_error(e: Error, dst: &Path) -> Error {
+fn annotate_path(e: Error, dst: &Path) -> Error {
     match e {
         Error::FileStat(FileStatError::Io { source, .. }) => Error::FileStat(FileStatError::Io {
             path: dst.to_path_buf(),
@@ -1233,7 +1249,7 @@ mod tests {
             path: PathBuf::new(),
             source: IoError::new(ErrorKind::NotFound, "boom"),
         });
-        match annotate_copy_error(err, &dst) {
+        match annotate_path(err, &dst) {
             Error::FileStat(FileStatError::Io { path, source }) => {
                 assert_eq!(path, dst);
                 assert_eq!(source.kind(), ErrorKind::NotFound);
@@ -1246,7 +1262,7 @@ mod tests {
     fn annotate_copy_error_preserves_interrupted() {
         let dst = PathBuf::from("/out/dst.txt");
         assert!(matches!(
-            annotate_copy_error(Error::Interrupted, &dst),
+            annotate_path(Error::Interrupted, &dst),
             Error::Interrupted
         ));
     }
@@ -1259,11 +1275,11 @@ mod tests {
             message: "nope".into(),
         });
         assert!(matches!(
-            annotate_copy_error(general, &dst),
+            annotate_path(general, &dst),
             Error::FileStat(FileStatError::General { .. })
         ));
         assert!(matches!(
-            annotate_copy_error(Error::Other(anyhow::anyhow!("x")), &dst),
+            annotate_path(Error::Other(anyhow::anyhow!("x")), &dst),
             Error::Other(_)
         ));
     }
