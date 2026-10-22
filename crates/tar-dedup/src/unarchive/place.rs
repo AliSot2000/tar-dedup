@@ -245,6 +245,14 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
     if rt.shutdown.is_interrupted() {
         return Err(Error::Interrupted);
     }
+
+    if let Err(e) = capture_error(
+        recorder, &rt.config.paths.extract_cache_dir(), |p| fs::remove_dir_all(p)) {
+        tracing::warn!("Failed to delete extract cache at: {} with error {e}",
+            rt.config.paths.extract_cache_dir().display()
+        );
+    }
+
     rt.db.drop_canonical_move_queue()?;
     Ok(())
 }
