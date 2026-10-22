@@ -549,15 +549,16 @@ pub struct ExtractArgs {
     )]
     pub absolute_names: bool,
 
-    /// Create a subdirectory so loose archive members are not extracted directly into
-    /// the extraction root (GNU tar `--one-top-level`). Optional DIR overrides the
-    /// default (archive stem).
+    /// Extract loose members into a subdirectory under the extraction root
+    /// (GNU tar `--one-top-level`). A bare `--one-top-level` uses the archive
+    /// name as the subdirectory; DIR overrides it.
     #[arg(
         long = "one-top-level",
         value_name = "DIR",
+        num_args = 0..=1,
         help_heading = "Archive Paths"
     )]
-    pub one_top_level: Option<PathBuf>,
+    pub one_top_level: Option<Option<PathBuf>>,
 
     // --- Compression ---
 
@@ -1276,4 +1277,35 @@ pub enum ProgressMode {
     /// Everything, including per-thread worker bars (default).
     #[default]
     PerThread,
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--one-top-level` is an optional-value flag: no flag -> `None`, bare flag
+    /// -> `Some(None)` (defaults to archive stem at config build), `DIR` ->
+    /// `Some(Some(DIR))`. Locks the clap tip so a bare flag never errors.
+    #[test]
+    fn one_top_level_tip_has_three_states() {
+        let absent = Cli::try_parse_from(["tar-dedup", "extract", "-f", "x.tar"])
+            .expect("parse without flag");
+        let Command::Extract(a) = absent.command else { panic!("expected extract") };
+        assert_eq!(a.one_top_level, None);
+
+        let bare = Cli::try_parse_from(["tar-dedup", "extract", "-f", "x.tar", "--one-top-level"])
+            .expect("parse bare flag");
+        let Command::Extract(a) = bare.command else { panic!("expected extract") };
+        assert_eq!(a.one_top_level, Some(None));
+
+        let dir = Cli::try_parse_from([
+            "tar-dedup", "extract", "-f", "x.tar", "--one-top-level", "my",
+        ]).expect("parse with dir");
+        let Command::Extract(a) = dir.command else { panic!("expected extract") };
+        assert_eq!(a.one_top_level, Some(Some(PathBuf::from("my"))));
+    }
 }

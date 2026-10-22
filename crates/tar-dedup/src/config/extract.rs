@@ -18,7 +18,7 @@ use super::compression::{CompressionFormat, resolve_compression};
 use super::paths::PathLayout;
 use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
 use super::{
-    default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_file,
+    archive_stem, default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_file,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,9 +412,11 @@ impl ExtractConfig {
         let jobs = args.jobs.unwrap_or_else(num_cpus::get);
         let io_jobs = args.io_jobs.unwrap_or_else(num_cpus::get);
 
-        let c_one_top_level = match args.one_top_level.as_ref() {
+        let c_one_top_level = match &args.one_top_level {
             None => None,
-            Some(otl) => Some(otl.clean())
+            // Bare `--one-top-level`: default to the archive stem (GNU tar).
+            Some(None) => Some(archive_stem(&c_archive_path).into()),
+            Some(Some(otl)) => Some(otl.clean()),
         };
 
         let c_link_source = match args.link_source.as_ref() {
@@ -587,6 +589,14 @@ impl ExtractConfig {
             strip_components: 0,
             transform_policy: TransformSource::None,
             filter: FilterOptions::default(),
+        }
+    }
+
+    /// Compute effective extraction root. (if given, concat one_top_level)
+    pub fn effective_extraction_root(&self) -> PathBuf {
+        match &self.placement.one_top_level {
+            Some(otl) => self.paths.extraction_root().join(otl),
+            None => self.paths.extraction_root().to_path_buf(),
         }
     }
 }
