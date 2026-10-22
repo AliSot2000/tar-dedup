@@ -74,19 +74,15 @@ fn resolve_transform(rt: &ExtractRTArgs) -> Result<Option<TransformExpr>> {
     }
 }
 
-/// Populate the new_name field of the element using GNU ordering (transform then strip)
-/// In absolute mode, the paths are only stripped of the leading /.
-/// In relative mode, the absolute starting point is removed and relative path concatenated.
+/// Populate the new_name field using GNU ordering (transform then strip). The
+/// pre-mangling member is the same relative target the regular out_tree mapping
+/// produces, so transforms match identically whether or not new-name mode is active.
 fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
     -> Result<()> {
 
     if rt.config.placement.absolute_names {
         let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
-            apply_renames(rt, entries, transform, |abs: &Path| {
-                debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
-                debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
-                abs.strip_prefix("/").expect("abs path starts with /").to_path_buf()
-            })
+            apply_renames(rt, entries, transform, |abs: &Path| abs_rel_path(abs))
         };
         stepped_dirs_then_rest(rt, None, false, &mut apply)
     } else {
@@ -99,13 +95,8 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
                 for source in sources {
                     let source_abs = source.abs_path;
                     let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
-                        apply_renames(rt, entries, transform, |abs: &Path| {
-                            debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
-                            debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
-                            abs.strip_prefix(&source_abs)
-                                .expect("entry must start within source root")
-                                .to_path_buf()
-                        })
+                        apply_renames(rt, entries, transform, |abs: &Path|
+                            rel_rel_path(&source_abs, &source.original_path, abs))
                     };
                     stepped_dirs_then_rest(rt, Some(source.id), false, &mut apply)?;
                 }
@@ -285,27 +276,9 @@ fn populate_out_tree_rel(
         |src| src.id,
         |sources| {
             for source in sources {
-                let san_org_path = source.original_path.clean();
-
-                let extraction_base: PathBuf = if san_org_path.is_absolute() {
-                    // Got root dir, simply return the extract root
-                    if san_org_path == PathBuf::from("/") {
-                        root.to_path_buf()
-                    } else {
-                        let stripped = san_org_path
-                            .strip_prefix("/")
-                            .expect("Absolute expects / at the beginning");
-                        root.join(stripped)
-                    }
-                } else {
-                    let (cut, _) = strip_leading_up(&san_org_path);
-                    debug_assert!(!cut.starts_with("/"), "Relative does not expect a / at begin");
-                    root.join(cut)
-                };
-
                 let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
                     let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
-                        entries, &root, Some((&source.abs_path, &extraction_base)), use_new_name
+                        entries, &root, Some((&source.abs_path, &source.original_path)), use_new_name
                     );
 
                     let out_ids = rt.db.insert_out_tree_rows(&processed)?;
@@ -314,7 +287,7 @@ fn populate_out_tree_rel(
                         .map(|id| { (id.clone(), source.id) })
                         .collect();
                     rt.db.insert_ref_out_rows(&ref_pairs)?;
-                    rt.progress.inc_both(processed.len() as u64);
+                    rt.progress.inc_phase(processed.len() as u64);
                     Ok(())
                 };
                 stepped_dirs_then_rest(rt, Some(source.id), use_new_name, &mut apply)?;
@@ -372,16 +345,22 @@ fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet, batc
 fn build_new_out_tree_rows(
     entries: &Vec<StrippedRecord>, root: &Path, sources: Option<(&Path, &Path)>, use_new_name: bool)
     -> Vec<NewOutTreeRow> {
-    let base = match sources {
-        Some((_, base)) => base.to_path_buf(),
-        None => root.to_path_buf(),
-    };
     let mut processed: Vec<NewOutTreeRow> = Vec::new();
+
     for r in entries {
         let path = if use_new_name {
-            base.join(r.new_name.as_deref().expect("filtered to valid new_name"))
+            // Re-clamp the mangled member so a transform-injected `../` cannot
+            // escape the extraction root.
+            let (cleaned, _) = strip_leading_up(&Path::new(
+                r.new_name.as_deref().expect("filtered to valid new_name")).clean());
+            root.join(cleaned)
         } else {
-            catalog_to_target_abs(root, &r.abs_path, sources)
+            match sources {
+                None => root.join(abs_rel_path(&r.abs_path)),
+                Some((source_abs, original_path)) => {
+                    root.join(rel_rel_path(source_abs, original_path, &r.abs_path))
+                }
+            }
         };
         let is_dir = r.ftype == FileType::Directory;
         let mut of = OutTreeFlags::default();
@@ -436,32 +415,37 @@ fn strip_relative_member(member: &str, strip: u32) -> String {
     if comps.len() as u32 <= strip {
         return String::new();
     }
-    let res = comps
+    comps[strip as usize..]
         .iter()
         .map(|name| name.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
-        .join("/");
-    res
+        .join("/")
 }
 
-fn catalog_to_target_abs(
-    extraction_root: &Path, catalog_path: &Path, relative_component: Option<(&Path, &Path)>)
-    -> PathBuf {
-    match relative_component {
-        None => {
-            let rel = catalog_path.strip_prefix("/").expect(&format!(
-                "INVARIANT ERROR: Catalogue Path MUST be absolute and start with /, got {}",
-                catalog_path.display()
-            ));
-            extraction_root.join(rel)
+fn abs_rel_path(abs: &Path) -> PathBuf {
+    debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
+    debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
+    abs.strip_prefix("/").expect("abs path starts with /").to_path_buf()
+}
+
+/// Relative target of an entry under a relative source: `original_path` (the
+/// raw CLI arg) is clamped so leading `../` and a leading `/` can never escape
+/// the extraction root, then the within-source remainder is appended.
+fn rel_rel_path(source_abs: &Path, original_path: &Path, abs: &Path) -> PathBuf {
+    debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
+    debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
+    let san_org = original_path.clean();
+    let prefix = if san_org.is_absolute() {
+        if san_org == Path::new("/") {
+            PathBuf::new()
+        } else {
+            san_org.strip_prefix("/").expect("absolute expects / at the beginning").to_path_buf()
         }
-        Some((source_abs, source_base)) => {
-            let rel_stem = catalog_path
-                .strip_prefix(source_abs)
-                .expect("Source rows must start within source root");
-            source_base.join(rel_stem)
-        }
-    }
+    } else {
+        strip_leading_up(&san_org).0
+    };
+    let stem = abs.strip_prefix(source_abs).expect("entry must start within source root");
+    prefix.join(stem).clean()
 }
 
 /// Strip leading ../ in relative paths s.t. they do not escape from the extraction target.
@@ -515,5 +499,70 @@ mod tests {
         let transformed = t.apply(member);
         assert_eq!(transformed, "b/x/c.txt");
         assert_eq!(strip_relative_member(&transformed, 1), "x/c.txt");
+    }
+
+    // ---- abs/rel/new-name path helpers --------------------------------------
+
+    #[test]
+    fn abs_rel_path_drops_leading_slash() {
+        assert_eq!(abs_rel_path(Path::new("/a/b.txt")), PathBuf::from("a/b.txt"));
+        assert_eq!(abs_rel_path(Path::new("/")), PathBuf::from(""));
+    }
+
+    #[test]
+    fn rel_rel_path_builds_clamped_target() {
+        let src = Path::new("/home/user/Movies");
+        // leading `..` in the original path is clamped away (can't escape `<ed>`)
+        let abs = Path::new("/home/user/Movies/Best-Movie-Ever.mp4");
+        assert_eq!(
+            rel_rel_path(src, Path::new("../../Movies"), abs),
+            PathBuf::from("Movies/Best-Movie-Ever.mp4"),
+        );
+        // absolute original path drops its leading `/`
+        assert_eq!(
+            rel_rel_path(src, Path::new("/home/user/Movies"), abs),
+            PathBuf::from("home/user/Movies/Best-Movie-Ever.mp4"),
+        );
+        // `/` root original path -> empty prefix
+        assert_eq!(
+            rel_rel_path(src, Path::new("/"), Path::new("/home/user/Movies/sub/x.mp4")),
+            PathBuf::from("sub/x.mp4"),
+        );
+    }
+
+    #[test]
+    fn strip_leading_up_counts_and_clamps() {
+        assert_eq!(strip_leading_up(Path::new("../../a/b")), (PathBuf::from("a/b"), 2));
+        assert_eq!(strip_leading_up(Path::new("../x")), (PathBuf::from("x"), 1));
+        assert_eq!(strip_leading_up(Path::new("a/b")), (PathBuf::from("a/b"), 0));
+        assert_eq!(strip_leading_up(Path::new("..")), (PathBuf::from(""), 1));
+    }
+
+    #[test]
+    fn strip_leading_up_clamps_after_clean() {
+        // The re-clamp path used by the out_tree builder normalizes first.
+        let clamp = |name: &str| strip_leading_up(&Path::new(name).clean()).0;
+        assert_eq!(clamp("Movies/Best-Movie-Ever.mp4"), PathBuf::from("Movies/Best-Movie-Ever.mp4"));
+        assert_eq!(clamp("../Movies/x.mp4"), PathBuf::from("Movies/x.mp4"));
+        assert_eq!(clamp("../../.."), PathBuf::from(""));
+        assert_eq!(clamp("/abs/x"), PathBuf::from("abs/x"));
+    }
+
+    /// Order lock: a transform anchored on the source prefix must see the FULL
+    /// relative target (including the clamped prefix), matching the rel mapping.
+    #[test]
+    fn transform_sees_full_relative_path() {
+        let t = parse_transform_expr("s,^Movies,Pics,").unwrap();
+        let rel = rel_rel_path(
+            Path::new("/home/user/Movies"),
+            Path::new("../../Movies"),
+            Path::new("/home/user/Movies/Best-Movie-Ever.mp4"),
+        );
+        let mangled = t.apply(&rel.to_string_lossy());
+        assert_eq!(mangled, "Pics/Best-Movie-Ever.mp4");
+        // and the out_tree path re-cleans the result.
+        let final_path = PathBuf::from("/ed")
+            .join(strip_leading_up(&Path::new(&mangled).clean()).0);
+        assert_eq!(final_path, PathBuf::from("/ed/Pics/Best-Movie-Ever.mp4"));
     }
 }
