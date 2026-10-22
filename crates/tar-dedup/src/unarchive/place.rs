@@ -5,7 +5,7 @@ use crate::common::files;
 use crate::common::{batched_loop, batched_stepped_loop, send_receive_loop};
 use crate::config::{ExtractConfig, ExtractPipelinePhase};
 use crate::db::Database;
-use crate::db::flags::{ErrorFlags, OutTreeFlag};
+use crate::db::flags::ErrorFlags;
 use crate::db::place::{CopyOutcome, MaterializeResult};
 use crate::db::types::FilePhase;
 #[warn(unused_imports)] // LinkType needed for linking back on windows.
