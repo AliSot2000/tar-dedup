@@ -354,20 +354,9 @@ fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<
 
             // Apply results to db
             rt.db.ingest_results_link_tree(&linked)?;
-            let _: Vec<()> = linked.into_iter()
-                .filter(|(_id, err)| err.is_some())
-                .map(|(id, err)| {
-                    let e = err.expect("INVARIANT ERROR: Must be Some here.");
-                    recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default())
-                })
-                .collect();
-
             for (id, err) in linked {
-                match err {
-                    None => (),
-                    Some(e) => {
-                        recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default());
-                    }
+                if let Some(e) = err {
+                    recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default());
                 }
             }
             Ok(())
