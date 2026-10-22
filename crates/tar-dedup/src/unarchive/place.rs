@@ -152,25 +152,10 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
         None => PathBuf::from(".sources"),
         Some(v) => v.to_path_buf(),
     };
-    let base_dir = rt.config.paths.extraction_root().join(dir_name);
-    let mk_res = fs::create_dir_all(&base_dir);
-    match mk_res {
-        Ok(_) => (),
-        Err(e) => {
-            let err = Error::io(&base_dir, e);
-            recorder.record_session(
-                ERROR_PHASE,
-                err.to_file_stat(Some(&base_dir)),
-                ErrorFlags::default(),
-            );
-            return Err(err);
-        }
-    }
 
-    // Stable workload + resume position, mirroring the rehash phase bar: the
-    // max is the *overall* set of files the phase will ever move, the position
-    // the already-moved count, so a resumed run restarts exactly where it left
-    // off (and the early `pending == 0` short-circuit runs on the remainder).
+    let base_dir = rt.config.effective_extraction_root().join(dir_name);
+    capture_error(recorder, &base_dir, |p| fs::create_dir_all(p))?;
+
     let total = rt.db.count_files_to_move(true)?;
     let done = rt.db.count_moved_files(true)?;
     let pending = total.saturating_sub(done);
