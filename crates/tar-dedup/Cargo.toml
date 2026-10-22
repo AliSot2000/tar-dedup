@@ -9,6 +9,10 @@ debug-force-utf8 = []
 err-to-panic = []
 # Compile the `--ordering id` debug override (plain `files(id)` order).
 debug-ordering = []
+# Heavy compression round-trip test suite (all formats × all levels).
+test-compression = []
+# Meta feature aggregating the on-demand test suites.
+test-all = ["test-compression"]
 
 [dependencies]
 clap = { workspace = true }
