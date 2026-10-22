@@ -311,12 +311,7 @@ fn materialize_link_tree(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<
                     std::os::windows::fs::symlink_file(link_target, &out.abs_path)
                 }
             };
-            match base_res {
-                Ok(_) => Ok(()),
-                Err(e) => Err(FileStatError::Io {
-                    path: out.abs_path.to_path_buf(), source: e,
-                }),
-            }
+            base_res.map_err(|e| FileStatError::io(&out.abs_path, e))
         } else {
             assert!(!matches!(canonical.ftype, FileType::Unknown), "'unknown' not permitted!");
             assert!(!matches!(canonical.ftype, FileType::Directory), "'Directory' not permitted!");
@@ -690,41 +685,27 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
         #[cfg(unix)]
         FileType::Symlink(_) => match &canonical.link_dst {
             None => Ok(()),
-            Some(dst) => match std::os::unix::fs::symlink(dst, &out_tree.abs_path) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(FileStatError::Io {
-                    path: out_tree.abs_path.to_path_buf(),
-                    source: e,
-                }),
-            },
+            Some(dst) => std::os::unix::fs::symlink(dst, &out_tree.abs_path)
+                .map_err(|e| FileStatError::io(&out_tree.abs_path, e))
         },
         #[cfg(windows)]
         FileType::Symlink(LinkType::Directory) => match &canonical.link_dst {
             None => Ok(()),
-            Some(dst) => match std::os::windows::fs::symlink_dir(dst, &out_tree.abs_path) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e}),
-            },
+            Some(dst) => std::os::windows::fs::symlink_dir(dst, &out_tree.abs_path)
+                .map_err(|e| FileStatError::io(&out_tree.abs_path, e))
         },
         #[cfg(windows)]
         FileType::Symlink(_) => match &canonical.link_dst {
             None => Ok(()),
-            Some(dst) => match std::os::windows::fs::symlink_file(dst, &out_tree.abs_path) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(FileStatError::Io{path: out_tree.abs_path.to_path_buf(), source: e}),
-            },
+            Some(dst) => std::os::windows::fs::symlink_file(dst, &out_tree.abs_path)
+                .map_err(|e| FileStatError::io(&out_tree.abs_path, e))
         },
         FileType::FIFO => {
             if !try_special {
                 return Ok(());
             }
-            match nix::unistd::mkfifo(&out_tree.abs_path, Mode::from_bits_truncate(0o644)) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(FileStatError::Nix {
-                    path: out_tree.abs_path.to_path_buf(),
-                    source: e,
-                }),
-            }
+            nix::unistd::mkfifo(&out_tree.abs_path, Mode::from_bits_truncate(0o644))
+                .map_err(|e| FileStatError::nix(&out_tree.abs_path, e))
         }
         f @ (FileType::BlockDevice | FileType::CharacterDevice) => {
             let (dev_type, s_flag) = match f {
@@ -752,19 +733,8 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
                 canonical.major.unwrap() as u32,
                 canonical.minor.unwrap() as u32,
             );
-            let create_res = mknod(
-                &out_tree.abs_path,
-                s_flag,
-                Mode::from_bits_truncate(0o644),
-                dev,
-            );
-            match create_res {
-                Ok(_) => Ok(()),
-                Err(e) => Err(FileStatError::Nix {
-                    path: out_tree.abs_path.to_path_buf(),
-                    source: e,
-                }),
-            }
+            mknod(&out_tree.abs_path, s_flag, Mode::from_bits_truncate(0o644), dev)
+                .map_err(|e| FileStatError::nix(&out_tree.abs_path, e))
         }
     }
 }
