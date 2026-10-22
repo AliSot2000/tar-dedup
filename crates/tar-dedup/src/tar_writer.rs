@@ -411,3 +411,166 @@ impl CompressLayer {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST — compression round-trip batteries (feature `test-compression`)
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "test-compression"))]
+mod compression_tests {
+    use std::fs;
+    use std::io::Read;
+    use std::path::Path;
+
+    use super::*;
+    use crate::config::CompressionSettings;
+    use crate::shutdown::Shutdown;
+    use crate::tar_reader::{open_decompressed, open_tar_archive};
+    use crate::test_support::{TEST_PAYLOAD_SIZE_BYTES, all_levels, encode_bytes, pseudo_random};
+
+    fn settings(format: CompressionFormat, level: u32, xz_extreme: bool) -> CompressionSettings {
+        CompressionSettings {
+            format,
+            level,
+            xz_extreme,
+            memlimit_compress: None,
+        }
+    }
+
+    fn read_decompressed(path: &Path, format: &CompressionFormat) -> Vec<u8> {
+        let mut out = Vec::new();
+        open_decompressed(path, format)
+            .expect("open decompressed")
+            .read_to_end(&mut out)
+            .expect("read decompressed");
+        out
+    }
+
+    /// Codec-stage round-trip through the production decoder: C1 = enc(R),
+    /// R1 = dec(C1), R1 == R, and C2 = enc(R1) is byte-identical to C1.
+    /// Only the compressing formats make sense here; `None` is identity by
+    /// construction and its determinism is covered by the full-stack matrix.
+    #[test]
+    fn codec_recompresses_byte_identically() {
+        for format in [CompressionFormat::Xz, CompressionFormat::Gz, CompressionFormat::Bz2, CompressionFormat::Zstd] {
+            let level = format.default_level().expect("compressing format");
+            let dir = tempfile::tempdir().expect("tempdir");
+            let file = dir.path().join("codec.bin");
+
+            let r = pseudo_random(TEST_PAYLOAD_SIZE_BYTES);
+            let c1 = encode_bytes(&r, format, level);
+            fs::write(&file, &c1).expect("write encoded");
+            let r1 = read_decompressed(&file, &format);
+            assert_eq!(r1, r, "{format:?} L{level} decode mismatch");
+            let c2 = encode_bytes(&r1, format, level);
+            assert_eq!(c2, c1, "{format:?} L{level} recompress not deterministic");
+
+            fs::write(&file, encode_bytes(b"", format, level)).expect("write empty");
+            assert!(
+                read_decompressed(&file, &format).is_empty(),
+                "{format:?} empty input mismatch"
+            );
+        }
+    }
+
+    /// Deterministic sample set shared by both archive writes of a matrix run.
+    /// Content, names, and (m)times never change between the two writes, which
+    /// is what makes `A1 == A2` byte-identity a meaningful assertion.
+    fn sample_files(dir: &Path) -> Vec<(String, PathBuf)> {
+        let mut compressible = Vec::with_capacity(TEST_PAYLOAD_SIZE_BYTES);
+        let chunk = b"the quick brown fox jumps over the lazy dog\n";
+        while compressible.len() + chunk.len() <= TEST_PAYLOAD_SIZE_BYTES {
+            compressible.extend_from_slice(chunk);
+        }
+        compressible.extend_from_slice(&pseudo_random(
+            TEST_PAYLOAD_SIZE_BYTES - compressible.len(),
+        ));
+        let samples: [(&str, Vec<u8>); 4] = [
+            ("empty.bin", Vec::new()),
+            ("small.txt", b"tar-dedup round-trip\n".repeat(7)),
+            ("compressible.bin", compressible),
+            ("random.bin", pseudo_random(TEST_PAYLOAD_SIZE_BYTES)),
+        ];
+
+        let in_dir = dir.join("in");
+        fs::create_dir_all(&in_dir).expect("create in dir");
+        let members: Vec<(String, PathBuf)> = samples
+            .into_iter()
+            .map(|(name, bytes)| {
+                let p = in_dir.join(name);
+                fs::write(&p, &bytes).expect("write sample");
+                (name.to_string(), p)
+            })
+            .collect();
+        members
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn write_archive(
+        archive_path: &Path, settings: &CompressionSettings, members: &[(String, PathBuf)])
+    {
+        let mut writer = TarWriter::open(
+            archive_path.to_path_buf(),
+            settings,
+            1,
+            Shutdown::detached(),
+            false,
+        ).expect("open writer");
+        for (name, path) in members {
+            writer.append_path(path, name, |_| {}).expect("append member");
+        }
+        writer.finalize_archive().expect("finalize archive");
+    }
+
+    fn read_members(archive_path: &Path, format: &CompressionFormat) -> Vec<(String, Vec<u8>)> {
+        let mut ar = open_tar_archive(archive_path, format).expect("open tar archive");
+        let mut members = Vec::new();
+        for entry in ar.entries().expect("tar entries") {
+            let mut e = entry.expect("tar entry");
+            let name = e.path().expect("member path").to_string_lossy().into_owned();
+            let mut bytes = Vec::new();
+            e.read_to_end(&mut bytes).expect("read member");
+            members.push((name, bytes));
+        }
+        members
+    }
+
+    /// Full-stack matrix: every (format, level [, xz extreme]) through the real
+    /// `TarWriter → TarSink → BufferedCompress → CompressLayer → File` pipeline.
+    /// Two writes from identical untouched inputs must be byte-identical; the
+    /// first archive then reads back every member's content unchanged.
+    #[test]
+    fn full_stack_matrix_roundtrip_and_determinism() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let members = sample_files(dir.path());
+
+        let mut tested = 0usize;
+        for (format, level, extreme) in all_levels() {
+            let label = format!(
+                "{format:?} L{level}{}",
+                if extreme { "e" } else { "" }
+            );
+            let settings = settings(format, level, extreme);
+            // TarWriter opens with `append(true)`: each combo needs its own path,
+            // otherwise later formats would read back spilled bytes from earlier ones.
+            let a1 = dir.path().join(format!("a1-{tested}.bin"));
+            let a2 = dir.path().join(format!("a2-{tested}.bin"));
+
+            write_archive(&a1, &settings, &members);
+            write_archive(&a2, &settings, &members);
+            let b1 = fs::read(&a1).expect("read a1");
+            let b2 = fs::read(&a2).expect("read a2");
+            assert_eq!(b1, b2, "full-stack determinism: {label}");
+
+            let got = read_members(&a1, &format);
+            assert_eq!(got.len(), members.len(), "{label} member count");
+            for ((name, path), (gname, gbytes)) in members.iter().zip(&got) {
+                assert_eq!(gname, name, "{label} member order/name");
+                let src = fs::read(path).expect("read source sample");
+                assert_eq!(gbytes, &src, "{label} member {name} content mismatch");
+            }
+            tested += 1;
+        }
+        assert_eq!(tested, all_levels().len(), "matrix combo count drift");
+    }
+}
