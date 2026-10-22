@@ -437,11 +437,7 @@ fn strip_relative_member(member: &str, strip: u32) -> String {
     if comps.len() as u32 <= strip {
         return String::new();
     }
-    let kept = &comps[strip as usize..];
-    if kept.is_empty() {
-        return String::new();
-    }
-    let res = kept
+    let res = comps
         .iter()
         .map(|name| name.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
