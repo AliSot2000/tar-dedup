@@ -225,8 +225,7 @@ fn stepped_dirs_then_rest(
 // Substage
 // -------------------------------------------------------------------------------------------------
 
-// INFO: Not tested or reasoned through. Trusted the output of an LLM here.
-//  TODO: Batched
+//  TODO: Transaction?
 fn apply_renames(
     rt: &ExtractRTArgs,
     entries: &[StrippedRecord],
