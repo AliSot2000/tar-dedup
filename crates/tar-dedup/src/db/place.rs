@@ -779,18 +779,18 @@ pub fn ingest_materialize_results(
                            other
                     );
                 }
-                Ok(suc) => {
+                Ok(success) => {
                     if cfg!(debug_assertions) {
-                        validate_materialize_result(&suc);
+                        validate_materialize_result(&success);
                     }
-                    set_out_tree_flag(i_conn, suc.id, OutTreeFlag::Placed, suc.placed)?;
-                    set_out_tree_flag(i_conn, suc.id, OutTreeFlag::RemovedPrevious, suc.removed)?;
-                    set_out_tree_flag(i_conn, suc.id, OutTreeFlag::Conflict, suc.conflict)?;
+                    set_out_tree_flag(i_conn, success.id, OutTreeFlag::Placed, success.placed)?;
+                    set_out_tree_flag(i_conn, success.id, OutTreeFlag::RemovedPrevious, success.removed)?;
+                    set_out_tree_flag(i_conn, success.id, OutTreeFlag::Conflict, success.conflict)?;
                     if is_hardlink {
-                        set_out_tree_flag(i_conn, suc.id, OutTreeFlag::IsHardlink, true)?;
+                        set_out_tree_flag(i_conn, success.id, OutTreeFlag::IsHardlink, true)?;
                     }
                     if set_reflink {
-                        set_out_tree_flag(i_conn, suc.id, OutTreeFlag::UsedRefLink, !suc.used_copy)?;
+                        set_out_tree_flag(i_conn, success.id, OutTreeFlag::UsedRefLink, !success.used_copy)?;
                     }
                 }
             }
