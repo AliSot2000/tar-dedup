@@ -61,7 +61,7 @@
 - [X] finish testing for [inventory]
 - [X] finish testing for [filter]
 - [X] finish testing for [scan]
-- [ ] finish testing for [place_prologue]
+- [X] finish testing for [place_prologue]
 - [ ] finish testing for [place]
 - [ ] finish testing for [permissions]
 - [ ] fix flush / try_flush

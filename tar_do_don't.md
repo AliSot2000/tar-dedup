@@ -347,20 +347,20 @@ Valid arguments for the `--quoting-style` option are: `literal`, `shell`, `shell
 
 Not from `tar --help`; listed so the matrix stays honest about our CLI.
 
-| shortopt | longopt                      | implement    | description                             | comment                                                    |
-|----------|------------------------------|--------------|-----------------------------------------|------------------------------------------------------------|
-| `-i`     |                              | IMPLEMENTED  | input directory to snapshot (`archive`) | Collides with GNU `-i` `--ignore-zeros` (DISCARDED above). |
-|          | `--jobs`                     | IMPLEMENTED  | max concurrent workers                  |                                                            |
-|          | `--level`                    | IMPLEMENTED  | compression level                       |                                                            |
-|          | `--xz-extreme`               | IMPLEMENTED  | xz extreme preset bit                   |                                                            |
-|          | `--bzip-small`               | IMPLEMENTED  | bzip2 small/100k blocks                 |                                                            |
-|          | `--memlimit-compress`        | IMPLEMENTED  | xz encoder RAM cap                      |                                                            |
-|          | `--page-size`                | IMPLEMENTED  | sparse/hash zero-page size              |                                                            |
-|          | `--min-pages`                | IMPLEMENTED  | min empty pages before sparsify rewrite |                                                            |
-|          | `--resume` / `--fresh`       | IMPLEMENTED  | start policy                            |                                                            |
-|          | `--keep-db` / `--keep-stage` | IMPLEMENTED  | post-success cleanup keeps              |                                                            |
-|          | `--exit-after-stage`         | IMPLEMENTED  | stop after named pipeline phase         |                                                            |
-|          | `--restore-owner`            | TO_IMPLEMENT | extract uid/gid                         | Flag present; apply path incomplete.                       |
-|          | `--bridge`                   | FEATURE      | dedup + link back into place            | Reflection.                                                |
-|          | `--link-in-place`            | FEATURE      | extract tree as links into stage        | Reflection.                                                |
-|          | `--retry-missing-sha`        | FEATURE      | archive files missing sha               | Config knob / Reflection.                                  |
+| shortopt | longopt                      | implement   | description                             | comment                                                    |
+|----------|------------------------------|-------------|-----------------------------------------|------------------------------------------------------------|
+| `-i`     |                              | IMPLEMENTED | input directory to snapshot (`archive`) | Collides with GNU `-i` `--ignore-zeros` (DISCARDED above). |
+|          | `--jobs`                     | IMPLEMENTED | max concurrent workers                  |                                                            |
+|          | `--level`                    | IMPLEMENTED | compression level                       |                                                            |
+|          | `--xz-extreme`               | IMPLEMENTED | xz extreme preset bit                   |                                                            |
+|          | `--bzip-small`               | IMPLEMENTED | bzip2 small/100k blocks                 |                                                            |
+|          | `--memlimit-compress`        | IMPLEMENTED | xz encoder RAM cap                      |                                                            |
+|          | `--page-size`                | IMPLEMENTED | sparse/hash zero-page size              |                                                            |
+|          | `--min-pages`                | IMPLEMENTED | min empty pages before sparsify rewrite |                                                            |
+|          | `--resume` / `--fresh`       | IMPLEMENTED | start policy                            |                                                            |
+|          | `--keep-db` / `--keep-stage` | IMPLEMENTED | post-success cleanup keeps              |                                                            |
+|          | `--exit-after-stage`         | IMPLEMENTED | stop after named pipeline phase         |                                                            |
+|          | `--restore-owner`            | IMPLEMENTED | extract uid/gid                         | Flag present; apply path incomplete.                       |
+|          | `--bridge`                   | FEATURE     | dedup + link back into place            | Reflection.                                                |
+|          | `--link-in-place`            | IMPLEMENTED | extract tree as links into stage        | Reflection.                                                |
+|          | `--retry-missing-sha`        | DISCARDED   | archive files missing sha               | Config knob / Reflection.                                  |
