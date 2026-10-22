@@ -168,27 +168,6 @@ fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
     Ok(())
 }
 
-/// Single batched pass over one `list_materialized_entries` bucket (`only_dirs`),
-/// reporting each batch to `f`.
-fn stepped_materialized(
-    rt: &ExtractRTArgs,
-    source_id: Option<i64>,
-    only_dirs: Option<bool>,
-    apply_filters: bool,
-    only_valid_new_name: bool,
-    f: &mut impl FnMut(&Vec<StrippedRecord>) -> Result<()>)
-    -> Result<()> {
-    batched_stepped_loop(
-        rt.config.process.batch_size,
-        || FileId(0),
-        |lid, bs| rt.db.list_materialized_entries(
-            *lid, bs, source_id, only_dirs, only_valid_new_name, apply_filters
-        ),
-        |r: &StrippedRecord| r.id,
-        |entries| f(&entries),
-    )
-}
-
 /// Two-stage driver over `list_materialized_entries`: directory rows first, then
 /// the remaining entries. The directory pass bypasses the include/exclude filters
 /// when `--overwrite-dir` is set (excluded directories still get out_tree rows so
@@ -209,6 +188,28 @@ fn stepped_dirs_then_rest(
         rt, source_id, Some(false), true, only_valid_new_name, f)?;
 
     Ok(())
+}
+
+/// Single batched pass over one `list_materialized_entries` bucket (`only_dirs`),
+/// reporting each batch to `f`.
+fn stepped_materialized(
+    rt: &ExtractRTArgs,
+    source_id: Option<i64>,
+    only_dirs: Option<bool>,
+    apply_filters: bool,
+    only_valid_new_name: bool,
+    f: &mut impl FnMut(&Vec<StrippedRecord>) -> Result<()>)
+    -> Result<()> {
+
+    batched_stepped_loop(
+        rt.config.process.batch_size,
+        || FileId(0),
+        |lid, bs| rt.db.list_materialized_entries(
+            *lid, bs, source_id, only_dirs, only_valid_new_name, apply_filters
+        ),
+        |r: &StrippedRecord| r.id,
+        |entries| f(&entries),
+    )
 }
 
 // -------------------------------------------------------------------------------------------------
