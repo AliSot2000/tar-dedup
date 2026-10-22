@@ -332,7 +332,7 @@ fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet, batc
                     flags: cref_flags.clone(),
                 })
             }
-            progress.inc_both(parent_rows.len() as u64);
+            progress.inc_phase(parent_rows.len() as u64);
             db.insert_out_tree_rows(&parent_rows)?;
             // Clear the accumulators before the next run to avoid huge structures in ram.
             current_parents.clear();
