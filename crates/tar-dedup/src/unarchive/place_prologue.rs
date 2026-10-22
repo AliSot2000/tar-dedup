@@ -101,6 +101,8 @@ fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
                     let source_abs = source.abs_path;
                     let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
                         apply_renames(rt, entries, transform, |abs: &Path| {
+                            debug_assert!(abs.is_absolute(), "abs_paths in database MUST be absolute");
+                            debug_assert_eq!(abs.clean(), abs, "abs_paths in database MUST be normalized");
                             abs.strip_prefix(&source_abs)
                                 .expect("entry must start within source root")
                                 .to_path_buf()
