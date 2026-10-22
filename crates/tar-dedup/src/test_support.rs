@@ -452,3 +452,89 @@ pub fn corrupt_byte(path: &Path, offset: u64) {
     f.seek(SeekFrom::Start(offset)).expect("seek");
     f.write_all(&b).expect("write byte");
 }
+// ---------------------------------------------------------------------------------------------------------------------
+// Heavy compression test support (feature `test-compression`)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// Single knob for the compression round-trip payload sizes. Feeds both the
+/// codec-stage pseudorandom stream and the full-stack sample files.
+#[cfg(feature = "test-compression")]
+pub const TEST_PAYLOAD_SIZE_BYTES: usize = 32 * 1024;
+
+#[cfg(feature = "test-compression")]
+/// Deterministic pseudorandom byte stream (worst case for codec correctness).
+pub fn pseudo_random(len: usize) -> Vec<u8> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+    let mut out = Vec::with_capacity(len);
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    while out.len() < len {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let mut h = DefaultHasher::new();
+        h.write_u64(seed);
+        out.extend_from_slice(&h.finish().to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
+#[cfg(feature = "test-compression")]
+/// Pure-bytes encoder mirroring the production `CompressLayer` (tar_writer.rs)
+/// settings for each format. Single-threaded, deterministic — the `C1 == C2`
+/// determinism lock needs byte-identical inputs, which tar re-framing breaks.
+pub fn encode_bytes(data: &[u8], format: crate::config::CompressionFormat, level: u32) -> Vec<u8> {
+    use crate::config::CompressionFormat;
+    use std::io::Write;
+    let mut out = Vec::new();
+    match format {
+        CompressionFormat::Xz => {
+            let stream = xz2::stream::Stream::new_easy_encoder(level, xz2::stream::Check::Crc64)
+                .expect("xz encoder");
+            let mut enc = xz2::write::XzEncoder::new_stream(&mut out, stream);
+            enc.write_all(data).expect("write");
+            enc.finish().expect("finish");
+        }
+        CompressionFormat::Gz => {
+            let mut enc = flate2::write::GzEncoder::new(&mut out, flate2::Compression::new(level));
+            enc.write_all(data).expect("write");
+            enc.finish().expect("finish");
+        }
+        CompressionFormat::Bz2 => {
+            let mut enc = bzip2::write::BzEncoder::new(&mut out, bzip2::Compression::new(level));
+            enc.write_all(data).expect("write");
+            enc.finish().expect("finish");
+        }
+        CompressionFormat::Zstd => {
+            let mut enc = zstd::stream::write::Encoder::new(&mut out, level as i32)
+                .expect("zstd encoder");
+            enc.write_all(data).expect("write");
+            enc.finish().expect("finish");
+        }
+        CompressionFormat::None => out.extend_from_slice(data),
+    }
+    out
+}
+
+#[cfg(feature = "test-compression")]
+/// Every (format, level) that exists, plus the xz extreme axis (orthogonal
+/// `1<<31` bit — `-0e`…`-9e`) and the `None` baseline.
+pub fn all_levels() -> Vec<(crate::config::CompressionFormat, u32, bool)> {
+    use crate::config::CompressionFormat;
+    let mut v = Vec::new();
+    for format in [
+        CompressionFormat::Xz,
+        CompressionFormat::Gz,
+        CompressionFormat::Bz2,
+        CompressionFormat::Zstd,
+    ] {
+        let (min, max) = format.level_range().expect("compressing format has levels");
+        for level in min..=max {
+            v.push((format, level, false));
+        }
+    }
+    for level in 0..=9 {
+        v.push((CompressionFormat::Xz, level, true));
+    }
+    v.push((CompressionFormat::None, 0, false));
+    v
+}
