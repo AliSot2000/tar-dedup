@@ -35,15 +35,14 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     debug_assert!(rt.db.placement_prologue_done()?,
                   "PRECONDITION FAILED: PlacementPrologue must complete before place");
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
-    let progress = rt.progress;
     let corpus = rt.db.count_out_tree_rows()?;
-    progress.set_phase_total(corpus);
-    let (ac, mc, ah, mh, ao, mo) = status_message_rebuilding(rt)?;
+    rt.progress.set_phase_total(corpus);
+    let (ac, pc, ah, ph, ao, po) = status_message_rebuilding(rt)?;
     tracing::info!(
         "starting place: total {}, processing {}, pending {}",
         corpus,
         ac + ah + ao,
-        mc + mh + mo,
+        pc + ph + po,
     );
     let capture_error = |rec: &mut Recorder, path: &PathBuf, iof: fn(&Path)
         -> io::Result<()>| {
@@ -791,37 +790,44 @@ fn build_other(canonical: &FileRecord, out_tree: &OutTreeRecord, try_special: bo
     }
 }
 
-/// Get the number of files, hardlinks and others. Also produce
+/// Get the number of files, hardlinks and others. This is tuple notation
+/// 1. Total number of canonical files
+/// 2. Number of canonical files still pending
+/// 3. Total number of hard links
+/// 4. Number of hardlinks still pending
+/// 5. Total number of other entries
+/// 6. Number of other entries still pending
 fn status_message_rebuilding(rt: &ExtractRTArgs)
     -> Result<(u64, u64, u64, u64, u64, u64)> {
     let all_canonicals = rt.db.count_out_tree_canonicals(None)?;
     let all_hardlinks = rt.db.count_out_tree_hardlinks(None)?;
     let all_other = rt.db.count_out_tree_others(None)?;
-    let materialized_canonicals = rt.db.count_out_tree_canonicals(Some(false))?;
-    let materialized_hardlinks = rt.db.count_out_tree_hardlinks(Some(false))?;
-    let materialized_other = rt.db.count_out_tree_others(Some(false))?;
+    // `Some(false)` selects rows neither placed nor errored — the pending work.
+    let pending_canonicals = rt.db.count_out_tree_canonicals(Some(false))?;
+    let pending_hardlinks = rt.db.count_out_tree_hardlinks(Some(false))?;
+    let pending_other = rt.db.count_out_tree_others(Some(false))?;
 
     let other_msg = if rt.config.placement.recreate_none_file_entries {
-        &format!("{materialized_other} of other entries, {} remaining",
-                 all_other - materialized_other)
+        &format!("{} of other entries, {pending_other} remaining.",
+                 all_other - pending_other)
     } else {
         ""
     };
 
     tracing::info!("
         Placement Phase:
-        {materialized_canonicals} of files already copied, {} remaining.
-        {materialized_hardlinks} of files already created, {} remaining.
+        {} of files already copied, {pending_canonicals} remaining.
+        {} of hardlinks already created, {pending_hardlinks} remaining.
         {other_msg}",
-        all_canonicals - materialized_canonicals,
-        all_hardlinks - materialized_hardlinks,
+        all_canonicals - pending_canonicals,
+        all_hardlinks - pending_hardlinks,
     );
     Ok((all_canonicals,
-        materialized_canonicals,
+        pending_canonicals,
         all_hardlinks,
-        materialized_hardlinks,
+        pending_hardlinks,
         all_other,
-        materialized_other))
+        pending_other))
 }
 
 fn process_results(
