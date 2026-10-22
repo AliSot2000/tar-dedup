@@ -406,7 +406,7 @@ fn component_to_str<'a>(c: &Component) -> &'a str {
         Component::RootDir => "root-dir",
         Component::ParentDir => "parent-dir",
         Component::CurDir => "current-dir",
-        Component::Prefix(_) => "prefix",
+        Component::Prefix(_) => "prefix", // I think Windows C:!
         Component::Normal(_) => "normal",
     }
 }
@@ -422,6 +422,10 @@ fn strip_relative_member(member: &str, strip: u32) -> String {
     let comps: Vec<&OsStr> = path
         .components()
         .filter_map(|comp| match comp {
+            // INFO:
+            //  - RootDir -> excluded due to rel paths.
+            //  - Prefix -> excluded due to Unix
+            //  - CurDir, ParentDir -> Excluded due to .clean()
             Component::Normal(name) => Some(name),
             other => {
                 panic!("Unexpected path component {}. Only `Normal` expected",
