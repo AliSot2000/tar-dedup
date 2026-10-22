@@ -414,25 +414,21 @@ fn materialize_others(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()>
 /// special files. Owns this pass's worker threads and thread bars.
 fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: MaterializeKind)
     -> Result<()> {
-    let is_hardlink = matches!(kind, MaterializeKind::Hardlinks);
-    // Reflink flag-tracking and the size-DESC queue both apply only to the copy
-    // pass (`Files`); derive the second from the first so the two can't drift.
-    let is_files =  matches!(kind, MaterializeKind::Files);
-    let ordered = is_files;
-    let set_reflink = is_files;
+    let ordered = matches!(kind, MaterializeKind::Files);;
 
-    if ordered {
+    // Progress bars, only needed for file copy.
+    let mut bars = Vec::<Option<ProgressBar>>::new();
+    if matches!(kind, MaterializeKind::Files) {
         rt.db.create_materialize_queue()?;
         rt.db.populate_materialize_queue()?;
         // Copy work streams byte progress into a per-worker Bytes bar; the single
         // actions are near-instant, so their bars stay hidden.
         rt.progress.create_thread_bars(BarKind::Bytes, rt.config.process.io_jobs);
-
-    }
-
-    let mut bars = Vec::<Option<ProgressBar>>::new();
-    for i in 0..rt.config.process.io_jobs {
-        bars.push(if ordered { Some(rt.progress.thread_bar(i)) } else { None });
+        for i in 0..rt.config.process.io_jobs {
+            bars.push(Some(rt.progress.thread_bar(i)));
+        }
+    } else {
+        bars.resize(rt.config.process.io_jobs, None);
     }
 
     let (work_s, work_r) = bounded::<MaterializeWork>(rt.config.process.work_capacity);
@@ -453,11 +449,10 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
     drop(work_r);
     drop(out_s);
 
-    // Feed cursor per kind: the ordered queue (positional) for files, a plain
-    // `out_tree` id cursor for the two lister-driven kinds (same contract: a
-    // handed row is never re-pulled; the loop drains every committed outcome).
+    // Trackers of the last element processed in the ordered queue.
     let mut queue_index = 0u64;
     let mut last_id = OutTreeId(0);
+    // INFO: Cannot create three different closures. Would cause type conflict!
     let pull = || -> Result<Vec<MaterializeWork>> {
         match kind {
             MaterializeKind::Files => {
@@ -508,7 +503,13 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
             return Ok(());
         }
         let n = items.len() as u64;
-        process_results(items, recorder, rt.db, is_hardlink, set_reflink)?;
+        process_results(
+            items,
+            recorder,
+            rt.db,
+            matches!(kind, MaterializeKind::Hardlinks),
+            matches!(kind, MaterializeKind::Files),
+        )?;
         rt.progress.inc_both(n);
         Ok(())
     };
