@@ -159,6 +159,7 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
     let total = rt.db.count_files_to_move(true)?;
     let done = rt.db.count_moved_files(true)?;
     let pending = total.saturating_sub(done);
+
     if pending == 0 {
         rt.db.drop_canonical_move_queue()?;
         return Ok(());
@@ -186,6 +187,7 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
     let cache_dir = rt.config.paths.extract_cache_dir();
     let keep_stage = rt.config.process.cleanup.keep_stage;
     let no_reflink = rt.config.placement.no_reflink;
+
     for i in 0..rt.config.process.io_jobs {
         let base = base_dir.clone();
         let cache = cache_dir.clone();
@@ -204,9 +206,7 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
     drop(work_r);
     drop(out_s);
 
-    // Feed cursor over `canonical_move_queue`: `queue_index` is the last
-    // consumed queue position. The pull re-filters to rows still lacking
-    // `AtLinkSource`, so an already-moved file is never re-pulled.
+    // queue feeder
     let mut queue_index = 0u64;
     let pull = || {
         let rows = rt.db.pull_canonical_move_queue::<StrippedRecord>(
@@ -216,6 +216,8 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
         }
         Ok(rows.into_iter().map(|(_q, row)| row).collect::<Vec<_>>())
     };
+
+    // queue drainer
     let apply = |pending: &mut Vec<CopyOutcome>| -> Result<()> {
         let items = take(pending);
         let n = rt.db.ingest_copy_results(&items)?;
@@ -239,8 +241,10 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
         |_| Ok(()),
         || Ok(true),
         apply)?;
+
     rt.progress.drop_thread_bars();
     recorder.flush()?;
+
     if rt.shutdown.is_interrupted() {
         return Err(Error::Interrupted);
     }
