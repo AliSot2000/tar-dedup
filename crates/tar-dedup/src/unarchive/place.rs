@@ -132,7 +132,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 fn prepare_extraction_dir(
     rt: &ExtractRTArgs,
     recorder: &mut Recorder) -> Result<()> {
-    debug_assert!(rt.config.paths.extraction_root().is_absolute(),
+    debug_assert!(rt.config.effective_extraction_root().is_absolute(),
                   "INVARIANT ERROR: extraction root is not absolute");
     debug_assert!(rt.db.out_tree_is_built().expect("out_tree meta"),
                   "PRECONDITION FAILED: OutTree must be built to run this function");
@@ -140,7 +140,7 @@ fn prepare_extraction_dir(
                   "PRECONDITION FAILED: Only run if the dir tree is not built yet");
     tracing::warn!("Building the Directory tree cannot be gracefully interrupted!");
 
-    let mut already_checked = rt.config.paths.extraction_root().to_path_buf();
+    let mut already_checked = rt.config.effective_extraction_root().to_path_buf();
 
     batched_stepped_loop(
         rt.config.process.batch_size,
