@@ -75,11 +75,9 @@ fn resolve_transform(rt: &ExtractRTArgs) -> Result<Option<TransformExpr>> {
     }
 }
 
-/// Populate `files.new_name` with the member-relative record name. Recomputed
-/// from `abs_path` on every prologue run (never chains onto an already-mapped
-/// `new_name`), so re-running with the same or changed options is deterministic.
-/// GNU order is transform first, then strip. Both run strictly on the relative
-/// member, i.e. AFTER the absolute path is converted to relative.
+/// Populate the new_name field of the element using GNU ordering (transform then strip)
+/// In absolute mode, the paths are only stripped of the leading /.
+/// In relative mode, the absolute starting point is removed and relative path concatenated.
 fn populate_new_names(rt: &ExtractRTArgs, transform: Option<&TransformExpr>)
     -> Result<()> {
 
