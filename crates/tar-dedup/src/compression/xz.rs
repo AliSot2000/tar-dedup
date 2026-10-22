@@ -266,3 +266,26 @@ impl<W: Write> Write for InterruptibleXzEncoder<W> {
         self.obj.as_mut().unwrap().flush()
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST — footer xz round-trip (feature `test-compression`)
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "test-compression"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn footer_bytes_roundtrip() {
+        let blobs: [(&str, Vec<u8>); 3] = [
+            ("empty", Vec::new()),
+            ("small", crate::test_support::pseudo_random(crate::test_support::TEST_PAYLOAD_SIZE_BYTES)),
+            ("large", crate::test_support::pseudo_random(1024 * 1024)),
+        ];
+        for (label, input) in blobs {
+            let enc = compress_footer_bytes(&input).expect("compress footer");
+            let dec = decompress_footer_bytes(&enc).expect("decompress footer");
+            assert_eq!(dec, input, "footer xz round-trip mismatch ({label})");
+        }
+    }
+}
