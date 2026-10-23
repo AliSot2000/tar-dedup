@@ -184,8 +184,8 @@ failed. The battery surfaced **four latent production bugs**, all fixed:
 - **ExtractWorld constructor**: `with_config(make_config)` instead of the
   planned `new(config)` — `new(config)` cannot own the tempdir the config points
   into (rehash's zero-arg `ExtractWorld::scan_test()` needs the world to own it,
-  else the work dir vanishes). Rehash + place_prologue rebased; `filter.rs` still
-  carries its old duplicated `ExtractTestWorld` (follow-up).
+  else the work dir vanishes). `scan_test()` lives on the shared world;
+  `rehash.rs`, `place_prologue.rs` and `filter.rs` all rebased onto it.
 - **check_path `symlink_metadata`-error and `determine_file_type`-error arms are
   unreachable from a test**: `tgt.exists()` short-circuits to `(true,false,false)`
   for any inaccessible/broken target, so the later error arms can only be hit via
