@@ -155,3 +155,53 @@ only needs the canonical `out_tree.abs_path` on disk):
 
 - `cargo test -p tar-dedup --lib` (default suite; pre-existing blocker only)
 - `cargo test -p tar-dedup --lib --features test-all` (full, incl. compression battery)
+
+## Implementation notes (2026-10-23)
+
+Implemented. Default suite 554 passed / 1 failed (pre-existing blocker
+`clear_archive_meta_drops_only_byte_counters`); `test-all` 563 passed / 1
+failed. The battery surfaced **four latent production bugs**, all fixed:
+
+1. `db/place.rs list_out_tree_for_linking` — SQL referenced an undefined alias
+   `f` (should be `ent`): `--link-tree` extract errored at runtime ("no such
+   column: f.ftype"). Fixed to `ent`.
+2. `unarchive/place.rs materialize_loop` Hardlinks pull — the positional cursor
+   advanced to `entries[..].1.id` (the *canonical* out row) instead of `.2.id`
+   (the *entry* out row). Since a group's canonical is `MIN(out.id)`, the next
+   `o.id > last_id` re-returned the same row forever → `materialize_hardlinks`
+   hung for Global/Source grouping. Fixed to `.2.id`.
+3. `db/place.rs files_to_move_where` — `" AND {}" + filter` emitted a literal
+   `{}` into SQL (should have been `format!`), so `count_files_to_move(true)` /
+   `count_moved_files(true)` failed → `copy_canonicals_to_source` errored for
+   every `--link-tree` run. Fixed.
+4. `db/common.rs list_out_tree` — the `only_dir` filter bound `:tgt = 1` but
+   `IsDirectory.mask_i64()` is `1<<8 = 256`, so `flags & 256 = 1` never matched
+   → `only_dir=true` returned nothing → `prepare_extraction_dir` never built the
+   dir tree on extract. Fixed to bind the mask.
+
+### Deviations from the agreed design (test-side)
+
+- **ExtractWorld constructor**: `with_config(make_config)` instead of the
+  planned `new(config)` — `new(config)` cannot own the tempdir the config points
+  into (rehash's zero-arg `ExtractWorld::scan_test()` needs the world to own it,
+  else the work dir vanishes). Rehash + place_prologue rebased; `filter.rs` still
+  carries its old duplicated `ExtractTestWorld` (follow-up).
+- **check_path `symlink_metadata`-error and `determine_file_type`-error arms are
+  unreachable from a test**: `tgt.exists()` short-circuits to `(true,false,false)`
+  for any inaccessible/broken target, so the later error arms can only be hit via
+  a TOCTOU race. Dropped; the reachable type-mismatch path (symlink→file) is
+  covered. Documented in `to-mock.md` alongside `get_file_times`.
+- **run() link_tree smoke** uses one canonical row: dups carry no `FileExtracted`
+  (only canonical payloads are unpacked), so `list_out_tree_for_linking` (which
+  requires `AtLinkSource` on the entry) never links dup rows — asserted the
+  canonical-only behavior.
+- **prepare_extraction_dir interrupt** uses `request_force`, not graceful
+  (`check_in_flight` only reacts to force; the function's own log line says it
+  "cannot be gracefully interrupted").
+- **build_other char-device** guarded for unprivileged runs (mknod → EPERM).
+- materialize-one conflict tests set `silent_conflicts = true` so the "keep
+  existing" outcome is the `Ok(placed=false)` path, not the loud `Err(General)`.
+- `link_tree_existing_path_errors` hits the intended `Error::Config` because
+  `materialize_link_tree` collects per-row errors via the `results` Mutex and
+  only the lister-side `Ok`-propagation error surfaces as `Err`.
+
