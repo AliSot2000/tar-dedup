@@ -484,48 +484,22 @@ mod tests {
     use crate::config::ExtractConfig;
     use crate::db::flags::{FileFlags, SourceFlag, SourceFlags};
     use crate::db::types::{FilePhase, LinkType, NewFileRecord};
-    use crate::progress::{EXTRACT_MULTIPLIER, ProgressBarSet};
-    use crate::shutdown::Shutdown;
-    use crate::test_support::seed_filter_reasons;
+    use crate::test_support::{ExtractWorld, seed_filter_reasons};
     use rusqlite::named_params;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    /// Extract-side prologue test world: tempdir DB + a mutatable
-    /// [`ExtractConfig`] (via `for_place_test`) + detached shutdown/progress.
-    /// Mirrors the archive `test_support::TestWorld`; the extract pipeline has no
-    /// shared world, so this is local to the module.
-    struct PrologueWorld {
-        // Held only to keep the DB file alive for the test's duration.
-        #[allow(dead_code)]
-        dir: tempfile::TempDir,
-        db: Database,
-        shutdown: Shutdown,
-        progress: ProgressBarSet,
-        config: ExtractConfig,
-    }
-
-    impl PrologueWorld {
-        fn new(root: &Path, absolute_names: bool, tune: impl FnOnce(&mut ExtractConfig)) -> Self {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let db = Database::open(&dir.path().join("test.sqlite")).expect("open db");
-            let mut config = ExtractConfig::for_place_test(root.to_path_buf(), absolute_names, 4);
-            tune(&mut config);
-            Self {
-                dir,
-                db,
-                shutdown: Shutdown::detached(),
-                progress: ProgressBarSet::new(EXTRACT_MULTIPLIER),
-                config,
-            }
-        }
-
-        fn rt(&self) -> ExtractRTArgs<'_> {
-            ExtractRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown: &self.shutdown,
-                progress: &self.progress,
-            }
+    impl ExtractWorld {
+        /// Place-side prologue test world: shared `ExtractWorld` with a
+        /// `for_place_test` config (fake extraction root, empty work dir
+        /// re-rooted under the tempdir so the DB has a home).
+        fn place_prologue(root: &Path, absolute_names: bool, tune: impl FnOnce(&mut ExtractConfig))
+            -> Self {
+            Self::with_config(|dp| {
+                let mut config = ExtractConfig::for_place_test(root.to_path_buf(), absolute_names, 4);
+                config.paths.work_dir = dp.join("estage");
+                tune(&mut config);
+                config
+            })
         }
 
         fn add_source(&self, abs: &str, original: &str) -> i64 {
@@ -566,18 +540,7 @@ mod tests {
         /// Seed both `filter_reason_*` tables with the internal include sentinel
         /// (-1) so a `files.include_reason_* = -1` row satisfies the FK.
         fn seed_filter_tables(&self) {
-            self.db.with_transaction(|conn| {
-                for table in ["archive", "extract"] {
-                    conn.execute(
-                        &format!(
-                            "INSERT OR IGNORE INTO filter_reason_{table} \
-                             (id, source, line, expression) VALUES (-1, 'internal', NULL, '.*')"
-                        ),
-                        [],
-                    ).expect("seed internal include rule");
-                }
-                Ok(())
-            }).expect("filter seed tx");
+            self.seed_filter();
         }
 
         /// Raw-SQL `files` insert bypassing `insert_file`'s
@@ -654,13 +617,13 @@ mod tests {
 
     #[test]
     fn resolve_transform_none_is_none() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |_| {});
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |_| {});
         assert!(resolve_transform(&world.rt()).expect("resolve").is_none());
     }
 
     #[test]
     fn resolve_transform_cli_parses() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |c| {
             c.transform_policy = TransformSource::Cli("s,a,b,".to_string());
         });
         let t = resolve_transform(&world.rt()).expect("resolve").expect("some");
@@ -669,7 +632,7 @@ mod tests {
 
     #[test]
     fn resolve_transform_cli_bad_expr_errors() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |c| {
             c.transform_policy = TransformSource::Cli("garbage".to_string());
         });
         assert!(resolve_transform(&world.rt()).is_err());
@@ -677,7 +640,7 @@ mod tests {
 
     #[test]
     fn resolve_transform_stored_reads_meta() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |c| {
             c.transform_policy = TransformSource::Stored;
         });
         world.db.set_archive_transform("s,a,b,").expect("set meta");
@@ -687,7 +650,7 @@ mod tests {
 
     #[test]
     fn resolve_transform_stored_without_meta_is_none() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |c| {
             c.transform_policy = TransformSource::Stored;
         });
         assert!(resolve_transform(&world.rt()).expect("resolve").is_none());
@@ -697,7 +660,7 @@ mod tests {
 
     #[test]
     fn populate_new_names_panics_on_relative_abs_path() {
-        let world = PrologueWorld::new(Path::new("/ed"), true, |_| {});
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |_| {});
         world.raw_insert(1, "relative/x");
         let result = catch_unwind(AssertUnwindSafe(|| populate_new_names(&world.rt(), None)));
         assert!(result.is_err(), "abs_rel_path must reject relative abs_paths");
@@ -705,7 +668,7 @@ mod tests {
 
     #[test]
     fn populate_new_names_panics_on_unclean_abs_path() {
-        let world = PrologueWorld::new(Path::new("/ed"), true, |_| {});
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |_| {});
         // `..` is resolved by clean() but not by Path::eq -> assert trips.
         // (`/a/./b` would NOT: Path::eq normalizes `.` away like clean does.)
         world.raw_insert(1, "/a/b/../c");
@@ -834,7 +797,7 @@ mod tests {
 
     #[test]
     fn apply_renames_writes_new_name_no_transform() {
-        let world = PrologueWorld::new(Path::new("/ed"), true, |_| {});
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |_| {});
         world.add_file(None, "/a/x/one.txt", 1, FileType::File);
         world.add_file(None, "/a/x/two.txt", 2, FileType::File);
         let entries = world.db.list_materialized_entries::<StrippedRecord>(
@@ -849,7 +812,7 @@ mod tests {
 
     #[test]
     fn apply_renames_applies_transform_then_strip() {
-        let world = PrologueWorld::new(Path::new("/ed"), true, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |c| {
             c.strip_components = 1;
         });
         world.add_file(None, "/a/x/two.txt", 2, FileType::File);
@@ -868,7 +831,7 @@ mod tests {
 
     #[test]
     fn populate_out_tree_abs_maps_and_leaves_ref_out_empty() {
-        let world = PrologueWorld::new(Path::new("/ed"), true, |_| {});
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |_| {});
         world.add_file(None, "/var/docker/cache/one.txt", 1, FileType::File);
         world.add_file(None, "/var/docker/cache/two.txt", 2, FileType::File);
         populate_out_tree_abs(&world.rt(), false).expect("abs out tree");
@@ -881,7 +844,7 @@ mod tests {
 
     #[test]
     fn populate_out_tree_rel_clamps_and_populates_ref_out() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |_| {});
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |_| {});
         let sid = world.add_source("/home/user/Movies", "../../Movies");
         world.add_file(Some(sid), "/home/user/Movies/Best-Movie-Ever.mp4", 3, FileType::File);
         world.add_file(Some(sid), "/home/user/Movies/sub/x.mp4", 4, FileType::File);
@@ -898,7 +861,7 @@ mod tests {
     /// `ensure_parent` step of `populate_out_tree` must mint the missing dir rows.
     #[test]
     fn populate_out_tree_ensures_parents_for_orphan_file() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |_| {});
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |_| {});
         let sid = world.add_source("/x", "./x");
         world.add_file(Some(sid), "/x/y/z.txt", 5, FileType::File);
         populate_out_tree(&world.rt(), false).expect("out tree");
@@ -948,7 +911,7 @@ mod tests {
 
     #[test]
     fn prepare_hardlink_canonicals_none_marks_all_files_self_canonical() {
-        let world = PrologueWorld::new(Path::new("/ed"), true, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |c| {
             c.placement.hard_link_grouping = HardLinkGrouping::None;
         });
         let f1 = world.add_file(None, "/a/one.txt", 1, FileType::File);
@@ -972,7 +935,7 @@ mod tests {
 
     #[test]
     fn stepped_dirs_then_rest_orders_dirs_first_and_visits_all() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |_| {});
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |_| {});
         let sid = world.add_source("/t", "./t");
         let dir = world.add_file(Some(sid), "/t/sub", 0, FileType::Directory);
         let f1 = world.add_file(Some(sid), "/t/a.txt", 1, FileType::File);
@@ -1001,7 +964,7 @@ mod tests {
 
     #[test]
     fn run_builds_out_tree_and_is_idempotent() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |c| {
             c.transform_policy = TransformSource::Cli("s,^Movies,Pics,".to_string());
             c.strip_components = 1;
         });
@@ -1027,7 +990,7 @@ mod tests {
 
     #[test]
     fn one_top_level_prefixes_abs_out_tree() {
-        let world = PrologueWorld::new(Path::new("/ed"), true, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |c| {
             c.placement.one_top_level = Some(PathBuf::from("otl"));
         });
         world.add_file(None, "/var/cache/one.txt", 1, FileType::File);
@@ -1039,7 +1002,7 @@ mod tests {
 
     #[test]
     fn one_top_level_prefixes_rel_out_tree() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |c| {
             c.placement.one_top_level = Some(PathBuf::from("otl"));
         });
         let sid = world.add_source("/home/user/Movies", "../../Movies");
@@ -1052,7 +1015,7 @@ mod tests {
 
     #[test]
     fn one_top_level_run_maps_under_subdir() {
-        let world = PrologueWorld::new(Path::new("/ed"), false, |c| {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |c| {
             c.placement.one_top_level = Some(PathBuf::from("otl"));
             c.transform_policy = TransformSource::Cli("s,^Movies,Pics,".to_string());
             c.strip_components = 1;
