@@ -623,6 +623,7 @@ fn materialize_one(
                 },
             }
         }
+
         MaterializeKind::Others => {
             let target = &w.out;
             let idx = target.id;
