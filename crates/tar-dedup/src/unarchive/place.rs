@@ -1249,7 +1249,15 @@ fn cleanup_stage(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::files::original_extension;
+    use crate::db::content_id::content_id_from_digest;
+    use crate::db::flags::{FileFlag, FileFlags, OutTreeFlag, OutTreeFlags};
+    use crate::db::types::{LinkType, NewFileRecord, NewOutTreeRow};
+    use crate::test_support::{ExtractWorld, seed_filter_reasons};
+    use chrono::{DateTime, Utc};
+    use rusqlite::named_params;
     use std::io::{Error as IoError, ErrorKind};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     #[test]
     fn annotate_copy_error_attaches_dst_to_io() {
@@ -1291,5 +1299,1602 @@ mod tests {
             annotate_path(Error::Other(anyhow::anyhow!("x")), &dst),
             Error::Other(_)
         ));
+    }
+
+    // ---------------------------------------------------------------------
+    // PlaceWorld: local seeder impl on the shared `ExtractWorld`.
+    // ---------------------------------------------------------------------
+
+    impl ExtractWorld {
+        /// Real-disk place world: `for_place_test` config re-rooted under the
+        /// tempdir (`out/` = extraction root, `estage/` = extract cache), a
+        /// single worker for deterministic ordered results.
+        fn place_test(tune: impl FnOnce(&mut ExtractConfig)) -> Self {
+            Self::with_config(|dp| {
+                let mut config = ExtractConfig::for_place_test(dp.join("out"), false, 4);
+                config.paths.work_dir = dp.join("estage");
+                config.process.io_jobs = 1;
+                config.process.jobs = 1;
+                tune(&mut config);
+                config
+            })
+        }
+
+        fn root(&self) -> PathBuf {
+            self.config.paths.extraction_root().to_path_buf()
+        }
+
+        /// Create + return the extraction root.
+        fn ensure_root(&self) -> PathBuf {
+            fs::create_dir_all(self.root()).expect("create root");
+            self.root()
+        }
+
+        /// Insert a canonical `files` row: self-linked, `rehashed`,
+        /// `FileExtracted`, joint filter passed, digest `[sha;20]`.
+        fn add_place_file(&self, abs: &str, size: u64, sha: u8, ftype: FileType) -> FileId {
+            self.add_place_file_inode(abs, size, sha, ftype, None, None)
+        }
+
+        /// `add_file` plus a captured `(dev, inode)` (real hardlink groups).
+        fn add_place_file_inode(
+            &self, abs: &str, size: u64, sha: u8, ftype: FileType,
+            dev: Option<u64>, inode: Option<u64>) -> FileId {
+            self.seed_filter();
+            let path = PathBuf::from(abs);
+            self.db.insert_file(&NewFileRecord {
+                abs_path: path.clone(),
+                abs_path_raw: None,
+                ext: original_extension(&path),
+                size,
+                mtime: None, atime: None, ctime: None,
+                uid: None, gid: None, mode: None,
+                ftype: Some(ftype),
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None,
+                link_dst: None, link_dst_raw: None,
+                device_id: dev, inode_id: inode, major: None, minor: None,
+            }).expect("insert file");
+            let id = self.db.file_id_by_abs_path(&path).expect("lookup").expect("row");
+            seed_filter_reasons(&self.db, id);
+            self.db.mark_self_canonical(id).expect("self canonical");
+            self.db.update_file_inspection_per_id(id, [sha; 20], 0, false).expect("digest");
+            self.db.set_file_flag(id, FileFlag::FileExtracted, true).expect("extracted");
+            self.db.mark_file_phase(id, FilePhase::Rehashed).expect("phase");
+            id
+        }
+
+        /// A non-canonical `files` row pointing at `canonical` as its content
+        /// canonical. Dups carry no payload and no `FileExtracted` (extract
+        /// never unpacks their content — only the dedup canonical has a member).
+        fn add_dup_file(&self, abs: &str, canonical: FileId) -> FileId {
+            self.seed_filter();
+            let path = PathBuf::from(abs);
+            self.db.insert_file(&NewFileRecord {
+                abs_path: path.clone(),
+                abs_path_raw: None,
+                ext: original_extension(&path),
+                size: 0,
+                mtime: None, atime: None, ctime: None,
+                uid: None, gid: None, mode: None,
+                ftype: Some(FileType::File),
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None,
+                link_dst: None, link_dst_raw: None,
+                device_id: None, inode_id: None, major: None, minor: None,
+            }).expect("insert dup");
+            let id = self.db.file_id_by_abs_path(&path).expect("lookup").expect("row");
+            seed_filter_reasons(&self.db, id);
+            self.db.set_canonical(id, canonical).expect("set canonical");
+            self.db.mark_file_phase(id, FilePhase::Rehashed).expect("phase");
+            id
+        }
+
+        /// A self-canonical symlink `files` row with a link target.
+        fn add_place_symlink(&self, abs: &str, link_dst: &str) -> FileId {
+            self.seed_filter();
+            let path = PathBuf::from(abs);
+            self.db.insert_file(&NewFileRecord {
+                abs_path: path.clone(),
+                abs_path_raw: None,
+                ext: original_extension(&path),
+                size: 0,
+                mtime: None, atime: None, ctime: None,
+                uid: None, gid: None, mode: None,
+                ftype: Some(FileType::Symlink(LinkType::File)),
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None,
+                link_dst: Some(PathBuf::from(link_dst)), link_dst_raw: None,
+                device_id: None, inode_id: None, major: None, minor: None,
+            }).expect("insert symlink");
+            let id = self.db.file_id_by_abs_path(&path).expect("lookup").expect("row");
+            seed_filter_reasons(&self.db, id);
+            self.db.mark_self_canonical(id).expect("self canonical");
+            self.db.update_file_inspection_per_id(id, [2; 20], 0, false).expect("digest");
+            self.db.mark_file_phase(id, FilePhase::Rehashed).expect("phase");
+            id
+        }
+
+        /// Insert an `out_tree` row and set its canonical_id.
+        fn add_out(&self, abs: &str, file_id: FileId, canonical: Option<OutTreeId>) -> OutTreeId {
+            let mut flags = OutTreeFlags::default();
+            flags.set(OutTreeFlag::IsDirectory, false);
+            let rows = vec![NewOutTreeRow {
+                abs_path: PathBuf::from(abs),
+                file_id: Some(file_id),
+                flags,
+            }];
+            let id = self.db.insert_out_tree_rows(&rows).expect("insert out")[0];
+            if let Some(c) = canonical {
+                self.db.with_transaction(|conn| {
+                    conn.execute(
+                        "UPDATE out_tree SET canonical_id = :c WHERE id = :id",
+                        named_params! { ":c": c.0, ":id": id.0 },
+                    ).expect("set canonical");
+                    Ok(())
+                }).expect("canonical tx");
+            }
+            id
+        }
+
+        /// A pure directory `out_tree` row (no `file_id`).
+        fn add_out_dir(&self, abs: &str) -> OutTreeId {
+            let mut flags = OutTreeFlags::default();
+            flags.set(OutTreeFlag::IsDirectory, true);
+            let rows = vec![NewOutTreeRow {
+                abs_path: PathBuf::from(abs),
+                file_id: None,
+                flags,
+            }];
+            self.db.insert_out_tree_rows(&rows).expect("insert out dir")[0]
+        }
+
+        /// Write the cache payload for a canonical file row; returns the path.
+        /// The content id derives from the row's own `abs_path` extension, so the
+        /// file lands under the name `materialize_one` will look up.
+        fn put_payload(&self, id: FileId, bytes: &[u8]) -> PathBuf {
+            let rec = self.db.get_file_by_id::<FileRecord>(id).expect("get").expect("row");
+            let cid = rec.content_id().expect("canonical file has content id");
+            let p = self.config.paths.extract_cache_dir().join(&cid.0);
+            fs::create_dir_all(p.parent().expect("parent")).expect("cache dir");
+            fs::write(&p, bytes).expect("write payload");
+            p
+        }
+
+        fn out_flag(&self, id: OutTreeId, flag: OutTreeFlag) -> bool {
+            self.db.get_out_tree_flag(id, flag).expect("get flag")
+        }
+
+        fn file_flag(&self, id: FileId, flag: FileFlag) -> bool {
+            self.db.get_file_flag(id, flag).expect("get flag")
+        }
+
+        /// Set a file row's stored mtime (RFC3339, as the pipeline writes it).
+        fn set_file_mtime(&self, id: FileId, t: DateTime<Utc>) {
+            self.db.with_transaction(|conn| {
+                conn.execute(
+                    "UPDATE files SET mtime = :t WHERE id = :id",
+                    named_params! { ":t": t.to_rfc3339(), ":id": id.0 },
+                ).expect("set mtime");
+                Ok(())
+            }).expect("mtime tx");
+        }
+    }
+
+    /// Pure `StrippedRecord` builder (no DB).
+    fn mk_stripped(id: i64, abs: &str, ftype: FileType, mtime: Option<DateTime<Utc>>)
+        -> StrippedRecord {
+        StrippedRecord {
+            id: FileId(id),
+            abs_path: PathBuf::from(abs),
+            abs_path_raw: None,
+            ext: original_extension(Path::new(abs)),
+            size: 0,
+            sha1: None,
+            mtime, atime: None, ctime: None,
+            ftype,
+            device_id: None, inode_id: None,
+            canonical_id: Some(FileId(id)),
+            flags: FileFlags::default(),
+            phase: FilePhase::Rehashed,
+            new_name: None,
+        }
+    }
+
+    /// Pure `FileRecord` builder (canonical: `canonical_id = id`, hashed).
+    #[allow(clippy::too_many_arguments)]
+    fn mk_file(id: i64, abs: &str, size: u64, sha: u8, ftype: FileType,
+               link_dst: Option<&str>, major: Option<u64>, minor: Option<u64>) -> FileRecord {
+        FileRecord {
+            id: FileId(id),
+            abs_path: PathBuf::from(abs),
+            ext: original_extension(Path::new(abs)),
+            size,
+            sha1: Some([sha; 20]),
+            mtime: None, atime: None, ctime: None,
+            uid: None, gid: None, username: None, groupname: None, mode: None,
+            ftype,
+            device_id: None, inode_id: None,
+            major, minor,
+            xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None,
+            link_dst: link_dst.map(PathBuf::from),
+            include_reason_archive: None, exclude_reason_archive: None,
+            include_reason_extract: None, exclude_reason_extract: None,
+            canonical_id: Some(FileId(id)),
+            flags: FileFlags::default(),
+            phase: FilePhase::Rehashed,
+            new_name: None,
+        }
+    }
+
+    fn mk_out(id: i64, abs: &str) -> OutTreeRecord {
+        OutTreeRecord {
+            id: OutTreeId(id),
+            abs_path: PathBuf::from(abs),
+            file_id: Some(FileId(id)),
+            flags: OutTreeFlags::default(),
+            canonical_id: Some(OutTreeId(id)),
+        }
+    }
+
+    fn mk_work(canonical: FileRecord, out: OutTreeRecord, out_canon: Option<OutTreeRecord>)
+        -> MaterializeWork {
+        MaterializeWork { canonical, out, out_canon }
+    }
+
+    // ---------------------------------------------------------------------
+    // build_path
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn build_path_creates_missing_dirs() {
+        let world = ExtractWorld::place_test(|c| c.placement.no_create_dir = false);
+        let root = world.ensure_root();
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let target = root.join("a/b/c");
+        let mut already = root.clone();
+        build_path(&world.config, &mut already, &target, OutTreeId(1), &mut recorder).expect("build");
+        assert!(target.is_dir());
+        assert_eq!(already, target);
+        assert_eq!(recorder.buffered(), 0);
+    }
+
+    #[test]
+    fn build_path_replaces_symlink_segment() {
+        let world = ExtractWorld::place_test(|c| c.placement.no_create_dir = false);
+        let root = world.ensure_root();
+        let outside = world.path("outside");
+        fs::create_dir_all(&outside).expect("outside");
+        std::os::unix::fs::symlink(&outside, root.join("a")).expect("symlink");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let target = root.join("a/b");
+        let mut already = root.clone();
+        build_path(&world.config, &mut already, &target, OutTreeId(1), &mut recorder).expect("build");
+        assert!(root.join("a").is_dir() && !root.join("a").is_symlink(), "symlink replaced");
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn build_path_keeps_dir_symlink() {
+        let world = ExtractWorld::place_test(|c| {
+            c.placement.no_create_dir = false;
+            c.placement.keep_dir_symlink = true;
+        });
+        let root = world.ensure_root();
+        let real = world.path("real");
+        fs::create_dir_all(&real).expect("real");
+        std::os::unix::fs::symlink(&real, root.join("a")).expect("symlink");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let target = root.join("a/b");
+        let mut already = root.clone();
+        build_path(&world.config, &mut already, &target, OutTreeId(1), &mut recorder).expect("build");
+        assert!(root.join("a").is_symlink(), "symlink kept");
+        assert!(real.join("b").is_dir(), "subdir created under the link target");
+    }
+
+    #[test]
+    fn build_path_replaces_non_dir_with_dir() {
+        let world = ExtractWorld::place_test(|c| {
+            c.placement.no_create_dir = false;
+            c.placement.remove_and_replace = true;
+        });
+        let root = world.ensure_root();
+        fs::write(root.join("a"), b"file").expect("write");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let target = root.join("a/b");
+        let mut already = root.clone();
+        build_path(&world.config, &mut already, &target, OutTreeId(1), &mut recorder).expect("build");
+        assert!(root.join("a").is_dir(), "non-dir replaced");
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn build_path_non_dir_without_replace_errors() {
+        let world = ExtractWorld::place_test(|c| c.placement.no_create_dir = false);
+        let root = world.ensure_root();
+        fs::write(root.join("a"), b"file").expect("write");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let target = root.join("a/b");
+        let mut already = root.clone();
+        let res = build_path(&world.config, &mut already, &target, OutTreeId(1), &mut recorder);
+        assert!(matches!(res, Err(Error::Config(_))));
+    }
+
+    #[test]
+    fn build_path_panics_on_sibling_root() {
+        let world = ExtractWorld::place_test(|c| c.placement.no_create_dir = false);
+        let root = world.ensure_root();
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        // Sibling of the extraction root: the common prefix is shallower than the root.
+        let sibling = root.parent().expect("parent").join("other");
+        let mut already = root.clone();
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            build_path(&world.config, &mut already, &sibling.join("x"), OutTreeId(1), &mut recorder)
+        }));
+        assert!(res.is_err(), "target outside extract dir must panic");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_path_records_error_when_create_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let world = ExtractWorld::place_test(|c| c.placement.no_create_dir = false);
+        let root = world.ensure_root();
+        let blocked = root.join("blocked");
+        fs::create_dir_all(&blocked).expect("blocked");
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o500)).expect("chmod");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let target = blocked.join("sub");
+        let mut already = root.clone();
+        let res = build_path(&world.config, &mut already, &target, OutTreeId(1), &mut recorder);
+        assert!(matches!(res, Err(Error::FileStat(FileStatError::Io { .. }))));
+        assert_eq!(recorder.buffered(), 1);
+    }
+
+    // ---------------------------------------------------------------------
+    // check_path
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn check_path_missing_target_is_placeable() {
+        let world = ExtractWorld::place_test(|_| {});
+        let tgt = world.root().join("nope.bin");
+        let rec = mk_stripped(1, "/x.bin", FileType::File, None);
+        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
+                   (true, false, false));
+    }
+
+    #[test]
+    fn check_path_missing_db_mtime_keeps_existing() {
+        for silent in [false, true] {
+            let world = ExtractWorld::place_test(|c| {
+                c.placement.conflict_policy = ConflictPolicy::PreferNewer;
+                c.placement.silent_conflicts = silent;
+            });
+            let root = world.ensure_root();
+            let tgt = root.join("x.bin");
+            fs::write(&tgt, b"x").expect("write");
+            let rec = mk_stripped(1, "/x.bin", FileType::File, None);
+            assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
+                       (false, true, false));
+        }
+    }
+
+    fn live_dt(tgt: &Path) -> DateTime<Utc> {
+        DateTime::<Utc>::from(fs::metadata(tgt).expect("meta").modified().expect("mtime"))
+    }
+
+    #[test]
+    fn check_path_prefer_newer_resolves_by_mtime() {
+        let world = ExtractWorld::place_test(|c| c.placement.conflict_policy = ConflictPolicy::PreferNewer);
+        let root = world.ensure_root();
+        let tgt = root.join("x.bin");
+        fs::write(&tgt, b"x").expect("write");
+        let live = live_dt(&tgt);
+        let hour = chrono::TimeDelta::seconds(3600);
+        // db > live -> proceed
+        let rec_old = mk_stripped(1, "/x.bin", FileType::File, Some(live + hour));
+        assert_eq!(check_path(&world.config, &tgt, &rec_old).expect("check"),
+                   (true, true, false));
+        // db == live -> keep (tie favours the on-disk copy)
+        let rec_eq = mk_stripped(1, "/x.bin", FileType::File, Some(live));
+        assert!(check_path(&world.config, &tgt, &rec_eq).is_err());
+        // db < live -> keep
+        let rec_new = mk_stripped(1, "/x.bin", FileType::File, Some(live - hour));
+        assert!(check_path(&world.config, &tgt, &rec_new).is_err());
+    }
+
+    #[test]
+    fn check_path_prefer_newer_silent_keeps_existing() {
+        let world = ExtractWorld::place_test(|c| {
+            c.placement.conflict_policy = ConflictPolicy::PreferNewer;
+            c.placement.silent_conflicts = true;
+        });
+        let root = world.ensure_root();
+        let tgt = root.join("x.bin");
+        fs::write(&tgt, b"x").expect("write");
+        let rec = mk_stripped(1, "/x.bin", FileType::File, Some(live_dt(&tgt)));
+        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
+                   (false, true, false));
+    }
+
+    #[test]
+    fn check_path_prefer_older_resolves_by_mtime() {
+        let world = ExtractWorld::place_test(|c| c.placement.conflict_policy = ConflictPolicy::PreferOlder);
+        let root = world.ensure_root();
+        let tgt = root.join("x.bin");
+        fs::write(&tgt, b"x").expect("write");
+        let live = live_dt(&tgt);
+        let hour = chrono::TimeDelta::seconds(3600);
+        // db < live -> proceed
+        let rec_new = mk_stripped(1, "/x.bin", FileType::File, Some(live - hour));
+        assert_eq!(check_path(&world.config, &tgt, &rec_new).expect("check"),
+                   (true, true, false));
+        // db == live -> keep
+        let rec_eq = mk_stripped(1, "/x.bin", FileType::File, Some(live));
+        assert!(check_path(&world.config, &tgt, &rec_eq).is_err());
+        // db > live -> keep
+        let rec_old = mk_stripped(1, "/x.bin", FileType::File, Some(live + hour));
+        assert!(check_path(&world.config, &tgt, &rec_old).is_err());
+    }
+
+    #[test]
+    fn check_path_replace_ignores_mtime() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let tgt = root.join("x.bin");
+        fs::write(&tgt, b"x").expect("write");
+        let live = live_dt(&tgt);
+        let hour = chrono::TimeDelta::seconds(3600);
+        for dt in [live - hour, live, live + hour] {
+            let rec = mk_stripped(1, "/x.bin", FileType::File, Some(dt));
+            assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
+                       (true, true, false));
+        }
+    }
+
+    #[test]
+    fn check_path_type_mismatch_replace_removes() {
+        let world = ExtractWorld::place_test(|c| c.placement.remove_and_replace = true);
+        let root = world.ensure_root();
+        let real = root.join("real.bin");
+        fs::write(&real, b"r").expect("write");
+        let tgt = root.join("x.bin");
+        std::os::unix::fs::symlink(&real, &tgt).expect("symlink");
+        let rec = mk_stripped(1, "/x.bin", FileType::File, None);
+        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
+                   (true, true, true));
+        assert!(!tgt.exists(), "mismatched symlink removed");
+    }
+
+    #[test]
+    fn check_path_type_mismatch_loud_errors() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let real = root.join("real.bin");
+        fs::write(&real, b"r").expect("write");
+        let tgt = root.join("x.bin");
+        std::os::unix::fs::symlink(&real, &tgt).expect("symlink");
+        let rec = mk_stripped(1, "/x.bin", FileType::File, None);
+        assert!(matches!(
+            check_path(&world.config, &tgt, &rec),
+            Err(FileStatError::General { .. })
+        ));
+    }
+
+    #[test]
+    fn check_path_type_mismatch_silent_keeps_existing() {
+        let world = ExtractWorld::place_test(|c| c.placement.silent_conflicts = true);
+        let root = world.ensure_root();
+        let real = root.join("real.bin");
+        fs::write(&real, b"r").expect("write");
+        let tgt = root.join("x.bin");
+        std::os::unix::fs::symlink(&real, &tgt).expect("symlink");
+        let rec = mk_stripped(1, "/x.bin", FileType::File, None);
+        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
+                   (false, true, false));
+    }
+
+    #[test]
+    fn check_path_unlink_first_removes_file() {
+        let world = ExtractWorld::place_test(|c| c.placement.unlink_first = true);
+        let root = world.ensure_root();
+        let tgt = root.join("x.bin");
+        fs::write(&tgt, b"x").expect("write");
+        let rec = mk_stripped(1, "/x.bin", FileType::File, None);
+        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
+                   (true, true, true));
+        assert!(!tgt.exists());
+    }
+
+    #[test]
+    fn check_path_unlink_first_nonempty_dir_fails() {
+        for silent in [false, true] {
+            let world = ExtractWorld::place_test(|c| {
+                c.placement.unlink_first = true;
+                c.placement.silent_conflicts = silent;
+            });
+            let root = world.ensure_root();
+            let tgt = root.join("d");
+            fs::create_dir(&tgt).expect("dir");
+            fs::write(tgt.join("inner"), b"x").expect("write");
+            let rec = mk_stripped(1, "/d", FileType::Directory, None);
+            let res = check_path(&world.config, &tgt, &rec);
+            match (silent, res) {
+                (true, Ok((false, true, true))) => (),
+                (false, Err(FileStatError::Io { .. })) => (),
+                (silent, other) => panic!("silent={silent} got {other:?}"),
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // copy_single_file
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn copy_single_file_plain_copy() {
+        let world = ExtractWorld::place_test(|_| {});
+        let src = world.path("src.bin");
+        let dst = world.path("dst.bin");
+        fs::write(&src, b"payload").expect("write");
+        let res = copy_single_file(FileId(1), &src, &dst, &Shutdown::detached(), true, None);
+        assert_eq!(res.expect("copy"), (FileId(1), true));
+        assert_eq!(fs::read(&dst).expect("read"), b"payload");
+    }
+
+    #[test]
+    fn copy_single_file_reflink_or_copy_content_equal() {
+        let world = ExtractWorld::place_test(|_| {});
+        let src = world.path("src.bin");
+        let dst = world.path("dst.bin");
+        fs::write(&src, b"reflink-me").expect("write");
+        let (id, used_copy) = copy_single_file(FileId(1), &src, &dst, &Shutdown::detached(), false, None)
+            .expect("copy");
+        assert_eq!(id, FileId(1));
+        assert_eq!(fs::read(&dst).expect("read"), b"reflink-me");
+        // reflink may fall back to a copy on unsupported filesystems; only the
+        // content and the (id, bool) shape are guaranteed.
+        let _ = used_copy;
+    }
+
+    #[test]
+    fn copy_single_file_force_aborts() {
+        let world = ExtractWorld::place_test(|_| {});
+        let src = world.path("src.bin");
+        let dst = world.path("dst.bin");
+        fs::write(&src, vec![0xAB; 1024 * 1024]).expect("write");
+        let sh = Shutdown::detached();
+        sh.request_force();
+        let res = copy_single_file(FileId(1), &src, &dst, &sh, true, None);
+        assert!(matches!(res, Err((FileId(1), Error::Interrupted))));
+        assert!(!dst.exists(), "aborted copy must not leave a partial dst");
+    }
+
+    #[test]
+    fn copy_single_file_missing_src_errors_and_cleans_dst() {
+        let world = ExtractWorld::place_test(|_| {});
+        let dst = world.path("dst.bin");
+        fs::write(&dst, b"pre-existing").expect("write");
+        let res = copy_single_file(FileId(1), &world.path("nope.bin"), &dst, &Shutdown::detached(), true, None);
+        assert!(matches!(res, Err((FileId(1), Error::FileStat(_)))));
+        assert!(!dst.exists(), "failed copy must not leave a partial dst");
+    }
+
+    // ---------------------------------------------------------------------
+    // copy_one_to_source
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn copy_one_to_source_copies_and_removes_cache() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let base = root.join(".sources");
+        fs::create_dir_all(&base).expect("base");
+        let id = world.add_place_file("/a.bin", 3, 1, FileType::File);
+        let cid = world.put_payload(id, b"abc");
+        let row = world.db.get_file_by_id::<StrippedRecord>(id).expect("get").expect("row");
+        let cache = world.config.paths.extract_cache_dir();
+        let res = copy_one_to_source(&base, &cache, false, true, &row, &Shutdown::detached(), None);
+        let (fid, is_copy) = res.expect("copy").expect("ok");
+        assert_eq!(fid, id);
+        assert!(is_copy);
+        let dst = base.join(cid.file_name().expect("name"));
+        assert_eq!(fs::read(&dst).expect("read"), b"abc");
+        assert!(!cid.exists(), "cache source removed when not keeping stage");
+    }
+
+    #[test]
+    fn copy_one_to_source_keeps_cache_when_keeping_stage() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let base = root.join(".sources");
+        fs::create_dir_all(&base).expect("base");
+        let id = world.add_place_file("/a.bin", 3, 1, FileType::File);
+        let cid = world.put_payload(id, b"abc");
+        let row = world.db.get_file_by_id::<StrippedRecord>(id).expect("get").expect("row");
+        let cache = world.config.paths.extract_cache_dir();
+        let res = copy_one_to_source(&base, &cache, true, true, &row, &Shutdown::detached(), None);
+        assert!(res.expect("copy").is_ok());
+        assert!(cid.exists(), "cache kept when keeping stage");
+    }
+
+    #[test]
+    fn copy_one_to_source_force_returns_none() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let base = root.join(".sources");
+        fs::create_dir_all(&base).expect("base");
+        let id = world.add_place_file("/a.bin", 1024 * 1024, 1, FileType::File);
+        world.put_payload(id, &vec![0xCD; 1024 * 1024]);
+        let row = world.db.get_file_by_id::<StrippedRecord>(id).expect("get").expect("row");
+        let cache = world.config.paths.extract_cache_dir();
+        let sh = Shutdown::detached();
+        sh.request_force();
+        let res = copy_one_to_source(&base, &cache, false, true, &row, &sh, None);
+        assert!(res.is_none(), "force abort mid-copy drops the in-flight outcome");
+    }
+
+    #[test]
+    fn copy_one_to_source_missing_src_errors() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let base = root.join(".sources");
+        fs::create_dir_all(&base).expect("base");
+        let id = world.add_place_file("/a.bin", 3, 1, FileType::File);
+        let row = world.db.get_file_by_id::<StrippedRecord>(id).expect("get").expect("row");
+        let cache = world.config.paths.extract_cache_dir();
+        let res = copy_one_to_source(&base, &cache, false, true, &row, &Shutdown::detached(), None);
+        assert!(matches!(res, Some(Err((_, Error::FileStat(_))))));
+    }
+
+    // ---------------------------------------------------------------------
+    // build_other
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn build_other_panics_on_files_dirs_unknown() {
+        for ftype in [FileType::File, FileType::Directory, FileType::Unknown] {
+            let rec = mk_file(1, "/x", 0, 1, ftype, None, None, None);
+            let out = mk_out(1, "/ed/x");
+            let res = catch_unwind(AssertUnwindSafe(|| build_other(&rec, &out, true)));
+            assert!(res.is_err(), "{ftype:?} must panic");
+        }
+    }
+
+    #[test]
+    fn build_other_skips_socket() {
+        let rec = mk_file(1, "/x", 0, 1, FileType::Socket, None, None, None);
+        let out = mk_out(1, "/ed/x");
+        build_other(&rec, &out, true).expect("ok");
+        assert!(!out.abs_path.exists());
+    }
+
+    #[test]
+    fn build_other_creates_symlink() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let out = mk_out(1, &root.join("link").to_string_lossy());
+        let rec = mk_file(1, "/x", 0, 1, FileType::Symlink(LinkType::File), Some("/target"), None, None);
+        build_other(&rec, &out, true).expect("ok");
+        assert_eq!(fs::read_link(&out.abs_path).expect("readlink"), PathBuf::from("/target"));
+    }
+
+    #[test]
+    fn build_other_symlink_without_target_is_noop() {
+        let rec = mk_file(1, "/x", 0, 1, FileType::Symlink(LinkType::File), None, None, None);
+        let out = mk_out(1, "/ed/x");
+        build_other(&rec, &out, true).expect("ok");
+        assert!(!out.abs_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_other_fifo() {
+        use std::os::unix::fs::FileTypeExt;
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let out = mk_out(1, &root.join("fifo").to_string_lossy());
+        let rec = mk_file(1, "/x", 0, 1, FileType::FIFO, None, None, None);
+        build_other(&rec, &out, true).expect("ok");
+        assert!(fs::symlink_metadata(&out.abs_path).expect("meta").file_type().is_fifo());
+    }
+
+    #[test]
+    fn build_other_fifo_disabled_is_noop() {
+        let rec = mk_file(1, "/x", 0, 1, FileType::FIFO, None, None, None);
+        let out = mk_out(1, "/ed/fifo");
+        build_other(&rec, &out, false).expect("ok");
+        assert!(!out.abs_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_other_char_device() {
+        use std::os::unix::fs::FileTypeExt;
+        // mknod requires CAP_MKNOD (root); as an unprivileged user the call
+        // fails with EPERM — assert the error shape instead of the device.
+        if !nix::unistd::geteuid().is_root() {
+            let world = ExtractWorld::place_test(|_| {});
+            let root = world.ensure_root();
+            let out = mk_out(1, &root.join("chardev").to_string_lossy());
+            let rec = mk_file(1, "/x", 0, 1, FileType::CharacterDevice, None, Some(1), Some(3));
+            assert!(build_other(&rec, &out, true).is_err(), "mknod must fail unprivileged");
+            return;
+        }
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let out = mk_out(1, &root.join("chardev").to_string_lossy());
+        let rec = mk_file(1, "/x", 0, 1, FileType::CharacterDevice, None, Some(1), Some(3));
+        build_other(&rec, &out, true).expect("ok");
+        assert!(fs::symlink_metadata(&out.abs_path).expect("meta").file_type().is_char_device());
+    }
+
+    #[test]
+    fn build_other_device_missing_major_or_minor_errors() {
+        for (major, minor) in [(None, None), (Some(1), None), (None, Some(3))] {
+            let rec = mk_file(1, "/x", 0, 1, FileType::CharacterDevice, None, major, minor);
+            let out = mk_out(1, "/ed/x");
+            assert!(build_other(&rec, &out, true).is_err(),
+                    "major/minor {major:?}/{minor:?} must error");
+        }
+    }
+
+    #[test]
+    fn build_other_device_disabled_is_noop() {
+        let rec = mk_file(1, "/x", 0, 1, FileType::BlockDevice, None, Some(1), Some(3));
+        let out = mk_out(1, "/ed/x");
+        build_other(&rec, &out, false).expect("ok");
+        assert!(!out.abs_path.exists());
+    }
+
+    // ---------------------------------------------------------------------
+    // relative_pardirs_to_dir
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn relative_pardirs_to_dir_depth() {
+        assert_eq!(
+            relative_pardirs_to_dir(Path::new("/ed"), Path::new("/ed/sub/dir/f.txt")),
+            PathBuf::from("../../"),
+        );
+        assert_eq!(
+            relative_pardirs_to_dir(Path::new("/ed"), Path::new("/ed/f.txt")),
+            PathBuf::from("."),
+        );
+    }
+
+    #[test]
+    fn relative_pardirs_to_dir_panics_outside_root() {
+        for (dir, file) in [
+            ("/ed", "/other/x.txt"),
+            ("/ed", "/edx.txt"),
+            ("/ed", "/ed/../escape.txt"),
+        ] {
+            let res = catch_unwind(AssertUnwindSafe(|| {
+                relative_pardirs_to_dir(Path::new(dir), Path::new(file))
+            }));
+            assert!(res.is_err(), "{file} under {dir} must panic");
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // materialize_one
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn materialize_one_file_places_from_cache() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let cache = world.config.paths.extract_cache_dir();
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        world.put_payload(id, b"abc");
+        let can = world.db.get_file_by_id::<FileRecord>(id).expect("get").expect("row");
+        let out = mk_out(1, &root.join("a.bin").to_string_lossy());
+        let w = mk_work(can, out.clone(), None);
+        let res = materialize_one(&MaterializeKind::Files, &cache, &world.config, &w,
+                                  &Shutdown::detached(), None);
+        let r = res.expect("some").expect("ok");
+        assert!(r.placed && r.id == out.id);
+        assert_eq!(fs::read(&out.abs_path).expect("read"), b"abc");
+    }
+
+    #[test]
+    fn materialize_one_file_conflict_keeps_existing() {
+        let world = ExtractWorld::place_test(|c| {
+            c.placement.conflict_policy = ConflictPolicy::PreferNewer;
+            c.placement.silent_conflicts = true;
+        });
+        let root = world.ensure_root();
+        let dst = root.join("a.bin");
+        fs::write(&dst, b"keep-me").expect("write");
+        let live = live_dt(&dst);
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        world.set_file_mtime(id, live - chrono::TimeDelta::seconds(3600));
+        world.put_payload(id, b"abc");
+        let can = world.db.get_file_by_id::<FileRecord>(id).expect("get").expect("row");
+        let out = mk_out(1, &dst.to_string_lossy());
+        let w = mk_work(can, out.clone(), None);
+        let cache = world.config.paths.extract_cache_dir();
+        let res = materialize_one(&MaterializeKind::Files, &cache, &world.config, &w,
+                                  &Shutdown::detached(), None);
+        let r = res.expect("some").expect("ok");
+        assert!(!r.placed && r.conflict);
+        assert_eq!(fs::read(&dst).expect("read"), b"keep-me", "existing file untouched");
+    }
+
+    #[test]
+    fn materialize_one_file_copy_error_records() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let cache = world.config.paths.extract_cache_dir();
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        let can = world.db.get_file_by_id::<FileRecord>(id).expect("get").expect("row");
+        let out = mk_out(1, &root.join("a.bin").to_string_lossy());
+        let w = mk_work(can, out, None);
+        let res = materialize_one(&MaterializeKind::Files, &cache, &world.config, &w,
+                                  &Shutdown::detached(), None);
+        assert!(matches!(res, Some(Err((_, Error::FileStat(_))))));
+    }
+
+    #[test]
+    fn materialize_one_file_force_drops_outcome() {
+        // `no_reflink` forces the sparse-copy path where `check_in_flight` fires;
+        // a reflink short-circuits before the shutdown check.
+        let world = ExtractWorld::place_test(|c| c.placement.no_reflink = true);
+        let root = world.ensure_root();
+        let cache = world.config.paths.extract_cache_dir();
+        let id = world.add_place_file("/src/a.bin", 1024 * 1024, 1, FileType::File);
+        world.put_payload(id, &vec![0xAB; 1024 * 1024]);
+        let can = world.db.get_file_by_id::<FileRecord>(id).expect("get").expect("row");
+        let out = mk_out(1, &root.join("a.bin").to_string_lossy());
+        let w = mk_work(can, out, None);
+        let sh = Shutdown::detached();
+        sh.request_force();
+        let res = materialize_one(&MaterializeKind::Files, &cache, &world.config, &w, &sh, None);
+        assert!(res.is_none(), "force mid-copy must drop the in-flight outcome");
+    }
+
+    #[test]
+    fn materialize_one_hardlink_links_to_canonical_out() {
+        use std::os::unix::fs::MetadataExt;
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        fs::create_dir_all(root.join("sub")).expect("sub");
+        let canon_out = mk_out(1, &root.join("sub/canon.bin").to_string_lossy());
+        fs::write(&canon_out.abs_path, b"payload").expect("write");
+        let dup = mk_file(2, "/src/dup.bin", 7, 1, FileType::File, None, None, None);
+        let dup_out = mk_out(2, &root.join("sub/dup.bin").to_string_lossy());
+        let w = mk_work(dup, dup_out.clone(), Some(canon_out));
+        let cache = world.config.paths.extract_cache_dir();
+        let res = materialize_one(&MaterializeKind::Hardlinks, &cache, &world.config, &w,
+                                  &Shutdown::detached(), None);
+        let r = res.expect("some").expect("ok");
+        assert!(r.placed && r.id == dup_out.id);
+        let canon = fs::metadata(root.join("sub/canon.bin")).expect("meta");
+        assert_eq!(fs::metadata(&dup_out.abs_path).expect("meta").ino(), canon.ino(),
+                   "hardlink shares the canonical inode");
+    }
+
+    #[test]
+    fn materialize_one_hardlink_missing_canonical_errors() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let canon_out = mk_out(1, &root.join("canon.bin").to_string_lossy());
+        let dup = mk_file(2, "/src/dup.bin", 7, 1, FileType::File, None, None, None);
+        let dup_out = mk_out(2, &root.join("dup.bin").to_string_lossy());
+        let w = mk_work(dup, dup_out.clone(), Some(canon_out));
+        let cache = world.config.paths.extract_cache_dir();
+        let res = materialize_one(&MaterializeKind::Hardlinks, &cache, &world.config, &w,
+                                  &Shutdown::detached(), None);
+        assert!(matches!(res, Some(Err((_, Error::FileStat(_))))));
+    }
+
+    #[test]
+    fn materialize_one_hardlink_conflict_keeps_existing() {
+        let world = ExtractWorld::place_test(|c| {
+            c.placement.conflict_policy = ConflictPolicy::PreferNewer;
+            c.placement.silent_conflicts = true;
+        });
+        let root = world.ensure_root();
+        fs::create_dir_all(root.join("sub")).expect("sub");
+        let canon_out = mk_out(1, &root.join("sub/canon.bin").to_string_lossy());
+        fs::write(&canon_out.abs_path, b"payload").expect("write");
+        let dst = root.join("sub/dup.bin");
+        fs::write(&dst, b"keep-me").expect("write");
+        let live = live_dt(&dst);
+        let mut dup = mk_file(2, "/src/dup.bin", 7, 1, FileType::File, None, None, None);
+        dup.mtime = Some(live - chrono::TimeDelta::seconds(3600));
+        let dup_out = mk_out(2, &dst.to_string_lossy());
+        let w = mk_work(dup, dup_out.clone(), Some(canon_out));
+        let cache = world.config.paths.extract_cache_dir();
+        let res = materialize_one(&MaterializeKind::Hardlinks, &cache, &world.config, &w,
+                                  &Shutdown::detached(), None);
+        let r = res.expect("some").expect("ok");
+        assert!(!r.placed && r.conflict);
+        assert_eq!(fs::read(&dst).expect("read"), b"keep-me");
+    }
+
+    #[test]
+    fn materialize_one_other_symlink() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let can = mk_file(1, "/src/link", 0, 1, FileType::Symlink(LinkType::File), Some("/tgt"), None, None);
+        let out = mk_out(1, &root.join("link").to_string_lossy());
+        let w = mk_work(can, out.clone(), None);
+        let cache = world.config.paths.extract_cache_dir();
+        let res = materialize_one(&MaterializeKind::Others, &cache, &world.config, &w,
+                                  &Shutdown::detached(), None);
+        let r = res.expect("some").expect("ok");
+        assert!(r.placed);
+        assert_eq!(fs::read_link(&out.abs_path).expect("readlink"), PathBuf::from("/tgt"));
+    }
+
+    // ---------------------------------------------------------------------
+    // process_results
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn process_results_sets_flags_and_records_errors() {
+        let world = ExtractWorld::place_test(|_| {});
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        let out_path = world.root().join("a.bin");
+        let out = world.add_out(&out_path.to_string_lossy(), id, Some(OutTreeId(1)));
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let ok = MaterializeResult { id: out, placed: true, conflict: false, removed: false, used_copy: true };
+        let err = FileStatError::io(&out_path, IoError::new(ErrorKind::Other, "boom"));
+        let results = vec![
+            Ok(ok),
+            Err((OutTreeId(99), Error::FileStat(err))),
+        ];
+        process_results(results, &mut recorder, &world.db, false, true).expect("process");
+        assert!(world.out_flag(out, OutTreeFlag::Placed));
+        assert!(!world.out_flag(out, OutTreeFlag::UsedRefLink), "used_copy=true => no reflink");
+        assert_eq!(recorder.buffered(), 1);
+    }
+
+    #[test]
+    fn process_results_ignores_interrupted() {
+        let world = ExtractWorld::place_test(|_| {});
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let results = vec![Err((OutTreeId(1), Error::Interrupted))];
+        process_results(results, &mut recorder, &world.db, false, false).expect("process");
+        assert_eq!(recorder.buffered(), 0);
+    }
+
+    #[test]
+    fn process_results_panics_on_unexpected_error() {
+        let world = ExtractWorld::place_test(|_| {});
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let results = vec![Err((OutTreeId(1), Error::Other(anyhow::anyhow!("x"))))];
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            process_results(results, &mut recorder, &world.db, false, false)
+        }));
+        assert!(res.is_err());
+    }
+
+    // ---------------------------------------------------------------------
+    // workers (channel)
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn copy_worker_sends_none_on_dropped_queue() {
+        let (s, r) = bounded::<StrippedRecord>(4);
+        let (os, or) = bounded::<Option<CopyOutcome>>(4);
+        drop(s);
+        copy_canonical_worker(
+            PathBuf::from("/base"), PathBuf::from("/cache"), false, true,
+            indicatif::ProgressBar::hidden(), Shutdown::detached(), r, os,
+        );
+        assert!(matches!(or.recv(), Ok(None)));
+    }
+
+    #[test]
+    fn copy_worker_copies_then_sends_none() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let base = root.join(".sources");
+        fs::create_dir_all(&base).expect("base");
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        world.put_payload(id, b"abc");
+        let row = world.db.get_file_by_id::<StrippedRecord>(id).expect("get").expect("row");
+        let (s, r) = bounded::<StrippedRecord>(4);
+        let (os, or) = bounded::<Option<CopyOutcome>>(4);
+        let sh = Shutdown::detached();
+        s.send(row.clone()).expect("send");
+        drop(s);
+        copy_canonical_worker(
+            base.clone(), world.config.paths.extract_cache_dir(), false, true,
+            indicatif::ProgressBar::hidden(), sh, r, os,
+        );
+        match or.recv().expect("recv") {
+            Some(Ok((fid, _))) => assert_eq!(fid, id),
+            other => panic!("expected Ok outcome, got {other:?}"),
+        }
+        assert!(matches!(or.recv(), Ok(None)));
+        assert!(base.join(row.tar_member_name().expect("cid")).is_file());
+    }
+
+    #[test]
+    fn materialize_worker_places_then_sends_none() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        world.put_payload(id, b"abc");
+        let can = world.db.get_file_by_id::<FileRecord>(id).expect("get").expect("row");
+        let out = mk_out(1, &root.join("a.bin").to_string_lossy());
+        let w = mk_work(can, out.clone(), None);
+        let (s, r) = bounded::<MaterializeWork>(4);
+        let (os, or) = bounded::<Option<MaterializeOutcome>>(4);
+        s.send(w).expect("send");
+        drop(s);
+        materialize_worker(MaterializeKind::Files, world.config.clone(), None,
+                           Shutdown::detached(), r, os);
+        match or.recv().expect("recv") {
+            Some(Ok(res)) => assert!(res.placed),
+            other => { let _ = other; panic!("expected placed outcome") },
+        }
+        assert!(matches!(or.recv(), Ok(None)));
+        assert!(out.abs_path.is_file());
+    }
+
+    #[test]
+    fn materialize_worker_force_breaks_and_sends_none() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        world.put_payload(id, b"abc");
+        let can = world.db.get_file_by_id::<FileRecord>(id).expect("get").expect("row");
+        let out = mk_out(1, &root.join("a.bin").to_string_lossy());
+        let w = mk_work(can, out, None);
+        let (s, r) = bounded::<MaterializeWork>(4);
+        let (os, or) = bounded::<Option<MaterializeOutcome>>(4);
+        let sh = Shutdown::detached();
+        sh.request_force();
+        s.send(w).expect("send");
+        drop(s);
+        materialize_worker(MaterializeKind::Files, world.config.clone(), None, sh, r, os);
+        assert!(matches!(or.recv(), Ok(None)), "force must skip in-flight work");
+    }
+
+    // ---------------------------------------------------------------------
+    // materialize_link_tree
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn link_tree_absolute_links_symlink_to_source() {
+        let world = ExtractWorld::place_test(|c| {
+            c.placement.link_tree = true;
+            c.placement.absolute_links = true;
+        });
+        let root = world.ensure_root();
+        let base = root.join(".sources");
+        fs::create_dir_all(&base).expect("base");
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        let cid = content_id_from_digest(Some(&[1; 20]), 3, id, Path::new("f.bin")).0;
+        fs::write(base.join(&cid), b"abc").expect("write payload");
+        let out_id = world.add_out(&root.join("a.bin").to_string_lossy(), id, None);
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        materialize_link_tree(&world.rt(), &mut recorder).expect("link tree");
+        assert_eq!(fs::read_link(root.join("a.bin")).expect("readlink"), base.join(&cid));
+        assert!(world.out_flag(out_id, OutTreeFlag::Placed));
+    }
+
+    #[test]
+    fn link_tree_relative_links_resolve_under_root() {
+        let world = ExtractWorld::place_test(|c| c.placement.link_tree = true);
+        let root = world.ensure_root();
+        let base = root.join(".sources");
+        fs::create_dir_all(&base).expect("base");
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        let cid = content_id_from_digest(Some(&[1; 20]), 3, id, Path::new("f.bin")).0;
+        fs::write(base.join(&cid), b"abc").expect("write payload");
+        // out at root/sub/a.bin -> relative target resolves to root/.sources/cid
+        let sub = root.join("sub");
+        fs::create_dir_all(&sub).expect("sub");
+        world.add_out(&sub.join("a.bin").to_string_lossy(), id, None);
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        materialize_link_tree(&world.rt(), &mut recorder).expect("link tree");
+        let link = fs::read_link(sub.join("a.bin")).expect("readlink");
+        assert_eq!(link, PathBuf::from("../.sources").join(&cid));
+        assert!(sub.join("../.sources").join(&cid).exists());
+    }
+
+    #[test]
+    fn link_tree_hard_links_use_same_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let world = ExtractWorld::place_test(|c| {
+            c.placement.link_tree = true;
+            c.placement.use_hard_links = true;
+        });
+        let root = world.ensure_root();
+        let base = root.join(".sources");
+        fs::create_dir_all(&base).expect("base");
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        let cid = content_id_from_digest(Some(&[1; 20]), 3, id, Path::new("f.bin")).0;
+        fs::write(base.join(&cid), b"abc").expect("write payload");
+        let out_id = world.add_out(&root.join("a.bin").to_string_lossy(), id, None);
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        materialize_link_tree(&world.rt(), &mut recorder).expect("link tree");
+        let src_ino = fs::metadata(base.join(&cid)).expect("meta").ino();
+        assert_eq!(fs::metadata(root.join("a.bin")).expect("meta").ino(), src_ino);
+        assert!(world.out_flag(out_id, OutTreeFlag::Placed));
+    }
+
+    #[test]
+    fn link_tree_existing_path_errors() {
+        let world = ExtractWorld::place_test(|c| c.placement.link_tree = true);
+        let root = world.ensure_root();
+        let base = root.join(".sources");
+        fs::create_dir_all(&base).expect("base");
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        let cid = content_id_from_digest(Some(&[1; 20]), 3, id, Path::new("f.bin")).0;
+        fs::write(base.join(&cid), b"abc").expect("write payload");
+        let dst = root.join("a.bin");
+        fs::write(&dst, b"pre-existing").expect("write dst");
+        world.add_out(&dst.to_string_lossy(), id, None);
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let res = materialize_link_tree(&world.rt(), &mut recorder);
+        assert!(matches!(res, Err(Error::Config(_))), "Link Tree must be empty");
+    }
+
+    // ---------------------------------------------------------------------
+    // copy_canonicals_to_source
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn copy_canonicals_moves_payloads_and_flags() {
+        let world = ExtractWorld::place_test(|c| c.placement.link_tree = true);
+        let root = world.ensure_root();
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        let cid = world.put_payload(id, b"abc");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        copy_canonicals_to_source(&world.rt(), &mut recorder).expect("move");
+        let dst = root.join(".sources").join(cid.file_name().expect("name"));
+        assert_eq!(fs::read(&dst).expect("read"), b"abc");
+        assert!(!cid.exists(), "cache removed after move");
+        assert!(world.file_flag(id, FileFlag::AtLinkSource));
+    }
+
+    #[test]
+    fn copy_canonicals_custom_link_source() {
+        let world = ExtractWorld::place_test(|c| {
+            c.placement.link_tree = true;
+            c.placement.link_source = Some(PathBuf::from("links"));
+        });
+        let root = world.ensure_root();
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        let cid = world.put_payload(id, b"abc");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        copy_canonicals_to_source(&world.rt(), &mut recorder).expect("move");
+        assert_eq!(fs::read(root.join("links").join(cid.file_name().expect("name"))).expect("read"),
+                   b"abc");
+    }
+
+    #[test]
+    fn copy_canonicals_no_pending_drops_queue() {
+        let world = ExtractWorld::place_test(|c| c.placement.link_tree = true);
+        let root = world.ensure_root();
+        fs::create_dir_all(&root).expect("root");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        copy_canonicals_to_source(&world.rt(), &mut recorder).expect("move");
+        assert!(world.db.drop_canonical_move_queue().is_ok(), "queue dropped");
+    }
+
+    // ---------------------------------------------------------------------
+    // prepare_extraction_dir
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn prepare_extraction_dir_builds_dir_tree() {
+        let world = ExtractWorld::place_test(|c| c.placement.no_create_dir = false);
+        world.db.set_out_tree_built().expect("out tree built");
+        let root = world.ensure_root();
+        let d1 = world.add_out_dir(&root.join("a").to_string_lossy());
+        let d2 = world.add_out_dir(&root.join("a/b").to_string_lossy());
+        let sid = world.db.add_get_source(Path::new("/x"), "test", Some(1),
+                                          Path::new("/x"), Path::new("/x"), Path::new("/x"),
+                                          crate::db::flags::SourceFlags::default(),
+        ).expect("source");
+        world.db.insert_ref_out_rows(&[(d1, sid), (d2, sid)]).expect("ref out");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        prepare_extraction_dir(&world.rt(), &mut recorder).expect("prepare");
+        assert!(root.join("a/b").is_dir());
+        assert!(world.db.dir_tree_is_built().expect("meta"));
+        assert_eq!(recorder.buffered(), 0);
+    }
+
+    #[test]
+    fn prepare_extraction_dir_force_interrupts() {
+        let world = ExtractWorld::place_test(|c| c.placement.no_create_dir = false);
+        world.db.set_out_tree_built().expect("out tree built");
+        let root = world.ensure_root();
+        let d1 = world.add_out_dir(&root.join("a").to_string_lossy());
+        let sid = world.db.add_get_source(Path::new("/x"), "test", Some(1),
+                                          Path::new("/x"), Path::new("/x"), Path::new("/x"),
+                                          crate::db::flags::SourceFlags::default(),
+        ).expect("source");
+        world.db.insert_ref_out_rows(&[(d1, sid)]).expect("ref out");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let sh = Shutdown::detached();
+        sh.request_force();
+        let res = prepare_extraction_dir(&world.rt_with(&sh), &mut recorder);
+        assert!(matches!(res, Err(Error::Interrupted)));
+    }
+
+    // ---------------------------------------------------------------------
+    // materialize_loop (3 passes)
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn materialize_loop_three_passes() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        // canonical file + dup + symlink
+        let cid_f = world.add_place_file("/src/canon.bin", 3, 1, FileType::File);
+        world.put_payload(cid_f, b"abc");
+        let out_f = world.add_out(&root.join("canon.bin").to_string_lossy(), cid_f, None);
+        world.db.with_transaction(|conn| {
+            conn.execute("UPDATE out_tree SET canonical_id = id WHERE id = :id",
+                         named_params! { ":id": out_f.0 }).expect("self canonical");
+            Ok(())
+        }).expect("canon tx");
+        let cid_d = world.add_dup_file("/src/dup.bin", cid_f);
+        let out_d = world.add_out(&root.join("dup.bin").to_string_lossy(), cid_d, Some(out_f));
+        let cid_l = world.add_place_symlink("/src/link", "/tgt");
+        let out_l = world.add_out(&root.join("link").to_string_lossy(), cid_l, None);
+
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        materialize_files(&world.rt(), &mut recorder).expect("files");
+        materialize_hardlinks(&world.rt(), &mut recorder).expect("hardlinks");
+        materialize_others(&world.rt(), &mut recorder).expect("others");
+
+        assert_eq!(fs::read(root.join("canon.bin")).expect("read"), b"abc");
+        assert!(world.out_flag(out_f, OutTreeFlag::Placed));
+        assert!(world.out_flag(out_d, OutTreeFlag::Placed));
+        assert!(world.out_flag(out_d, OutTreeFlag::IsHardlink));
+        assert_eq!(fs::read_link(root.join("link")).expect("readlink"), PathBuf::from("/tgt"));
+        assert!(world.out_flag(out_l, OutTreeFlag::Placed));
+    }
+
+    #[test]
+    fn pull_materialize_queue_orders_size_desc() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let small = world.add_place_file("/src/small.bin", 5, 1, FileType::File);
+        let large = world.add_place_file("/src/large.bin", 100, 2, FileType::File);
+        world.put_payload(small, b"12345");
+        world.put_payload(large, &vec![b'x'; 100]);
+        let out_s = world.add_out(&root.join("small.bin").to_string_lossy(), small, None);
+        let out_l = world.add_out(&root.join("large.bin").to_string_lossy(), large, None);
+        world.db.with_transaction(|conn| {
+            for id in [out_s.0, out_l.0] {
+                conn.execute("UPDATE out_tree SET canonical_id = id WHERE id = :id",
+                             named_params! { ":id": id }).expect("self canonical");
+            }
+            Ok(())
+        }).expect("canon tx");
+        world.db.create_materialize_queue().expect("create queue");
+        world.db.populate_materialize_queue().expect("populate queue");
+        let rows = world.db.pull_materialize_queue::<FileRecord>(0, 10).expect("pull");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, 1, "size DESC: large first");
+        assert_eq!(rows[0].1.size, 100);
+        assert_eq!(rows[1].1.size, 5);
+        assert_eq!(rows[0].2.abs_path, root.join("large.bin"));
+    }
+
+    // ---------------------------------------------------------------------
+    // run()
+    // ---------------------------------------------------------------------
+
+    fn seed_run_files(world: &ExtractWorld) -> (OutTreeId, OutTreeId, OutTreeId) {
+        let root = world.root();
+        let cid_f = world.add_place_file("/src/canon.bin", 3, 1, FileType::File);
+        world.put_payload(cid_f, b"abc");
+        let out_f = world.add_out(&root.join("canon.bin").to_string_lossy(), cid_f, None);
+        world.db.with_transaction(|conn| {
+            conn.execute("UPDATE out_tree SET canonical_id = id WHERE id = :id",
+                         named_params! { ":id": out_f.0 }).expect("self canonical");
+            Ok(())
+        }).expect("canon tx");
+        let cid_d = world.add_dup_file("/src/dup.bin", cid_f);
+        let out_d = world.add_out(&root.join("dup.bin").to_string_lossy(), cid_d, Some(out_f));
+        let cid_l = world.add_place_symlink("/src/link", "/tgt");
+        let out_l = world.add_out(&root.join("link").to_string_lossy(), cid_l, None);
+        world.db.set_placement_prologue_done().expect("prologue done");
+        (out_f, out_d, out_l)
+    }
+
+    #[test]
+    fn run_places_files_hardlinks_and_others() {
+        use std::os::unix::fs::MetadataExt;
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let (out_f, out_d, out_l) = seed_run_files(&world);
+        run(&world.rt()).expect("run");
+
+        assert_eq!(fs::read(root.join("canon.bin")).expect("read"), b"abc");
+        assert_eq!(fs::read(root.join("dup.bin")).expect("read"), b"abc");
+        assert_eq!(fs::metadata(root.join("canon.bin")).expect("meta").ino(),
+                   fs::metadata(root.join("dup.bin")).expect("meta").ino(),
+                   "dup must be a hardlink of the canonical");
+        assert_eq!(fs::read_link(root.join("link")).expect("readlink"), PathBuf::from("/tgt"));
+        assert!(!world.config.paths.extract_cache_dir().exists(),
+                "cache removed by cleanup_stage");
+        assert!(world.out_flag(out_f, OutTreeFlag::Placed));
+        assert!(world.out_flag(out_d, OutTreeFlag::Placed));
+        assert!(world.out_flag(out_d, OutTreeFlag::IsHardlink));
+        assert!(world.out_flag(out_l, OutTreeFlag::Placed));
+        let phase = world.db.get_file_by_id::<StrippedRecord>(
+            world.db.file_id_by_abs_path(Path::new("/src/canon.bin")).expect("lookup").expect("row")
+        ).expect("get").expect("row").phase;
+        assert_eq!(phase, FilePhase::AtDestination);
+    }
+
+    #[test]
+    fn run_clean_target_with_one_top_level() {
+        let world = ExtractWorld::place_test(|c| {
+            c.placement.clean_target = true;
+            c.placement.one_top_level = Some(PathBuf::from("otl"));
+            c.placement.no_create_dir = false;
+        });
+        let root = world.ensure_root();
+        // Step 1.1 wipes the *effective* root; it must exist for remove_dir_all.
+        fs::create_dir_all(root.join("otl")).expect("otl root");
+        fs::write(root.join("otl/stale.txt"), b"stale").expect("write stale");
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        world.put_payload(id, b"abc");
+        world.add_out_dir(&root.join("otl").to_string_lossy());
+        let out_f = world.add_out(&root.join("otl/a.bin").to_string_lossy(), id, None);
+        world.db.with_transaction(|conn| {
+            conn.execute("UPDATE out_tree SET canonical_id = id WHERE id = :id",
+                         named_params! { ":id": out_f.0 }).expect("self canonical");
+            Ok(())
+        }).expect("canon tx");
+        world.db.set_out_tree_built().expect("out tree built");
+        world.db.set_placement_prologue_done().expect("prologue done");
+        run(&world.rt()).expect("run");
+        assert!(!root.join("otl/stale.txt").exists(), "clean-target removed stale entry");
+        assert_eq!(fs::read(root.join("otl/a.bin")).expect("read"), b"abc");
+    }
+
+    #[test]
+    fn run_clean_target_without_one_top_level_is_noop() {
+        let world = ExtractWorld::place_test(|c| c.placement.clean_target = true);
+        let root = world.ensure_root();
+        fs::write(root.join("stale.txt"), b"stale").expect("write stale");
+        let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
+        world.put_payload(id, b"abc");
+        let out_f = world.add_out(&root.join("a.bin").to_string_lossy(), id, None);
+        world.db.with_transaction(|conn| {
+            conn.execute("UPDATE out_tree SET canonical_id = id WHERE id = :id",
+                         named_params! { ":id": out_f.0 }).expect("self canonical");
+            Ok(())
+        }).expect("canon tx");
+        world.db.set_placement_prologue_done().expect("prologue done");
+        run(&world.rt()).expect("run");
+        assert!(root.join("stale.txt").exists(), "clean-target requires --one-top-level");
+        assert_eq!(fs::read(root.join("a.bin")).expect("read"), b"abc");
+    }
+
+    #[test]
+    fn run_empty_out_tree_is_ok() {
+        let world = ExtractWorld::place_test(|_| {});
+        world.ensure_root();
+        world.db.set_placement_prologue_done().expect("prologue done");
+        run(&world.rt()).expect("run");
+    }
+
+    #[test]
+    fn run_link_tree_smoke() {
+        let world = ExtractWorld::place_test(|c| c.placement.link_tree = true);
+        let root = world.ensure_root();
+        let cid_f = world.add_place_file("/src/canon.bin", 3, 1, FileType::File);
+        world.put_payload(cid_f, b"abc");
+        let out_f = world.add_out(&root.join("canon.bin").to_string_lossy(), cid_f, None);
+        world.db.set_placement_prologue_done().expect("prologue done");
+        run(&world.rt()).expect("run");
+        // Only moved (canonical, `FileExtracted`) entries are linked; the target
+        // is the canonical's content id in the link source.
+        let rec = world.db.get_file_by_id::<FileRecord>(cid_f).expect("get").expect("row");
+        let source = root.join(".sources").join(rec.content_id().expect("cid").0);
+        // The link is written relative to the extraction root; it must resolve.
+        assert_eq!(fs::canonicalize(root.join("canon.bin")).expect("resolve"),
+                   fs::canonicalize(&source).expect("source exists"));
+        assert!(world.out_flag(out_f, OutTreeFlag::Placed));
+        assert!(!world.config.paths.extract_cache_dir().exists(), "cache removed");
+    }
+
+    // ---------------------------------------------------------------------
+    // cleanup_stage
+    // ---------------------------------------------------------------------
+
+    fn cache_as_file(world: &ExtractWorld) -> PathBuf {
+        let cache = world.config.paths.extract_cache_dir();
+        fs::remove_dir_all(&cache).expect("remove cache dir");
+        fs::write(&cache, b"not a dir").expect("write file");
+        cache
+    }
+
+    #[test]
+    fn cleanup_stage_fail_fast_errors_on_undir() {
+        let world = ExtractWorld::place_test(|c| c.process.fail_fast = true);
+        cache_as_file(&world);
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let res = cleanup_stage(&world.rt(), &mut recorder);
+        assert!(matches!(res, Err(Error::Config(_))));
+    }
+
+    #[test]
+    fn cleanup_stage_non_fatal_warns_on_undir() {
+        let world = ExtractWorld::place_test(|_| {});
+        cache_as_file(&world);
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        cleanup_stage(&world.rt(), &mut recorder).expect("ok");
+    }
+
+    #[test]
+    fn cleanup_stage_keeps_cache_when_keeping_stage() {
+        let world = ExtractWorld::place_test(|c| c.process.cleanup.keep_stage = true);
+        let cache = world.config.paths.extract_cache_dir();
+        fs::write(cache.join("x"), b"x").expect("write");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        cleanup_stage(&world.rt(), &mut recorder).expect("ok");
+        assert!(cache.is_dir(), "cache kept");
+    }
+
+    // ---------------------------------------------------------------------
+    // Integration: hardlink groups on a real filesystem
+    // ---------------------------------------------------------------------
+
+    /// Real-disk hardlink pair: `link_a` and `link_b` share an inode.
+    fn disk_hardlink_pair(world: &ExtractWorld) -> (PathBuf, PathBuf) {
+        let a = world.path("src/link_a");
+        let b = world.path("src/sub/link_b");
+        fs::create_dir_all(b.parent().expect("parent")).expect("dirs");
+        fs::write(&a, b"hard").expect("write a");
+        fs::hard_link(&a, &b).expect("hardlink b");
+        (a, b)
+    }
+
+    /// Seed files/out rows for a two-file same-inode group and run the given
+    /// canonical election; returns (out_a, out_b) ids.
+    /// `disjoint`: each out row belongs to exactly one source (`a` in s1, `b`
+    /// in s2); otherwise `b` is shared by both sources (overlapping trees).
+    fn seed_hardlink_group(
+        world: &ExtractWorld,
+        sources: bool,
+        disjoint: bool,
+        mark: impl FnOnce(&ExtractWorld) -> ()) -> (OutTreeId, OutTreeId) {
+        use std::os::unix::fs::MetadataExt;
+        let (a, _b) = disk_hardlink_pair(world);
+        let md_a = fs::metadata(&a).expect("meta");
+        let fa = world.add_place_file_inode("/src/link_a", 4, 1, FileType::File,
+                                      Some(md_a.dev()), Some(md_a.ino()));
+        let fb = world.add_place_file_inode("/src/sub/link_b", 4, 2, FileType::File,
+                                      Some(md_a.dev()), Some(md_a.ino()));
+        let root = world.root();
+        let out_a = world.add_out(&root.join("link_a").to_string_lossy(), fa, None);
+        let out_b = world.add_out(&root.join("sub/link_b").to_string_lossy(), fb, None);
+        fs::create_dir_all(root.join("sub")).expect("dest sub dir");
+        if sources {
+            let s1 = world.db.add_get_source(Path::new("/src"), "test", Some(1),
+                                             Path::new("/src"), Path::new("/src"), Path::new("/src"),
+                                             crate::db::flags::SourceFlags::default()
+                                                 .with(crate::db::flags::SourceFlag::IsDirectory, true),
+            ).expect("source");
+            let s2 = world.db.add_get_source(Path::new("/src/sub"), "test", Some(1),
+                                             Path::new("/src/sub"), Path::new("/src/sub"), Path::new("/src/sub"),
+                                             crate::db::flags::SourceFlags::default()
+                                                 .with(crate::db::flags::SourceFlag::IsDirectory, true),
+            ).expect("source");
+            let refs: &[(crate::db::types::OutTreeId, i64)] = if disjoint {
+                &[(out_a, s1), (out_b, s2)]
+            } else {
+                &[(out_a, s1), (out_b, s1), (out_b, s2)]
+            };
+            world.db.insert_ref_out_rows(refs).expect("ref out");
+        }
+        // cache payloads for both self-canonical content rows
+        world.put_payload(fa, b"hard");
+        world.put_payload(fb, b"hard");
+        mark(world);
+        (out_a, out_b)
+    }
+
+    fn materialize_group(world: &ExtractWorld) {
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        materialize_files(&world.rt(), &mut recorder).expect("files");
+        materialize_hardlinks(&world.rt(), &mut recorder).expect("hardlinks");
+    }
+
+    fn canonical_of(world: &ExtractWorld, out: OutTreeId) -> Option<OutTreeId> {
+        world.db.with_transaction(|conn| {
+            let v: Option<i64> = conn.query_row(
+                "SELECT canonical_id FROM out_tree WHERE id = :id",
+                named_params! { ":id": out.0 }, |r| r.get(0),
+            ).unwrap_or(None);
+            Ok(v.map(OutTreeId))
+        }).expect("read canonical")
+    }
+
+    #[test]
+    fn integration_global_links_shared_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let world = ExtractWorld::place_test(|_| {});
+        world.ensure_root();
+        let (out_a, out_b) = seed_hardlink_group(&world, true, false, |w| {
+            w.db.mark_global_canonical().expect("global");
+        });
+        assert_eq!(canonical_of(&world, out_b), Some(out_a),
+                   "same-inode group elected a single canonical out row");
+        materialize_group(&world);
+        let root = world.root();
+        let md_a = fs::metadata(root.join("link_a")).expect("meta");
+        let md_b = fs::metadata(root.join("sub/link_b")).expect("meta");
+        assert_eq!(md_a.ino(), md_b.ino(), "materialized group is a real hardlink");
+        assert!(world.out_flag(out_b, OutTreeFlag::IsHardlink));
+    }
+
+    #[test]
+    fn integration_source_grouping_keeps_sources_disjoint() {
+        use std::os::unix::fs::MetadataExt;
+        let world = ExtractWorld::place_test(|_| {});
+        world.ensure_root();
+        let (out_a, out_b) = seed_hardlink_group(&world, true, true, |w| {
+            // Per-source grouping: each source holds exactly one member, so no
+            // cross-source link is elected.
+            let sids = w.db.list_sources(None, 0, 100).expect("sources");
+            for s in &sids {
+                w.db.mark_source_canonical(s.id).expect("source canonical");
+            }
+        });
+        assert_eq!(canonical_of(&world, out_a), Some(out_a));
+        assert_eq!(canonical_of(&world, out_b), Some(out_b),
+                   "disjoint sources must not cross-link");
+        materialize_group(&world);
+        let root = world.root();
+        let md_a = fs::metadata(root.join("link_a")).expect("meta");
+        let md_b = fs::metadata(root.join("sub/link_b")).expect("meta");
+        assert_ne!(md_a.ino(), md_b.ino(), "separate copies, not a hardlink");
+        assert!(!world.out_flag(out_b, OutTreeFlag::IsHardlink));
+    }
+
+    #[test]
+    fn integration_none_grouping_never_links() {
+        use std::os::unix::fs::MetadataExt;
+        let world = ExtractWorld::place_test(|_| {});
+        world.ensure_root();
+        let (out_a, out_b) = seed_hardlink_group(&world, true, false, |w| {
+            w.db.mark_all_canonical().expect("all canonical");
+        });
+        assert_eq!(canonical_of(&world, out_a), Some(out_a));
+        assert_eq!(canonical_of(&world, out_b), Some(out_b));
+        materialize_group(&world);
+        let root = world.root();
+        let md_a = fs::metadata(root.join("link_a")).expect("meta");
+        let md_b = fs::metadata(root.join("sub/link_b")).expect("meta");
+        assert_ne!(md_a.ino(), md_b.ino(), "None grouping must never link");
+    }
+
+    #[test]
+    fn integration_dir_and_symlink_not_grouped() {
+        let world = ExtractWorld::place_test(|_| {});
+        let root = world.ensure_root();
+        let d = root.join("d");
+        fs::create_dir_all(&d).expect("dir");
+        let idir = world.add_place_file_inode("/d", 0, 9, FileType::Directory, Some(1), Some(500));
+        let sa = root.join("sa");
+        std::os::unix::fs::symlink(&d, &sa).expect("symlink");
+        let isa = world.add_place_file_inode("/sa", 0, 9, FileType::Symlink(LinkType::Directory),
+                                       Some(1), Some(501));
+        let out_dir = world.add_out_dir(&root.join("d").to_string_lossy());
+        let out_sa = world.add_out(&root.join("sa").to_string_lossy(), isa, None);
+        let _ = idir;
+        world.db.mark_global_canonical().expect("global");
+        assert_eq!(canonical_of(&world, out_dir), None, "dir rows never canonical");
+        assert_eq!(canonical_of(&world, out_sa), None, "symlink rows never grouped");
     }
 }
