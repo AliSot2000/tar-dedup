@@ -496,10 +496,10 @@ pub fn list_out_tree_for_linking<R: SqlFileRow>(
         SELECT {file_cols}, {out_cols}
         FROM files AS can
         JOIN files AS ent ON can.id = ent.canonical_id
-        JOIN out_tree AS o ON f.id = o.file_id
-        WHERE f.ftype NOT IN ('dir', 'unknown')
+        JOIN out_tree AS o ON ent.id = o.file_id
+        WHERE ent.ftype NOT IN ('dir', 'unknown')
             {filter_placed}
-            AND f.flags & :moved != 0
+            AND ent.flags & :moved != 0
         ORDER BY o.id LIMIT :batch_size
         ")).to_panic()?;
     let results = stmt.query_map(
