@@ -570,8 +570,10 @@ fn materialize_one(
     shutdown: &Shutdown,
     bar: Option<&ProgressBar>)
     -> Option<MaterializeOutcome> {
+
     let stripped = w.canonical.to_stripped();
     let outcome = match kind {
+
         MaterializeKind::Files => {
             let target = &w.out;
             let id = w.canonical.content_id()
@@ -599,6 +601,7 @@ fn materialize_one(
                 }
             }
         }
+
         MaterializeKind::Hardlinks => {
             let out_canon = w.out_canon.as_ref()
                 .expect("PRECONDITION FAILED: hardlink work must carry the canonical out row");
