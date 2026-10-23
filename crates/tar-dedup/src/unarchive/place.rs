@@ -815,12 +815,7 @@ fn relative_pardirs_to_dir(dir: &Path, file: &Path) -> PathBuf {
     let below = parent
         .strip_prefix(&dir)
         .expect("parent must be under dir after starts_with check");
-    // INFO Check exists but it should already be guaranteed not to exist.
-    // for c in below.components() {
-    //     if !matches!(c, Component::Normal(_)) {
-    //         assert!(false, "Absolute Path contained non-Normal intermediate entry.");
-    //     }
-    // }
+    // INFO no check of components required. Normal is implied by the preconditions.
     let depth = below.components().count();
     if depth == 0 {
         PathBuf::from(".")
