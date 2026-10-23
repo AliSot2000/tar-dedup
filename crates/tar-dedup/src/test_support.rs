@@ -18,8 +18,9 @@ use crate::db::Database;
 use crate::db::content_id::content_id_from_digest;
 use crate::db::flags::FileFlag;
 use crate::db::types::{FileId, FilePhase, FileRecord, FileType, NewFileRecord, StrippedRecord};
-use crate::progress::{ARCHIVE_MULTIPLIER, ProgressBarSet};
+use crate::progress::{ARCHIVE_MULTIPLIER, EXTRACT_MULTIPLIER, ProgressBarSet};
 use crate::shutdown::Shutdown;
+use crate::unarchive::ExtractRTArgs;
 use chrono::{DateTime, Utc};
 use rusqlite::named_params;
 
@@ -212,6 +213,82 @@ impl TestWorld {
 impl Default for TestWorld {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Extract-side test world: a tempdir with the extract config built from it by
+/// `make_config` (re-rooting `work_dir`/`output_dir` under the tempdir), a DB
+/// opened at `db_path()`, a detached shutdown and the standard extract progress
+/// bar set. All fields are `pub` for direct test access.
+///
+/// Module-specific seeders live as local `impl ExtractWorld` blocks in the test
+/// modules — inherent impls may be added by any module of the defining crate —
+/// so the shared world stays generic (cf. `unarchive/scan.rs`, `filter.rs` and
+/// `place_prologue.rs` which previously duplicated this skeleton).
+pub struct ExtractWorld {
+    pub dir: tempfile::TempDir,
+    pub db: Database,
+    pub shutdown: Shutdown,
+    pub progress: ProgressBarSet,
+    pub config: ExtractConfig,
+}
+
+impl ExtractWorld {
+    /// Fresh tempdir; `make_config` builds the extract config from the tempdir
+    /// path. The work dir is created and the DB opened at `db_path()` (what
+    /// `extract_cache_dir()`/`stage_dir()` resolve to for extract).
+    pub fn with_config(make_config: impl FnOnce(&Path) -> ExtractConfig) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = make_config(dir.path());
+        fs::create_dir_all(&config.paths.work_dir).expect("create work dir");
+        let db = Database::open(&config.paths.db_path()).expect("open db");
+        Self {
+            dir,
+            db,
+            shutdown: Shutdown::detached(),
+            progress: ProgressBarSet::new(EXTRACT_MULTIPLIER),
+            config,
+        }
+    }
+
+    pub fn rt(&self) -> ExtractRTArgs<'_> {
+        ExtractRTArgs {
+            config: &self.config,
+            db: &self.db,
+            shutdown: &self.shutdown,
+            progress: &self.progress,
+        }
+    }
+
+    pub fn rt_with<'a>(&'a self, shutdown: &'a Shutdown) -> ExtractRTArgs<'a> {
+        ExtractRTArgs {
+            config: &self.config,
+            db: &self.db,
+            shutdown,
+            progress: &self.progress,
+        }
+    }
+
+    pub fn path(&self, name: &str) -> PathBuf {
+        self.dir.path().join(name)
+    }
+
+    /// Seed the joint `-1` internal include rule in both `filter_reason_*`
+    /// tables so rows pinned to `include_reason_* = -1` satisfy the FK and the
+    /// eager-extract gate (`should_extract_canonical_id`). Idempotent.
+    pub fn seed_filter(&self) {
+        for table in ["archive", "extract"] {
+            self.db.with_transaction(|conn| {
+                conn.execute(
+                    &format!(
+                        "INSERT OR IGNORE INTO filter_reason_{table} (id, source, line, expression) \
+                         VALUES (-1, 'internal', NULL, '.*')"
+                    ),
+                    [],
+                ).expect("seed internal include rule");
+                Ok(())
+            }).expect("seed filter tx");
+        }
     }
 }
 
