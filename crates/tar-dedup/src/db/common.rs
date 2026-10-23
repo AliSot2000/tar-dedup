@@ -471,6 +471,8 @@ pub fn count_files_entries_in_phase(conn: &Connection, phase: FilePhase) -> Resu
     Ok(count as u64)
 }
 
+/// Test-only: list file rows in a phase (backing `Database::t_files_in_phase`).
+#[cfg(test)]
 pub fn list_files_entries_in_phase<R: SqlFileRow>(conn: &Connection, phase: FilePhase) -> Result<Vec<R>> {
     let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!(
@@ -521,16 +523,6 @@ pub(crate) fn upsert_meta(conn: &Connection, key: &str, value: &str) -> Result<(
             ":key": key,
             ":value": value,
         },
-    ).to_panic()?;
-    Ok(())
-}
-
-/// Remove a key. `meta.value` is `NOT NULL`, so an absent row is how a value that has
-/// no meaning yet is represented.
-pub(crate) fn delete_meta(conn: &Connection, key: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM meta WHERE key = :key",
-        named_params! { ":key": key },
     ).to_panic()?;
     Ok(())
 }
