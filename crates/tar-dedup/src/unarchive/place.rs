@@ -457,7 +457,7 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
                 let entries = rt.db.list_out_tree_for_hardlinks::<FileRecord>(
                     &last_id, rt.config.process.feed_chunk as u64)?;
                 if !entries.is_empty() {
-                    last_id = entries[entries.len() - 1].1.id;
+                    last_id = entries[entries.len() - 1].2.id; // need .2 rather than .1!
                 }
                 let out = entries
                     .into_iter()
