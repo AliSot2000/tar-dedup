@@ -186,8 +186,7 @@ pub fn list_canonical_files_for_move<R: SqlFileRow>(
 /// (mirrors `db/rehash.rs::files_to_rehash_where`).
 fn files_to_move_where(filter: bool) -> String {
     let sql_filt = if filter {
-        " AND {}".to_string()
-            + crate::db::common::generate_archive_and_extract_filter(None).as_str()
+        format!(" AND {}", crate::db::common::generate_archive_and_extract_filter(None))
     } else {
         String::new()
     };
