@@ -310,7 +310,6 @@ mod tests {
     use crate::common::defaults::OUT_CAPACITY;
     use crate::common::files::original_extension;
     use crate::common::utf8::require_utf8;
-    use crate::config::ExtractConfig;
     use crate::db::flags::FileFlag;
     use crate::db::types::{FileId, FilePhase, FileType, NewFileRecord};
     use crate::error::FileStatError;
@@ -330,13 +329,6 @@ mod tests {
     }
 
     impl ExtractWorld {
-        /// Scan-side world (`for_scan_test` defaults `force = true`, jobs =
-        /// io_jobs = 1, `scan.rehash = true`; tests override as needed).
-        fn scan_test() -> Self {
-            Self::with_config(|dp| ExtractConfig::for_scan_test(
-                dp.join("archive.tar"), dp.join("estage"), dp.join("out")))
-        }
-
         /// Elected canonical row: self-canonical `extract_filtered` file with a
         /// digest + `FileExtracted`, joint filter passed, payload written to the
         /// stage dir (== work dir for extract) under its member name.
