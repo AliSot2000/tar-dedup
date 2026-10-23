@@ -1212,6 +1212,34 @@ fn capture_error(rec: &mut Recorder, path: &PathBuf, iof: fn(&Path) -> io::Resul
     }
 }
 
+/// Attempt to clean up the stage if it is not requested to be kept and handle any errors
+/// accordingly.
+fn cleanup_stage(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
+    if !rt.config.process.cleanup.keep_stage {
+        let cache_dir = rt.config.paths.extract_cache_dir();
+        match capture_error(
+            recorder,
+            &cache_dir.to_path_buf(), |p| fs::remove_dir_all(p)) {
+
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if rt.config.process.fail_fast {
+                    Err(Error::Config(format!(
+                        "Failed to clean up stage directors '{}' with error {}",
+                        cache_dir.display(), e)))
+                } else {
+                    tracing::warn!("Failed to clean up stage directors '{}' with error {}",
+                        cache_dir.display(), e);
+                    Ok(())
+                }
+            }
+        }
+    } else {
+        Ok(())
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
