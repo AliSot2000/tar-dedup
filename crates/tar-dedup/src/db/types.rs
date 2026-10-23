@@ -311,10 +311,6 @@ impl FilePhase {
                 | Self::Archived
         )
     }
-
-    pub fn is_extract_phase(self) -> bool {
-        !self.is_archive_phase()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -338,12 +334,6 @@ pub struct FilterExpression {
 }
 
 impl FilterExpression {
-    pub fn is_exclusion_filter(&self) -> bool {
-        self.id > 0
-    }
-    pub fn is_inclusion_filter(&self) -> bool {
-        self.id < 0
-    }
     pub fn is_internal(&self) -> bool {
         self.from == "internal"
     }

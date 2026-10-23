@@ -810,7 +810,7 @@ mod tests {
     }
 
     fn rows_under(world: &TestWorld, prefix: &Path) -> Vec<PathBuf> {
-        world.db.files_in_phase::<StrippedRecord>(FilePhase::Inventoried).expect("rows")
+        world.db.t_files_in_phase::<StrippedRecord>(FilePhase::Inventoried).expect("rows")
             .into_iter()
             .map(|r| r.abs_path)
             .filter(|p| p.starts_with(prefix))

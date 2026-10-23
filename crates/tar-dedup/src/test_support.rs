@@ -386,7 +386,7 @@ pub fn insert(db: &Database, abs_path: &str, size: u64, ftype: FileType) -> File
     })
     .expect("insert");
 
-    db.files_in_phase::<StrippedRecord>(FilePhase::Inventoried)
+    db.t_files_in_phase::<StrippedRecord>(FilePhase::Inventoried)
         .expect("list")
         .into_iter()
         .find(|f| f.abs_path == Path::new(abs_path))

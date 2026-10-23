@@ -68,17 +68,6 @@ impl<'a> Recorder<'a> {
         self.db = Some(db);
     }
 
-    /// Drop the database reference, going back to speculative. Buffered drafts are
-    /// preserved; a later [`bind`] + [`flush`] can still persist them.
-    pub fn detach(&mut self) {
-        self.db = None;
-    }
-
-    /// Disable/enable automatic flushing once the buffer exceeds the default limit.
-    pub fn set_auto_flush(&mut self, on: bool) {
-        self.auto_flush = on;
-    }
-
     /// Override the auto-flush threshold (draft count at which a flush is tried).
     /// Useful once a fresh-from-disk database is attached to the process and its
     /// stored config carries the authoritative limit (e.g. extract/resume).
@@ -169,7 +158,7 @@ impl<'a> Recorder<'a> {
         self.flush_limit
     }
 
-    /// Whether auto-flush is active (see [`set_auto_flush`]).
+    /// Whether auto-flush is active.
     pub fn auto_flush(&self) -> bool {
         self.auto_flush
     }

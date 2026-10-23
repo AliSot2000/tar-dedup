@@ -185,7 +185,9 @@ impl Database {
         common::count_files_entries_in_phase(&*self.conn(), phase)
     }
 
-    pub fn files_in_phase<R: SqlFileRow>(&self, phase: FilePhase) -> Result<Vec<R>> {
+    /// Test-only: list file rows in a given phase.
+    #[cfg(test)]
+    pub fn t_files_in_phase<R: SqlFileRow>(&self, phase: FilePhase) -> Result<Vec<R>> {
         common::list_files_entries_in_phase(&*self.conn(), phase)
     }
 
@@ -582,10 +584,6 @@ impl Database {
 
     pub fn finalize_archive_session(&self, session_id: i64) -> Result<()> {
         tar_writer::finalize_session(&*self.conn(), session_id)
-    }
-
-    pub fn mark_archive_session_aborted(&self, session_id: i64) -> Result<()> {
-        tar_writer::mark_session_aborted(&*self.conn(), session_id)
     }
 
     pub fn abort_incomplete_archive_session(&self, session: &ArchiveSession) -> Result<()> {
