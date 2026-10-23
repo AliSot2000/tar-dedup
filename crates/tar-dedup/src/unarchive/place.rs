@@ -1202,6 +1202,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
     }
 }
 
+/// Capture the error of io functions (usually fs::...). The error is captured and passed out.
 fn capture_error(rec: &mut Recorder, path: &PathBuf, iof: fn(&Path) -> io::Result<()>)
     -> Result<()> {
     match iof(&path) {
