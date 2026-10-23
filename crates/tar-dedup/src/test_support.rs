@@ -290,6 +290,13 @@ impl ExtractWorld {
             }).expect("seed filter tx");
         }
     }
+
+    /// Scan-side world: `for_scan_test` defaults `force = true`, jobs =
+    /// io_jobs = 1, `scan.rehash = true`; tests override as needed.
+    pub fn scan_test() -> Self {
+        Self::with_config(|dp| ExtractConfig::for_scan_test(
+            dp.join("archive.tar"), dp.join("estage"), dp.join("out")))
+    }
 }
 
 // -----------------------------------------------------------------------------
