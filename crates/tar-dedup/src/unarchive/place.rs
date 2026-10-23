@@ -67,6 +67,8 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         materialize_link_tree(rt, &mut recorder)?;
     } else {
         materialize_files(rt, &mut recorder)?;
+        cleanup_stage(&rt, &mut recorder)?; // Free space!
+
         materialize_hardlinks(rt, &mut recorder)?;
         materialize_others(rt, &mut recorder)?;
     }
@@ -79,25 +81,8 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         rt.db.count_errors(Some("place"))?,
     );
 
-    if !rt.config.process.cleanup.keep_stage {
-        let cache_dir = rt.config.paths.extract_cache_dir();
-        match capture_error(
-            &mut recorder,
-            &cache_dir.to_path_buf(), |p| fs::remove_dir_all(p)) {
+    cleanup_stage(&rt, &mut recorder)?;
 
-            Ok(()) => (),
-            Err(e) => {
-                if rt.config.process.fail_fast {
-                    return Err(Error::Config(format!(
-                        "Failed to clean up stage directors '{}' with error {}",
-                        cache_dir.display(), e)))
-                } else {
-                    tracing::warn!("Failed to clean up stage directors '{}' with error {}",
-                    cache_dir.display(), e);
-                }
-            }
-        }
-    }
     // INFO: Since all relevant things are stored in out_tree, we cna blanket promote here.
     if !rt.shutdown.is_interrupted() {
         rt.db.global_mark_phase(FilePhase::AtDestination)?;
