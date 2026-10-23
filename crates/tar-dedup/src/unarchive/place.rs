@@ -533,6 +533,7 @@ fn materialize_worker(
     shutdown: Shutdown,
     work: Receiver<MaterializeWork>,
     out: Sender<Option<MaterializeOutcome>>) -> () {
+
     let cache_dir = config.paths.extract_cache_dir();
     loop {
         match work.recv() {
@@ -547,7 +548,8 @@ fn materialize_worker(
                 }
                 match materialize_one(&kind, &cache_dir, &config, &w, &shutdown, bar.as_ref()) {
                     Some(outcome) => {
-                        out.send(Some(outcome)).expect("materialize worker: result channel closed");
+                        out.send(Some(outcome))
+                            .expect("materialize worker: result channel closed");
                     }
                     None => break,
                 }
