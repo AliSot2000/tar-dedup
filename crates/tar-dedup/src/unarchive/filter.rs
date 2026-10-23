@@ -123,70 +123,27 @@ pub fn ingest_filters(config: &ExtractConfig, recorder: &mut Recorder) -> Result
 mod tests {
     use super::*;
     use crate::common::files::original_extension;
-    use crate::db::Database;
     use crate::db::types::{FileId, FileType, NewFileRecord};
-    use crate::progress::{EXTRACT_MULTIPLIER, ProgressBarSet};
-    use crate::shutdown::Shutdown;
-    use crate::unarchive::ExtractRTArgs;
+    use crate::test_support::ExtractWorld;
 
-    struct ExtractTestWorld {
-        dir: tempfile::TempDir,
-        db: Database,
-        shutdown: Shutdown,
-        progress: ProgressBarSet,
-        config: ExtractConfig,
-    }
-
-    impl ExtractTestWorld {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let work_dir = dir.path().join("estage");
-            std::fs::create_dir_all(&work_dir).expect("create work dir");
-            let config = ExtractConfig::for_scan_test(
-                dir.path().join("archive.tar"),
-                work_dir,
-                dir.path().join("out"),
-            );
-            let db = Database::open(&config.paths.db_path()).expect("open db");
-            Self {
-                dir,
-                db,
-                shutdown: Shutdown::detached(),
-                progress: ProgressBarSet::new(EXTRACT_MULTIPLIER),
-                config,
-            }
-        }
-
-        fn rt(&self) -> ExtractRTArgs<'_> {
-            ExtractRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown: &self.shutdown,
-                progress: &self.progress,
-            }
-        }
-
+    impl ExtractWorld {
+        /// Seed the internal extract include rule (-1) so `include_reason_extract`
+        /// rows satisfy the FK; the joint `.*` catch-all covers both tables.
         fn seed_internal_include(&self) {
-            self.db.with_transaction(|conn| {
-                conn.execute(
-                    "INSERT OR IGNORE INTO filter_reason_extract (id, source, line, expression) \
-                     VALUES (-1, 'internal', NULL, '.*')",
-                    [],
-                ).expect("seed");
-                Ok(())
-            }).expect("seed tx");
+            self.seed_filter();
         }
 
         fn add_unarchived(&self, name: &str) -> FileId {
-            let p = self.dir.path().join(name);
+            let p = self.path(name);
             self.db.insert_file(&NewFileRecord {
                 abs_path: p.clone(),
+                abs_path_raw: None,
                 ext: original_extension(&p),
                 size: 1,
                 mtime: None, atime: None, ctime: None,
                 uid: None, gid: None, mode: None,
                 ftype: Some(FileType::File),
-                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, abs_path_raw: None, link_dst_raw: None,
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None, link_dst: None, link_dst_raw: None,
                 device_id: None, inode_id: None, major: None, minor: None,
             }).expect("insert");
             let id = self.db.file_id_by_abs_path(&p).expect("lookup").expect("row");
@@ -195,7 +152,7 @@ mod tests {
         }
     }
 
-    fn extract_reason_pairs(world: &ExtractTestWorld) -> Vec<(i64, i64)> {
+    fn extract_reason_pairs(world: &ExtractWorld) -> Vec<(i64, i64)> {
         world.db.with_transaction(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT include_reason_extract, exclude_reason_extract FROM files ORDER BY id",
@@ -207,7 +164,7 @@ mod tests {
         }).expect("tx")
     }
 
-    fn seed_user_filters(world: &ExtractTestWorld) -> ParseFilterBuffer {
+    fn seed_user_filters(world: &ExtractWorld) -> ParseFilterBuffer {
         let mut rec = Recorder::speculative(
             !world.config.process.no_errors, Some(world.config.process.auto_flush_limit));
         let buf = ingest_filters(&world.config, &mut rec).expect("ingest");
@@ -224,7 +181,7 @@ mod tests {
 
     #[test]
     fn ingest_filters_buffer_and_write_to_db() {
-        let mut world = ExtractTestWorld::new();
+        let mut world = ExtractWorld::scan_test();
         world.config.filter.include_patterns = vec!["keep".into()];
         world.config.filter.exclude_patterns = vec!["skip".into()];
 
@@ -242,7 +199,7 @@ mod tests {
 
     #[test]
     fn ingest_filters_empty_buffer_appends_internal_catch_all() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let mut rec = Recorder::speculative(
             !world.config.process.no_errors, Some(world.config.process.auto_flush_limit));
         let buf = ingest_filters(&world.config, &mut rec).expect("ingest");
@@ -253,7 +210,7 @@ mod tests {
 
     #[test]
     fn run_fast_path_promotes_all() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         world.seed_internal_include();
         world.add_unarchived("a");
         world.add_unarchived("b");
@@ -266,7 +223,7 @@ mod tests {
 
     #[test]
     fn run_with_user_filters_sets_reasons_and_promotes() {
-        let mut world = ExtractTestWorld::new();
+        let mut world = ExtractWorld::scan_test();
         world.config.filter.include_patterns = vec!["keep".into()];
         world.config.filter.exclude_patterns = vec!["skip".into()];
         seed_user_filters(&world);
