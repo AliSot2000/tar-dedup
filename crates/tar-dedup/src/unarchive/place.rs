@@ -1085,6 +1085,10 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
 
     // Check the times with the conflict policy
     if !matches!(config.placement.conflict_policy, ConflictPolicy::Replace) {
+        // INFO: why no atime?
+        //  - unstable i.e. most likely changed by our reads
+        //  - no real fallback on unix atime <-> mtime
+        //  - complicated design choice what and what not to support with mtime.
         // mtime of record
         let db_mtime = match rec.mtime {
             None => {
