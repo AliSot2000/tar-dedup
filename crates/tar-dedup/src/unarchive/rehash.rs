@@ -311,11 +311,10 @@ mod tests {
     use crate::common::files::original_extension;
     use crate::common::utf8::require_utf8;
     use crate::config::ExtractConfig;
-    use crate::db::Database;
     use crate::db::flags::FileFlag;
     use crate::db::types::{FileId, FilePhase, FileType, NewFileRecord};
     use crate::error::FileStatError;
-    use crate::progress::{EXTRACT_MULTIPLIER, ProgressBarSet};
+    use crate::test_support::ExtractWorld;
     use rusqlite::named_params;
     use sha1::{Digest, Sha1};
     use std::time::Duration;
@@ -330,73 +329,12 @@ mod tests {
         hasher.finalize().into()
     }
 
-    struct ExtractTestWorld {
-        dir: tempfile::TempDir,
-        db: Database,
-        shutdown: Shutdown,
-        progress: ProgressBarSet,
-        config: ExtractConfig,
-    }
-
-    impl ExtractTestWorld {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().expect("tempdir");
-            let work_dir = dir.path().join("estage");
-            std::fs::create_dir_all(&work_dir).expect("create work dir");
-            // `for_scan_test` defaults `force = true`, jobs = io_jobs = 1,
-            // `scan.rehash = true`; tests override as needed.
-            let config = ExtractConfig::for_scan_test(
-                dir.path().join("archive.tar"),
-                work_dir,
-                dir.path().join("out"),
-            );
-            let db = Database::open(&config.paths.db_path()).expect("open db");
-            Self {
-                dir,
-                db,
-                shutdown: Shutdown::detached(),
-                progress: ProgressBarSet::new(EXTRACT_MULTIPLIER),
-                config,
-            }
-        }
-
-        fn rt(&self) -> ExtractRTArgs<'_> {
-            ExtractRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown: &self.shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn rt_with<'a>(&'a self, shutdown: &'a Shutdown) -> ExtractRTArgs<'a> {
-            ExtractRTArgs {
-                config: &self.config,
-                db: &self.db,
-                shutdown,
-                progress: &self.progress,
-            }
-        }
-
-        fn path(&self, name: &str) -> PathBuf {
-            self.dir.path().join(name)
-        }
-
-        /// Seed the joint `-1` archive+extract include rules so rows pass
-        /// `generate_archive_and_extract_filter`.
-        fn seed_filter(&self) {
-            for table in ["archive", "extract"] {
-                self.db.with_transaction(|conn| {
-                    conn.execute(
-                        &format!(
-                            "INSERT OR IGNORE INTO filter_reason_{table} (id, source, line, expression) \
-                             VALUES (-1, 'internal', NULL, '.*')"
-                        ),
-                        [],
-                    ).expect("seed internal include rule");
-                    Ok(())
-                }).expect("seed filter tx");
-            }
+    impl ExtractWorld {
+        /// Scan-side world (`for_scan_test` defaults `force = true`, jobs =
+        /// io_jobs = 1, `scan.rehash = true`; tests override as needed).
+        fn scan_test() -> Self {
+            Self::with_config(|dp| ExtractConfig::for_scan_test(
+                dp.join("archive.tar"), dp.join("estage"), dp.join("out")))
         }
 
         /// Elected canonical row: self-canonical `extract_filtered` file with a
@@ -556,7 +494,7 @@ mod tests {
 
     #[test]
     fn hash_file_returns_sha1() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(256 * 1024, 1);
         let path = world.path("h1.bin");
         std::fs::write(&path, &payload).expect("write");
@@ -567,14 +505,14 @@ mod tests {
 
     #[test]
     fn hash_file_open_error_propagates() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let res = hash_file(&world.path("missing.bin"), &mut io_buffer(), &Shutdown::detached(), None);
         assert!(matches!(res, Err(Error::FileStat(_))));
     }
 
     #[test]
     fn hash_file_force_interrupts() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(1024, 2);
         let path = world.path("h3.bin");
         std::fs::write(&path, &payload).expect("write");
@@ -586,7 +524,7 @@ mod tests {
 
     #[test]
     fn hash_file_graceful_continues() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(1024 * 1024, 3);
         let path = world.path("h4.bin");
         std::fs::write(&path, &payload).expect("write");
@@ -598,7 +536,7 @@ mod tests {
 
     #[test]
     fn hash_file_pb_advances_bytes() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(1024 * 1024, 4);
         let path = world.path("h5.bin");
         std::fs::write(&path, &payload).expect("write");
@@ -612,7 +550,7 @@ mod tests {
 
     #[test]
     fn rehash_one_panics_on_missing_member() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(1024, 5);
         // A self-canonical row resolves a member name; a dup pointed elsewhere
         // (canonical != id) does not — the `expect` must fire for it.
@@ -629,7 +567,7 @@ mod tests {
 
     #[test]
     fn rehash_one_match_and_mismatch() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(4 * 4096, 7);
         let id_match = world.add_elected("m2a.bin", &payload);
         let row = world.record(id_match);
@@ -648,7 +586,7 @@ mod tests {
 
     #[test]
     fn rehash_one_file_error_is_errored() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(4 * 4096, 9);
         let id = world.add_elected("m3.bin", &payload);
         std::fs::remove_file(world.stage_path(id)).expect("remove payload");
@@ -661,7 +599,7 @@ mod tests {
 
     #[test]
     fn rehash_one_force_abort_returns_none() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(16 * 1024 * 1024, 11);
         let id = world.add_elected("m4.bin", &payload);
         world.progress.create_thread_bars(BarKind::Bytes, 1);
@@ -691,7 +629,7 @@ mod tests {
 
     #[test]
     fn rehash_worker_sends_outcome_then_none_on_channel_close() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(4 * 4096, 12);
         let id = world.add_elected("w1.bin", &payload);
         let row = world.record(id);
@@ -723,7 +661,7 @@ mod tests {
 
     #[test]
     fn rehash_worker_interrupt_breaks_and_sends_none() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(4 * 4096, 13);
         let id = world.add_elected("w2.bin", &payload);
         let row = world.record(id);
@@ -752,7 +690,7 @@ mod tests {
 
     #[test]
     fn rehash_worker_force_midfile_breaks_and_sends_none() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let payload = pattern(16 * 1024 * 1024, 14);
         let id = world.add_elected("w3.bin", &payload);
         let row = world.record(id);
@@ -792,7 +730,7 @@ mod tests {
 
     #[test]
     fn loop_processes_batch() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let mut ids = Vec::<FileId>::new();
         for i in 0..3 {
             let payload = pattern(512 * 1024 + i, i as u8);
@@ -812,7 +750,7 @@ mod tests {
 
     #[test]
     fn loop_graceful_mid_feed_finishes_in_flight_and_resumes() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let mut ids = Vec::<FileId>::new();
         for i in 0..8 {
             let payload = pattern(4 * 1024 * 1024 + i, i as u8);
@@ -867,7 +805,7 @@ mod tests {
 
     #[test]
     fn loop_force_discards_in_flight_but_drains_delivered() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         // size-DESC queue order: the 64 MiB file is hash-stage first (delivered),
         // the 32 MiB second (in-flight when force lands); the two smalls are fed
         // but never processed.
@@ -929,7 +867,7 @@ mod tests {
 
     #[test]
     fn run_skip_rehash_promotes_everything() {
-        let mut world = ExtractTestWorld::new();
+        let mut world = ExtractWorld::scan_test();
         let payload = pattern(1024, 31);
         let id_a = world.add_elected("a.bin", &payload);
         let id_d = world.add_dup("d.bin", id_a);
@@ -946,14 +884,14 @@ mod tests {
 
     #[test]
     fn run_pending_zero_returns_ok() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         run(&world.rt()).expect("run empty");
         assert!(!world.queue_table_exists());
     }
 
     #[test]
     fn run_completes_and_drops_queue() {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let mut ids = Vec::<FileId>::new();
         for i in 0..3 {
             let payload = pattern(1024 * 1024 + i, i as u8);
@@ -969,7 +907,7 @@ mod tests {
 
     #[test]
     fn run_mismatch_endgame() {
-        let mut world = ExtractTestWorld::new();
+        let mut world = ExtractWorld::scan_test();
         world.config.process.force = false;
         let payload = pattern(1024 * 1024, 41);
         let id = world.add_elected("mm.bin", &payload);
@@ -991,7 +929,7 @@ mod tests {
 
     #[test]
     fn run_errors_fail_fast() {
-        let mut world = ExtractTestWorld::new();
+        let mut world = ExtractWorld::scan_test();
         let payload = pattern(1024 * 1024, 51);
         let id = world.add_elected("err.bin", &payload);
         std::fs::remove_file(world.stage_path(id)).expect("remove payload");
@@ -1006,7 +944,7 @@ mod tests {
         assert!(records[0].error_type.starts_with("Io/"));
 
         // Without fail-fast the phase completes and warns instead.
-        let world2 = ExtractTestWorld::new();
+        let world2 = ExtractWorld::scan_test();
         let payload2 = pattern(1024 * 1024, 52);
         let id2 = world2.add_elected("err2.bin", &payload2);
         std::fs::remove_file(world2.stage_path(id2)).expect("remove payload");
@@ -1033,7 +971,7 @@ mod tests {
     /// `Err(Interrupted)`, keeps the ordering table (drop is success-path only),
     /// then a fresh `run` with a detached shutdown completes the whole phase.
     fn run_interrupt_tail(graceful: bool) {
-        let world = ExtractTestWorld::new();
+        let world = ExtractWorld::scan_test();
         let mut ids = Vec::<FileId>::new();
         for i in 0..4 {
             let payload = pattern(16 * 1024 * 1024 + i, i as u8);
