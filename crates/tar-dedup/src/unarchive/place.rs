@@ -1145,7 +1145,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         }
     }
 
-    // Check if the file types are a match.
+    // Check if the file types are a match (cannot write do the file operations on symlink).
     let ftype = match files::determine_file_type(&file_metadata, tgt) {
         Ok(ft) => ft,
         Err((ft, failed_path, e)) => {
