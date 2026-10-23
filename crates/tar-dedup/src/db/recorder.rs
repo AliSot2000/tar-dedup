@@ -159,6 +159,21 @@ impl<'a> Recorder<'a> {
         self.buf.is_empty()
     }
 
+    /// Number of drafts currently buffered (both speculative and attached).
+    pub fn buffered(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// The draft count at which a flush is attempted (see [`set_flush_limit`]).
+    pub fn flush_limit(&self) -> u64 {
+        self.flush_limit
+    }
+
+    /// Whether auto-flush is active (see [`set_auto_flush`]).
+    pub fn auto_flush(&self) -> bool {
+        self.auto_flush
+    }
+
     /// Best-effort flush once the buffer has grown past the auto-flush limit.
     /// No-op while no database is attached (keeps buffering speculatively) and
     /// never propagates an error: on failure the drafts stay buffered for retry.
