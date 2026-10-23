@@ -428,13 +428,13 @@ pub fn list_out_tree(
             ":last_id": last_id.0,
             ":batch_size": batch_size,
             ":dir": OutTreeFlag::IsDirectory.mask_i64(),
-            ":tgt": if only_dir.unwrap() { 1 } else { 0 },
+            ":tgt": if only_dir.unwrap() { OutTreeFlag::IsDirectory.mask_i64() } else { 0 },
         },
         (true, true) => named_params! {
             ":last_id": last_id.0,
             ":batch_size": batch_size,
             ":dir": OutTreeFlag::IsDirectory.mask_i64(),
-            ":tgt": if only_dir.unwrap() { 1 } else { 0 },
+            ":tgt": if only_dir.unwrap() { OutTreeFlag::IsDirectory.mask_i64() } else { 0 },
             ":source_id": source_id.unwrap(),
         },
     };
