@@ -413,3 +413,963 @@ fn apply_times(target: &Path, atime: Option<FileTime>, mtime: Option<FileTime>) 
 fn to_file_time(dt: DateTime<Utc>) -> FileTime {
     FileTime::from_system_time(SystemTime::from(dt))
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::files::original_extension;
+    use crate::common::perms::{IdentityMap, IdentitySpec};
+    use crate::common::xattr::tests::{probe_acl, probe_selinux, probe_xattr};
+    use crate::db::flags::{FileFlag, FileFlags, OutTreeFlag, OutTreeFlags};
+    use crate::db::types::{LinkType, NewFileRecord, NewOutTreeRow, StrippedRecord};
+    use crate::test_support::{ExtractWorld, seed_filter_reasons};
+    use chrono::TimeZone;
+    use rusqlite::named_params;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    // ---------------------------------------------------------------------
+    // PermissionsWorld: local seeder impl on the shared `ExtractWorld`.
+    // ---------------------------------------------------------------------
+
+    impl ExtractWorld {
+        /// Permissions-test world: `for_place_test` base re-rooted under the
+        /// tempdir (`out/` = extraction root, `estage/` = work dir), a single
+        /// worker, per-test config tune.
+        fn permissions_world(tune: impl FnOnce(&mut ExtractConfig)) -> Self {
+            Self::with_config(|dp| {
+                let mut config = ExtractConfig::for_place_test(dp.join("out"), false, 4);
+                config.paths.work_dir = dp.join("estage");
+                config.process.io_jobs = 1;
+                config.process.jobs = 1;
+                tune(&mut config);
+                config
+            })
+        }
+
+        fn proot(&self) -> PathBuf {
+            self.config.paths.extraction_root().to_path_buf()
+        }
+
+        /// Write `payload` under the extraction root (creating parents).
+        fn write_file(&self, rel: &str, payload: &[u8]) -> PathBuf {
+            let p = self.proot().join(rel);
+            fs::create_dir_all(p.parent().expect("parent")).expect("parent dirs");
+            fs::write(&p, payload).expect("write file");
+            p
+        }
+
+        /// Insert a self-canonical, rehashed `files` row (digest `[7;20]`) with
+        /// an on-disk file at the same relative path.
+        fn p_add_file(&self, rel: &str, payload: &[u8], tune: impl FnOnce(&mut NewFileRecord)) -> FileId {
+            self.seed_filter();
+            let p = self.write_file(rel, payload);
+            let mut rec = NewFileRecord {
+                abs_path: p.clone(),
+                abs_path_raw: None,
+                ext: original_extension(Path::new(rel)),
+                size: payload.len() as u64,
+                mtime: None, atime: None, ctime: None,
+                uid: None, gid: None, mode: None,
+                ftype: Some(FileType::File),
+                xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None,
+                link_dst: None, link_dst_raw: None,
+                device_id: None, inode_id: None, major: None, minor: None,
+            };
+            tune(&mut rec);
+            self.db.insert_file(&rec).expect("insert file");
+            let id = self.db.file_id_by_abs_path(&p).expect("lookup").expect("row");
+            seed_filter_reasons(&self.db, id);
+            self.db.mark_self_canonical(id).expect("self canonical");
+            self.db.update_file_inspection_per_id(id, [7; 20], 0, false).expect("digest");
+            self.db.mark_file_phase(id, FilePhase::Rehashed).expect("phase");
+            id
+        }
+
+        /// `files.username` / `files.groupname` (not carried by `NewFileRecord`).
+        fn set_names(&self, id: FileId, username: Option<&str>, groupname: Option<&str>) {
+            self.db.with_transaction(|conn| {
+                conn.execute(
+                    "UPDATE files SET username = :u, groupname = :g WHERE id = :id",
+                    named_params! { ":u": username, ":g": groupname, ":id": id.0 },
+                ).expect("set names");
+                Ok(())
+            }).expect("names tx");
+        }
+
+        /// Un-eject the row so `content_id` resolution fails (the link-sources
+        /// precondition panic): `content_id` fills `;` for a missing digest but
+        /// returns `None` for a non-self-canonical row.
+        fn un_canonicalize(&self, id: FileId) {
+            self.db.with_transaction(|conn| {
+                conn.execute("UPDATE files SET canonical_id = NULL WHERE id = :id",
+                             named_params! { ":id": id.0 }).expect("un canonicalize");
+                Ok(())
+            }).expect("un canonicalize tx");
+        }
+
+        /// Insert an `out_tree` row (self-canonical) for an on-disk target.
+        fn padd_out(&self, rel: &str, file_id: FileId, flags: OutTreeFlags) -> OutTreeId {
+            let p = self.proot().join(rel);
+            let rows = vec![NewOutTreeRow { abs_path: p, file_id: Some(file_id), flags }];
+            let id = self.db.insert_out_tree_rows(&rows).expect("insert out")[0];
+            self.db.with_transaction(|conn| {
+                conn.execute("UPDATE out_tree SET canonical_id = id WHERE id = :id",
+                             named_params! { ":id": id.0 }).expect("set canonical");
+                Ok(())
+            }).expect("canonical tx");
+            id
+        }
+
+        fn p_out_flag(&self, id: OutTreeId, flag: OutTreeFlag) -> bool {
+            self.db.get_out_tree_flag(id, flag).expect("get flag")
+        }
+
+        fn p_file_flag(&self, id: FileId, flag: FileFlag) -> bool {
+            self.db.get_file_flag(id, flag).expect("get flag")
+        }
+
+        fn file_phase(&self, id: FileId) -> FilePhase {
+            self.db.get_file_by_id::<StrippedRecord>(id)
+                .expect("get row").expect("row present").phase
+        }
+
+        fn file_mode(&self, id: FileId) -> Option<u32> {
+            self.db.get_file_by_id::<FileRecord>(id)
+                .expect("get row").expect("row present").mode
+        }
+
+        fn any_file_has_phase(&self, phase: FilePhase) -> bool {
+            self.db.t_files_in_phase::<StrippedRecord>(phase)
+                .expect("list").len() > 0
+        }
+    }
+
+    /// Pure `FileRecord` builder with full metadata (no DB).
+    #[allow(clippy::too_many_arguments)]
+    fn mk_file(
+        abs: &str,
+        ftype: FileType,
+        mode: Option<u32>,
+        mtime: Option<DateTime<Utc>>,
+        atime: Option<DateTime<Utc>>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        username: Option<&str>,
+        groupname: Option<&str>,
+        xattrs: Option<String>,
+        acl: Option<String>,
+        selinux: Option<Vec<u8>>) -> FileRecord {
+        FileRecord {
+            id: FileId(1),
+            abs_path: PathBuf::from(abs),
+            ext: original_extension(Path::new(abs)),
+            size: 0,
+            sha1: Some([7; 20]),
+            mtime, atime, ctime: None,
+            uid, gid,
+            username: username.map(|s| s.to_string()),
+            groupname: groupname.map(|s| s.to_string()),
+            mode,
+            ftype,
+            device_id: None, inode_id: None, major: None, minor: None,
+            xattrs, posix_acl: acl, selinux_ctx: selinux, win_perm: None,
+            link_dst: None,
+            include_reason_archive: None, exclude_reason_archive: None,
+            include_reason_extract: None, exclude_reason_extract: None,
+            canonical_id: Some(FileId(1)),
+            flags: FileFlags::default(),
+            phase: FilePhase::Rehashed,
+            new_name: None,
+        }
+    }
+
+    /// A `Placed` canonical non-dir out_tree flag set.
+    fn placed_flags() -> OutTreeFlags {
+        let mut f = OutTreeFlags::default();
+        f.set(OutTreeFlag::Placed, true);
+        f
+    }
+
+    fn ps_none() -> OwnerGroupMode {
+        OwnerGroupMode { ogp: None, mp: None }
+    }
+
+    fn ps_ogp(policy: OwnerGroupPolicy) -> OwnerGroupMode {
+        OwnerGroupMode { ogp: Some(policy), mp: None }
+    }
+
+    fn on_disk_mode(p: &Path) -> u32 {
+        fs::metadata(p).expect("meta").permissions().mode() & 0o7777
+    }
+
+    #[cfg(unix)]
+    fn current_uid() -> u32 {
+        nix::unistd::Uid::current().as_raw()
+    }
+
+    #[cfg(unix)]
+    fn current_gid() -> u32 {
+        nix::unistd::Gid::current().as_raw()
+    }
+
+    fn dt(secs: i64, nanos: u32) -> DateTime<Utc> {
+        Utc.timestamp_opt(secs, nanos).unwrap()
+    }
+
+    fn empty_acl_json() -> String {
+        r#"{"user-obj":7,"group-obj":5,"other":0}"#.to_string()
+    }
+
+    fn xattr_json() -> String {
+        r#"{"encoding":"utf8","data":{"user.meta":"v"}}"#.to_string()
+    }
+
+    // ---------------------------------------------------------------------
+    // resolve_owner_group_policy
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn policy_none_is_none() {
+        let world = ExtractWorld::permissions_world(|c| c.owner_policy = OwnerGroupSource::None);
+        assert!(resolve_owner_group_policy(&world.rt()).expect("resolve").is_none());
+    }
+
+    #[test]
+    fn policy_cli_is_cloned() {
+        let p = OwnerGroupPolicy {
+            owner_override: Some(IdentitySpec { name: Some("alice".into()), id: None }),
+            ..OwnerGroupPolicy::default()
+        };
+        let world = ExtractWorld::permissions_world(|c| c.owner_policy = OwnerGroupSource::Cli(p.clone()));
+        assert_eq!(resolve_owner_group_policy(&world.rt()).expect("resolve"), Some(p));
+    }
+
+    #[test]
+    fn policy_stored_without_meta_is_none() {
+        let world = ExtractWorld::permissions_world(|c| c.owner_policy = OwnerGroupSource::Stored);
+        assert!(resolve_owner_group_policy(&world.rt()).expect("resolve").is_none());
+    }
+
+    /// `--apply-stored-owner-map/-group-map` partial transfer of the four fields.
+    #[test]
+    fn policy_stored_partial_application_matrix() {
+        for (apply_owner, apply_group) in [(true, true), (true, false), (false, true), (false, false)] {
+            let world = ExtractWorld::permissions_world(|c| {
+                c.owner_policy = OwnerGroupSource::Stored;
+                c.owner_group.apply_owner = apply_owner;
+                c.owner_group.apply_group = apply_group;
+            });
+            let stored = OwnerGroupPolicy {
+                owner_map: Some(IdentityMap::default()),
+                owner_override: Some(IdentitySpec { name: Some("o".into()), id: None }),
+                group_map: Some(IdentityMap::default()),
+                group_override: Some(IdentitySpec { name: None, id: Some(1) }),
+            };
+            world.db.set_archive_owner_policy(&stored).expect("set stored");
+            let got = resolve_owner_group_policy(&world.rt()).expect("resolve").expect("some");
+            assert_eq!(got.owner_map.is_some(), apply_owner,
+                       "apply_owner={apply_owner} apply_group={apply_group}: owner_map");
+            assert_eq!(got.owner_override.is_some(), apply_owner,
+                       "apply_owner={apply_owner} apply_group={apply_group}: owner_override");
+            assert_eq!(got.group_map.is_some(), apply_group,
+                       "apply_owner={apply_owner} apply_group={apply_group}: group_map");
+            assert_eq!(got.group_override.is_some(), apply_group,
+                       "apply_owner={apply_owner} apply_group={apply_group}: group_override");
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // resolve_mode
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn resolve_mode_none_is_none() {
+        let world = ExtractWorld::permissions_world(|c| c.mode_policy = ModeSource::None);
+        assert!(resolve_mode(&world.rt()).expect("resolve").is_none());
+    }
+
+    #[test]
+    fn resolve_mode_cli_parses() {
+        let world = ExtractWorld::permissions_world(|c| c.mode_policy = ModeSource::Cli("u+x".into()));
+        assert!(resolve_mode(&world.rt()).expect("resolve").is_some());
+    }
+
+    #[test]
+    fn resolve_mode_cli_invalid_panics() {
+        let world = ExtractWorld::permissions_world(|c| c.mode_policy = ModeSource::Cli("u+vv".into()));
+        let res = catch_unwind(AssertUnwindSafe(|| resolve_mode(&world.rt())));
+        assert!(res.is_err(), "invalid --mode must trip the parse-time precondition");
+    }
+
+    #[test]
+    fn resolve_mode_stored_reads_meta() {
+        let world = ExtractWorld::permissions_world(|c| c.mode_policy = ModeSource::Stored);
+        world.db.set_archive_mode_changes("u+w").expect("set stored mode");
+        assert!(resolve_mode(&world.rt()).expect("resolve").is_some());
+    }
+
+    #[test]
+    fn resolve_mode_stored_without_meta_is_none() {
+        let world = ExtractWorld::permissions_world(|c| c.mode_policy = ModeSource::Stored);
+        assert!(resolve_mode(&world.rt()).expect("resolve").is_none());
+    }
+
+    // ---------------------------------------------------------------------
+    // apply_one — ownership
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn apply_one_ogp_none_leaves_ownership() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let tgt = world.write_file("report.docx", b"docx");
+        let rec = mk_file("report.docx", FileType::File, Some(0o644), None, None,
+                          Some(current_uid()), Some(current_gid()), None, None, None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty());
+        let md = fs::metadata(&tgt).expect("meta");
+        assert_eq!(md.uid(), current_uid());
+        assert_eq!(md.gid(), current_gid());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_one_chown_gid_applies() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let tgt = world.write_file("photo.jpg", b"jpeg");
+        let gid = current_gid();
+        let mut policy = OwnerGroupPolicy::default();
+        policy.group_override = Some(IdentitySpec { name: None, id: Some(gid) });
+        let rec = mk_file("photo.jpg", FileType::File, None, None, None, None, None, None, None,
+                          None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_ogp(policy));
+        assert!(errs.is_empty(), "gid -> own group must succeed unprivileged: {errs:?}");
+        assert_eq!(fs::metadata(&tgt).expect("meta").gid(), gid);
+    }
+
+    #[test]
+    fn apply_one_chown_missing_target_errors() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let tgt = world.proot().join("missing.bin");
+        let mut policy = OwnerGroupPolicy::default();
+        policy.owner_override = Some(IdentitySpec { name: None, id: Some(current_uid()) });
+        let rec = mk_file("missing.bin", FileType::File, None, None, None, None, None, None, None,
+                          None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_ogp(policy));
+        assert_eq!(errs.len(), 1, "a single chown failure on a missing target");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_one_chown_uid_permission_denied_when_unprivileged() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let tgt = world.write_file("raw.arw", b"arw");
+        let mut policy = OwnerGroupPolicy::default();
+        policy.owner_override = Some(IdentitySpec { name: None, id: Some(0) });
+        let rec = mk_file("raw.arw", FileType::File, None, None, None, None, None, None, None,
+                          None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_ogp(policy));
+        if nix::unistd::geteuid().is_root() {
+            assert!(errs.is_empty(), "root may chown");
+        } else {
+            assert_eq!(errs.len(), 1, "unprivileged chown to uid 0 must fail");
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // apply_one — mode
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn apply_one_mode_applies() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let tgt = world.write_file("config.xml", b"<xml/>");
+        let rec = mk_file("config.xml", FileType::File, Some(0o640), None, None, None, None,
+                          None, None, None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty());
+        assert_eq!(on_disk_mode(&tgt), 0o640);
+    }
+
+    #[test]
+    fn apply_one_mode_changes_applied_on_top() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let tgt = world.write_file("style.css", b"body{}");
+        let rec = mk_file("style.css", FileType::File, Some(0o644), None, None, None, None,
+                          None, None, None, None, None);
+        let ps = OwnerGroupMode { ogp: None, mp: Some(parse_mode_changes("u+x").expect("mode")) };
+        let errs = apply_one(&world.config, &rec, &tgt, &ps);
+        assert!(errs.is_empty());
+        assert_eq!(on_disk_mode(&tgt), 0o744);
+    }
+
+    #[test]
+    fn apply_one_no_same_permissions_skips_mode() {
+        let world = ExtractWorld::permissions_world(|c| c.attributes.no_same_permissions = true);
+        let tgt = world.write_file("index.html", b"<html/>");
+        let rec = mk_file("index.html", FileType::File, Some(0o600), None, None, None, None,
+                          None, None, None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty());
+        assert_eq!(on_disk_mode(&tgt), 0o644, "mode untouched with --no-same-permissions");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_one_symlink_skips_mode_only() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let real = world.write_file("target.txt", b"t");
+        let tgt = world.proot().join("link.txt");
+        std::os::unix::fs::symlink(&real, &tgt).expect("symlink");
+        let rec = mk_file("link.txt", FileType::Symlink(LinkType::File), Some(0o600),
+                          None, None, None, None, None, None, None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty());
+        // mode is kernel-fixed on symlinks; the target keeps its own mode.
+        assert_eq!(on_disk_mode(&real), 0o644);
+    }
+
+    #[test]
+    fn apply_one_null_mode_is_noop() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let tgt = world.write_file("readme.txt", b"hi");
+        let rec = mk_file("readme.txt", FileType::File, None, None, None, None, None, None, None,
+                          None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty());
+        assert_eq!(on_disk_mode(&tgt), 0o644, "no record mode -> untouched");
+    }
+
+    #[test]
+    fn apply_one_mode_error_on_missing_target() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let tgt = world.proot().join("missing.pdf");
+        let rec = mk_file("missing.pdf", FileType::File, Some(0o600), None, None, None, None,
+                          None, None, None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert_eq!(errs.len(), 1, "chmod on a missing target is a single error");
+    }
+
+    // ---------------------------------------------------------------------
+    // apply_one — xattrs / ACL / SELinux
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn apply_one_xattr_applies_when_supported() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let scratch = world.path("probe");
+        fs::create_dir_all(&scratch).expect("scratch");
+        if let Err(e) = probe_xattr(&scratch) {
+            eprintln!("skipped (unsupported): xattr: {e}");
+            return;
+        }
+        let tgt = world.write_file("paper.pdf", b"%PDF");
+        let rec = mk_file("paper.pdf", FileType::File, None, None, None, None, None, None, None,
+                          Some(xattr_json()), None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty(), "xattr restore must succeed: {errs:?}");
+        let raw = crate::common::xattr::get_file_xattr(&tgt).expect("recapture");
+        let map = crate::common::xattr::tests::decoded_xattr_map(&raw);
+        assert_eq!(map.get("user.meta"), Some(&b"v".to_vec()),
+                   "xattr present after restore: {raw}");
+    }
+
+    #[test]
+    fn apply_one_no_xattrs_gate_skips() {
+        let world = ExtractWorld::permissions_world(|c| c.attributes.no_xattrs = true);
+        let tgt = world.write_file("notes.typst", b"= hi");
+        let rec = mk_file("notes.typst", FileType::File, None, None, None, None, None, None, None,
+                          Some(xattr_json()), None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty());
+        let raw = crate::common::xattr::get_file_xattr(&tgt).expect("recapture");
+        assert!(crate::common::xattr::tests::decoded_xattr_map(&raw).is_empty(),
+                "nothing applied with --no-xattrs: {raw}");
+    }
+
+    #[test]
+    fn apply_one_acl_applies_when_supported() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let scratch = world.path("probe");
+        fs::create_dir_all(&scratch).expect("scratch");
+        if let Err(e) = probe_acl(&scratch) {
+            eprintln!("skipped (unsupported): acl: {e}");
+            return;
+        }
+        let tgt = world.write_file("book.xlsx", b"xlsx");
+        let rec = mk_file("book.xlsx", FileType::File, None, None, None, None, None, None, None,
+                          None, Some(empty_acl_json()), None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty(), "acl restore must succeed: {errs:?}");
+        let raw = crate::common::xattr::get_file_acl(&tgt).expect("recapture");
+        assert!(raw.contains("user-obj\":7"), "acl present after restore: {raw}");
+    }
+
+    #[test]
+    fn apply_one_no_acls_gate_skips() {
+        let world = ExtractWorld::permissions_world(|c| c.attributes.no_acls = true);
+        let tgt = world.write_file("rules.yaml", b"a: 1");
+        let rec = mk_file("rules.yaml", FileType::File, None, None, None, None, None, None, None,
+                          None, Some(empty_acl_json()), None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty());
+        let raw = crate::common::xattr::get_file_acl(&tgt).expect("recapture");
+        assert!(!raw.contains("user-obj\":7"), "nothing applied with --no-acls: {raw}");
+    }
+
+    #[test]
+    fn apply_one_selinux_applies_when_supported() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let scratch = world.path("probe");
+        fs::create_dir_all(&scratch).expect("scratch");
+        if let Err(e) = probe_selinux(&scratch) {
+            eprintln!("skipped (unsupported): selinux: {e}");
+            return;
+        }
+        let tgt = world.write_file("video.mp4", b"mp4");
+        let ctx = crate::common::xattr::get_file_selinux_data(&scratch.join("probe_selinux"))
+            .expect("base context");
+        let rec = mk_file("video.mp4", FileType::File, None, None, None, None, None, None, None,
+                          None, None, Some(ctx.clone()));
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty(), "selinux restore must succeed: {errs:?}");
+        assert_eq!(crate::common::xattr::get_file_selinux_data(&tgt).expect("recapture"), ctx);
+    }
+
+    #[test]
+    fn apply_one_no_selinux_gate_skips() {
+        let world = ExtractWorld::permissions_world(|c| c.attributes.no_selinux = true);
+        let tgt = world.write_file("anim.gif", b"GIF89a");
+        let rec = mk_file("anim.gif", FileType::File, None, None, None, None, None, None, None,
+                          None, None, Some(b"system_u:object_r:etc_t:s0".to_vec()));
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty(), "no-selinux must not attempt the set");
+    }
+
+    // ---------------------------------------------------------------------
+    // apply_one — times
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn apply_times_four_combos() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let t = world.path("times.bin");
+        fs::write(&t, b"x").expect("write");
+        let ft = FileTime::from_unix_time(1_600_000_000, 42);
+
+        apply_times(&t, Some(ft), None).expect("set atime");
+        assert_eq!(FileTime::from_system_time(fs::metadata(&t).expect("meta").accessed().expect("a")), ft);
+        assert_ne!(FileTime::from_system_time(fs::metadata(&t).expect("meta").modified().expect("m")), ft);
+
+        apply_times(&t, None, Some(ft)).expect("set mtime");
+        assert_eq!(FileTime::from_system_time(fs::metadata(&t).expect("meta").modified().expect("m")), ft);
+
+        apply_times(&t, Some(ft), Some(ft)).expect("set both");
+        assert_eq!(FileTime::from_system_time(fs::metadata(&t).expect("meta").accessed().expect("a")), ft);
+        assert_eq!(FileTime::from_system_time(fs::metadata(&t).expect("meta").modified().expect("m")), ft);
+
+        apply_times(&t, None, None).expect("no-op");
+        assert_eq!(FileTime::from_system_time(fs::metadata(&t).expect("meta").accessed().expect("a")), ft);
+    }
+
+    #[test]
+    fn apply_one_times_respect_gate_axes() {
+        // The gate is (apply_mtime && mtime) || (apply_atime && atime); each
+        // axis applies independently. Sweep the four gate combos.
+        let combos: &[(bool, bool)] = &[(true, true), (true, false), (false, true), (false, false)];
+        for (apply_mtime, apply_atime) in combos {
+            let world = ExtractWorld::permissions_world(|c| {
+                c.attributes.apply_mtime = *apply_mtime;
+                c.attributes.apply_atime = *apply_atime;
+            });
+            let tgt = world.write_file("pic.heic", b"heic");
+            let m_old = dt(1_500_000_000, 0);
+            let m_new = dt(1_600_000_000, 0);
+            let a_old = dt(1_400_000_000, 0);
+            let a_new = dt(1_700_000_000, 0);
+            apply_times(
+                &tgt,
+                Some(FileTime::from_system_time(SystemTime::from(a_old))),
+                Some(FileTime::from_system_time(SystemTime::from(m_old))),
+            ).expect("seed times");
+            let rec = mk_file("pic.heic", FileType::File, None, Some(m_new), Some(a_new),
+                              None, None, None, None, None, None, None);
+            let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+            assert!(errs.is_empty());
+            let live_m = FileTime::from_system_time(fs::metadata(&tgt).expect("meta").modified().expect("m"));
+            let live_a = FileTime::from_system_time(fs::metadata(&tgt).expect("meta").accessed().expect("a"));
+            assert_eq!(live_m, FileTime::from_system_time(SystemTime::from(
+                if *apply_mtime { m_new } else { m_old })), "apply_mtime={apply_mtime}");
+            assert_eq!(live_a, FileTime::from_system_time(SystemTime::from(
+                if *apply_atime { a_new } else { a_old })), "apply_atime={apply_atime}");
+        }
+    }
+
+    /// The OR short-circuit: only an mtime present while only the atime gate is
+    /// open must NOT touch the file.
+    #[test]
+    fn apply_one_times_or_gate_short_circuit() {
+        let world = ExtractWorld::permissions_world(|c| {
+            c.attributes.apply_mtime = false;
+            c.attributes.apply_atime = true;
+        });
+        let tgt = world.write_file("scan.jpeg", b"jpeg");
+        let m_old = dt(1_500_000_000, 0);
+        apply_times(&tgt, None, Some(FileTime::from_system_time(SystemTime::from(m_old))))
+            .expect("seed mtime");
+        // record has an mtime but NO atime -> neither gate holds.
+        let rec = mk_file("scan.jpeg", FileType::File, None, Some(dt(1_600_000_000, 0)), None,
+                          None, None, None, None, None, None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert!(errs.is_empty());
+        let live_m = FileTime::from_system_time(fs::metadata(&tgt).expect("meta").modified().expect("m"));
+        assert_eq!(live_m, FileTime::from_system_time(SystemTime::from(m_old)),
+                   "nothing must be applied when no gate holds");
+    }
+
+    // ---------------------------------------------------------------------
+    // apply_one — error accounting
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn apply_one_missing_target_cascades() {
+        let world = ExtractWorld::permissions_world(|c| {
+            c.attributes.apply_mtime = true;
+            c.attributes.apply_atime = true;
+        });
+        let tgt = world.proot().join("missing.bin");
+        let rec = mk_file("missing.bin", FileType::File, Some(0o600),
+                          Some(dt(1_500_000_000, 0)), Some(dt(1_600_000_000, 0)),
+                          None, None, None, None,
+                          Some(xattr_json()), Some(empty_acl_json()),
+                          Some(b"system_u:object_r:etc_t:s0".to_vec()));
+        // mode + xattr + acl + selinux + times all fail on a missing target.
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert_eq!(errs.len(), 5, "each applied facet reports exactly one error: {errs:?}");
+    }
+
+    #[test]
+    fn apply_one_counts_only_later_failures() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let tgt = world.write_file("slide.pptx", b"pptx");
+        // step 2 (mode) succeeds; step 3 (xattr) fails on a malformed blob.
+        let rec = mk_file("slide.pptx", FileType::File, Some(0o600), None, None,
+                          None, None, None, None,
+                          Some("not-json".to_string()), None, None);
+        let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
+        assert_eq!(errs.len(), 1, "only the xattr parse failed: {errs:?}");
+        assert_eq!(on_disk_mode(&tgt), 0o600, "mode was applied despite the later error");
+    }
+
+    // ---------------------------------------------------------------------
+    // inner_apply_permissions
+    // ---------------------------------------------------------------------
+
+    fn out_record(id: i64, rel: &str, file_id: Option<FileId>, is_dir: bool) -> OutTreeRecord {
+        let mut flags = OutTreeFlags::default();
+        flags.set(OutTreeFlag::IsDirectory, is_dir);
+        OutTreeRecord {
+            id: OutTreeId(id),
+            abs_path: PathBuf::from(rel),
+            file_id,
+            flags,
+            canonical_id: if is_dir { None } else { Some(OutTreeId(id)) },
+        }
+    }
+
+    #[test]
+    fn inner_apply_ancestor_no_record_is_clean() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let out = out_record(1, "/ed/docs", None, true);
+        let mut results: Vec<(OutTreeId, bool)> = Vec::new();
+        let mut captured: Vec<(Option<FileId>, OutTreeId)> = Vec::new();
+        inner_apply_permissions(
+            &world.rt(), &None, out.clone(),
+            &ps_none(),
+            &mut |fid, oid, _err| captured.push((fid, oid)),
+            &mut results,
+        ).expect("inner");
+        assert_eq!(results, vec![(out.id, true)], "ancestor rows are 'applied'");
+        assert!(captured.is_empty(), "no errors to capture");
+    }
+
+    #[test]
+    fn inner_apply_fail_fast_raises() {
+        let world = ExtractWorld::permissions_world(|c| c.process.fail_fast = true);
+        let rec = mk_file("x.bin", FileType::File, Some(0o600), None, None, None, None,
+                          None, None, None, None, None);
+        let out = out_record(2, "/ed/x.bin", Some(FileId(1)), false);
+        let mut results: Vec<(OutTreeId, bool)> = Vec::new();
+        let res = inner_apply_permissions(
+            &world.rt(), &Some(rec), out.clone(),
+            &ps_none(),
+            &mut |_, _, _| {},
+            &mut results,
+        );
+        // target `/ed/x.bin` does not exist -> mode fails -> fail_fast raises.
+        assert!(matches!(res, Err(Error::Other(_))), "fail-fast must raise: {res:?}");
+        assert_eq!(results, vec![(out.id, false)]);
+    }
+
+    #[test]
+    fn inner_apply_without_fail_fast_captures_and_returns_ok() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let rec = mk_file("x.bin", FileType::File, Some(0o600), None, None, None, None,
+                          None, None, None, None, None);
+        let out = out_record(3, "/ed/x.bin", Some(FileId(1)), false);
+        let mut results: Vec<(OutTreeId, bool)> = Vec::new();
+        let mut captured: Vec<(Option<FileId>, OutTreeId)> = Vec::new();
+        inner_apply_permissions(
+            &world.rt(), &Some(rec), out.clone(),
+            &ps_none(),
+            &mut |fid, oid, _err| captured.push((fid, oid)),
+            &mut results,
+        ).expect("inner");
+        assert_eq!(results, vec![(out.id, false)]);
+        assert_eq!(captured, vec![(Some(FileId(1)), out.id)]);
+    }
+
+    // ---------------------------------------------------------------------
+    // apply_permissions_link_sources
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn link_sources_applies_metadata() {
+        let world = ExtractWorld::permissions_world(|c| c.placement.link_tree = true);
+        let id = world.p_add_file("photo.jpg", b"jpeg", |r| r.mode = Some(0o640));
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        let cid = world.db.get_file_by_id::<FileRecord>(id)
+            .expect("get").expect("row").content_id().expect("cid").0;
+        let src = world.proot().join(".sources").join(&cid);
+        fs::create_dir_all(src.parent().expect("parent")).expect("src dir");
+        fs::write(&src, b"jpeg").expect("write src");
+
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        apply_permissions_link_sources(&world.rt(), &mut recorder, &ps_none()).expect("apply");
+        assert!(world.p_file_flag(id, FileFlag::AppliedMetadata));
+        assert_eq!(on_disk_mode(&src), 0o640);
+        assert_eq!(recorder.buffered(), 0);
+    }
+
+    #[test]
+    fn link_sources_custom_dir() {
+        let world = ExtractWorld::permissions_world(|c| {
+            c.placement.link_tree = true;
+            c.placement.link_source = Some(PathBuf::from("links"));
+        });
+        let id = world.p_add_file("pic.heif", b"heif", |r| r.mode = Some(0o600));
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        let cid = world.db.get_file_by_id::<FileRecord>(id)
+            .expect("get").expect("row").content_id().expect("cid").0;
+        let src = world.proot().join("links").join(&cid);
+        fs::create_dir_all(src.parent().expect("parent")).expect("src dir");
+        fs::write(&src, b"heif").expect("write src");
+
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        apply_permissions_link_sources(&world.rt(), &mut recorder, &ps_none()).expect("apply");
+        assert!(world.p_file_flag(id, FileFlag::AppliedMetadata));
+        assert_eq!(on_disk_mode(&src), 0o600);
+    }
+
+    #[test]
+    fn link_sources_panics_without_content_id() {
+        let world = ExtractWorld::permissions_world(|c| c.placement.link_tree = true);
+        let id = world.p_add_file("cr2", b"cr2", |_| {});
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        world.un_canonicalize(id);
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            apply_permissions_link_sources(&world.rt(), &mut recorder, &ps_none())
+        }));
+        assert!(res.is_err(), "a digest-less AtLinkSource row must trip the expect");
+    }
+
+    #[test]
+    fn link_sources_fail_fast_raises() {
+        let world = ExtractWorld::permissions_world(|c| {
+            c.placement.link_tree = true;
+            c.process.fail_fast = true;
+        });
+        let id = world.p_add_file("dng", b"dng", |r| r.mode = Some(0o600));
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        // .sources file NOT created -> mode restore fails -> fail_fast.
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let res = apply_permissions_link_sources(&world.rt(), &mut recorder, &ps_none());
+        assert!(matches!(res, Err(Error::Other(_))), "fail-fast must raise: {res:?}");
+    }
+
+    // ---------------------------------------------------------------------
+    // process_batched_files / process_batches_dirs
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn process_batched_files_ingests_results() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let id = world.p_add_file("data.json", b"{}", |r| r.mode = Some(0o600));
+        let out = world.padd_out("data.json", id,
+                                placed_flags());
+        let mut ps = ps_none();
+        let mut failures: Vec<(OutTreeId, FileStatError)> = Vec::new();
+        process_batched_files(
+            &world.rt(),
+            &mut |_fid, oid, err| failures.push((oid, err)),
+            &ps,
+        ).expect("process files");
+        assert!(world.p_out_flag(out, OutTreeFlag::AppliedMetadata));
+        assert!(!world.p_out_flag(out, OutTreeFlag::ErrorWhileApplyingMetadata));
+        assert_eq!(on_disk_mode(&world.proot().join("data.json")), 0o600);
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn process_batches_dirs_ingests_results() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let dir = world.proot().join("docs");
+        fs::create_dir_all(&dir).expect("docs dir");
+        world.db.insert_file(&NewFileRecord {
+            abs_path: dir.clone(),
+            abs_path_raw: None,
+            ext: String::new(),
+            size: 0,
+            mtime: None, atime: None, ctime: None,
+            uid: None, gid: None, mode: Some(0o750),
+            ftype: Some(FileType::Directory),
+            xattrs: None, posix_acl: None, selinux_ctx: None, win_perm: None,
+            link_dst: None, link_dst_raw: None,
+            device_id: None, inode_id: None, major: None, minor: None,
+        }).expect("insert dir row");
+        let id = world.db.file_id_by_abs_path(&dir).expect("lookup").expect("row");
+        let mut dir_flags = OutTreeFlags::default();
+        dir_flags.set(OutTreeFlag::IsDirectory, true);
+        let out = world.padd_out("docs", id, dir_flags);
+        let mut failures: Vec<(OutTreeId, FileStatError)> = Vec::new();
+        process_batches_dirs(
+            &world.rt(),
+            &mut |_fid, oid, err| failures.push((oid, err)),
+            &ps_none(),
+        ).expect("process dirs");
+        assert!(world.p_out_flag(out, OutTreeFlag::AppliedMetadata));
+        assert_eq!(on_disk_mode(&dir), 0o750);
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn process_batch_graceful_interrupt_stops() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let id = world.p_add_file("rules.yaml", b"a", |r| r.mode = Some(0o600));
+        let out = world.padd_out("rules.yaml", id,
+                                placed_flags());
+        world.shutdown.request_graceful();
+        let res = process_batched_files(
+            &world.rt(),
+            &mut |_, _, _| {},
+            &ps_none(),
+        );
+        assert!(matches!(res, Err(Error::Interrupted)), "graceful must stop: {res:?}");
+        assert!(!world.p_out_flag(out, OutTreeFlag::AppliedMetadata),
+                "no partial ingestion on interrupt");
+    }
+
+    // ---------------------------------------------------------------------
+    // run
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn run_applies_non_dir_and_dirs() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let fid = world.p_add_file("report.docx", b"docx", |r| r.mode = Some(0o640));
+        let fout = world.padd_out("report.docx", fid,
+                                 placed_flags());
+
+        let dir = world.proot().join("docs");
+        fs::create_dir_all(&dir).expect("docs");
+        let mut flags = OutTreeFlags::default();
+        flags.set(OutTreeFlag::IsDirectory, true);
+        world.db.insert_file(&NewFileRecord {
+            abs_path: dir.clone(), abs_path_raw: None, ext: String::new(), size: 0,
+            mtime: None, atime: None, ctime: None, uid: None, gid: None, mode: Some(0o700),
+            ftype: Some(FileType::Directory), xattrs: None, posix_acl: None,
+            selinux_ctx: None, win_perm: None, link_dst: None, link_dst_raw: None,
+            device_id: None, inode_id: None, major: None, minor: None,
+        }).expect("insert dir");
+        let did = world.db.file_id_by_abs_path(&dir).expect("lookup").expect("row");
+        let dout = world.padd_out("docs", did, flags);
+
+        run(&world.rt()).expect("run");
+
+        assert_eq!(on_disk_mode(&world.proot().join("report.docx")), 0o640);
+        assert_eq!(on_disk_mode(&dir), 0o700);
+        assert!(world.p_out_flag(fout, OutTreeFlag::AppliedMetadata));
+        assert!(world.p_out_flag(dout, OutTreeFlag::AppliedMetadata));
+    }
+
+    #[test]
+    fn run_no_overwrite_dir_skips_dirs() {
+        let world = ExtractWorld::permissions_world(|c| c.attributes.no_overwrite_dir = true);
+        let fid = world.p_add_file("config.xml", b"<x/>", |r| r.mode = Some(0o600));
+        let fout = world.padd_out("config.xml", fid,
+                                 placed_flags());
+
+        let dir = world.proot().join("docs");
+        fs::create_dir_all(&dir).expect("docs");
+        let mut flags = OutTreeFlags::default();
+        flags.set(OutTreeFlag::IsDirectory, true);
+        let drec = NewFileRecord {
+            abs_path: dir.clone(), abs_path_raw: None, ext: String::new(), size: 0,
+            mtime: None, atime: None, ctime: None, uid: None, gid: None, mode: Some(0o700),
+            ftype: Some(FileType::Directory), xattrs: None, posix_acl: None,
+            selinux_ctx: None, win_perm: None, link_dst: None, link_dst_raw: None,
+            device_id: None, inode_id: None, major: None, minor: None,
+        };
+        world.db.insert_file(&drec).expect("insert dir");
+        let did = world.db.file_id_by_abs_path(&dir).expect("lookup").expect("row");
+        let dout = world.padd_out("docs", did, flags);
+
+        run(&world.rt()).expect("run");
+
+        assert!(world.p_out_flag(fout, OutTreeFlag::AppliedMetadata));
+        assert!(!world.p_out_flag(dout, OutTreeFlag::AppliedMetadata),
+                "--no-overwrite-dir leaves dirs untouched");
+        assert_eq!(world.file_mode(did), Some(0o700));
+    }
+
+    #[test]
+    fn run_link_tree_applies_sources() {
+        let world = ExtractWorld::permissions_world(|c| c.placement.link_tree = true);
+        let id = world.p_add_file("photo.jpg", b"jpeg", |r| r.mode = Some(0o640));
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        let cid = world.db.get_file_by_id::<FileRecord>(id)
+            .expect("get").expect("row").content_id().expect("cid").0;
+        let src = world.proot().join(".sources").join(&cid);
+        fs::create_dir_all(src.parent().expect("parent")).expect("src dir");
+        fs::write(&src, b"jpeg").expect("write src");
+
+        run(&world.rt()).expect("run");
+
+        assert!(world.p_file_flag(id, FileFlag::AppliedMetadata));
+        assert_eq!(on_disk_mode(&src), 0o640);
+    }
+
+    /// `global_mark_phase` promotes EVERY file row, even ones never seen by the
+    /// out_tree (e.g. hardlink duplicates without an out row).
+    #[test]
+    fn run_marks_every_file_permissions_restored() {
+        let world = ExtractWorld::permissions_world(|_| {});
+        let fid = world.p_add_file("paper.pdf", b"%PDF", |r| r.mode = Some(0o640));
+        world.padd_out("paper.pdf", fid, placed_flags());
+        // an orphaned file row with no out_tree entry at all
+        let orphan = world.p_add_file("orphan.txt", b"x", |_| {});
+
+        run(&world.rt()).expect("run");
+
+        assert_eq!(world.file_phase(fid), FilePhase::PermissionsRestored);
+        assert_eq!(world.file_phase(orphan), FilePhase::PermissionsRestored);
+        let count = world.db.t_files_in_phase::<StrippedRecord>(FilePhase::PermissionsRestored)
+            .expect("list").len();
+        assert_eq!(count, 2, "both rows promoted regardless of phase participation");
+    }
+}
