@@ -381,7 +381,8 @@ pub fn resolve_owner_group(
     policy: &OwnerGroupPolicy,
     target: MapResolutionTarget,
     same_owner: bool)
-    -> Result<(Option<u32>, Option<u32>)> {
+    -> (Option<u32>, Option<u32>) {
+
     let empty_map = IdentityMap::default();
     let owner = resolve_identity(
         src_username,
@@ -391,7 +392,7 @@ pub fn resolve_owner_group(
         target,
         same_owner,
         lookup_uid,
-    )?;
+    );
     let group = resolve_identity(
         src_groupname,
         src_gid,
@@ -400,8 +401,8 @@ pub fn resolve_owner_group(
         target,
         same_owner,
         lookup_gid,
-    )?;
-    Ok((owner, group))
+    );
+    (owner, group)
 }
 
 fn resolve_identity(
@@ -412,7 +413,8 @@ fn resolve_identity(
     target: MapResolutionTarget,
     same_owner: bool,
     lookup: fn(&str) -> Option<u32>)
-    -> Result<Option<u32>> {
+    -> Option<u32> {
+
     // Step 1: pick the identity spec to emit. Matches map by name then by uid.
     let resolved_src_id = src_id.and_then(|i| map.by_id.get(&i));
     let resolved_target: Option<&IdentitySpec> = src_name
@@ -424,7 +426,7 @@ fn resolve_identity(
     // first, then the `--owner`/`--group` override, then — only under
     // `--same-owner` — the archived (db) identity. A `None` from a chain means
     // "leave ownership unset" and must not be resurrected here.
-    Ok(match target {
+    match target {
         MapResolutionTarget::Ids => resolve_ids(resolved_target, src_id, ovr, same_owner),
         MapResolutionTarget::Names => {
             resolve_names(resolved_target, src_name, ovr, same_owner, lookup)
@@ -435,7 +437,7 @@ fn resolve_identity(
         MapResolutionTarget::IdName => {
             resolve_id_name(resolved_target, src_name, src_id, ovr, same_owner, lookup)
         }
-    })
+    }
 }
 
 /// `ids`: map.id → override.id → (same_owner ? db_id : None).
@@ -443,8 +445,9 @@ fn resolve_ids(
     chosen: Option<&IdentitySpec>,
     db_id: Option<u32>,
     ovr: Option<&IdentitySpec>,
-    same_owner: bool,
-) -> Option<u32> {
+    same_owner: bool)
+    -> Option<u32> {
+
     let ovr_id = ovr.as_ref().and_then(|s| s.id);
     let db_res_id = if same_owner { db_id } else { None };
     chosen
@@ -461,8 +464,9 @@ fn resolve_names(
     db_name: Option<&str>,
     ovr: Option<&IdentitySpec>,
     same_owner: bool,
-    lookup: fn(&str) -> Option<u32>,
-) -> Option<u32> {
+    lookup: fn(&str) -> Option<u32>)
+    -> Option<u32> {
+
     let ovr_name = ovr.as_ref().and_then(|s| s.name.clone());
     let db_map_name = if same_owner {
         db_name.map(|s| s.to_string())
@@ -486,8 +490,9 @@ fn resolve_name_id(
     db_id: Option<u32>,
     ovr: Option<&IdentitySpec>,
     same_owner: bool,
-    lookup: fn(&str) -> Option<u32>,
-) -> Option<u32> {
+    lookup: fn(&str) -> Option<u32>)
+    -> Option<u32> {
+
     resolve_names(chosen, db_name, ovr, same_owner, lookup)
         .or_else(|| resolve_ids(chosen, db_id, ovr, same_owner))
 }
@@ -500,8 +505,9 @@ fn resolve_id_name(
     db_id: Option<u32>,
     ovr: Option<&IdentitySpec>,
     same_owner: bool,
-    lookup: fn(&str) -> Option<u32>,
-) -> Option<u32> {
+    lookup: fn(&str) -> Option<u32>)
+    -> Option<u32> {
+
     resolve_ids(chosen, db_id, ovr, same_owner)
         .or_else(|| resolve_names(chosen, db_name, ovr, same_owner, lookup))
 }
@@ -1169,8 +1175,7 @@ mod tests {
             None,
             MapResolutionTarget::Ids,
             false,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, None);
 
         // same-owner: db uid applies
@@ -1181,8 +1186,7 @@ mod tests {
             None,
             MapResolutionTarget::Ids,
             true,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, Some(uid));
     }
 
@@ -1193,8 +1197,8 @@ mod tests {
         map: IdentityMap,
         ovr_arg: Option<&IdentitySpec>,
         target: MapResolutionTarget,
-        same_owner: bool,
-    ) -> Result<Option<u32>> {
+        same_owner: bool)
+        -> Option<u32> {
         let mut p = empty_policy();
         p.owner_map = if map.by_id.is_empty() && map.by_name.is_empty() {
             None
@@ -1218,7 +1222,7 @@ mod tests {
     fn resolve_ids_same_owner_no_db() {
         // src has no uid in the row; same_owner + no db → None.
         let empty = IdentityMap::default();
-        let r = resolve_case(None, None, empty, None, MapResolutionTarget::Ids, true).expect("ok");
+        let r = resolve_case(None, None, empty, None, MapResolutionTarget::Ids, true);
         assert_eq!(r, None);
     }
 
@@ -1235,8 +1239,7 @@ mod tests {
             None,
             MapResolutionTarget::Names,
             false,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, None);
 
         // same_owner + db name resolves → db uid
@@ -1247,8 +1250,7 @@ mod tests {
             None,
             MapResolutionTarget::Names,
             true,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, Some(uid));
     }
 
@@ -1264,8 +1266,7 @@ mod tests {
             None,
             MapResolutionTarget::Names,
             true,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, None);
     }
 
@@ -1284,8 +1285,7 @@ mod tests {
             None,
             MapResolutionTarget::NameId,
             true,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, Some(uid));
 
         // map dst name unresolvable → override name (existing) → db.
@@ -1300,8 +1300,7 @@ mod tests {
             Some(&ovr),
             MapResolutionTarget::NameId,
             true,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, Some(uid));
 
         // override id used when name fails entirely under same_owner.
@@ -1315,8 +1314,7 @@ mod tests {
             Some(&ovr2),
             MapResolutionTarget::NameId,
             true,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, Some(uid));
     }
 
@@ -1333,8 +1331,7 @@ mod tests {
             None,
             MapResolutionTarget::IdName,
             true,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, Some(uid));
 
         // map dst name-only, override id; IdName picks override id before name.
@@ -1347,8 +1344,7 @@ mod tests {
             Some(&ovr2),
             MapResolutionTarget::IdName,
             true,
-        )
-        .expect("ok");
+        );
         assert_eq!(r, Some(uid));
     }
 
