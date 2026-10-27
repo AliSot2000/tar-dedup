@@ -213,7 +213,7 @@ fn inner_apply_permissions(
     out: OutTreeRecord,
     ps: &OwnerGroupMode,
     capture_err: &mut impl FnMut(Option<FileId>, OutTreeId, FileStatError) -> (),
-    results: &mut  Vec<(OutTreeId, bool)>)
+    results: &mut Vec<(OutTreeId, bool)>)
     -> Result<()> {
 
     // Ancestor-only directory rows (`ensure_parent`) have no catalog row;
