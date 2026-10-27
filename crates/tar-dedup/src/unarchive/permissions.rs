@@ -101,13 +101,11 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     // AppliedPermissions iff ALL rows applied; ErrorWhileApplyingPermissions iff ANY errored.
     let (applied, errored) = rt.db.apply_permissions_flags_to_files()?;
     tracing::info!(
-        applied_files = applied,
-        errored_files = errored,
-        "permissions: propagated metadata flags to files"
+        "permissions: propagated {applied} applied and {errored} error metadata flags to files"
     );
     tracing::info!(
         "permissions done: processed {} of {}, {} error(s)",
-        applied,
+        file_pending + dir_pending,
         file_pending + file_done + dir_pending + dir_done,
         rt.db.count_errors(Some("permissions"))?,
     );
