@@ -148,11 +148,15 @@ fn resolve_owner_group_policy(rt: &ExtractRTArgs)
 /// Resolve the symbolic mode changes based on the cli flags and the presence of an mode change
 /// string in the database.
 fn resolve_mode(rt: &ExtractRTArgs) -> Result<Option<file_mode::Mode>> {
+    // INFO: Future versions might have to alter this course of action if the mode change is
+    //  altered since the "parse worked" precondition might not hold across time.
     let res = match &rt.config.mode_policy {
         ModeSource::None => None,
-        ModeSource::Cli(changes) => Some(parse_mode_changes(changes)?),
+        ModeSource::Cli(changes) => Some(parse_mode_changes(changes)
+            .expect("Mode changes should be validated at parse time!")),
         ModeSource::Stored => match rt.db.get_archive_mode_changes()? {
-            Some(changes) => Some(parse_mode_changes(&changes)?),
+            Some(changes) => Some(parse_mode_changes(&changes)
+                .expect("Mode changes should be validated at parse time!")),
             None => None,
         },
     };
