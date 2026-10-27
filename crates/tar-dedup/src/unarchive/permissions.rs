@@ -247,7 +247,7 @@ fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps: &O
         None => PathBuf::from(".sources"),
         Some(v) => v.to_path_buf(),
     };
-    let base_dir = rt.config.paths.extraction_root().join(dir_name);
+    let base_dir = rt.config.effective_extraction_root().join(dir_name);
     batched_loop(
         |bs| rt.db.list_canonical_files_for_permissions(bs),
         rt.config.process.batch_size,
