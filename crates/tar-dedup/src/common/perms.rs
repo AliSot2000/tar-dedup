@@ -1353,6 +1353,237 @@ mod tests {
     }
 
     // ================================================================================
+    // Suite 6b — resolve_identity degradation matrix
+    // ================================================================================
+
+    /// Build a map from its optional by-name / by-id arm and resolve the owner.
+    #[cfg(unix)]
+    fn resolve_row(
+        src_name: Option<&str>,
+        src_uid: Option<u32>,
+        map_by_name: Option<(&str, IdentitySpec)>,
+        map_by_id: Option<(u32, IdentitySpec)>,
+        ovr: Option<IdentitySpec>,
+        target: MapResolutionTarget,
+        same_owner: bool) -> Option<u32> {
+        let mut map = IdentityMap::default();
+        if let Some((k, v)) = map_by_name {
+            map.by_name.insert(k.to_string(), v);
+        }
+        if let Some((k, v)) = map_by_id {
+            map.by_id.insert(k, v);
+        }
+        resolve_identity(src_name, src_uid, &map, ovr.as_ref(), target, same_owner, lookup_uid)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ids_chain_never_digs_into_names() {
+        let (uid, name) = current_user();
+        // map.id only (source uid keyed) wins over everything.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            None,
+            Some((uid, spec(None, Some(1000)))),
+            None, MapResolutionTarget::Ids, true);
+        assert_eq!(r, Some(1000));
+        // override.id next.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            None, None,
+            Some(spec(None, Some(2000))),
+            MapResolutionTarget::Ids, true);
+        assert_eq!(r, Some(2000));
+        // db.uid only under --same-owner.
+        let r = resolve_row(Some(&name), Some(uid), None, None, None, MapResolutionTarget::Ids, true);
+        assert_eq!(r, Some(uid));
+        let r = resolve_row(Some(&name), Some(uid), None, None, None, MapResolutionTarget::Ids, false);
+        assert_eq!(r, None);
+        // A resolvable map NAME dst is never consulted by `ids`.
+        let r = resolve_row(
+            Some(&name), None,
+            Some((name.as_str(), spec(Some(name.as_str()), None))),
+            None, None, MapResolutionTarget::Ids, false);
+        assert_eq!(r, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn names_chain_never_digs_into_ids() {
+        let (uid, name) = current_user();
+        // map.name resolves.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            Some((name.as_str(), spec(Some(name.as_str()), None))),
+            None, None, MapResolutionTarget::Names, true);
+        assert_eq!(r, Some(uid));
+        // override.name.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            None, None,
+            Some(spec(Some(name.as_str()), None)),
+            MapResolutionTarget::Names, true);
+        assert_eq!(r, Some(uid));
+        // db.name under --same-owner; without it none.
+        let r = resolve_row(Some(&name), Some(uid), None, None, None, MapResolutionTarget::Names, true);
+        assert_eq!(r, Some(uid));
+        let r = resolve_row(Some(&name), Some(uid), None, None, None, MapResolutionTarget::Names, false);
+        assert_eq!(r, None);
+        // A dst that carries an id (plus unresolvable name) is NOT a fallback:
+        // `names` fails closed.
+        let missing = nonexistent_user_name();
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            Some((name.as_str(), spec(Some(missing.as_str()), Some(3000)))),
+            None, None, MapResolutionTarget::Names, true);
+        assert_eq!(r, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn name_id_degrades_all_the_way_to_db_uid() {
+        let (uid, name) = current_user();
+        let missing = nonexistent_user_name();
+        // map.name present but unresolvable, intermediates absent ->
+        // falls through the whole chain to db.uid (same_owner).
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            Some((name.as_str(), spec(Some(missing.as_str()), None))),
+            None, None, MapResolutionTarget::NameId, true);
+        assert_eq!(r, Some(uid));
+        // Without --same-owner the db stage collapses -> nothing left.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            Some((name.as_str(), spec(Some(missing.as_str()), None))),
+            None, None, MapResolutionTarget::NameId, false);
+        assert_eq!(r, None);
+        // ... or override.id rescues the same_owner=false case.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            Some((name.as_str(), spec(Some(missing.as_str()), None))),
+            None,
+            Some(spec(None, Some(4000))),
+            MapResolutionTarget::NameId, false);
+        assert_eq!(r, Some(4000));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn name_id_jumps_absent_stages() {
+        let (uid, name) = current_user();
+        let missing = nonexistent_user_name();
+        // only override.id present.
+        let r = resolve_row(
+            None, None, None, None,
+            Some(spec(None, Some(5000))),
+            MapResolutionTarget::NameId, true);
+        assert_eq!(r, Some(5000));
+        // only map.id present (source uid keyed, no src name to match).
+        let r = resolve_row(
+            None, Some(uid), None,
+            Some((uid, spec(None, Some(6000)))),
+            None, MapResolutionTarget::NameId, true);
+        assert_eq!(r, Some(6000));
+        // map dst carries an (unresolvable) name plus an id: the name chain
+        // fails, the same spec's id rescues the gap.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            Some((name.as_str(), spec(Some(missing.as_str()), Some(7000)))),
+            None, None, MapResolutionTarget::NameId, true);
+        assert_eq!(r, Some(7000));
+        // override.name beats db.uid when it resolves.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            None, None,
+            Some(spec(Some(name.as_str()), None)),
+            MapResolutionTarget::NameId, true);
+        assert_eq!(r, Some(uid));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn id_name_is_the_mirror() {
+        let (uid, name) = current_user();
+        let missing = nonexistent_user_name();
+        // id-first: a chosen dst carrying both name+id emits its id first.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            None,
+            Some((uid, spec(Some(name.as_str()), Some(8000)))),
+            None, MapResolutionTarget::IdName, true);
+        assert_eq!(r, Some(8000));
+        // a by_name chosen dst with an id also feeds the id chain (choose by name).
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            Some((name.as_str(), spec(Some(name.as_str()), Some(8000)))),
+            Some((uid, spec(None, Some(9000)))),
+            None, MapResolutionTarget::IdName, true);
+        assert_eq!(r, Some(8000));
+        // map.id absent, override.id present -> id chain first.
+        let r = resolve_row(
+            Some(&name), Some(uid),
+            None, None,
+            Some(spec(None, Some(9000))),
+            MapResolutionTarget::IdName, true);
+        assert_eq!(r, Some(9000));
+        // only db.uid (same_owner) fills the id chain.
+        let r = resolve_row(Some(&name), Some(uid), None, None, None, MapResolutionTarget::IdName, true);
+        assert_eq!(r, Some(uid));
+        // override id present -> used; the name chain is never reached.
+        let r = resolve_row(
+            Some(&name), None, None, None,
+            Some(spec(None, Some(9000))),
+            MapResolutionTarget::IdName, true);
+        assert_eq!(r, Some(9000));
+        // no ids at all -> name rescue.
+        let r = resolve_row(
+            Some(&name), None,
+            Some((name.as_str(), spec(Some(name.as_str()), None))),
+            None, None, MapResolutionTarget::IdName, true);
+        assert_eq!(r, Some(uid));
+        // unresolvable map.name at the tail of id-name -> None, never digs ids.
+        let r = resolve_row(
+            Some(&name), None,
+            Some((name.as_str(), spec(Some(missing.as_str()), None))),
+            None, None, MapResolutionTarget::IdName, true);
+        assert_eq!(r, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_and_group_resolve_independently() {
+        let (uid, name) = current_user();
+        let (gid, group) = current_group();
+        let mut policy = OwnerGroupPolicy::default();
+        policy.owner_override = Some(spec(Some(&name), None));
+        policy.group_override = Some(spec(None, Some(gid)));
+        let (ouid, ogid) = resolve_owner_group(
+            Some(uid), Some(gid), Some(&name), Some(&group),
+            &policy, MapResolutionTarget::NameId, true);
+        assert_eq!(ouid, Some(uid), "owner override name resolves");
+        assert_eq!(ogid, Some(gid), "group override id emitted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn group_name_unresolvable_degrades_to_none() {
+        let missing = nonexistent_group_name();
+        let (gid, group) = current_group();
+        let policy = OwnerGroupPolicy::default();
+        // same_owner + db group name, but the name does not resolve -> None
+        // (`Groups` target does not upgrade to the numeric gid).
+        let (_, ogid) = resolve_owner_group(
+            None, Some(gid), None, Some(&missing),
+            &policy, MapResolutionTarget::Names, true);
+        assert_eq!(ogid, None);
+        // db numeric gid is emitted by the default NameId target under same_owner.
+        let (_, ogid) = resolve_owner_group(
+            None, Some(gid), None, Some(&group),
+            &policy, MapResolutionTarget::NameId, true);
+        assert_eq!(ogid, Some(gid));
+    }
+
+    // ================================================================================
     // Suite 7 — symbolic mode changes (`--mode`)
     // ================================================================================
 
@@ -1417,5 +1648,33 @@ mod tests {
         // Beyond the 4-digit special+rwx range.
         assert!(matches!(parse_mode_changes("77777"), Err(Error::Config(_))));
         assert!(parse_mode_changes("7777").is_ok());
+    }
+
+    #[test]
+    fn mode_foreign_char_v_rejected() {
+        // A chmod alphabet outsider must never reach the file-mode parser.
+        assert!(matches!(parse_mode_changes("v"), Err(Error::Config(_))));
+        assert!(matches!(parse_mode_changes("u+vv"), Err(Error::Config(_))));
+    }
+
+    #[test]
+    fn mode_symbolic_set_str_errors_stay_config() {
+        // These pass the alphabet gate but `file-mode` still rejects them
+        // (users without an operator, or an empty comma-clause). They surface
+        // as user-facing Config errors — never panics.
+        for bad in ["ugo", "a", "u+w,", ","] {
+            assert!(matches!(parse_mode_changes(bad), Err(Error::Config(_))), "{bad}");
+        }
+    }
+
+    #[test]
+    fn mode_octal_boundaries() {
+        // A single non-octal digit trips the radix parse (all-ascii-digit gate
+        // passes, radix 8 does not).
+        assert!(matches!(parse_mode_changes("8"), Err(Error::Config(_))));
+        assert!(matches!(parse_mode_changes("09"), Err(Error::Config(_))));
+        // Valid absolute sets, including the 4-digit special+rwx range.
+        assert!(parse_mode_changes("7777").is_ok());
+        assert!(parse_mode_changes("0").is_ok());
     }
 }
