@@ -257,11 +257,18 @@ fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps: &O
                 let id = file
                     .content_id()
                     .expect("Copied requires content_id to exist");
-                let tgt_path = base_dir.join(id.0);
+                let tgt_path = base_dir.join(&id.0);
                 let errs = apply_one(&rt.config, &file, &tgt_path, &ps);
+                let errs_empty = errs.is_empty();
                 results.push((file.id, errs.is_empty()));
                 for err in errs {
                     rec.record_file(file.id, ERROR_PHASE, err, ErrorFlags::default());
+                }
+                if rt.config.process.fail_fast && !errs_empty {
+                    return Err(Error::Other(anyhow::anyhow!(
+                    "metadata restore failed for {}",
+                    id.0
+                )));
                 }
                 rt.progress.inc_both(1);
             }
