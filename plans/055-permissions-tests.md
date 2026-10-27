@@ -106,3 +106,36 @@ Seeders:
   `ErrorWhileApplyingMetadata`, `OutTreeFlag::AppliedMetadata` /
   `ErrorWhileApplyingMetadata`.
 - Shutdown: `request_graceful` → `check_between_files` errors.
+
+## Implementation notes (2026-10-23)
+
+Implemented. `common/perms.rs`: 60 tests (grew by 12 — `resolve_row` matrix suite
+6b + parse-mode gaps); `unarchive/permissions.rs`: new `// TEST` module with 44
+tests; `common/xattr.rs`: three probes + `decoded_xattr_map` now
+`#[cfg(test)] pub(crate)`, test module `pub(crate) mod tests`.
+
+Deviations / findings during implementation:
+
+- **`content_id()` fills `;`** when `sha1` is `NULL` — it only returns `None`
+  for a non-self-canonical row / non-file. The link-sources panic test therefore
+  un-canonicalizes the row (`UPDATE files SET canonical_id = NULL`) instead of
+  clearing the digest.
+- **`get_file_xattr`/`get_file_acl` never return `Err` on absent attributes**
+  (empty map / minimal default ACL). Gate tests assert on the *decoded* content
+  (`decoded_xattr_map` empty, or `"user-obj":7` absent) rather than `is_err()`.
+- **ACL setter key format** is `"user-obj"`/`"group-obj"`/`"other"`/`"mask"`
+  (qualifier names from `serialize_acl_qualifier`), not ACL-pipe syntax
+  `"user::"`. Using `"user::"` surfaces a `PosixQualifierParser` error.
+- **Times gate is off by default** (`apply_mtime`/`apply_atime` default false):
+  the 5-error cascade test must enable both gates so the times facet actually runs.
+- **Times gate loop seeds both atime + mtime** to fixed old values; the atime
+  "unchanged" side stays at the seeded `a_old`, not "creation time".
+- File fixtures: docx/pptx/xlsx/pdf/txt/html/css/typst/json/xml/yaml/jpg/jpeg/
+  heif/heic/gif/arw/cr2/dng/mp4 with valid UTF-8 content.
+
+Verification: `unarchive::permissions` + `common::perms` 104 passed; full default
+suite **608 passed / 1 failed** and `test-all` **617 passed / 1 failed** — the
+only failure is the pre-existing blocker
+(`db::meta::tests::clear_archive_meta_drops_only_byte_counters`). No new
+warnings in touched files; `cargo build -p tar-dedup` unchanged (3 pre-existing
+warnings).
