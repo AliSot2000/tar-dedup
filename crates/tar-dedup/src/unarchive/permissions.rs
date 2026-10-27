@@ -30,13 +30,25 @@ use std::time::SystemTime;
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Extract(ExtractPipelinePhase::Permissions);
 
 pub struct OwnerGroupMode {
-    /// Capture the OwnerGroupPolicy that might need to be routet through the functions to make it a slimmer fujnction call
+    /// Capture the OwnerGroupPolicy that might need to be routed through the functions to make it
+    /// a slimmer function call.
     ogp: Option<OwnerGroupPolicy>,
     mp: Option<file_mode::Mode>,
 }
 
+fn local_err(rec: &mut Recorder, fid: Option<FileId>, oid: OutTreeId, err: FileStatError) {
+    rec.record(
+        fid,
+        Some(oid),
+        ERROR_PHASE,
+        err,
+        ErrorFlags::default(),
+    );
+}
+
 pub fn run(rt: &ExtractRTArgs) -> Result<()> {
-    let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
+    let mut recorder = Recorder::new(
+        rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
 
     let policy: Option<OwnerGroupPolicy> = resolve_owner_group_policy(rt)?;
     let mode_changes = resolve_mode(rt)?;
@@ -69,12 +81,18 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         apply_permissions_link_sources(&rt, &mut recorder, &ps)?;
     } else {
         // Files (and non-directory entries) first.
-        process_batches(&rt, &mut recorder, &ps, false)?;
+        process_batched_files(
+            &rt,
+            &mut |fid, oid, err| local_err(&mut recorder, fid, oid, err),
+            &ps)?;
     }
 
     // Directories, unless `--no-overwrite-dir`.
     if !rt.config.attributes.no_overwrite_dir {
-        process_batches(&rt, &mut recorder, &ps, true)?;
+        process_batches_dirs(
+            &rt,
+            &mut |fid, oid, err| local_err(&mut recorder, fid, oid, err),
+            &ps)?;
     }
 
     recorder.flush()?;
@@ -141,24 +159,6 @@ fn resolve_mode(rt: &ExtractRTArgs) -> Result<Option<file_mode::Mode>> {
         },
     };
     Ok(res)
-}
-
-fn process_batches(rt: &ExtractRTArgs, recorder: &mut Recorder, ps: &OwnerGroupMode, dirs: bool)
-    -> Result<()> {
-    let mut add_err = |fid, oid, err| {
-        recorder.record(
-            fid,
-            Some(oid),
-            ERROR_PHASE,
-            err,
-            ErrorFlags::default(),
-        );
-    };
-    if dirs {
-        process_batches_dirs(&rt, &mut add_err, ps)
-    } else {
-        process_batched_files(&rt, &mut add_err, ps)
-    }
 }
 
 fn process_batched_files(
