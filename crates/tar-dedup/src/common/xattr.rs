@@ -329,7 +329,7 @@ pub fn set_file_selinux_data(path: &Path, raw_ctx: &[u8]) -> FileStatResult<()> 
 // Testing
 //--------------------------------------------------------------------------------------------------
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
 
@@ -357,7 +357,7 @@ mod tests {
     }
 
     /// Probe: can we store a user xattr here? Any failure means the fs lacks support.
-    fn probe_xattr(dir: &Path) -> Result<(), String> {
+    pub(crate) fn probe_xattr(dir: &Path) -> Result<(), String> {
         let probe = dir.join("probe_xattr");
         std::fs::write(&probe, b"x").expect("write probe");
         match symlink_set_xattr(probe.as_path(), "probe", b"v") {
@@ -367,7 +367,7 @@ mod tests {
     }
 
     /// Probe: can we store a POSIX ACL here? (`write_acl` fails on fs without ACLs.)
-    fn probe_acl(dir: &Path) -> Result<(), String> {
+    pub(crate) fn probe_acl(dir: &Path) -> Result<(), String> {
         let probe = dir.join("probe_acl");
         std::fs::write(&probe, b"x").expect("write probe");
         let mut acl = posix_acl::PosixACL::empty();
@@ -383,7 +383,7 @@ mod tests {
 
     /// Probe: can we read + re-apply a security context here? Reads whatever label a
     /// fresh file got (proves labels exist) and writes it back (proves privilege).
-    fn probe_selinux(dir: &Path) -> Result<(), String> {
+    pub(crate) fn probe_selinux(dir: &Path) -> Result<(), String> {
         let probe = dir.join("probe_selinux");
         std::fs::write(&probe, b"x").expect("write probe");
         let octx = SecurityContext::of_path(&probe, false, false).map_err(|e| format!("{e}"))?;
@@ -417,7 +417,7 @@ mod tests {
 
     /// Decode a dump's base64 keys/values back to plain strings (handles the
     /// `debug-force-utf8` encoding too).
-    fn decoded_xattr_map(s: &str) -> HashMap<String, Vec<u8>> {
+    pub(crate) fn decoded_xattr_map(s: &str) -> HashMap<String, Vec<u8>> {
         let dump: XattrDump = serdej_from_str(s).expect("parse xattr dump");
         match dump.encoding {
             Encoding::Utf8 => dump.data
