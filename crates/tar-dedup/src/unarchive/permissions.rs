@@ -378,6 +378,9 @@ fn apply_one(
             "metadata restore failure; marking ErrorWhileApplyingMetadata"
         );
     }
+    debug_assert!(errors.len() <= 6,
+                  "INVARIANT ERROR: Expected at most 6 errors in apply_one, got {}",
+                  errors.len());
     errors
 }
 
