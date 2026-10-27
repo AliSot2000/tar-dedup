@@ -592,13 +592,17 @@ pub fn parse_mode_changes(changes: &str) -> Result<file_mode::Mode> {
         }
         // GNU bare octal is an absolute set; file-mode wants the `=` operator,
         // which also round-trips setuid/setgid/sticky in the leading digit.
+        // Infallible: `from_str_radix` + the `<= 7777` range check above leave
+        // only pure `0-7` digits, and `=`, `=0`..`=7777` all parse.
         mode.set_str(&format!("={changes}"))
-            .map_err(|e| Error::Config(format!("invalid --mode `{changes}`: {e}")))?;
+            .expect("PRECONDITION FAILED: --mode passed the chmod gate but file-mode \
+                    rejected the octal '=' form");
+        Ok(mode)
     } else {
         mode.set_str(changes)
             .map_err(|e| Error::Config(format!("invalid --mode `{changes}`: {e}")))?;
+        Ok(mode)
     }
-    Ok(mode)
 }
 
 // -------------------------------------------------------------------------------------------------
