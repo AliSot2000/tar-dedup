@@ -229,7 +229,7 @@ fn inner_apply_permissions(
     for error in errors {
         capture_err(out.file_id, out.id, error);
     }
-    if rt.config.process.fail_fast && error_empty {
+    if rt.config.process.fail_fast && !error_empty {
         return Err(Error::Other(anyhow::anyhow!(
                     "metadata restore failed for {}",
                     out.abs_path.display()
