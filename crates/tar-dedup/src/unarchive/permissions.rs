@@ -290,27 +290,14 @@ fn apply_one(
 
     // Owner/group via policy resolution.
     let (uid, gid) = match ps.ogp.as_ref() {
-        Some(pol) => match resolve_owner_group(
+        Some(pol) => resolve_owner_group(
             record.uid,
             record.gid,
             record.username.as_ref().map(|s| s.as_ref()),
             record.groupname.as_ref().map(|s| s.as_ref()),
             &pol,
             config.owner_group.target,
-            config.owner_group.same_owner) {
-
-            Ok((u, g)) => (u, g),
-            Err(e) => {
-                errors.push(FileStatError::Io {
-                    path: tgt_path.to_path_buf(),
-                    source: io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("owner/group resolution failed: {e}"),
-                    ),
-                });
-                (None, None)
-            }
-        },
+            config.owner_group.same_owner),
         None => (None, None),
     };
 
