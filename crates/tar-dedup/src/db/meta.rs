@@ -731,7 +731,7 @@ mod tests {
     #[test]
     // TODO cleare_archvie metadata is removed. test needs to be reworked.
     fn clear_archive_meta_drops_only_byte_counters() {
-        let (_dir, mut conn) = open_conn();
+        let (_dir, conn) = open_conn();
 
         set_archive_phase(&conn, PipelinePhase::Archive).unwrap();
         set_tar_writer_bytes_in(&conn, 1).unwrap();
