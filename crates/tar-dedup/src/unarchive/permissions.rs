@@ -1212,7 +1212,7 @@ mod tests {
         let id = world.p_add_file("data.json", b"{}", |r| r.mode = Some(0o600));
         let out = world.padd_out("data.json", id,
                                 placed_flags());
-        let mut ps = ps_none();
+        let ps = ps_none();
         let mut failures: Vec<(OutTreeId, FileStatError)> = Vec::new();
         process_batched_files(
             &world.rt(),
