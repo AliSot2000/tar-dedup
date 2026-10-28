@@ -22,6 +22,8 @@
           rust
           pkgs.rustup
           pkgs.pkg-config
+          pkgs.grcov        # RustRover coverage backend (source-based)
+          pkgs.cargo-llvm-cov # coverage reports (`cargo llvm-cov`)
           pkgs.xz        # liblzma for xz2
           pkgs.bzip2     # bzip2 for bzip2 crate
           pkgs.zstd      # zstd C lib for zstd crate
@@ -30,7 +32,6 @@
           pkgs.libselinux # headers + lib for selinux / selinux-sys crates
           pkgs.llvmPackages.libclang # needed by bindgen (selinux-sys build script)
           pkgs.llvmPackages.clang    # optional, but useful to have the driver too
-          pkgs.cargo-llvm-cov        # coverage reports (`cargo llvm-cov`)
         ];
 
         # Ensures dynamically linked C libs are findable at runtime
@@ -76,6 +77,12 @@
           export PATH="${rust}/bin:$PATH"
           echo "🦀 tar-dedup dev shell — $(rustc --version)"
           echo "   RUSTFLAGS=$RUSTFLAGS"
+          export RUST_SRC_PATH="$(rustc --print sysroot)/lib/rustlib/src/rust/library"
+          # RustRover: prepare the REAL rustup toolchain (writable std sources +
+          # rustup shim + grcov/cargo-llvm-cov). Point the IDE toolchain at the
+          # printed <toolchain>/bin for a stable linter AND coverage.
+          bash ./scripts/rustrover-rustup.sh >/dev/null 2>&1 || \
+            echo "   (warning: could not prepare rustup toolchain for RustRover)"
         '';
       };
     };
