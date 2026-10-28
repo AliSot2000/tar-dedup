@@ -512,7 +512,7 @@ impl ExtractConfig {
     }
 
     #[cfg(test)]
-    pub fn for_place_test(extraction_root: PathBuf, absolute_names: bool, jobs: usize) -> Self {
+    pub fn for_place_test(extraction_root: PathBuf, absolute_names: bool, _jobs: usize) -> Self {
         Self {
             paths: PathLayout {
                 archive_path: PathBuf::new(),

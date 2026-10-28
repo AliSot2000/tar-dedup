@@ -1164,7 +1164,7 @@ mod tests {
             sh2.request_graceful();
         });
 
-        let (fail_fast, completed) = run_loop(&world, bar, 4);
+        let (fail_fast, _completed) = run_loop(&world, bar, 4);
         trigger.join().expect("join trigger");
         world.progress.drop_thread_bars();
 
