@@ -399,7 +399,7 @@ fn materialize_others(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()>
 /// special files. Owns this pass's worker threads and thread bars.
 fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: MaterializeKind)
     -> Result<()> {
-    let ordered = matches!(kind, MaterializeKind::Files);;
+    let ordered = matches!(kind, MaterializeKind::Files);
 
     // Progress bars, only needed for file copy.
     let mut bars = Vec::<Option<ProgressBar>>::new();
