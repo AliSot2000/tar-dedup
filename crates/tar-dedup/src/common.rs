@@ -370,7 +370,7 @@ mod tests {
         work_cap: usize,
         drain_chunk: usize,
         apply_on_partial: bool,
-        mut tick: impl FnMut() -> Result<bool>) -> (u64, Vec<u64>, Vec<u64>, Vec<Vec<u64>>) {
+        tick: impl FnMut() -> Result<bool>) -> (u64, Vec<u64>, Vec<u64>, Vec<Vec<u64>>) {
         let (work_s, work_r) = bounded::<u64>(work_cap);
         let (out_s, out_r) = bounded::<Option<u64>>(1024);
         let mut handles = Vec::with_capacity(workers);
