@@ -756,3 +756,226 @@ fn resolve_map_arg(
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{Cli, Command};
+    use crate::common::perms::infer_same_owner;
+    use crate::config::{CompressionFormat, ExtractStageLocation};
+    use clap::Parser;
+    use std::path::{Path, PathBuf};
+
+    /// `Cli::try_parse_from` on `extract -f <archive> [extra...]`.
+    fn parse_extract(archive: &Path, extra: &[&str]) -> ExtractArgs {
+        let argv = std::iter::once("tar-dedup".to_string())
+            .chain(std::iter::once("extract".to_string()))
+            .chain(["-f".to_string(), archive.display().to_string()])
+            .chain(extra.iter().map(|s| s.to_string()))
+            .collect::<Vec<_>>();
+        let cli = Cli::try_parse_from(&argv).expect("clap parse");
+        match cli.command {
+            Command::Extract(a) => a,
+            other => panic!("expected extract, got {other:?}"),
+        }
+    }
+
+    fn archive_file(dir: &Path, name: &str) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, b"dummy").expect("write archive fixture");
+        p
+    }
+
+    fn build(archive: &Path, extra: &[&str]) -> Result<ExtractConfig> {
+        ExtractConfig::build(&parse_extract(archive, extra), None)
+    }
+
+    /// The whole contradictory `--x` / `--no-x` family in ONE matrix test (not
+    /// one test per pair): each pair on one command line is rejected, each flag
+    /// alone is accepted.
+    #[test]
+    fn conflicting_metadata_pairs_rejected_in_one_matrix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let pairs: [(&str, &str); 11] = [
+            ("--same-owner", "--no-same-owner"),
+            ("--apply-stored-owner-map", "--no-apply-stored-owner-map"),
+            ("--apply-stored-group-map", "--no-apply-stored-group-map"),
+            ("--apply-mode", "--no-apply-mode"),
+            ("--apply-transform", "--no-apply-transform"),
+            ("--apply-atime", "--no-apply-atime"),
+            ("--apply-mtime", "--no-apply-mtime"),
+            ("--xattrs", "--no-xattrs"),
+            ("--acls", "--no-acls"),
+            ("--selinux", "--no-selinux"),
+            ("--same-permissions", "--no-same-permissions"),
+        ];
+        for (yes, no) in pairs {
+            let err = build(&archive, &[yes, no])
+                .expect_err(&format!("{yes} + {no} must be rejected"));
+            assert!(
+                err.to_string().contains("conflicting flags"),
+                "{yes}+{no}: {err}"
+            );
+            assert!(err.to_string().contains(yes), "{yes}+{no}: {err}");
+            assert!(err.to_string().contains(no), "{yes}+{no}: {err}");
+            // Only the pair conflicts; each flag alone is valid.
+            assert!(build(&archive, &[yes]).is_ok(), "{yes} alone");
+            assert!(build(&archive, &[no]).is_ok(), "{no} alone");
+        }
+    }
+
+    #[test]
+    fn missing_archive_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("nope.tar");
+        let err = build(&missing, &[]).unwrap_err();
+        assert!(
+            err.to_string().contains("archive does not exist"),
+            "missing archive: {err}"
+        );
+    }
+
+    #[test]
+    fn minimal_valid_config_absolutizes_and_stages_work_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let cfg = build(&archive, &[]).expect("build");
+        assert_eq!(cfg.paths.archive_path, archive, "already absolute");
+        let expected_work = crate::config::default_extract_work_dir(
+            &archive,
+            dir.path(),
+            ExtractStageLocation::BesideArchive,
+        );
+        assert_eq!(cfg.paths.work_dir, expected_work);
+        assert!(cfg.rehash, "rehash on by default");
+        assert_eq!(cfg.owner_group.same_owner, infer_same_owner());
+        assert_eq!(cfg.strip_components, 0);
+        assert_eq!(cfg.decompression, CompressionFormat::None);
+    }
+
+    #[test]
+    fn one_top_level_uses_stem_or_explicit_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "named.tar");
+        let cfg = build(&archive, &["--one-top-level"]).expect("bare");
+        assert_eq!(cfg.placement.one_top_level.as_deref(), Some(Path::new("named")));
+        let cfg2 = build(&archive, &["--one-top-level", "itsy"]).expect("explicit");
+        assert_eq!(cfg2.placement.one_top_level.as_deref(), Some(Path::new("itsy")));
+    }
+
+    #[test]
+    fn clean_target_conflicts_with_no_create_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let err = build(&archive, &["--clean-target", "--no-create-dirs"]).unwrap_err();
+        assert!(
+            err.to_string().contains("--clean-target conflicts with --no-create-dirs"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn restore_owner_and_no_same_owner_set_the_same_owner_bit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let yes = build(&archive, &["--restore-owner"]).expect("restore-owner");
+        assert!(yes.owner_group.same_owner);
+        assert!(yes.attributes.restore_owner);
+        let no = build(&archive, &["--no-same-owner"]).expect("no-same-owner");
+        assert!(!no.owner_group.same_owner);
+    }
+
+    #[test]
+    fn apply_all_metadata_overridden_per_bit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let cfg = build(&archive, &["--apply-all-metadata", "--no-apply-atime"])
+            .expect("build");
+        assert!(!cfg.attributes.apply_atime, "--no-apply-atime wins");
+        assert!(cfg.attributes.apply_mtime);
+        assert!(!cfg.attributes.no_xattrs, "umbrella on xattrs");
+        assert!(!cfg.attributes.no_acls, "umbrella on acls");
+        // The umbrella sets the stored owner/group-map apply bits (owner
+        // identity itself stays the inference path + explicit --same-owner).
+        assert!(cfg.owner_group.apply_owner);
+        assert!(cfg.owner_group.apply_group);
+
+        let base = build(&archive, &[]).expect("build");
+        assert!(!base.owner_group.apply_owner);
+        assert!(!base.owner_group.apply_group);
+    }
+
+    #[test]
+    fn sparsify_requires_nonzero_page_size() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let err = build(&archive, &["--sparsify", "--page-size", "0"]).unwrap_err();
+        assert!(
+            err.to_string().contains("--page-size"),
+            "zero page size: {err}"
+        );
+    }
+
+    #[test]
+    fn invalid_mode_and_transform_are_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let err = build(&archive, &["--mode", "nonsense"]).unwrap_err();
+        assert!(!err.to_string().is_empty(), "--mode parse must fail");
+        let err2 = build(&archive, &["--transform", "nonsense"]).unwrap_err();
+        assert!(!err2.to_string().is_empty(), "--transform parse must fail");
+    }
+
+    #[test]
+    fn zero_worker_counts_are_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        for flag in ["--jobs", "--io-jobs"] {
+            let err = build(&archive, &[flag, "0"]).unwrap_err();
+            assert!(
+                err.to_string().contains("must be greater than 0"),
+                "{flag}: {err}"
+            );
+        }
+        let cfg = build(&archive, &["--jobs", "2"]).expect("jobs 2");
+        assert_eq!(cfg.process.jobs, 2);
+    }
+
+    #[test]
+    fn compression_inferred_from_suffix_and_overridden() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let xz = archive_file(dir.path(), "backup.tar.xz");
+        let cfg = build(&xz, &[]).expect("suffix inference");
+        assert_eq!(cfg.decompression, CompressionFormat::Xz);
+
+        let plain = archive_file(dir.path(), "plain");
+        let gz = build(&plain, &["-z"]).expect("force gzip");
+        assert_eq!(gz.decompression, CompressionFormat::Gz);
+        let xz2 = build(&plain, &["-J"]).expect("force xz");
+        assert_eq!(xz2.decompression, CompressionFormat::Xz);
+    }
+
+    #[test]
+    fn conflicting_compression_flags_fail_at_parse() {
+        let argv = ["tar-dedup", "extract", "-f", "x.tar", "-z", "-J"];
+        assert!(Cli::try_parse_from(argv).is_err(), "-z + -J must conflict");
+    }
+
+    #[test]
+    fn stage_location_beside_output_moves_work_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let cfg = build(&archive, &["--stage-location", "beside-output"]).expect("build");
+        let expected = crate::config::default_extract_work_dir(
+            &archive,
+            &cfg.paths.output_dir,
+            ExtractStageLocation::BesideOutput,
+        );
+        assert_eq!(cfg.paths.work_dir, expected);
+    }
+}
