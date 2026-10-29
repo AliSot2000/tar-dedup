@@ -16,7 +16,7 @@ use crate::config::{
 };
 use crate::db::Database;
 use crate::db::content_id::content_id_from_digest;
-use crate::db::flags::FileFlag;
+use crate::db::flags::{FileFlag, SourceFlag, SourceFlags};
 use crate::db::types::{FileId, FilePhase, FileRecord, FileType, NewFileRecord, StrippedRecord};
 use crate::progress::{ARCHIVE_MULTIPLIER, EXTRACT_MULTIPLIER, ProgressBarSet};
 use crate::shutdown::Shutdown;
@@ -311,6 +311,33 @@ pub fn write_catalog(path: &Path) -> String {
     let canonical = insert(&db, "/canonical.txt", 4, FileType::File);
     let duplicate = insert(&db, "/duplicate.txt", 4, FileType::File);
 
+    // A synthetic `/` source so the relative placement path has a root to map
+    // the members under (real manifests carry the `--input-dir` sources).
+    let source_id = db
+        .add_get_source(
+            Path::new("/"),
+            "--input-dir",
+            Some(0),
+            Path::new("/"),
+            Path::new("/"),
+            Path::new("/"),
+            SourceFlags::default().with(SourceFlag::IsDirectory, true),
+        )
+        .expect("insert root source");
+    db.add_ref(source_id, canonical).expect("ref canonical");
+    db.add_ref(source_id, duplicate).expect("ref duplicate");
+
+    // Real archives record dev/inode per file; the hardlink-canonical election
+    // in the placement prologue groups out_tree rows by it. Share one
+    // (dev, inode) so the two same-content members form a single group.
+    db.with_transaction(|conn| {
+        conn.execute(
+            "UPDATE files SET dev = 1, inode = 10 WHERE id IN (:c, :d)",
+            rusqlite::named_params! { ":c": canonical.0, ":d": duplicate.0 },
+        ).expect("set dev/inode");
+        Ok(())
+    }).expect("dev/inode tx");
+
     // Seed the joint include filter (id -1 = internal catch-all) in both
     // tables so the eager-extract gate (`should_extract_canonical_id`) sees
     // the canonicals as filter-eligible; then pin the reason columns.
@@ -339,6 +366,8 @@ pub fn write_catalog(path: &Path) -> String {
 
     db.update_file_inspection_per_id(canonical, [7u8; 20], 0, false)
         .expect("digest");
+    db.update_file_inspection_per_id(duplicate, [7u8; 20], 0, false)
+        .expect("dupe digest");
     db.mark_self_canonical(canonical).expect("self canonical");
     db.set_canonical(duplicate, canonical).expect("canonical");
     db.set_file_flag(canonical, FileFlag::AppendedPath, true)
@@ -482,6 +511,8 @@ pub fn build_multi_catalog(dir: &Path, n: usize) -> (ExtractConfig, Vec<String>)
     let dup = insert(&db, "/dup.txt", 4, FileType::File);
     seed_filter_reasons(&db, dup);
     db.set_canonical(dup, last_id).expect("canonical");
+    db.update_file_inspection_per_id(dup, [last_id.0 as u8; 20], 0, false)
+        .expect("dupe digest");
     db.mark_file_phase(dup, FilePhase::Archived).expect("phase");
     db.checkpoint().expect("checkpoint");
     drop(db);
