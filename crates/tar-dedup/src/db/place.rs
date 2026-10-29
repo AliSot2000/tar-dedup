@@ -779,9 +779,11 @@ pub fn ingest_materialize_results(
                     );
                 }
                 Ok(success) => {
-                    if cfg!(debug_assertions) {
-                        validate_materialize_result(&success);
-                    }
+                    // Compile-time gated: the validator only exists under
+                    // `cfg(debug_assertions)` (a runtime `cfg!` would leave the
+                    // call dangling in `--release` builds).
+                    #[cfg(debug_assertions)]
+                    validate_materialize_result(&success);
                     set_out_tree_flag(i_conn, success.id, OutTreeFlag::Placed, success.placed)?;
                     set_out_tree_flag(i_conn, success.id, OutTreeFlag::RemovedPrevious, success.removed)?;
                     set_out_tree_flag(i_conn, success.id, OutTreeFlag::Conflict, success.conflict)?;
