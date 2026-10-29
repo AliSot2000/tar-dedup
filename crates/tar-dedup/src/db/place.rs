@@ -583,7 +583,20 @@ pub fn mark_global_canonical(conn: &Connection) -> Result<u64> {
         [],
     ).to_panic()?;
 
-    Ok((updated + updated2) as u64)
+    // Step 3: content-equal members whose (dev, inode) differs from every
+    // elected row (separate files on the source, e.g. byte-identical copies)
+    // are not a hardlink group — make each such out row its own canonical so
+    // the materialize pass copies the payload to each path. The queue's source
+    // resolves through `files.canonical_id`, so the (single) archived member is
+    // still used as the copy source.
+    let updated3 = conn.execute(
+        "UPDATE out_tree SET canonical_id = id
+         WHERE canonical_id IS NULL
+           AND file_id IN (SELECT id FROM files WHERE ftype = 'file')",
+        [],
+    ).to_panic()?;
+
+    Ok((updated + updated2 + updated3) as u64)
 }
 
 /// Set one file as the canonical in the out_tree given hardlink groups (dev, inode)
