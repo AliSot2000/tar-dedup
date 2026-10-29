@@ -298,3 +298,165 @@ impl FileStatError {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    fn fixture_path() -> PathBuf {
+        PathBuf::from("/data/example.txt")
+    }
+
+    fn eacces() -> std::io::Error {
+        std::io::Error::from_raw_os_error(13) // EACCES -> PermissionDenied
+    }
+
+    fn interrupted() -> std::io::Error {
+        std::io::Error::from(std::io::ErrorKind::Interrupted)
+    }
+
+    fn sample_error_variants() -> Vec<FileStatError> {
+        let path = fixture_path();
+        vec![
+            FileStatError::Io { path: path.clone(), source: eacces() },
+            FileStatError::Json { path: path.clone(), source: serde_json::from_str::<u32>("boom").unwrap_err() },
+            FileStatError::Xattrs { path: path.clone(), source: xattrs::list_xattr("/definitely-missing-xattr-path").expect_err("missing path") },
+            FileStatError::PosixAcl { path: path.clone(), source: posix_acl::PosixACL::read_acl("/definitely-missing-acl-path").expect_err("missing path") },
+            FileStatError::SELinux { path: path.clone(), source: selinux::errors::Error::PathIsInvalid(path.clone()) },
+            FileStatError::Nix { path: path.clone(), source: nix::errno::Errno::EPERM },
+            FileStatError::PosixQualifierParser { path: path.clone(), source: crate::common::xattr::PosixQualifierParserError::UnexpectedString("x".into()) },
+            FileStatError::Base64DecodingError { path: path.clone(), source: base64::engine::general_purpose::STANDARD.decode("!!not-base64!!").expect_err("invalid base64") },
+            FileStatError::General { path: Some(path), message: "message".into() },
+        ]
+    }
+
+    #[test]
+    fn file_stat_variants_display_and_report_paths() {
+        for e in sample_error_variants() {
+            assert_eq!(e.io_path(), Some(fixture_path()), "io_path of {e:?}");
+            let displayed = e.to_string();
+            assert!(
+                displayed.contains("example.txt"),
+                "display must carry the path: {displayed}"
+            );
+            assert!(!e.kind().is_empty(), "kind of {:?}", e);
+        }
+    }
+
+    #[test]
+    fn file_stat_kind_classifies_variants() {
+        let path = fixture_path();
+        let io = FileStatError::io(&path, eacces());
+        assert_eq!(io.kind(), "Io/PermissionDenied");
+
+        let json = FileStatError::json(&path, serde_json::from_str::<u32>("boom").unwrap_err());
+        assert_eq!(json.kind(), "Json");
+        let general = FileStatError::general(None, "m".into());
+        assert_eq!(general.kind(), "General");
+        assert_eq!(general.io_path(), None, "General may carry no path");
+        let nix = FileStatError::nix(&path, nix::errno::Errno::EPERM);
+        assert_eq!(nix.kind(), "Nix/EPERM: Operation not permitted");
+    }
+
+    #[test]
+    fn general_error_round_trips_through_recreate() {
+        let path = fixture_path();
+        let err = FileStatError::general(Some(&path), "hello".into());
+        let re = err.recreate();
+        match re {
+            FileStatError::General { path: p, message } => {
+                assert_eq!(p.as_deref(), Some(fixture_path().as_path()));
+                assert_eq!(message, "hello");
+            }
+            other => panic!("expected General, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn io_errors_round_trip_through_recreate_by_raw_os_code() {
+        let path = fixture_path();
+        let err = FileStatError::io(&path, eacces());
+        let re = err.recreate();
+        assert!(matches!(re, FileStatError::Io { .. }), "{:?}", re);
+        // Real OS errors keep their kind through the raw code round-trip.
+        assert_eq!(re.kind(), "Io/PermissionDenied");
+    }
+
+    #[test]
+    fn non_io_variants_recreate_as_general() {
+        for e in sample_error_variants() {
+            let re = e.recreate();
+            assert!(
+                matches!(re, FileStatError::General { .. }) || re.kind() == "Io/PermissionDenied",
+                "{e:?} -> {re:?}"
+            );
+            assert_eq!(re.io_path(), e.io_path(), "path preserved for {e:?}");
+        }
+    }
+
+    #[test]
+    fn io_and_copy_io_map_interrupted_to_interrupted() {
+        let path = fixture_path();
+        assert!(matches!(Error::io(&path, interrupted()), Error::Interrupted));
+        assert!(matches!(Error::copy_io(&path, &interrupted()), Error::Interrupted));
+        let io = Error::io(&path, eacces());
+        assert_eq!(io.to_string(), "io error at /data/example.txt: Permission denied (os error 13)");
+        assert_eq!(io.io_path(), Some(path));
+        assert!(matches!(io, Error::FileStat(FileStatError::Io { .. })));
+    }
+
+    #[test]
+    fn from_io_maps_interrupted_and_others() {
+        assert!(matches!(Error::from(interrupted()), Error::Interrupted));
+        let e = Error::from(eacces());
+        assert!(matches!(e, Error::FileStat(FileStatError::Io { .. })));
+        assert_eq!(e.io_path(), Some(PathBuf::new()), "empty path for From<io::Error>");
+    }
+
+    #[test]
+    fn io_path_none_for_non_file_variants() {
+        assert_eq!(Error::Config("x".into()).io_path(), None);
+        assert_eq!(Error::Interrupted.io_path(), None);
+        assert_eq!(Error::Other(anyhow::anyhow!("boom")).io_path(), None);
+        // A database error (open garbage bytes as a sqlite file).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bad = dir.path().join("bad.sqlite");
+        std::fs::write(&bad, b"this is not a sqlite database").expect("write garbage");
+        let db_err = crate::db::Database::open(&bad).err().expect("garbage bytes must fail");
+        assert!(matches!(db_err, Error::Database(_)));
+        assert_eq!(db_err.io_path(), None);
+    }
+
+    #[test]
+    fn to_file_stat_falls_back_to_general() {
+        let path = fixture_path();
+        for (err, needle) in [
+            (Error::Config("cfg".into()), "invalid configuration: cfg"),
+            (Error::Other(anyhow::anyhow!("boom")), "boom"),
+            (Error::Interrupted, "interrupted"),
+        ] {
+            let fse = err.to_file_stat(Some(&path));
+            assert!(matches!(fse, FileStatError::General { .. }), "{err:?}");
+            assert_eq!(fse.io_path().as_deref(), Some(path.as_path()));
+            assert!(fse.to_string().contains(needle), "{fse:?} vs {needle}");
+            assert!(err.to_only_file_stat().is_none(), "{err:?}");
+        }
+    }
+
+    #[test]
+    fn to_file_stat_preserves_carried_file_stat() {
+        let path = fixture_path();
+        let carried = FileStatError::io(&path, eacces());
+        let fse = Error::FileStat(carried).to_file_stat(None);
+        assert!(matches!(fse, FileStatError::Io { .. }), "{fse:?}");
+        let carried2 = FileStatError::io(&path, eacces());
+        let kept = Error::FileStat(carried2).to_only_file_stat();
+        assert!(kept.is_some());
+        assert_eq!(kept.unwrap().kind(), "Io/PermissionDenied");
+    }
+}
