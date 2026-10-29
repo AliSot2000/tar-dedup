@@ -237,9 +237,14 @@ fn load_extract_state(db_path: &Path) -> Result<ExtractRuntimeState> {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::build_footer_archive;
     use std::path::PathBuf;
 
     #[test]
@@ -271,6 +276,88 @@ mod tests {
                 err.to_string().contains("does not exist on extract"),
                 "stage {stage:?}: {err}",
             );
+        }
+    }
+
+    /// Footer-archive config with rehash off (the shared catalog fabricates the
+    /// digest); run() then still drives scan→filter→prologue→place→permissions→cleanup.
+    fn footer_extract_config(dir: &Path) -> ExtractConfig {
+        let (mut config, _member) = build_footer_archive(dir);
+        config.rehash = false;
+        // `build_path` short-circuits when a directory row equals the extraction
+        // root, so the root must pre-exist (as a real extraction dir would).
+        std::fs::create_dir_all(config.paths.extraction_root()).expect("create out root");
+        config
+    }
+
+    fn assert_extracted(root: &Path) {
+        assert_eq!(
+            std::fs::read(root.join("canonical.txt")).expect("canonical"),
+            b"data"
+        );
+        assert_eq!(
+            std::fs::read(root.join("duplicate.txt")).expect("duplicate"),
+            b"data",
+            "dedup members materialize at their own paths"
+        );
+    }
+
+    #[test]
+    fn full_extract_run_end_to_end() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = footer_extract_config(dir.path());
+        assert!(
+            crate::archive_footer::has_valid_footer(&config.paths.archive_path),
+            "fixture archive carries a footer"
+        );
+        run(config.clone(), Shutdown::detached()).expect("extract run");
+        assert_extracted(config.paths.extraction_root());
+        assert!(!config.paths.work_dir.exists(), "work dir cleaned after success");
+    }
+
+    #[test]
+    fn extract_run_exit_after_stage_then_resume_to_done() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = footer_extract_config(dir.path());
+
+        // Run through the scan only; state saved, output untouched.
+        config.process.exit_after_stage = Some(ExitAfterStage::Inventory);
+        run(config.clone(), Shutdown::detached()).expect("scan-only run");
+        assert!(!config.paths.extraction_root().join("canonical.txt").exists());
+        assert!(config.paths.work_dir.is_dir(), "work kept at stop");
+
+        // Resume from the saved catalog; completes through cleanup.
+        config.process.start_policy = StartPolicy::Resume;
+        config.process.exit_after_stage = None;
+        let root = config.paths.extraction_root().to_path_buf();
+        let work = config.paths.work_dir.clone();
+        run(config, Shutdown::detached()).expect("resumed run");
+        assert_extracted(&root);
+        assert!(!work.exists(), "work dir cleaned after resume");
+    }
+
+    #[test]
+    fn load_extract_state_defaults_when_db_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = load_extract_state(&dir.path().join("missing.sqlite")).expect("default");
+        assert_eq!(state.phase, ExtractPipelinePhase::ScanTar);
+        assert_eq!(state.snapshots_ingested, 0);
+    }
+
+    #[test]
+    fn enter_phase_accepts_every_extract_phase() {
+        let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+        for phase in [
+            ExtractPipelinePhase::ScanTar,
+            ExtractPipelinePhase::Filter,
+            ExtractPipelinePhase::Rehash,
+            ExtractPipelinePhase::PlacementPrologue,
+            ExtractPipelinePhase::Place,
+            ExtractPipelinePhase::Permissions,
+            ExtractPipelinePhase::Cleanup,
+            ExtractPipelinePhase::Done,
+        ] {
+            enter_phase(&progress, phase);
         }
     }
 }
