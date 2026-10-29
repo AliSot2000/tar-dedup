@@ -155,6 +155,8 @@ impl Validate for ProcessOptions {
         //     ));
         // }
         for (value, name) in [
+            (self.jobs as u64, "--jobs"),
+            (self.io_jobs as u64, "--io-jobs"),
             (self.auto_flush_limit, "--auto-flush-limit"),
             (self.batch_size, "--batch-size"),
             (self.work_capacity as u64, "--work-capacity"),
