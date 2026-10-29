@@ -105,3 +105,18 @@ the host (NixOS) — parity.
 - VM toolchain: rustup stable 1.99.1; `dnf` (one-time, by owner):
   `gcc clang make pkgconf-pkg-config libselinux-devel libacl-devel
   libzstd-devel bzip2-devel` (+ `xz-devel zlib-devel` optional/absent).
+
+## Cargo entry point (2026-10-29)
+
+Each shell scenario is also a cargo test so coverage of the CLI **child processes**
+(counting the `cmd/*` subcommands and real pipelines) merges into `llvm-cov`:
+
+- `cargo test  -p tar-dedup-cli --test integration_shell` (all scenarios)
+- `cargo llvm-cov -p tar-dedup-cli -p tar-dedup --test integration_shell --summary-only`
+- per scenario: append `-- <filter>` (e.g. `-- scenario_cmd_inspect`).
+
+`crates/tar-dedup-cli/tests/integration_shell.rs` drives `integration/run.sh` with
+`TAR_DEDUP_BIN=$CARGO_BIN_EXE_tar-dedup`, so shell and cargo share the exact same
+scenarios. Verified: child-process coverage merges (main.rs 63%, cmd.rs 53%,
+inspect.rs 65%, stub subcommands 86% from a 10-scenario run; per-scenario
+filtering isolates each scenario's contribution).
