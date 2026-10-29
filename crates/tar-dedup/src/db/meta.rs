@@ -729,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    // TODO cleare_archvie metadata is removed. test needs to be reworked.
+    // TODO clear_archive metadata is removed. test needs to be reworked.
     fn clear_archive_meta_drops_only_byte_counters() {
         let (_dir, conn) = open_conn();
 
