@@ -275,4 +275,140 @@ mod tests {
             Path::new("/data")
         );
     }
+
+    #[test]
+    fn resolve_path_to_abs_path_absolutizes_and_cleans() {
+        let base = Path::new("/data/base");
+        assert_eq!(
+            resolve_path_to_abs_path(Path::new("/abs/x.tar"), base),
+            PathBuf::from("/abs/x.tar")
+        );
+        assert_eq!(
+            resolve_path_to_abs_path(Path::new("/a/../b/x.tar"), base),
+            PathBuf::from("/b/x.tar")
+        );
+        assert_eq!(
+            resolve_path_to_abs_path(Path::new("rel/y.tar"), base),
+            PathBuf::from("/data/base/rel/y.tar")
+        );
+        assert_eq!(
+            resolve_path_to_abs_path(Path::new("./rel/../z.tar"), base),
+            PathBuf::from("/data/base/z.tar")
+        );
+    }
+
+    #[test]
+    fn resolve_cwd_resolves_existing_dir() {
+        let cwd = std::env::current_dir().expect("cwd");
+        assert_eq!(resolve_cwd(None).expect("none"), cwd);
+        assert!(cwd.is_dir());
+        assert_eq!(
+            resolve_cwd(Some(cwd.as_path())).expect("abs"),
+            cwd.clone()
+        );
+
+        // Nonexistent directory fails.
+        let missing = cwd.join("__definitely_missing_dir__");
+        let err = resolve_cwd(Some(&missing)).unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
+    }
+
+    #[test]
+    fn validate_dir_and_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let d = dir.path();
+        assert!(validate_dir(d, "--dir").is_ok());
+        let file = d.join("f");
+        std::fs::write(&file, b"x").expect("write");
+        assert!(validate_file(&file, "--file").is_ok());
+        assert!(validate_dir(&file, "--dir").is_err(), "a file is not a dir");
+        assert!(validate_file(&d, "--file").is_err(), "a dir is not a file");
+        assert!(validate_dir(&d.join("missing"), "--dir").is_err());
+        assert!(validate_file(&d.join("missing"), "--file").is_err());
+    }
+
+    #[test]
+    fn parse_memlimit_suffixes_and_percent() {
+        use super::*;
+        assert_eq!(parse_memlimit("1024").unwrap(), 1024);
+        assert_eq!(parse_memlimit("4KiB").unwrap(), 4 * 1024);
+        assert_eq!(parse_memlimit("4K").unwrap(), 4 * 1000);
+        assert_eq!(parse_memlimit("4MiB").unwrap(), 4 * 1024 * 1024);
+        assert_eq!(parse_memlimit("4M").unwrap(), 4 * 1000 * 1000);
+        assert_eq!(parse_memlimit("4GiB").unwrap(), 4 * 1024 * 1024 * 1024u64);
+        assert_eq!(parse_memlimit("4G").unwrap(), 4 * 1000 * 1000 * 1000u64);
+        // Percent of the physical RAM this test runs on.
+        if let Some(ram) = physical_ram_bytes() {
+            assert_eq!(parse_memlimit("50%").unwrap(), ram * 50 / 100);
+        }
+        assert!(matches!(parse_memlimit("0%"), Err(Error::Config(_))));
+        assert!(matches!(parse_memlimit("101%"), Err(Error::Config(_))));
+        assert!(matches!(parse_memlimit("banana"), Err(Error::Config(_))));
+        assert!(matches!(
+            parse_memlimit("999999999999999999999GiB"),
+            Err(Error::Config(_))
+        ));
+    }
+
+    #[test]
+    fn archive_phase_next_respects_eager_filter() {
+        use super::PipelinePhase as P;
+        // eager: inventory -> filter -> hash -> dedup -> sparsify -> stage -> archive -> done.
+        let chain_eager = [
+            P::Inventory, P::Filter, P::Hash, P::Dedup,
+            P::Sparsify, P::Stage, P::Archive, P::Done,
+        ];
+        for (i, phase) in chain_eager.iter().enumerate() {
+            assert_eq!(phase.next(true), chain_eager.get(i + 1).copied(), "{phase:?}");
+        }
+        // lazy: inventory -> hash -> filter -> dedup -> ...
+        assert_eq!(P::Inventory.next(false), Some(P::Hash));
+        assert_eq!(P::Hash.next(false), Some(P::Filter));
+        assert_eq!(P::Filter.next(false), Some(P::Dedup));
+        assert_eq!(P::Done.next(false), None);
+    }
+
+    #[test]
+    fn extract_phase_next_chain() {
+        use super::ExtractPipelinePhase as E;
+        let chain = [
+            E::ScanTar, E::Filter, E::Rehash, E::PlacementPrologue,
+            E::Place, E::Permissions, E::Cleanup, E::Done,
+        ];
+        for (i, phase) in chain.iter().enumerate() {
+            assert_eq!(phase.next(), chain.get(i + 1).copied(), "{phase:?}");
+        }
+    }
+
+    #[test]
+    fn phase_as_str_parse_roundtrip() {
+        for (phase, name) in [
+            (PipelinePhase::Inventory, "inventory"),
+            (PipelinePhase::Hash, "hash"),
+            (PipelinePhase::Filter, "filter"),
+            (PipelinePhase::Dedup, "dedup"),
+            (PipelinePhase::Sparsify, "sparsify"),
+            (PipelinePhase::Stage, "stage"),
+            (PipelinePhase::Archive, "archive"),
+            (PipelinePhase::Done, "done"),
+        ] {
+            assert_eq!(phase.as_str(), name);
+            assert_eq!(PipelinePhase::parse(name).unwrap(), phase);
+        }
+        assert!(PipelinePhase::parse("bogus").is_err());
+        for (phase, name) in [
+            (ExtractPipelinePhase::ScanTar, "scan_tar"),
+            (ExtractPipelinePhase::Filter, "filter"),
+            (ExtractPipelinePhase::Rehash, "rehash"),
+            (ExtractPipelinePhase::PlacementPrologue, "placement_prologue"),
+            (ExtractPipelinePhase::Place, "place"),
+            (ExtractPipelinePhase::Permissions, "permissions"),
+            (ExtractPipelinePhase::Cleanup, "cleanup"),
+            (ExtractPipelinePhase::Done, "done"),
+        ] {
+            assert_eq!(phase.as_str(), name);
+            assert_eq!(ExtractPipelinePhase::parse(name).unwrap(), phase);
+        }
+        assert!(ExtractPipelinePhase::parse("bogus").is_err());
+    }
 }
