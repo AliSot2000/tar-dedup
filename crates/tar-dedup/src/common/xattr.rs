@@ -212,7 +212,14 @@ pub fn get_file_selinux_data(path: &Path) -> FileStatResult<Vec<u8>> {
         .map_err(|e| {FileStatError::SELinux {path: path.to_path_buf(), source: e}})?;
     match octx {
         None => Ok(Vec::new()),
-        Some(ctx) => Ok(ctx.as_bytes().to_vec()),
+        // `of_path` sizes the raw context buffer from `lgetfilecon`, which counts
+        // the trailing NUL — `as_bytes()` then includes it. The stored bytes must
+        // stay NUL-free so `set_file_selinux_data` can rebuild a CString.
+        Some(ctx) => {
+            let bytes = ctx.as_bytes();
+            let end = if bytes.last() == Some(&0) { bytes.len() - 1 } else { bytes.len() };
+            Ok(bytes[..end].to_vec())
+        }
     }
 }
 
