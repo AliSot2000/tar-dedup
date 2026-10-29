@@ -237,6 +237,131 @@ fn enter_phase(progress: &ProgressBarSet, phase: &PipelinePhase) {
     progress.begin_phase(phase.index(), name, kind);
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CompressionFormat, CompressionSettings, PathSource};
+
+    /// A full `ArchiveConfig` over a real source tree (dir, duplicate, symlink).
+    fn full_archive_config(dir: &std::path::Path) -> ArchiveConfig {
+        let src = dir.join("src");
+        std::fs::create_dir_all(src.join("sub")).expect("create src/sub");
+        std::fs::write(src.join("a.txt"), b"hello world").expect("write a");
+        std::fs::write(src.join("sub/b.txt"), b"hello world").expect("write b dup");
+        std::fs::write(src.join("sub/c.bin"), b"unique manhattan building\n").expect("write c");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("a.txt", src.join("link")).expect("symlink");
+
+        let mut cfg = crate::test_support::test_archive_config();
+        cfg.paths.directory = dir.to_path_buf();
+        cfg.paths.archive_path = dir.join("test.astar");
+        cfg.paths.output_dir = dir.to_path_buf();
+        cfg.paths.work_dir = dir.join("astage");
+        cfg.inputs.input_dirs = vec![PathSource {
+            original_path: src.clone(),
+            absolute_path: src,
+        }];
+        cfg.pipeline.dedup_mode = crate::cli::DedupMode::Regular;
+        cfg.pipeline.write_archive_footer = true;
+        cfg.process.start_policy = StartPolicy::Create;
+        cfg.compression =
+            CompressionSettings { format: CompressionFormat::None, ..cfg.compression.clone() };
+        cfg
+    }
+
+    /// The finished archive is a plain tar with a valid seekable footer.
+    fn assert_archive_complete(dir: &std::path::Path) {
+        let archive = dir.join("test.astar");
+        assert!(archive.is_file(), "archive written");
+        assert!(
+            crate::archive_footer::has_valid_footer(&archive),
+            "archive carries a valid footer"
+        );
+        assert!(
+            !dir.join("astage").exists(),
+            "work dir cleaned after success"
+        );
+    }
+
+    #[test]
+    fn full_archive_run_end_to_end() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = full_archive_config(dir.path());
+        run(cfg, Shutdown::detached()).expect("archive run");
+        assert_archive_complete(dir.path());
+    }
+
+    #[test]
+    fn archive_run_exit_after_stage_then_resume_to_done() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cfg = full_archive_config(dir.path());
+
+        // Run half-way: finish inventory, save state, exit cleanly.
+        cfg.process.exit_after_stage = Some(ExitAfterStage::Inventory);
+        run(cfg.clone(), Shutdown::detached()).expect("inventory-only run");
+        let archive = dir.path().join("test.astar");
+        assert!(!archive.exists(), "no archive before the Archive phase");
+        assert!(dir.path().join("astage").is_dir(), "work dir kept");
+
+        // Resume from the saved state; the archived product completes.
+        cfg.process.start_policy = StartPolicy::Resume;
+        cfg.process.exit_after_stage = None;
+        run(cfg, Shutdown::detached()).expect("resumed run");
+        assert_archive_complete(dir.path());
+    }
+
+    #[test]
+    fn archive_run_with_existing_finished_archive_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cfg = full_archive_config(dir.path());
+        run(cfg.clone(), Shutdown::detached()).expect("first run");
+        // A second Create run against a finished product must be rejected.
+        let err = run(cfg, Shutdown::detached()).unwrap_err();
+        assert!(
+            err.to_string().contains("output already exists"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn produced_archive_footer_reads_back_its_catalog() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = full_archive_config(dir.path());
+        run(cfg.clone(), Shutdown::detached()).expect("archive run");
+
+        // The footer catalog installs as an openable work DB next to the archive.
+        let dest = dir.path().join("footer.sqlite");
+        assert!(
+            crate::archive_footer::read_footer(&cfg.paths.archive_path, &dest).expect("read footer"),
+            "footer present"
+        );
+        let db = Database::open(&dest).expect("open footer db");
+        // 2 dirs (src, sub) + a.txt + sub/b.txt + sub/c.bin + link.
+        assert_eq!(db.count_entries().expect("entries"), 6);
+    }
+
+    #[test]
+    fn enter_phase_accepts_every_archive_phase() {
+        let progress = ProgressBarSet::new(ARCHIVE_MULTIPLIER);
+        for phase in [
+            PipelinePhase::Inventory,
+            PipelinePhase::Hash,
+            PipelinePhase::Filter,
+            PipelinePhase::Dedup,
+            PipelinePhase::Sparsify,
+            PipelinePhase::Stage,
+            PipelinePhase::Archive,
+            PipelinePhase::Done,
+        ] {
+            enter_phase(&progress, &phase);
+        }
+    }
+}
+
 /// Run the cross-phase integrity battery against the archive invariants after
 /// `phase` completed successfully. See `db/integrity.rs` and `plans/025-sanity-checks.md`.
 fn verify_after_phase(rt: &ArchiveRTArgs, phase: PipelinePhase) -> Result<()> {
