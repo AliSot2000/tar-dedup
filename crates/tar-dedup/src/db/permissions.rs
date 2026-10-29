@@ -80,6 +80,7 @@ pub fn list_out_tree_for_permissions_dirs<R: SqlFileRow>(
          LEFT JOIN files f ON f.id = o.file_id
          WHERE o.flags & :is_dir != 0
            AND o.flags & :applied = 0
+           AND o.flags & :error = 0
          ORDER BY {order}
          LIMIT :batch_size"
     )).to_panic()?;
@@ -87,6 +88,7 @@ pub fn list_out_tree_for_permissions_dirs<R: SqlFileRow>(
         named_params! {
             ":batch_size": batch_size,
             ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
+            ":error": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
             ":is_dir": OutTreeFlag::IsDirectory.mask_i64(),
         },
         |row| {
