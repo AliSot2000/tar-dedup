@@ -937,4 +937,36 @@ mod tests {
         assert_eq!(ids, vec![(1, Some(1)), (2, None)]);
         assert_eq!(updated, 1);
     }
+
+    #[test]
+    fn mark_global_canonical_makes_separate_inode_copies_self_canonical() {
+        let conn = conn();
+        // Content canonical 1 collects byte-identical file 2, but file 2 is a
+        // distinct inode (independent copy, not a hardlink) — it must be
+        // self-canonical so the materialize pass places both paths.
+        insert_file(&conn, 1, "/a/one", Some(1), Some(100), 1, "file");
+        insert_file(&conn, 2, "/a/two", Some(1), Some(200), 1, "file");
+        insert_out(&conn, 1, "/ed/a/one", 1);
+        insert_out(&conn, 2, "/ed/a/two", 2);
+
+        let updated = mark_global_canonical(&conn).unwrap();
+        assert_eq!(canonical_ids(&conn), vec![(1, Some(1)), (2, Some(2))]);
+        assert_eq!(updated, 2);
+    }
+
+    #[test]
+    fn mark_source_canonical_makes_separate_inode_copies_self_canonical() {
+        let conn = conn();
+        insert_source(&conn, 1, "/a");
+        insert_file(&conn, 1, "/a/x", Some(1), Some(100), 1, "file");
+        insert_file(&conn, 2, "/a/y", Some(1), Some(200), 1, "file");
+        insert_out(&conn, 1, "/ed/a/x", 1);
+        insert_out(&conn, 2, "/ed/a/y", 2);
+        insert_ref_out(&conn, 1, 1);
+        insert_ref_out(&conn, 2, 1);
+
+        let updated = mark_source_canonical(&conn, 1).unwrap();
+        assert_eq!(canonical_ids(&conn), vec![(1, Some(1)), (2, Some(2))]);
+        assert_eq!(updated, 2);
+    }
 }
