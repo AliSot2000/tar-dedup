@@ -127,3 +127,43 @@ Build args with `Cli::try_parse_from(["tar-dedup", <subcommand>, ...])` then
   --summary-only`; targets: xz ≥ 90%, cleanup ~100%, resume 100%, extract/archive
   config 60–95%, error ~90%, `unarchive.rs` ≥ 80%, `archive.rs` ≥ 80%. Only
   `cmd/*` + `db/stats.rs` should stay at 0%.
+## Implementation notes (2026-10-29) — DONE
+
+All five sections implemented. Suites: default **684 passed / 1 failed**; `test-all`
+**709 passed / 1 failed** (the pre-existing `db::meta::tests::clear_archive_meta_drops_only_byte_counters`
+blocker only). `cargo llvm-cov -p tar-dedup --features test-all --ignore-run-fail`
+→ tar-dedup **90.16% lines / 89.26% fns / 90.81% regions**.
+
+### Production changes (small, deliberate)
+- `config/process.rs`: `ProcessOptions::validate` now also rejects `--jobs 0` /
+  `--io-jobs 0` ("must be greater than 0"). Without it rayon's
+  `ThreadPoolBuilder::num_threads(0)` would panic at pool build time; this is the
+  guard the plan's `--jobs 0 → Err` case needed.
+- `test_support.rs` fixture `write_catalog` conforms to the A3 extract invariant
+  and to real manifests:
+  - duplicate now carries a sha1 (A3: `sha1 IS NULL ⟹ canonical_id IS NULL`);
+  - a synthetic `/` `--input-dir` source + `ref` rows (relative placement needs a
+    source root);
+  - both members share `(dev=1, inode=10)` (the prologue hardlink-canonical
+    election groups out_tree rows by canonical `dev,inode`).
+- `build_multi_catalog` duplicate also gets a digest (same A3 reason).
+
+### Orchestrator tests findings
+- `archive::run` end-to-end works out of the box (temp source tree + tuned
+  `test_archive_config`, footer on). Resume flow exercised via
+  `--exit-after-stage inventory` then `StartPolicy::Resume`.
+- `unarchive::run` end-to-end needed three fixture-related preconditions:
+  1. `build_footer_archive` fixture dedup rows must satisfy A3 (see above);
+  2. the extraction **root must pre-exist** — `build_path` short-circuits when a
+     directory row equals the extraction root;
+  3. don't trust a *kept* DB after `cleanup_workdir`: it renames the main file while
+     connections stay open, orphaning the WAL — the kept copy is pre-WAL data.
+- Std `Write::write_all` retries on `ErrorKind::Interrupted`, so the
+  `InterruptibleXzEncoder` force-abort test observes a single `Write::write` call
+  (the mechanism itself is correct; `write_all` would spin).
+
+### Coverage-to-target table (lines %)
+xz 92.09 · cleanup 93.94 · config 91.64 · archive cfg 80.02 · common 100 ·
+extract cfg 78.39 · resume 98.64 · db/state 93.91 · error 92.78 ·
+unarchive.rs 89.44 · archive.rs 77.61.
+Only `cmd/*` and `db/stats.rs` remain at 0% (deferred to integration testing).
