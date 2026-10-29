@@ -672,7 +672,18 @@ pub fn mark_source_canonical(conn: &Connection, source_id: i64) -> Result<u64> {
         named_params! { ":source_id": source_id },
     ).to_panic()?;
 
-    Ok((updated + updated2) as u64)
+    // Step 3: content-equal members of this source with a distinct (dev, inode)
+    // are not a hardlink group; materialize each independently (see
+    // `mark_global_canonical`).
+    let updated3 = conn.execute(
+        "UPDATE out_tree SET canonical_id = id
+         WHERE canonical_id IS NULL
+            AND id IN (SELECT out_id FROM ref_out WHERE source_id = :source_id)
+            AND file_id IN (SELECT id FROM files WHERE ftype = 'file')",
+        named_params! { ":source_id": source_id },
+    ).to_panic()?;
+
+    Ok((updated + updated2 + updated3) as u64)
 }
 
 /// (placed, reflinked, conflict, removed_previous, errored, skipped)
