@@ -538,3 +538,183 @@ fn validate_capture_pairs(args: &ArchiveArgs) -> Result<()> {
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+
+    fn parse_archive(extra: &[&str]) -> ArchiveArgs {
+        let argv = std::iter::once("tar-dedup".to_string())
+            .chain(std::iter::once("archive".to_string()))
+            .chain(["-f".to_string(), "out.tar".to_string()])
+            .chain(extra.iter().map(|s| s.to_string()))
+            .collect::<Vec<_>>();
+        let cli = Cli::try_parse_from(&argv).expect("clap parse");
+        match cli.command {
+            Command::Archive(a) => a,
+            other => panic!("expected archive, got {other:?}"),
+        }
+    }
+
+    fn input_dir_cli(dir: &std::path::Path) -> String {
+        format!("--input-dir={}", dir.display())
+    }
+
+    fn build(extra: &[&str]) -> Result<ArchiveConfig> {
+        ArchiveConfig::build(&parse_archive(extra), None)
+    }
+
+    #[test]
+    fn at_least_one_input_required() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = build(&["--work-dir", dir.path().to_str().unwrap()]).unwrap_err();
+        assert!(
+            err.to_string().contains("at least one of `-i`/`--input-dir` or `-T`/`--files-from`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn invalid_input_dir_does_not_exist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing");
+        let err = build(&[&format!("-i={}", missing.display())]).unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
+    }
+
+    #[test]
+    fn minimal_valid_config_with_input_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let b = build(&[&input_dir_cli(dir.path())]).expect("build");
+        assert_eq!(b.inputs.input_dirs.len(), 1);
+        assert_eq!(b.inputs.input_dirs[0].absolute_path, dir.path());
+        // Relative `-f` resolves against the process cwd into an absolute path.
+        assert!(b.paths.archive_path.is_absolute());
+        assert_eq!(
+            b.paths.archive_path.file_name().map(|s| s.to_str().unwrap()),
+            Some("out.tar")
+        );
+        assert_eq!(b.pipeline.write_archive_footer, true);
+    }
+
+    #[test]
+    fn overlapping_input_dirs_rejected_unless_no_strict_separation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir_all(&sub).expect("create sub");
+        let err = build(&[
+            &format!("-i={}", dir.path().display()),
+            &format!("-i={}", sub.display()),
+        ]).unwrap_err();
+        assert!(err.to_string().contains("overlaps"), "{err}");
+
+        let ok = build(&[
+            &format!("-i={}", dir.path().display()),
+            &format!("-i={}", sub.display()),
+            "--no-strict-separation",
+        ]);
+        assert!(ok.is_ok(), "no-strict-separation admits overlap");
+    }
+
+    #[test]
+    fn invalid_mode_and_transform_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = build(&[&input_dir_cli(dir.path()), "--mode", "bogus"]).unwrap_err();
+        assert!(!err.to_string().is_empty(), "--mode must fail");
+        let err = build(&[&input_dir_cli(dir.path()), "--transform", "bogus"]).unwrap_err();
+        assert!(!err.to_string().is_empty(), "--transform must fail");
+    }
+
+    #[test]
+    fn zero_worker_counts_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for flag in ["--jobs", "--io-jobs"] {
+            let err = build(&[&input_dir_cli(dir.path()), flag, "0"]).unwrap_err();
+            assert!(err.to_string().contains("must be greater than 0"), "{flag}: {err}");
+        }
+    }
+
+    #[test]
+    fn not_implemented_flags_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for flag in ["--exclude-vcs", "--exclude-vcs-ignores", "--use-shards"] {
+            let err = build(&[&input_dir_cli(dir.path()), flag]).unwrap_err();
+            assert!(err.to_string().contains("not implemented"), "{flag}: {err}");
+        }
+    }
+
+    #[test]
+    fn max_shard_size_requires_use_shards() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = build(&[&input_dir_cli(dir.path()), "--max-shard-size", "1024"]).unwrap_err();
+        assert!(err.to_string().contains("--max-shard-size requires --use-shards"), "{err}");
+    }
+
+    #[test]
+    fn conflicting_capture_pairs_rejected_in_one_matrix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pairs: [(&str, &str); 4] = [
+            ("--acls", "--no-acls"),
+            ("--xattrs", "--no-xattrs"),
+            ("--selinux", "--no-selinux"),
+            ("--numeric-ids-only", "--resolve-numeric-ids"),
+        ];
+        for (yes, no) in pairs {
+            let err = build(&[&input_dir_cli(dir.path()), yes, no])
+                .expect_err(&format!("{yes} + {no} must conflict"));
+            assert!(err.to_string().contains("conflicting flags"), "{yes}+{no}: {err}");
+            assert!(build(&[&input_dir_cli(dir.path()), yes]).is_ok(), "{yes} alone");
+            assert!(build(&[&input_dir_cli(dir.path()), no]).is_ok(), "{no} alone");
+        }
+    }
+
+    #[test]
+    fn capture_umbrella_and_per_bit_override() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Default: capture everything.
+        let cfg = build(&[&input_dir_cli(dir.path())]).expect("build");
+        assert!(cfg.capture.do_xattrs);
+        assert!(cfg.capture.do_posix_acl);
+        assert!(cfg.capture.do_selinux);
+        // --no-capture-all-metadata turns every bit off.
+        let cfg = build(&[&input_dir_cli(dir.path()), "--no-capture-all-metadata"]).expect("build");
+        assert!(!cfg.capture.do_xattrs);
+        assert!(!cfg.capture.do_posix_acl);
+        assert!(!cfg.capture.do_selinux);
+        // Per-bit --xattr re-enables one bit over the EXCLUDE base.
+        let cfg = build(&[
+            &input_dir_cli(dir.path()),
+            "--no-capture-all-metadata",
+            "--xattrs",
+        ]).expect("build");
+        assert!(cfg.capture.do_xattrs, "--xattrs overrides the EXCLUDE base");
+        assert!(!cfg.capture.do_selinux);
+    }
+
+    #[test]
+    fn sparsify_requires_nonzero_page_size() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = build(&[&input_dir_cli(dir.path()), "--sparsify", "--page-size", "0"])
+            .unwrap_err();
+        assert!(err.to_string().contains("--page-size"), "{err}");
+    }
+
+    #[test]
+    fn files_from_reads_from_stdin_convention_and_valid_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let list = dir.path().join("list.txt");
+        std::fs::write(&list, b"/x\n").expect("write list");
+        let cfg = build(&[&format!("-T={}", list.display())]).expect("build");
+        assert_eq!(cfg.inputs.files_from, vec![list]);
+        // `-` is kept verbatim (stdin).
+        let cfg2 = build(&["-T", "-"]).expect("build stdin");
+        assert_eq!(cfg2.inputs.files_from, vec![PathBuf::from("-")]);
+        assert!(cfg2.inputs.input_dirs.is_empty(), "only -T, no -i");
+    }
+}
