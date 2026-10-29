@@ -318,7 +318,10 @@ pub fn set_file_acl(path: &Path, raw_acl: &str) -> FileStatResult<()> {
 /// Apply stored raw security context. WARNING: No validation is performed. Assumption is,
 /// data originated from the above `get_file_selinux_data` and not anything else.
 pub fn set_file_selinux_data(path: &Path, raw_ctx: &[u8]) -> FileStatResult<()> {
-    let c_string = CString::new(raw_ctx).map_err(|e| FileStatError::Io {
+    // Defensive: a stored context carrying a trailing NUL (older captures, or a
+    // foreign source) must not produce "nul byte found in provided data".
+    let trim = if raw_ctx.last() == Some(&0) { &raw_ctx[..raw_ctx.len() - 1] } else { raw_ctx };
+    let c_string = CString::new(trim).map_err(|e| FileStatError::Io {
         path: path.to_path_buf(),
         source: io::Error::new(io::ErrorKind::InvalidData, e),
     })?;
