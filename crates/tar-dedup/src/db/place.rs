@@ -969,4 +969,78 @@ mod tests {
         assert_eq!(canonical_ids(&conn), vec![(1, Some(1)), (2, Some(2))]);
         assert_eq!(updated, 2);
     }
+
+    /// The `db/place.rs` doc comment: overlapping sources A=`/a/b` (covers b and
+    /// c) and B=`/a/b/c` (covers c). The three links share one (dev, inode), but
+    /// they only join into a single extraction-time group when the **covering**
+    /// source is processed first; a nested source processed first claims c's
+    /// subtree and the b-side link stays separate.
+    #[test]
+    fn mark_source_canonical_overlap_covering_source_first_groups_all() {
+        let conn = conn();
+        insert_source(&conn, 1, "/a/b");
+        insert_source(&conn, 2, "/a/b/c");
+        insert_file(&conn, 1, "/a/b/link_a", Some(1), Some(1), 1, "file");
+        insert_file(&conn, 2, "/a/b/c/link_b", Some(1), Some(1), 2, "file");
+        insert_file(&conn, 3, "/a/b/c/link_c", Some(1), Some(1), 3, "file");
+        insert_out(&conn, 1, "/ed/a/b/link_a", 1);
+        insert_out(&conn, 2, "/ed/a/b/c/link_b", 2);
+        insert_out(&conn, 3, "/ed/a/b/c/link_c", 3);
+        for (out, src) in [(1, 1), (2, 1), (3, 1), (2, 2), (3, 2)] {
+            insert_ref_out(&conn, out, src);
+        }
+        mark_source_canonical(&conn, 1).unwrap();
+        mark_source_canonical(&conn, 2).unwrap();
+        assert_eq!(
+            canonical_ids(&conn),
+            vec![(1, Some(1)), (2, Some(1)), (3, Some(1))],
+            "covering source first -> one group"
+        );
+    }
+
+    #[test]
+    fn mark_source_canonical_overlap_nested_source_first_splits() {
+        let conn = conn();
+        insert_source(&conn, 1, "/a/b/c");
+        insert_source(&conn, 2, "/a/b");
+        insert_file(&conn, 1, "/a/b/link_a", Some(1), Some(1), 1, "file");
+        insert_file(&conn, 2, "/a/b/c/link_b", Some(1), Some(1), 2, "file");
+        insert_file(&conn, 3, "/a/b/c/link_c", Some(1), Some(1), 3, "file");
+        insert_out(&conn, 1, "/ed/a/b/link_a", 1);
+        insert_out(&conn, 2, "/ed/a/b/c/link_b", 2);
+        insert_out(&conn, 3, "/ed/a/b/c/link_c", 3);
+        for (out, src) in [(1, 2), (2, 1), (3, 1), (2, 2), (3, 2)] {
+            insert_ref_out(&conn, out, src);
+        }
+        mark_source_canonical(&conn, 1).unwrap();
+        mark_source_canonical(&conn, 2).unwrap();
+        assert_eq!(
+            canonical_ids(&conn),
+            vec![(1, Some(1)), (2, Some(2)), (3, Some(2))],
+            "nested source first -> c group + separate b link"
+        );
+    }
+
+    /// `--no-strict-separation` fanout: one out row served to both covering
+    /// sources accumulates `ref_out` rows (with `INSERT OR IGNORE` dedupe).
+    #[test]
+    fn no_strict_separation_fanout_accumulates_ref_out() {
+        let conn = conn();
+        insert_source(&conn, 1, "/a");
+        insert_source(&conn, 2, "/a/c");
+        insert_file(&conn, 1, "/a/c/f.txt", Some(1), Some(1), 1, "file");
+        insert_out(&conn, 1, "/ed/a/c/f.txt", 1);
+        // Both covering sources fan out onto the single out row; the batched
+        // inserter dedupes (INSERT OR IGNORE) the repeated pair.
+        insert_ref_out_rows(
+            &conn,
+            &[(OutTreeId(1), 1), (OutTreeId(1), 2), (OutTreeId(1), 2)],
+        ).unwrap();
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM ref_out", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM ref_out WHERE out_id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+    }
 }
