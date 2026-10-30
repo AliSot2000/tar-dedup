@@ -39,6 +39,9 @@ macro_rules! error_guarded {
 /// Use it opt-in at the call site where an error *is* a process-abort reason:
 ///
 /// ```rust,should_panic
+/// use tar_dedup::error::Error;
+///
+/// fn fallible() -> Result<()> { Err(Error::Other("Failed"))}
 /// let ok = fallible().to_panic()?;
 /// ```
 ///
