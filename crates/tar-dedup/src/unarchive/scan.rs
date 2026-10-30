@@ -81,6 +81,21 @@ fn flush_scan_recorder(recorder: &mut Recorder, db: Option<&Database>) -> Result
     }
 }
 
+/// A future tar-dedup may write sharded archives (content-defined chunking:
+/// the schemas exist but the pipeline is not wired yet). This version cannot
+/// scan such an archive, so refuse up-front with an upgrade hint instead of
+/// letting the stream walk produce corrupt results.
+fn reject_sharded_archive(db: &Database, archive_path: &Path) -> Result<()> {
+    match db.get_archive_config()? {
+        Some(cfg) if cfg.pipeline.use_shards => Err(Error::Config(format!(
+            "archive {} was created with sharded payloads (`--use-shards`), which this \
+             version of tar-dedup cannot extract; please upgrade tar-dedup",
+            archive_path.display()
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Account a freshly loaded scan DB against the progress bars. Called after every
 /// `rt.db = Some(...)` assignment: the global bar is sized to the full table
 /// (`count_entries`, later refined by place_prologue), the phase bar is scoped to
@@ -244,6 +259,9 @@ fn run_inner(
     } else {
         None
     };
+    if let Some(edb) = rt.db.as_ref() {
+        reject_sharded_archive(edb, &rt.config.paths.archive_path)?;
+    }
 
     let mut scan = if let Some(edb) = rt.db.as_ref() {
         let s = edb.load_extract_scan_state()?;
@@ -1359,6 +1377,47 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
             "the in-tar manifest member is still walked (no-op install)"
         );
         assert_eq!(state.snapshots_ingested, 1);
+    }
+
+    #[test]
+    fn scan_rejects_archive_whose_config_enables_shards() {
+        // A future tar-dedup writing sharded payloads persists `use_shards` in
+        // the archive config meta; this version must refuse the archive with an
+        // upgrade hint rather than scan corrupt output.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let catalog = dir.path().join("catalog.sqlite");
+        let member = write_catalog(&catalog);
+        {
+            let db = Database::open(&catalog).expect("open catalog");
+            let mut cfg = crate::config::ArchiveConfig::default();
+            cfg.pipeline.use_shards = true;
+            db.set_archive_config(&cfg).expect("set sharded config");
+            db.checkpoint().expect("checkpoint");
+        }
+        let catalog_bytes = fs::read(&catalog).expect("read catalog");
+        let archive_path = dir.path().join("archive.tar");
+        let mut builder = tar::Builder::new(fs::File::create(&archive_path).expect("create tar"));
+        append_member(&mut builder, SNAPSHOT_INIT_TAR_NAME, &catalog_bytes);
+        append_member(&mut builder, &member, b"data");
+        append_member(&mut builder, SNAPSHOT_TAR_NAME, &catalog_bytes);
+        builder.finish().expect("finish tar");
+        crate::archive_footer::write_footer(&archive_path, &catalog, None).expect("write footer");
+
+        let config = ExtractConfig::for_scan_test(
+            archive_path,
+            dir.path().join("work"),
+            dir.path().join("out"),
+        );
+        let db_path = config.paths.db_path();
+        let err = match run(&config, &db_path, &Shutdown::detached(),
+                            &mut Recorder::speculative(false, None),
+                            &mut Some(ParseFilterBuffer::default()),
+                            &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
+            Ok(_) => panic!("sharded archive must be rejected by this version"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("shard"), "{err}");
+        assert!(err.to_string().contains("upgrade tar-dedup"), "{err}");
     }
 
     #[test]
