@@ -1,11 +1,12 @@
 use std::io::{self, IsTerminal, Write};
+use std::mem::take;
+use std::ops::Deref;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use std::mem::take;
+use indicatif::{MultiProgress, ProgressStyle};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::{FilterExt, LevelFilter, filter_fn};
@@ -50,6 +51,60 @@ fn style_for(kind: BarKind) -> ProgressStyle {
         .expect("valid indicatif template")
         .progress_chars("=>-")
         .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+}
+
+/// Milliseconds to sleep before each bar increment (`slow-progress` feature);
+/// read once from `TAR_DEDUP_SLOW_PROGRESS_MS`, default 100.
+#[cfg(feature = "slow-progress")]
+fn slow_sleep_duration() -> Duration {
+    static MS: OnceLock<u64> = OnceLock::new();
+    let ms = *MS.get_or_init(|| {
+        std::env::var("TAR_DEDUP_SLOW_PROGRESS_MS")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(100)
+    });
+    Duration::from_millis(ms)
+}
+
+#[cfg(feature = "slow-progress")]
+fn slow_sleep() {
+    thread::sleep(slow_sleep_duration());
+}
+
+#[cfg(not(feature = "slow-progress"))]
+fn slow_sleep() {}
+
+/// Wrapper around `indicatif::ProgressBar` so *every* increment in the crate —
+/// the `ProgressBarSet` helpers and the sub/integrity/thread bars it hands out —
+/// can be slowed at one choke point instead of touching every call site. Only the
+/// `inc` increment is wrapped (the crate uses nothing else); the remaining API
+/// passes through `Deref`.
+#[derive(Clone)]
+pub struct ProgressBar(pub indicatif::ProgressBar);
+
+impl ProgressBar {
+    pub fn new(len: u64) -> Self {
+        Self(indicatif::ProgressBar::new(len))
+    }
+    pub fn new_spinner() -> Self {
+        Self(indicatif::ProgressBar::new_spinner())
+    }
+    pub fn hidden() -> Self {
+        Self(indicatif::ProgressBar::hidden())
+    }
+
+    pub fn inc(&self, delta: u64) {
+        slow_sleep();
+        self.0.inc(delta);
+    }
+}
+
+impl Deref for ProgressBar {
+    type Target = indicatif::ProgressBar;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 /// The `MultiProgress` currently driving the terminal, if any. Registered by
@@ -98,7 +153,7 @@ impl ProgressBarSet {
             ProgressStyle::with_template(GLOBAL_TEMPLATE).expect("valid indicatif template"),
         );
         global.set_message("tar-dedup");
-        mp.add(global.clone());
+        mp.add(global.0.clone());
         Self {
             mp,
             global,
@@ -129,7 +184,7 @@ impl ProgressBarSet {
         self.global.set_position(idx.saturating_mul(total));
         self.finish_current(ResetKind::Finish);
         let bar = make_bar(kind, msg);
-        self.mp.insert_before(&self.global, bar.clone());
+        self.mp.insert_before(&self.global, bar.0.clone());
         *self.phase.lock().expect("progress phase lock poisoned") = Some(bar);
     }
 
@@ -179,7 +234,7 @@ impl ProgressBarSet {
     /// above the phase bar / global). Used for complex phases.
     pub fn push_sub_bar(&self, msg: &str, kind: BarKind) -> ProgressBar {
         let bar = make_bar(kind, msg);
-        self.mp.insert(0, bar.clone());
+        self.mp.insert(0, bar.0.clone());
         self.subs.lock().expect("progress subs lock poisoned").push(bar.clone());
         bar
     }
@@ -255,8 +310,8 @@ impl ProgressBarSet {
 
         // Insert the bar into the MultiProgress bar.
         match self.phase.lock().expect("progress phase lock poisoned").as_ref() {
-            Some(p) => self.mp.insert_before(p, bar.clone()),
-            None => self.mp.insert_before(&self.global, bar.clone()),
+            Some(p) => self.mp.insert_before(p, bar.0.clone()),
+            None => self.mp.insert_before(&self.global, bar.0.clone()),
         };
 
         // Update the vector with the new bar.
