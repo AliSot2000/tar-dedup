@@ -516,7 +516,7 @@ mod tests {
         fn padd_out(&self, rel: &str, file_id: FileId, flags: OutTreeFlags) -> OutTreeId {
             let p = self.proot().join(rel);
             let rows = vec![NewOutTreeRow { abs_path: p, file_id: Some(file_id), flags }];
-            let id = self.db.insert_out_tree_rows(&rows).expect("insert out")[0];
+            let id = self.db.insert_out_tree_rows(&rows, false).expect("insert out")[0];
             self.db.with_transaction(|conn| {
                 conn.execute("UPDATE out_tree SET canonical_id = id WHERE id = :id",
                              named_params! { ":id": id.0 }).expect("set canonical");
