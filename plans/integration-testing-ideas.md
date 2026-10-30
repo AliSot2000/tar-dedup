@@ -2,7 +2,7 @@
 
 Living notes for tests that span more than one phase or pipeline (archive → extract, or
 unit-testable only through a full run). Status updated 2026-10-30 — all items
-implemented via the scenario suite + in-process tests (see `plans/060-finish-integration-tests.md`).
+implemented via the scenario suite + in-process tests (see `060-finish-integration-tests.md`).
 
 Legend: ✅ scenario · 🔵 unit test (in-process).
 
