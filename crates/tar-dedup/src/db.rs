@@ -1039,8 +1039,9 @@ impl Database {
             only_valid_new_name, apply_filters)
     }
 
-    pub fn insert_out_tree_rows(&self, rows: &[NewOutTreeRow]) -> Result<Vec<OutTreeId>> {
-        place_prologue::insert_out_tree_rows(&self.conn(), rows)
+    pub fn insert_out_tree_rows(
+        &self, rows: &[NewOutTreeRow], enabled: bool) -> Result<Vec<OutTreeId>> {
+        place_prologue::insert_out_tree_rows(&mut self.conn_mut(), rows, enabled)
     }
 
     pub fn insert_ref_out_rows(&self, pairs: &[(OutTreeId, i64)]) -> Result<()> {
