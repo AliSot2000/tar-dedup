@@ -212,6 +212,7 @@ pub fn insert_out_tree_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::flags::OutTreeFlags;
     use crate::db::types::StrippedRecord;
 
     /// Real schema — `list_materialized_entries` reads the StrippedRecord columns
@@ -307,5 +308,71 @@ mod tests {
         insert_row(&conn, 3, "/f", "file");
         let rest = ids(&conn, Some(false), true);
         assert_eq!(rest, vec![2i64, 3]);
+    }
+
+    #[test]
+    fn materialize_conflict_recorded_and_gated_by_no_errors() {
+        for enabled in [true, false] {
+            let mut conn = conn();
+            // Member 1 owns `/ed/target.txt` first; member 2 is displaced onto
+            // the same abs_path (the transform/strip collision case).
+            conn.execute(
+                "INSERT INTO files (id, abs_path, abs_path_raw, ftype, ext, size) \
+                 VALUES (1, '/ed/target.txt', '/ed/target.txt', 'file', 'txt', 0)",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO files (id, abs_path, abs_path_raw, ftype, ext, size) \
+                 VALUES (2, '/ed/other.txt', '/ed/other.txt', 'file', 'txt', 0)",
+                [],
+            ).unwrap();
+            let flags = OutTreeFlags::default();
+            let rows = vec![
+                NewOutTreeRow { abs_path: "/ed/target.txt".into(), file_id: Some(FileId(1)), flags: flags.clone() },
+                NewOutTreeRow { abs_path: "/ed/target.txt".into(), file_id: Some(FileId(2)), flags: flags.clone() },
+            ];
+            let ids = insert_out_tree_rows(&mut conn, &rows, enabled).expect("insert");
+            // Both rows resolve to the resident (first) row; the second member is displaced.
+            assert_eq!(ids, vec![OutTreeId(1), OutTreeId(1)]);
+
+            let out_rows: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM out_tree", [], |r| r.get(0)).unwrap();
+            assert_eq!(out_rows, 1, "single resident row");
+
+            let err_rows: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM errors", [], |r| r.get(0)).unwrap();
+            assert_eq!(err_rows, if enabled { 1 } else { 0 }, "recording honors no_errors");
+
+            if enabled {
+                let (file_id, abs, et): (i64, String, String) = conn.query_row(
+                    "SELECT file_id, abs_path, error_type FROM errors",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                ).unwrap();
+                assert_eq!(file_id, 2, "displaced member is linked");
+                assert_eq!(abs, "/ed/target.txt", "conflicting target is the io path");
+                assert_eq!(et, "MaterializeConflict", "kind stored as error_type");
+            }
+        }
+    }
+
+    #[test]
+    fn same_file_fanout_stays_silent() {
+        let mut conn = conn();
+        conn.execute(
+            "INSERT INTO files (id, abs_path, abs_path_raw, ftype, ext, size) \
+             VALUES (1, '/ed/t.txt', '/ed/t.txt', 'file', 'txt', 0)",
+            [],
+        ).unwrap();
+        let flags = OutTreeFlags::default();
+        let rows = vec![
+            NewOutTreeRow { abs_path: "/ed/t.txt".into(), file_id: Some(FileId(1)), flags: flags.clone() },
+            NewOutTreeRow { abs_path: "/ed/t.txt".into(), file_id: Some(FileId(1)), flags: flags.clone() },
+        ];
+        let ids = insert_out_tree_rows(&mut conn, &rows, true).expect("insert");
+        assert_eq!(ids, vec![OutTreeId(1), OutTreeId(1)]);
+        let err_rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM errors", [], |r| r.get(0)).unwrap();
+        assert_eq!(err_rows, 0, "same-file fanout is benign even with recording enabled");
     }
 }
