@@ -254,7 +254,7 @@ fn populate_out_tree_abs(
             entries, &root, None, use_new_name
         );
 
-        rt.db.insert_out_tree_rows(&processed)?;
+        rt.db.insert_out_tree_rows(&processed, !rt.config.process.no_errors)?;
         rt.progress.inc_phase(processed.len() as u64);
         // INFO ref table is left empty since we are working with abs_paths and one source row can
         //  have at most one child
@@ -285,7 +285,7 @@ fn populate_out_tree_rel(
                         entries, &root, Some((&source.abs_path, &source.original_path)), use_new_name
                     );
 
-                    let out_ids = rt.db.insert_out_tree_rows(&processed)?;
+                    let out_ids = rt.db.insert_out_tree_rows(&processed, !rt.config.process.no_errors)?;
                     let ref_pairs: Vec<(OutTreeId, i64)> = out_ids
                         .iter()
                         .map(|id| { (id.clone(), source.id) })
@@ -334,7 +334,7 @@ fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet, batc
                 })
             }
             progress.inc_phase(parent_rows.len() as u64);
-            db.insert_out_tree_rows(&parent_rows)?;
+            db.insert_out_tree_rows(&parent_rows, false)?;
             // Clear the accumulators before the next run to avoid huge structures in ram.
             current_parents.clear();
             parent_rows.clear();
@@ -920,7 +920,7 @@ mod tests {
             FileId(0), 100, None, None, false, true,
         ).expect("materialized");
         let rows = build_new_out_tree_rows(&entries, Path::new("/ed"), None, false);
-        world.db.insert_out_tree_rows(&rows).expect("insert out tree");
+        world.db.insert_out_tree_rows(&rows, false).expect("insert out tree");
         prepare_hardlink_canonicals(&world.rt()).expect("canonical election");
 
         let ot = world.raw_out_tree();
