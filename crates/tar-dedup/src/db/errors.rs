@@ -80,9 +80,22 @@ pub fn insert_errors(conn: &mut Connection, drafts: &[RecordDraft]) -> Result<u6
     if count == 0 {
         return Ok(0);
     }
-    let now = Utc::now();
     let tx = conn.transaction().to_panic()?;
-    let mut stmt = tx.prepare_cached(
+    let inserted = insert_errors_in(&tx, drafts)?;
+    tx.commit().to_panic()?;
+    Ok(inserted)
+}
+
+/// Execute the error inserts on any connection `conn` (a transaction or the
+/// pool). The caller owns the transaction; errors land in the *same* commit as
+/// the surrounding work. Returns rows inserted.
+pub(crate) fn insert_errors_in(conn: &Connection, drafts: &[RecordDraft]) -> Result<u64> {
+    let count = drafts.len();
+    if count == 0 {
+        return Ok(0);
+    }
+    let now = Utc::now();
+    let mut stmt = conn.prepare_cached(
         "INSERT INTO errors (
              file_id, out_tree_id, abs_path, error_msg, error_type, phase,
              error_misc, error_datetime, flags
@@ -105,8 +118,6 @@ pub fn insert_errors(conn: &mut Connection, drafts: &[RecordDraft]) -> Result<u6
             ":flags": draft.flags.to_i64(),
         }).to_panic()?;
     }
-    drop(stmt);
-    tx.commit().to_panic()?;
     Ok(count as u64)
 }
 
