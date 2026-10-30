@@ -1421,7 +1421,7 @@ mod tests {
                 file_id: Some(file_id),
                 flags,
             }];
-            let id = self.db.insert_out_tree_rows(&rows).expect("insert out")[0];
+            let id = self.db.insert_out_tree_rows(&rows, false).expect("insert out")[0];
             if let Some(c) = canonical {
                 self.db.with_transaction(|conn| {
                     conn.execute(
@@ -1443,7 +1443,7 @@ mod tests {
                 file_id: None,
                 flags,
             }];
-            self.db.insert_out_tree_rows(&rows).expect("insert out dir")[0]
+            self.db.insert_out_tree_rows(&rows, false).expect("insert out dir")[0]
         }
 
         /// Write the cache payload for a canonical file row; returns the path.
