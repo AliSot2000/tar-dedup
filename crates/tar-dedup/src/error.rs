@@ -219,6 +219,9 @@ pub enum FileStatError {
     #[error("bBase64 decoding error at {path}: {source}")]
     Base64DecodingError { path: PathBuf, source: base64::DecodeError},
 
+    #[error("materialize conflict at {path}: {details}")]
+    MaterializeConflict { path: PathBuf, details: String },
+
     #[error("general error at {path:?}: {message}")]
     General { path: Option<PathBuf>, message: String },
 }
@@ -268,7 +271,8 @@ impl FileStatError {
             | Self::SELinux { path, .. }
             | Self::Nix { path, .. }
             | Self::PosixQualifierParser { path, .. }
-            | Self::Base64DecodingError { path, .. } => Some(path.clone()),
+            | Self::Base64DecodingError { path, .. }
+            | Self::MaterializeConflict { path, .. } => Some(path.clone()),
         }
     }
 
@@ -306,6 +310,7 @@ impl FileStatError {
             Self::Nix { source, .. } => format!("Nix/{}", source),
             Self::PosixQualifierParser { .. } => "PosixQualifierParser".to_string(),
             Self::Base64DecodingError { .. } => "Base64DecodingError".to_string(),
+            Self::MaterializeConflict { .. } => "MaterializeConflict".to_string(),
             Self::General { .. } => "General".to_string(),
         }
     }
@@ -343,6 +348,7 @@ mod tests {
             FileStatError::Nix { path: path.clone(), source: nix::errno::Errno::EPERM },
             FileStatError::PosixQualifierParser { path: path.clone(), source: crate::common::xattr::PosixQualifierParserError::UnexpectedString("x".into()) },
             FileStatError::Base64DecodingError { path: path.clone(), source: base64::engine::general_purpose::STANDARD.decode("!!not-base64!!").expect_err("invalid base64") },
+            FileStatError::MaterializeConflict { path: path.clone(), details: "two members map here".into() },
             FileStatError::General { path: Some(path), message: "message".into() },
         ]
     }
@@ -373,6 +379,8 @@ mod tests {
         assert_eq!(general.io_path(), None, "General may carry no path");
         let nix = FileStatError::nix(&path, nix::errno::Errno::EPERM);
         assert_eq!(nix.kind(), "Nix/EPERM: Operation not permitted");
+        let conflict = FileStatError::MaterializeConflict { path, details: "d".into() };
+        assert_eq!(conflict.kind(), "MaterializeConflict");
     }
 
     #[test]
