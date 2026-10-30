@@ -38,7 +38,7 @@ macro_rules! error_guarded {
 ///
 /// Use it opt-in at the call site where an error *is* a process-abort reason:
 ///
-/// ```
+/// ```rust,should_panic
 /// let ok = fallible().to_panic()?;
 /// ```
 ///
