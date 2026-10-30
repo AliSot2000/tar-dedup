@@ -82,3 +82,23 @@ fn scenario_xattr_user() { run_scenario("xattr_user") }
 fn scenario_cmd_inspect() { run_scenario("cmd_inspect") }
 #[test]
 fn scenario_cmd_stub_not_implemented() { run_scenario("cmd_stub_not_implemented") }
+#[test]
+fn scenario_paths_relative_input() { run_scenario("paths_relative_input") }
+#[test]
+fn scenario_paths_strip_transform_order() { run_scenario("paths_strip_transform_order") }
+#[test]
+fn scenario_paths_empty_name_skip() { run_scenario("paths_empty_name_skip") }
+#[test]
+fn scenario_paths_absolute_root() { run_scenario("paths_absolute_root") }
+#[test]
+fn scenario_path_collision_transform() { run_scenario("path_collision_transform") }
+#[test]
+fn scenario_no_strict_separation_fanout() { run_scenario("no_strict_separation_fanout") }
+#[test]
+fn scenario_link_tree() { run_scenario("link_tree") }
+#[test]
+fn scenario_hardlink_grouping_none() { run_scenario("hardlink_grouping_none") }
+#[test]
+fn scenario_hardlink_global_vs_source() { run_scenario("hardlink_global_vs_source") }
+#[test]
+fn scenario_hardlink_overlap_matrix() { run_scenario("hardlink_overlap_matrix") }
