@@ -1,9 +1,14 @@
 use crate::common::utf8::require_utf8;
 use crate::db::common::SqlFileRow;
 use crate::db::common::generate_archive_and_extract_filter;
+use crate::db::errors::insert_errors_in;
+use crate::db::errors::{ErrorPhase, RecordDraft};
+use crate::db::flags::ErrorFlags;
 use crate::db::meta;
 use crate::db::types::{FileId, NewOutTreeRow, OutTreeId};
-use crate::error::{Result, ToPanic};
+use crate::error::{FileStatError, Result, ToPanic};
+use rusqlite::Error::SqliteFailure;
+use rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE;
 use rusqlite::{Connection, named_params};
 
 pub fn placement_prologue_done(conn: &Connection) -> Result<bool> {
@@ -122,31 +127,85 @@ pub fn set_file_new_name(conn: &Connection, file_id: FileId, new_name: Option<&s
 
 /// Insert a new OutTree row into the table. Function then returns the ids of all rows inserted
 /// based on the abs_path
-pub fn insert_out_tree_rows(conn: &Connection, rows: &[NewOutTreeRow]) -> Result<Vec<OutTreeId>> {
+/// Insert out_tree rows, recording a `MaterializeConflict` error when a row
+/// maps onto an `abs_path` already owned by a *different* member (e.g. two
+/// members collapsed onto one target by `--transform`/`--strip-components`/
+/// relative mapping). Same-member re-mapping (`--no-strict-separation` fanout)
+/// and scaffold dir rows (`file_id IS NULL`) are benign and stay silent.
+/// `enabled` gates the error recording (`--no-errors`).
+///
+/// The conflict is surfaced by the plain `INSERT`'s UNIQUE violation on
+/// `abs_path` — the observation that a row could not be added and the error
+/// record happen in the same transaction, so they can never drift apart.
+pub fn insert_out_tree_rows(
+    conn: &mut Connection,
+    rows: &[NewOutTreeRow],
+    enabled: bool)
+    -> Result<Vec<OutTreeId>> {
     if rows.is_empty() {
         return Ok(Vec::new());
     }
-    let mut insert = conn.prepare("
-        INSERT OR IGNORE INTO out_tree (abs_path, file_id, flags)
+    let tx = conn.transaction().to_panic()?;
+    let mut insert = tx.prepare("
+        INSERT INTO out_tree (abs_path, file_id, flags)
         VALUES (:abs_path, :file_id, :flags)").to_panic()?;
 
+    let mut ids = Vec::with_capacity(rows.len());
+    let mut conflicts: Vec<RecordDraft> = Vec::new();
+
     for row in rows {
-        insert.execute(named_params! {
-            ":abs_path": require_utf8(&row.abs_path)?,
+        let abs = require_utf8(&row.abs_path)?;
+        match insert.execute(named_params! {
+            ":abs_path": abs,
             ":file_id": row.file_id.map(|id| id.0),
             ":flags": row.flags.to_i64(),
-        }).to_panic()?;
+        }) {
+            Ok(_) => {
+                let id: i64 = tx.query_row(
+                    "SELECT id FROM out_tree WHERE abs_path = :abs_path",
+                    named_params! { ":abs_path": abs },
+                    |r| r.get(0),
+                ).to_panic()?;
+                ids.push(OutTreeId(id));
+            }
+            Err(SqliteFailure(e, _)) if e.extended_code == SQLITE_CONSTRAINT_UNIQUE => {
+
+                // A row already owns this abs_path.
+                let (resident_id, resident_file): (i64, Option<i64>) = tx.query_row(
+                    "SELECT id, file_id FROM out_tree WHERE abs_path = :abs_path",
+                    named_params! { ":abs_path": abs },
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                ).to_panic()?;
+                ids.push(OutTreeId(resident_id));
+                if let (true, Some(displaced)) = (enabled, row.file_id) {
+                    if resident_file != Some(displaced.0) {
+                        conflicts.push(RecordDraft {
+                            file_id: Some(displaced),
+                            out_tree_id: Some(OutTreeId(resident_id)),
+                            phase: ErrorPhase::Extract(
+                                crate::config::ExtractPipelinePhase::PlacementPrologue),
+                            error: FileStatError::MaterializeConflict {
+                                path: row.abs_path.clone(),
+                                details: format!(
+                                    "member {} conflicts with resident {} at {}",
+                                    displaced.0,
+                                    resident_file.map_or(
+                                        "<dir scaffold>".to_string(),
+                                        |f| f.to_string()),
+                                    row.abs_path.display(),
+                                ),
+                            },
+                            flags: ErrorFlags::default(),
+                        });
+                    }
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
-    let mut ids = Vec::with_capacity(rows.len());
-    // get the newly inserted ids.
-    for row in rows {
-        let id: i64 = conn.query_row(
-            "SELECT id FROM out_tree WHERE abs_path = :abs_path",
-            named_params! { ":abs_path": require_utf8(&row.abs_path)? },
-            |r| r.get(0),
-        ).to_panic()?;
-        ids.push(OutTreeId(id));
-    }
+    drop(insert);
+    insert_errors_in(&tx, &conflicts)?;
+    tx.commit().to_panic()?;
     Ok(ids)
 }
 
