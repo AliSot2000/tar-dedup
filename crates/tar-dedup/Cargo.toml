@@ -9,6 +9,9 @@ debug-force-utf8 = []
 err-to-panic = []
 # Compile the `--ordering id` debug override (plain `files(id)` order).
 debug-ordering = []
+# Sleep before every progress-bar increment (env TAR_DEDUP_SLOW_PROGRESS_MS, default 100).
+# Intentionally NOT part of `test-all` (would make the suite crawl).
+slow-progress = []
 # Heavy compression round-trip test suite (all formats × all levels).
 test-compression = []
 # Meta feature aggregating the on-demand test suites.
