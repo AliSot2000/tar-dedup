@@ -729,8 +729,7 @@ mod tests {
     }
 
     #[test]
-    // TODO clear_archive metadata is removed. test needs to be reworked.
-    fn clear_archive_meta_drops_only_byte_counters() {
+    fn archive_phase_and_byte_counters_are_independent() {
         let (_dir, conn) = open_conn();
 
         set_archive_phase(&conn, PipelinePhase::Archive).unwrap();
@@ -738,8 +737,9 @@ mod tests {
         set_tar_writer_bytes_out(&conn, 2).unwrap();
         set_extract_phase(&conn, ExtractPipelinePhase::ScanTar).unwrap();
 
-        assert_eq!(get_tar_writer_bytes_in(&conn).unwrap(), None);
-        assert_eq!(get_tar_writer_bytes_out(&conn).unwrap(), None);
+        // The counters survive alongside the phases.
+        assert_eq!(get_tar_writer_bytes_in(&conn).unwrap(), Some(1));
+        assert_eq!(get_tar_writer_bytes_out(&conn).unwrap(), Some(2));
         assert_eq!(
             get_archive_phase(&conn).unwrap(),
             Some(PipelinePhase::Archive)
@@ -747,6 +747,15 @@ mod tests {
         assert_eq!(
             get_extract_phase(&conn).unwrap(),
             Some(ExtractPipelinePhase::ScanTar)
+        );
+
+        // And re-setting a phase leaves the byte counters untouched.
+        set_archive_phase(&conn, PipelinePhase::Hash).unwrap();
+        assert_eq!(get_tar_writer_bytes_in(&conn).unwrap(), Some(1));
+        assert_eq!(get_tar_writer_bytes_out(&conn).unwrap(), Some(2));
+        assert_eq!(
+            get_archive_phase(&conn).unwrap(),
+            Some(PipelinePhase::Hash)
         );
     }
 
