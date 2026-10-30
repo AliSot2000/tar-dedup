@@ -38,11 +38,20 @@ macro_rules! error_guarded {
 ///
 /// Use it opt-in at the call site where an error *is* a process-abort reason:
 ///
-/// ```rust,should_panic
-/// use tar_dedup::error::Error;
+/// ```rust
+/// use tar_dedup::error::{Error, ToPanic};
 ///
-/// fn fallible() -> Result<()> { Err(Error::Other("Failed"))}
-/// let ok = fallible().to_panic()?;
+/// fn fallible() -> Result<(), Error> { Ok(()) }
+///
+/// fn run() -> Result<(), Error> {
+///     // `to_panic()` aborts the process on `Err` under `--features
+///     // err-to-panic`; without the feature it is a pass-through and `?`
+///     // simply propagates the error to the caller.
+///     fallible().to_panic()?;
+///     Ok(())
+/// }
+///
+/// assert!(run().is_ok());
 /// ```
 ///
 /// With the `err-to-panic` feature enabled `.to_panic()` converts the `Err`
