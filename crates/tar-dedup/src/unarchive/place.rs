@@ -13,10 +13,10 @@ use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord, S
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::progress::BarKind;
+use crate::progress::ProgressBar;
 use crate::shutdown::Shutdown;
 use crate::unarchive::ExtractRTArgs;
 use crossbeam_channel::{Receiver, Sender, bounded};
-use indicatif::ProgressBar;
 use nix::NixPath;
 use nix::libc::makedev;
 use nix::sys::stat::{Mode, SFlag, mknod};
@@ -2281,7 +2281,7 @@ mod tests {
         drop(s);
         copy_canonical_worker(
             PathBuf::from("/base"), PathBuf::from("/cache"), false, true,
-            indicatif::ProgressBar::hidden(), Shutdown::detached(), r, os,
+            ProgressBar::hidden(), Shutdown::detached(), r, os,
         );
         assert!(matches!(or.recv(), Ok(None)));
     }
@@ -2302,7 +2302,7 @@ mod tests {
         drop(s);
         copy_canonical_worker(
             base.clone(), world.config.paths.extract_cache_dir(), false, true,
-            indicatif::ProgressBar::hidden(), sh, r, os,
+            ProgressBar::hidden(), sh, r, os,
         );
         match or.recv().expect("recv") {
             Some(Ok((fid, _))) => assert_eq!(fid, id),

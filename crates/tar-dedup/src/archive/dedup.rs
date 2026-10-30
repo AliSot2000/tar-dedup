@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::thread;
 
+use crate::progress::ProgressBar;
 use crossbeam_channel::{Receiver, Sender, bounded};
-use indicatif::ProgressBar;
 use std::fs::File;
 use std::io::Read;
 use std::mem::take;

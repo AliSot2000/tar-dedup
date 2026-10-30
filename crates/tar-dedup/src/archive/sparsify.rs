@@ -17,9 +17,9 @@ use crate::db::sparsify::SparseOutcome;
 use crate::db::types::{FilePhase, StrippedRecord};
 use crate::error::{Error, Result};
 use crate::progress::BarKind;
+use crate::progress::ProgressBar;
 use crate::shutdown::Shutdown;
 use crossbeam_channel::{Receiver, Sender, bounded};
-use indicatif::ProgressBar;
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhase::Sparsify);
 
