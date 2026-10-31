@@ -494,6 +494,7 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
             rt.db,
             matches!(kind, MaterializeKind::Hardlinks),
             matches!(kind, MaterializeKind::Files),
+            rt.config.process.fail_fast,
         )?;
         rt.progress.inc_both(n);
         Ok(())
@@ -773,14 +774,19 @@ fn process_results(
     recorder: &mut Recorder,
     db: &Database,
     is_hardlink: bool,
-    set_reflink: bool)
+    set_reflink: bool,
+    fail_fast: bool)
     -> Result<()> {
 
     db.ingest_materialize_results(&results, is_hardlink, set_reflink)?;
     for result in results {
         match result {
             Err((id, Error::FileStat(e))) => {
-                recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default())
+                let e_temp = e.recreate();
+                recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default());
+                if fail_fast {
+                    return Err(Error::FileStat(e_temp));
+                }
             }
             _ => ()
         }
@@ -1056,7 +1062,7 @@ fn build_path(
 /// On error, the file on the file system wins.
 /// Result:
 /// - first bool is true iff the file can be written to the path
-/// - second bool is true iff there was a conflict which resolved in favor of extracting
+/// - second bool is true iff there was an existing file conflicting with the extraction
 /// - third bool is true iff there was a file was removed during the prep process.
 fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
     -> std::result::Result<(bool, bool, bool), FileStatError> {
@@ -1065,6 +1071,20 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
     };
 
     // PRECONDITION: Path exists
+    if matches!(config.placement.conflict_policy, ConflictPolicy::SkipExisting) {
+        return if config.placement.silent_conflicts {
+            tracing::warn!("Leaving {}, skip existing.",
+                    tgt.display()
+            );
+            Ok((false, true, false))
+        } else {
+            Err(FileStatError::General {
+                path: Some(tgt.to_path_buf()),
+                message: format!("Leaving {}, skip existing.", tgt.display()),
+            })
+        }
+    }
+
     let file_metadata = match tgt.symlink_metadata() {
         Err(e) => {
             return if config.placement.silent_conflicts {
@@ -1116,6 +1136,8 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         };
         match config.placement.conflict_policy {
             ConflictPolicy::Replace => (),
+            // Handled by the early return above; unreachable here but kept exhaustive.
+            ConflictPolicy::SkipExisting => return Ok((false, true, false)),
             ConflictPolicy::PreferNewer => {
                 if db_mtime <= file_mtime {
                     return if !config.placement.silent_conflicts {

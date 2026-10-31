@@ -1223,6 +1223,10 @@ pub enum ConflictPolicy {
     #[default]
     #[value(alias = "overwrite")]
     Replace,
+    /// Leave existing paths untouched; never remove, never overwrite
+    /// (GNU tar `--skip-old-files`).
+    #[value(alias = "skip-old-files")]
+    SkipExisting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
