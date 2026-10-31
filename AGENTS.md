@@ -18,8 +18,8 @@ Design stance (from `Readme.md`):
 
 ## Plan-first workflow
 
-Before implementing any non-trivial change, write a plan to `plans/{topic}.md` (see the
-existing `plans/*.md` files for format) and settle it with the user before touching code.
+Before implementing any non-trivial change, write a plan to `docs/plans/{topic}.md` (see the
+existing `docs/plans/*.md` files for format) and settle it with the user before touching code.
 A plan may be a deliberate "session recap + next steps" if the design was already agreed
 in conversation; the file just needs to capture the agreed design so implementation can
 be verified against it. Skip the file only for trivial, self-contained edits.
