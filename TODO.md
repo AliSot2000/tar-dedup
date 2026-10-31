@@ -62,30 +62,30 @@
 - [X] finish testing for [filter]
 - [X] finish testing for [scan]
 - [X] finish testing for [place_prologue]
-- [ ] finish testing for [place]
-- [ ] finish testing for [permissions]
+- [X] finish testing for [place]
+- [X] finish testing for [permissions]
 - [ ] fix flush / try_flush
 - [ ] finish the readme
 - [ ] publish to crates.io
 - [ ] publish to gh releases
-- [ ] publish to flatpak
+- [ ] ~~publish to flatpak~~
 
 ## Strip
-- [ ] Drop unused db functions
+- [X] Drop unused db functions
 - [ ] Degrate ExtractRuntimeState - ArchiveRuntimeState what is the snapshot doing??? 
 - [ ] Restructure db.rs
 - [ ] Batched rename / transaction
 - [ ] Visibility of functions.
 
 ## General:
-- [ ] Testing
-- [ ] Rework error handling and log policy as well as log levels
+- [X] Testing
+- [X] Rework error handling and log policy as well as log levels
 - [X] Sequential / Parallel where possible
 - [X] Add Version of Tool to metadata
 - [X] Add Platform to metadata
 - [X] Capture Errors in database for review.
 - [X] need to add source root -i flag to the metadata (solved as source table)
-- [ ] Add archive process started, archive process ended time stamps to the db.
+- [X] Add archive process started, archive process ended time stamps to the db.
 
 ## Phases
 ### CLI:
@@ -114,7 +114,7 @@
 
 ### Dedup
 Should be done?
-- [ ] Better logging?
+- [X] Better logging?
 - [X] Run in parallel and do so very well
 
 ### Sparsified
