@@ -1156,7 +1156,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
                     return if !config.placement.silent_conflicts {
                         Err(FileStatError::General {
                             path: Some(tgt.to_path_buf()),
-                            message: "File is new old.".to_string(),
+                            message: "File is too new.".to_string(),
                         })
                     } else {
                         tracing::warn!("Could not extract to {}, file is too new.", tgt.display());
