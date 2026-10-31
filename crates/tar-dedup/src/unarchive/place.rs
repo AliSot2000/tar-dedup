@@ -1206,6 +1206,7 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         false
     };
     // Remove file, if indicated.
+    // PRECONDITION: Path exists!
     if remove || config.placement.unlink_first {
         match fs::remove_file(&tgt) {
             Ok(()) => Ok((true, true, true)),
