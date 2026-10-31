@@ -2267,7 +2267,7 @@ mod tests {
             Ok(ok),
             Err((OutTreeId(99), Error::FileStat(err))),
         ];
-        process_results(results, &mut recorder, &world.db, false, true).expect("process");
+        process_results(results, &mut recorder, &world.db, false, true, false).expect("process");
         assert!(world.out_flag(out, OutTreeFlag::Placed));
         assert!(!world.out_flag(out, OutTreeFlag::UsedRefLink), "used_copy=true => no reflink");
         assert_eq!(recorder.buffered(), 1);
@@ -2278,7 +2278,7 @@ mod tests {
         let world = ExtractWorld::place_test(|_| {});
         let mut recorder = Recorder::new(&world.db, true, Some(0));
         let results = vec![Err((OutTreeId(1), Error::Interrupted))];
-        process_results(results, &mut recorder, &world.db, false, false).expect("process");
+        process_results(results, &mut recorder, &world.db, false, false, false).expect("process");
         assert_eq!(recorder.buffered(), 0);
     }
 
@@ -2288,9 +2288,51 @@ mod tests {
         let mut recorder = Recorder::new(&world.db, true, Some(0));
         let results = vec![Err((OutTreeId(1), Error::Other(anyhow::anyhow!("x"))))];
         let res = catch_unwind(AssertUnwindSafe(|| {
-            process_results(results, &mut recorder, &world.db, false, false)
+            process_results(results, &mut recorder, &world.db, false, false, false)
         }));
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn process_results_without_fail_fast_swallows_error() {
+        let world = ExtractWorld::place_test(|_| {});
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let err = FileStatError::io(&world.root().join("a.bin"),
+                                    IoError::new(ErrorKind::Other, "boom"));
+        let results = vec![Err((OutTreeId(1), Error::FileStat(err)))];
+        process_results(results, &mut recorder, &world.db, false, false, false).expect("swallow");
+        assert_eq!(recorder.buffered(), 1, "error always lands in the recorder");
+    }
+
+    #[test]
+    fn process_results_with_fail_fast_records_then_raises() {
+        let world = ExtractWorld::place_test(|_| {});
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let err = FileStatError::io(&world.root().join("a.bin"),
+                                    IoError::new(ErrorKind::Other, "boom"));
+        let results = vec![Err((OutTreeId(1), Error::FileStat(err)))];
+        let res = process_results(results, &mut recorder, &world.db, false, false, true);
+        assert!(matches!(res, Err(Error::FileStat(_))), "{res:?}");
+        assert_eq!(recorder.buffered(), 1,
+            "error must be recorded even when fail-fast raises it");
+    }
+
+    #[test]
+    fn process_results_fail_fast_records_only_until_first_error() {
+        let world = ExtractWorld::place_test(|_| {});
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        let e1 = FileStatError::io(&world.root().join("a.bin"),
+                                   IoError::new(ErrorKind::Other, "boom"));
+        let e2 = FileStatError::io(&world.root().join("b.bin"),
+                                   IoError::new(ErrorKind::Other, "bang"));
+        let results = vec![
+            Err((OutTreeId(1), Error::FileStat(e1))),
+            Err((OutTreeId(2), Error::FileStat(e2))),
+        ];
+        let res = process_results(results, &mut recorder, &world.db, false, false, true);
+        assert!(matches!(res, Err(Error::FileStat(_))), "{res:?}");
+        assert_eq!(recorder.buffered(), 1,
+            "abort happens at the first error; later ones in the batch are never recorded");
     }
 
     // ---------------------------------------------------------------------
