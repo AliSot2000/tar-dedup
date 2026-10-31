@@ -63,7 +63,7 @@ pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(
 
 /// Directory rows whose metadata must still be applied, deepest first.
 ///
-/// Only applied when `--overwrite-dir` is set. Directories are never marked `Placed`
+/// Only applied when `--overwrite-all-dir` is set. Directories are never marked `Placed`
 /// or errored: they are created up-front by `prepare_extraction_dir` (aborting the
 /// whole run on failure). Ancestor rows injected by `ensure_parent` have a `NULL`
 /// `file_id` (no catalog row, so no metadata to apply) — hence the LEFT JOIN.
@@ -108,7 +108,7 @@ pub fn count_out_tree_for_permissions_non_dir(conn: &Connection) -> Result<(u64,
     count_out_tree_for_permissions(conn, false)
 }
 
-/// Count of directory rows still needing metadata (only relevant with `--overwrite-dir`).
+/// Count of directory rows still needing metadata (only relevant with `--overwrite-all-dir`).
 pub fn count_out_tree_for_permissions_dirs(conn: &Connection) -> Result<(u64, u64)> {
     count_out_tree_for_permissions(conn, true)
 }

@@ -170,7 +170,7 @@ fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
 
 /// Two-stage driver over `list_materialized_entries`: directory rows first, then
 /// the remaining entries. The directory pass bypasses the include/exclude filters
-/// when `--overwrite-dir` is set (excluded directories still get out_tree rows so
+/// when `--overwrite-all-dir` is set (excluded directories still get out_tree rows so
 /// their archived metadata can be restored); the second pass is always
 /// filter-aware.
 fn stepped_dirs_then_rest(
@@ -181,7 +181,7 @@ fn stepped_dirs_then_rest(
     -> Result<()> {
 
     stepped_materialized(
-        rt, source_id, Some(true), !rt.config.attributes.force_overwrite_dir,
+        rt, source_id, Some(true), !rt.config.attributes.overwrite_all_dir,
         only_valid_new_name, f)?;
 
     stepped_materialized(

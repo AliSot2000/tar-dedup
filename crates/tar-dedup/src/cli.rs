@@ -617,16 +617,16 @@ pub struct ExtractArgs {
     )]
     pub no_overwrite_dir: bool,
     
-    /// Also apply archived directory metadata to directories excluded by filters.
-    /// Normally only placed members are updated (GNU tar equivalent); this flag
-    /// matters because excluded paths remain in the catalog with full metadata.
+    /// Also apply archived directory metadata to directories excluded by filters
+    /// (normally only placed members are updated). Not the negation of
+    /// `--no-overwrite-dir`: both flags together disable all directory updates.
     #[arg(
-        long = "overwrite-dir",
+        long = "overwrite-all-dir",
         default_value_t = false,
         action = ArgAction::SetTrue,
         help_heading = "Overwrite Control"
     )]
-    pub force_overwrite_dir: bool,
+    pub overwrite_all_dir: bool,
 
     /// How to handle paths that already exist on disk.
     #[arg(

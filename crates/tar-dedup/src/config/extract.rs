@@ -113,7 +113,7 @@ impl Validate for PlacementOptions {
 pub struct ExtractAttributeOptions {
     pub restore_owner: bool,
     pub no_overwrite_dir: bool,
-    pub force_overwrite_dir: bool,
+    pub overwrite_all_dir: bool,
     pub apply_atime: bool,
     pub apply_mtime: bool,
     pub no_xattrs: bool,
@@ -127,7 +127,7 @@ impl Default for ExtractAttributeOptions {
         Self {
             restore_owner: false,
             no_overwrite_dir: false,
-            force_overwrite_dir: false,
+            overwrite_all_dir: false,
             apply_atime: false,
             apply_mtime: false,
             no_xattrs: false,
@@ -140,8 +140,8 @@ impl Default for ExtractAttributeOptions {
 
 impl Validate for ExtractAttributeOptions {
     fn validate(&self) -> Result<()> {
-        if self.no_overwrite_dir && self.force_overwrite_dir {
-            tracing::warn!("--force-overwrite-dir is disabled with --no-overwrite-dir");
+        if self.no_overwrite_dir && self.overwrite_all_dir {
+            tracing::warn!("--overwrite-all-dir is disabled with --no-overwrite-dir");
         }
         Ok(())
     }
@@ -454,7 +454,7 @@ impl ExtractConfig {
             attributes: ExtractAttributeOptions {
                 restore_owner: same_owner,
                 no_overwrite_dir: args.no_overwrite_dir,
-                force_overwrite_dir: args.force_overwrite_dir,
+                overwrite_all_dir: args.overwrite_all_dir,
                 apply_atime: resolve_bool_flag(args.no_apply_atime, args.apply_atime, apply_all),
                 apply_mtime: resolve_bool_flag(args.no_apply_mtime, args.apply_mtime, apply_all),
                 no_xattrs: !resolve_bool_flag(args.no_xattrs, args.xattrs, apply_all),

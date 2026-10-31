@@ -31,7 +31,7 @@ pub fn set_out_tree_built(conn: &Connection) -> Result<()> {
 /// based on filtering (include, exclude filter) and on file type. Additionally, a source can be
 /// added s.t. only the files which are covered by this source are returned. When
 /// `only_valid_new_name` is set, only rows carrying a non-empty `new_name` are returned.
-/// When `apply_filters` is false the archive/extract filter gate is dropped (`--overwrite-dir`
+/// When `apply_filters` is false the archive/extract filter gate is dropped (`--overwrite-all-dir`
 /// directory pass must see excluded directories so their metadata can be restored).
 pub fn list_materialized_entries<R: SqlFileRow>(
     conn: &Connection,
@@ -57,7 +57,7 @@ pub fn list_materialized_entries<R: SqlFileRow>(
     } else {
         ""
     };
-    // `AND`-prefixed gate; empty when filters are bypassed (`--overwrite-dir`
+    // `AND`-prefixed gate; empty when filters are bypassed (`--overwrite-all-dir`
     // directory pass must see excluded directories so their metadata can be
     // restored).
     let filter_include_exclude = if apply_filters {
@@ -275,7 +275,7 @@ mod tests {
         insert_row(&conn, 1, "/a", "dir");
         insert_row(&conn, 2, "/b", "dir");
         exclude_extract(&conn, 2);
-        // --overwrite-dir: excluded dir still materialized.
+        // --overwrite-all-dir: excluded dir still materialized.
         let dirs = ids(&conn, Some(true), false);
         assert_eq!(dirs, vec![1i64, 2]);
     }

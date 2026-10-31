@@ -5,7 +5,7 @@
 //! xattrs / ACLs / SELinux, then archived mtime/atime (only with `--apply-mtime` /
 //! `--apply-atime`). Times are applied last since the extended-attribute setters may
 //! touch mtime/atime. Hardlink duplicates share the inode with the canonical row, so
-//! only the canonical row is touched. With `--overwrite-dir`, directory metadata is
+//! only the canonical row is touched. With `--overwrite-all-dir`, directory metadata is
 //! applied as well.
 
 use crate::common::batched_loop;
@@ -61,7 +61,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     // Phase-bar accounting. Link-tree mode applies metadata on the `.sources`
     // canonical files (files table); the non-link mode on non-dir `out_tree`
     // rows. Directory rows are counted — and applied — unless `--no-overwrite-dir`
-    // (with `--overwrite-dir` the set includes filter-excluded dirs). Each count
+    // (with `--overwrite-all-dir` the set includes filter-excluded dirs). Each count
     // is `(pending, done)`: bar length = the full workload, position = the
     // already-handled rows (resume-correct).
     let (file_pending, file_done) = if rt.config.placement.link_tree {
@@ -192,7 +192,7 @@ fn process_batches_dirs(
     -> Result<()> {
     batched_loop(
         // No filter here: filter-selected vs all-dirs is encoded in out_tree
-        // at population time (force_overwrite_dir bypasses the filter there).
+        // at population time (force_overwrite_all_dir bypasses the filter there).
         |bs| rt.db.list_out_tree_for_permissions_dirs::<FileRecord>(bs),
         rt.config.process.batch_size,
         |entries| {
