@@ -537,7 +537,7 @@ pub struct ExtractArgs {
     pub work_dir_location: WorkDirLocation,
 
     /// Restore using absolute catalog paths (`-P`). Extraction join abs paths under
-    /// the extraction root (leading `,/` stripped). To extract to file system root,
+    /// the extraction root (leading `/` stripped). To extract to file system root,
     /// pass `/` as `-C`
     #[arg(
         short = 'P',
