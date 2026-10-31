@@ -15,7 +15,7 @@ rust-version = "1.95"
 tar-dedup = { path = "crates/tar-dedup" }
 sparse-cp = { path = "crates/sparse-cp" }
 
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
 tar = "0.4"
 xz2 = { version = "0.1", features = ["static"] }
 lzma-sys = "0.1"
