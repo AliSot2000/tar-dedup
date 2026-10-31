@@ -1,4 +1,4 @@
-sparse-file-generation on archive added. é
+sparse-file-generation on archive added.
 
 --null / --no-null added for file separation in case file names contain \n
 
