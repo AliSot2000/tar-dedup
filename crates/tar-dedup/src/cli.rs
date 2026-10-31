@@ -664,7 +664,7 @@ pub struct ExtractArgs {
     )]
     pub remove_and_replace: bool,
 
-    /// On type mismatch at a path, remove the existing entry and extract the archive member.
+    /// Adjust how hardlinks are extracted.
     #[arg(
         long = "hard-link-grouping",
         value_enum,
