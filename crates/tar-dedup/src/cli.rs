@@ -1211,10 +1211,12 @@ pub enum ExitAfterStageArg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum ConflictPolicy {
-    /// Keep existing files; warn on conflict (GNU tar `--keep-old-files`).
+    /// Keep whichever copy has the older mtime (GNU tar `--keep-older-files`). File system wins
+    /// over tar if mtime is equal.
     #[value(alias = "keep-old-files")]
     PreferOlder,
-    /// Keep whichever copy has the newer mtime (GNU tar `--keep-newer-files`).
+    /// Keep whichever copy has the newer mtime (GNU tar `--keep-newer-files`). File system wins
+    /// over tar if mtime is equal.
     #[value(alias = "keep-newer-files")]
     PreferNewer,
     /// Overwrite existing paths (GNU tar `--overwrite`; default).
