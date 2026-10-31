@@ -724,7 +724,7 @@ pub struct ExtractArgs {
     pub no_reflink: bool,
 
     /// Recreate non-regular entries (symlink, fifo, char/block device, socket).
-    /// Off by default: those entries require privileges (`mknod`) most users lack.
+    /// Off by default: those entries require `mknod` privileges or `root`.
     #[arg(
         long = "create-other-entries",
         default_value_t = false,
