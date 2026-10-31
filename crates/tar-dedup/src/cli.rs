@@ -560,6 +560,15 @@ pub struct ExtractArgs {
     )]
     pub one_top_level: Option<Option<PathBuf>>,
 
+    /// Remove the extraction root before extracting (only effective with `--one-top-level`).
+    #[arg(
+        long = "clean-target",
+        default_value_t = false,
+        action = ArgAction::SetTrue,
+        help_heading = "Archive Paths"
+    )]
+    pub clean_target: bool,
+
     // --- Compression ---
 
     /// Compression filter override. By default the archive suffix decides
@@ -664,15 +673,6 @@ pub struct ExtractArgs {
         value_name = "GROUPING-POLICY"
     )]
     pub hard_link_grouping: HardLinkGrouping,
-
-    /// Remove the extraction root before extracting (only effective with `--one-top-level`).
-    #[arg(
-        long = "clean-target",
-        default_value_t = false,
-        action = ArgAction::SetTrue,
-        help_heading = "Overwrite Control"
-    )]
-    pub clean_target: bool,
 
     // --- Link Tree ---
 
