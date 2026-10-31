@@ -63,7 +63,7 @@ pub trait WorkLayout {
 /// Where extract places `{stem}.estage` (builder-only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 #[value(rename_all = "kebab-case")]
-pub enum ExtractStageLocation {
+pub enum WorkDirLocation {
     #[default]
     BesideArchive,
     BesideOutput,
@@ -148,11 +148,11 @@ pub(crate) fn path_parent(path: &Path) -> &Path {
 pub(crate) fn default_extract_work_dir(
     archive_path: &Path,
     output_dir: &Path,
-    location: ExtractStageLocation)
+    location: WorkDirLocation)
     -> PathBuf {
     let parent = match location {
-        ExtractStageLocation::BesideArchive => path_parent(archive_path),
-        ExtractStageLocation::BesideOutput => path_parent(output_dir),
+        WorkDirLocation::BesideArchive => path_parent(archive_path),
+        WorkDirLocation::BesideOutput => path_parent(output_dir),
     };
     parent.join(format!("{}.estage", archive_stem(archive_path))).clean()
 }
@@ -252,14 +252,14 @@ mod tests {
             PathBuf::from("/data/foo.astage")
         );
         assert_eq!(
-            default_extract_work_dir(arch, Path::new("/out"), ExtractStageLocation::BesideArchive),
+            default_extract_work_dir(arch, Path::new("/out"), WorkDirLocation::BesideArchive),
             PathBuf::from("/data/foo.estage")
         );
         assert_eq!(
             default_extract_work_dir(
                 arch,
                 Path::new("/out/tree"),
-                ExtractStageLocation::BesideOutput
+                WorkDirLocation::BesideOutput
             ),
             PathBuf::from("/out/foo.estage")
         );

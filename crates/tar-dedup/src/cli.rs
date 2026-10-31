@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common;
 use crate::common::perms::MapResolutionTarget;
-use crate::config::ExtractStageLocation;
+use crate::config::WorkDirLocation;
 
 #[derive(Debug, Parser)]
 #[command(name = "tar-dedup", about = "Deduplicating archival pipeline")]
@@ -529,12 +529,12 @@ pub struct ExtractArgs {
     /// Where `{stem}.estage` is placed when `--work-dir` is not given:
     /// `beside-archive` (default) or `beside-output` (next to the extraction root).
     #[arg(
-        long = "stage-location",
+        long = "work-dir-location",
         value_enum,
-        default_value_t = ExtractStageLocation::BesideArchive,
+        default_value_t = WorkDirLocation::BesideArchive,
         help_heading = "Archive Paths"
     )]
-    pub stage_location: ExtractStageLocation,
+    pub work_dir_location: WorkDirLocation,
 
     /// Restore using absolute catalog paths (`-P`). Extraction join abs paths under
     /// the extraction root (leading `,/` stripped). To extract to file system root,

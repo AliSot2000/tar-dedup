@@ -348,7 +348,7 @@ impl ExtractConfig {
             )));
         }
         
-        let extract_stage_location = args.stage_location;
+        let work_dir_location = args.work_dir_location;
         let c_output_dir = match &args.extract_to {
             Some(path) => resolve_path_to_abs_path(path, &c_directory),
             None => c_directory.clone(),
@@ -356,7 +356,7 @@ impl ExtractConfig {
         std::fs::create_dir_all(&c_output_dir).map_err(|e| Error::io(&c_output_dir, e))?;
         let c_work_dir = match &args.work_dir {
             Some(path) => resolve_path_to_abs_path(path, &c_directory),
-            None => default_extract_work_dir(&c_archive_path, &c_output_dir, extract_stage_location),
+            None => default_extract_work_dir(&c_archive_path, &c_output_dir, work_dir_location),
         };
         std::fs::create_dir_all(&c_work_dir).map_err(|e| Error::io(&c_work_dir, e))?;
 
@@ -766,7 +766,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use crate::common::perms::infer_same_owner;
-    use crate::config::{CompressionFormat, ExtractStageLocation};
+    use crate::config::{CompressionFormat, WorkDirLocation};
     use clap::Parser;
     use std::path::{Path, PathBuf};
 
@@ -849,7 +849,7 @@ mod tests {
         let expected_work = crate::config::default_extract_work_dir(
             &archive,
             dir.path(),
-            ExtractStageLocation::BesideArchive,
+            WorkDirLocation::BesideArchive,
         );
         assert_eq!(cfg.paths.work_dir, expected_work);
         assert!(cfg.rehash, "rehash on by default");
@@ -967,14 +967,14 @@ mod tests {
     }
 
     #[test]
-    fn stage_location_beside_output_moves_work_dir() {
+    fn work_dir_location_beside_output_moves_work_dir() {
         let dir = tempfile::tempdir().expect("tempdir");
         let archive = archive_file(dir.path(), "backup.tar");
-        let cfg = build(&archive, &["--stage-location", "beside-output"]).expect("build");
+        let cfg = build(&archive, &["--work-dir-location", "beside-output"]).expect("build");
         let expected = crate::config::default_extract_work_dir(
             &archive,
             &cfg.paths.output_dir,
-            ExtractStageLocation::BesideOutput,
+            WorkDirLocation::BesideOutput,
         );
         assert_eq!(cfg.paths.work_dir, expected);
     }
