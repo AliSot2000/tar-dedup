@@ -40,20 +40,27 @@ This command takes a set of input files / directories and produces an archive.
 
 **Indexing**
 
-| Short | Long                      | Required | Args | Description                                                                                                               | Notes |
-|-------|---------------------------|----------|------|---------------------------------------------------------------------------------------------------------------------------|-------|
-| -     | `--no-recursion`          | n        | 0    | Disables recursion into subdirectories                                                                                    |       |
-| -     | `--dereference`           | n        | 0    | Follow symlinks                                                                                                           |       |
-| -     | `--one-file-system`       | n        | 0    | Stay within a single file system. (Root FS determined by the first entry given - line in `--files-from` or `--input-dir`) |       |
-| `-P`  | `--absolute-names`        | n        | 0    | Function sets the default extraction mode.                                                                                | 4.    |
-| -     | `--no-hardlink-detection` | n        | 0    | Hard Links are detected and merged in hash, dedup. If enabled, two hard linked files are treated as separate ones.        | 4.    |
+The general assumptions when indexing are: 
+- Every entry in the file system is walked once. 
+- There's no writes to the files currently indexed. 
+- There's no writes to the metadata of the files currently indexed.
+- Files may be read.
+
+| Short | Long                      | Required | Args | Description                                                                                                                       | Notes |
+|-------|---------------------------|----------|------|-----------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--no-recursion`          | n        | 0    | Disables recursion into subdirectories                                                                                            |       |
+| -     | `--dereference`           | n        | 0    | Follow symlinks                                                                                                                   |       |
+| -     | `--one-file-system`       | n        | 0    | Stay within a single file system. (Root FS determined by the first entry given - line in `--files-from` or `--input-dir`)         |       |
+| `-P`  | `--absolute-names`        | n        | 0    | Function sets the default extraction mode.                                                                                        | 4.    |
+| -     | `--no-hardlink-detection` | n        | 0    | Hard Links are detected and merged in hash, dedup. If enabled, two hard linked files are treated as separate ones.                | 4.    |
+| -     | `--no-strict-separation`  | n        | 0    | Allow nested or duplicate `-i` / `-T` directory. The same entry may be walked twice, metadata is stored per unique absolute path. |       | 
 
 **Filtering**
 
 `--include-from` and `--exclude-from` expects a file with `utf8` content and each pattern separated by a 
-newline character. If you need to match a new line for some reason, use `\n` and never `0x0A`.
-Regex is handled with rusts regex crate. TODO: Verify! This _should_ implement "PCRE-lite" - so a subset minus the 
-backreferences and lookahead/lookbehind functionality. 
+newline character. This can be relaxed with `--no-unicode` if needed. If you need to match a new line for some reason, 
+use `\n` and never `0x0A`. Regex is handled with rusts regex crate. TODO: Verify! This _should_ implement "PCRE-lite" - 
+so a subset minus the backreferences and lookahead/lookbehind functionality. 
 
 Also, please note **The include/exclude feature deviates substantially from tar!!!** The tool creates an index of all provided sources first. In doing so,
 it stores the absolute path to each item. When the filtering is applied, it is not done to the relative path but the absolute path of the files provided. 
@@ -73,6 +80,9 @@ If this behavior is undesirable, consider using `--files-from` or `-T` to provid
 | -     | `--exclude-vcs-ignores` | n        | 0    | Not implemented yet! Read VCS ignore files for exclusions                                        | 5.    |
 | -     | `--no-anchored`         | n        | 0    | Patterns match from the start of the relative path rather than any path component                | 5.    |
 | -     | `--no-ignore-case `     | n        | 0    | Perform case insensitive matching                                                                | 5.    |
+| -     | `--anchored`            | n        | 0    | Patterns match from the start of the relative path.                                              |       | 
+| -     | `--ignore-case`         | n        | 0    | Case-insensitive pattern matching.                                                               |       | 
+| -     | `--no-unicode`          | n        | 0    | Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte).                   |       | 
 
 Currently not implemented is the `--newer` ... filters. They are currently on the feature list but for the moment, this 
 can be remedied by using `filter` in conjunction with `--files-from` to achieve the same filtering.
@@ -82,15 +92,23 @@ As a baseline, the tool attempts to capture as much data as possible. This inclu
 selinux policy, posix_acls, xattrs, file type. By default, the tool also attempts to resolve any uid, gid to a 
 group name / owner name via the system database.
 
-| Short | Long           | Required | Args | Description                                                           | Notes |
-|-------|----------------|----------|------|-----------------------------------------------------------------------|-------|
-| -     | `--no-acls`    | n        | 0    | Do not attempt to acquire the acls of the file system entries         |       |
-| -     | `--no-xattrs`  | n        | 0    | Do not attempt to acquire the xattrs of the file system entries       |       |
-| -     | `--no-selinux` | n        | 0    | Do not attempt to acquire the SELinux policy of the fiel system entry |       |
-| -     | `--owner`      | n        | 1    | Store an override of the owner field in the database                  | 6.    |
-| -     | `--owner-map`  | n        | 1    | Load the owner map into the database for.                             | 6.    |
-| -     | `--group`      | n        | 1    | Store an override of the group field in the database                  | 6.    |
-| -     | `--group-map`  | n        | 1    | Load the group map into the database for.                             | 6.    |
+| Short | Long                        | Required | Args | Description                                                                                                                                                                                          | Notes |
+|-------|-----------------------------|----------|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--no-acls`                 | n        | 0    | Do not attempt to acquire the acls of the file system entries                                                                                                                                        |       |
+| -     | `--no-xattrs`               | n        | 0    | Do not attempt to acquire the xattrs of the file system entries                                                                                                                                      |       |
+| -     | `--no-selinux`              | n        | 0    | Do not attempt to acquire the SELinux policy of the fiel system entry                                                                                                                                |       |
+| -     | `--owner`                   | n        | 1    | Store an override of the owner field in the database                                                                                                                                                 | 6.    |
+| -     | `--owner-map`               | n        | 1    | Load the owner map into the database for.                                                                                                                                                            | 6.    |
+| -     | `--group`                   | n        | 1    | Store an override of the group field in the database                                                                                                                                                 | 6.    |
+| -     | `--group-map`               | n        | 1    | Load the group map into the database for.                                                                                                                                                            | 6.    |
+| -     | `--acls`                    | n        | 0    | Capture POSIX ACLs (default: on via the capture umbrella).                                                                                                                                           |       |
+| -     | `--xattrs`                  | n        | 0    | Capture extended attributes (default: on via the capture umbrella).                                                                                                                                  |       |
+| -     | `--selinux`                 | n        | 0    | Capture SELinux contexts (default: on via the capture umbrella).                                                                                                                                     |       |
+| -     | `--no-capture-all-metadata` | n        | 0    | Default: capture every metadata attribute (xattrs, ACLs, SELinux, ...). Option disables capture of all optional metadata fields. Single enable can be done e.g. `--acls`                             |       |
+| -     | `--numeric-ids-only`        | n        | 0    | Record numeric uids/gids only instead resolving user/group names during inventory.                                                                                                                   |       |
+| -     | `--resolve-numeric-ids`     | n        | 0    | Resolve user/group names during inventory (default; counters `--numeric-ids-only`).                                                                                                                  |       |
+| -     | `--mode`                    | n        | 1    | Force symbolic mode CHANGES for added members (GNU tar `--mode`). Applies chmod-style updates (e.g. `u+rwx,go-rx`) at extraction; stored as archive policy (meta).                                   |       |
+| -     | `--transform`               | n        | 1    | Record a sed-style name transform (GNU tar `--transform`/`--xform`, e.g. `s,^usr/,var/,`) to apply at extraction; stored as archive policy (meta). Only validated here; not applied at archive time. |       |
 
 **Sparse Files**
 The system relies on the tar reader detecting sparse files. To be able to add sparse files to the archive, they are 
@@ -106,18 +124,36 @@ selected to be sparsified)
 
 **Process Options**
 
-| Short | Long                   | Required | Args | Description                                                                                       | Notes |
-|-------|------------------------|----------|------|---------------------------------------------------------------------------------------------------|-------|
-| -     | `--jobs`               | n        | 1    | Maximum number of workers for rayon pools and xz encoder                                          |       |
-| -     | `--fresh`              | n        | 0    | Wipe `--work-dir` if there's something.                                                           |       |
-| -     | `--keep-db`            | n        | 0    | Retain the database after successfully finishing the archive                                      |       |
-| -     | `--keep-stage`         | n        | 0    | Retain the stage directory (independent of database)                                              |       |
-| -     | `--exit-after-stage`   | n        | 1    | Exit and save state after completing a given stage.                                               |       |
-| -     | `--fail-fast`          | n        | 0    | Exit immediately if an error occurres. (E.g. Permission denied, Path does not Exist, ...)         |       |
-| -     | `--no-errors`          | n        | 0    | Don't keep record of errors associated with a file.                                               |       |
-| -     | `--eager-filter`       | n        | 0    | Perform filtering before the hash phase (faster, less information in database)                    |       |
+Options labeled [Internal] are used for testing purposes and performance benchmarks. Sensible defaults should be set. 
+Changes can negatively impact tool performance by increasing the number of transactions in the database. Changes can 
+also use more RAM, leading to worse system performance.
+
+| Short | Long                   | Required | Args | Description                                                                                                                       | Notes |
+|-------|------------------------|----------|------|-----------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--jobs`               | n        | 1    | Maximum number of workers for rayon pools and xz encoder                                                                          |       |
+| -     | `--io-jobs`            | n        | 1    | Maximum concurrent io-bound workers (dedup, sparsify, place pools).                                                               |       |
+| -     | `--fresh`              | n        | 0    | Wipe `--work-dir` if there's something.                                                                                           |       |
+| -     | `--keep-db`            | n        | 0    | Retain the database after successfully finishing the archive                                                                      |       |
+| -     | `--keep-stage`         | n        | 0    | Retain the stage directory (independent of database)                                                                              |       |
+| -     | `--exit-after-stage`   | n        | 1    | Exit and save state after completing a given stage.                                                                               |       |
+| -     | `--fail-fast`          | n        | 0    | Exit immediately if an error occurres. (E.g. Permission denied, Path does not Exist, ...)                                         |       |
+| -     | `--no-errors`          | n        | 0    | Don't keep record of errors associated with a file.                                                                               |       |
+| -     | `--eager-filter`       | n        | 0    | Perform filtering before the hash phase (faster, less information in database)                                                    |       |
+| -     | `--lazy-filter`        | n        | 0    | Apply include/exclude filters after the hash phase.                                                                               |       |
 | -     | `--dedup-mode`         | n        | 1    | Deduplication strategy: `regular` (byte-compare; default), `hash` (trust the hash, min-id canonicals), `none` (no content dedup). |       |
-| -     | `--retry-missing-sha ` | n        | 0    | Attempt to add a file to the archive regardless if it produced errors in the previous sections.   |       |
+| -     | `--retry-missing-sha ` | n        | 0    | Attempt to add a file to the archive regardless if it produced errors in the previous sections.                                   |       | TODO removed?
+| -     | `--log-level`          | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var). (global)                                                          |       | 
+| -     | `--ordering`           | n        | 1    | Sorted combination of data pieces in the order necessary to write. (GNU tar `--sort` analog; applies at the tar writer.)          |       | TODO
+| -     | `--use-shards`         | n        | 0    | Use content-defined chunking instead of whole-file hashes (not implemented yet).                                                  |       | TODO
+| -     | `--max-shard-size`     | n        | 1    | Maximum shard size for content-defined chunking (requires `--use-shards`).                                                        |       | TODO
+| -     | `--relax-utf8`         | n        | 0    | Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept. Mutually exclusive with `--force`.               |       | TODO
+| -     | `--auto-flush-limit`   | n        | 1    | [Internal] Number of error drafts buffered before an auto-flush to the database.                                                  |       | 
+| -     | `--batch-size`         | n        | 1    | [Internal] Rows pulled from the database per phase iteration.                                                                     |       | 
+| -     | `--work-capacity`      | n        | 1    | [Internal] Items in the producer/consumer work channel.                                                                           |       | 
+| -     | `--out-capacity`       | n        | 1    | [Internal] Items in the producer/consumer result channel.                                                                         |       | 
+| -     | `--feed-chunk`         | n        | 1    | [Internal] Rows pulled from the database per feed round.                                                                          |       | 
+| -     | `--drain-chunk`        | n        | 1    | [Internal] Outcomes committed per transaction.                                                                                    |       | 
+| -     | `--progress-mode`      | n        | 1    | Determiens what progress is reported through progressbars: None, PerThread, Global                                                |       | 
 
 **Notes**
 1. Path resolution. If the path is absolute, the path is taken as is. If the path is relative and `-C --directory` is not set, 
