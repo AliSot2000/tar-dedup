@@ -1086,7 +1086,8 @@ pub struct ExtractArgs {
     #[arg(long = "no-errors", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub no_errors: bool,
 
-    /// After success, keep a timestamped copy of snapshot.sqlite next to the archive.
+    /// When to keep a timestamped copy of the work database (under the extraction
+    /// root). `always`: always; `on-error`: only if the run recorded errors; `never`: delete.
     #[arg(
         long = "db-retention",
         value_enum,
