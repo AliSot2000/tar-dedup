@@ -9,21 +9,25 @@
 //! applied as well.
 
 use crate::common::batched_loop;
+use crate::common::defaults::SIDECAR_MAX_NAME_ATTEMPTS;
 use crate::common::perms::{
     ModeSource, OwnerGroupPolicy, OwnerGroupSource, parse_mode_changes, resolve_owner_group,
 };
 use crate::common::xattr::{set_file_acl, set_file_selinux_data, set_file_xattrs};
 use crate::config::ExtractConfig;
 use crate::config::ExtractPipelinePhase;
+use crate::config::SidecarMode;
 use crate::db::flags::ErrorFlags;
-use crate::db::types::{FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord};
+use crate::db::types::{FileId, FilePhase, FileRecord, FileType, OutTreeId, OutTreeRecord, SidecarEntry};
 use crate::db::{ErrorPhase, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::unarchive::ExtractRTArgs;
 use chrono::{DateTime, Utc};
 use filetime::{FileTime, set_file_atime, set_file_mtime, set_file_times};
 use std::fs;
+use std::fs::OpenOptions;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
