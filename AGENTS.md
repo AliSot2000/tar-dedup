@@ -147,6 +147,7 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 > unit-test battery there as a follow-up.
 
 - Dev shell: `nix develop` (flake) provides rust toolchain + native libs (`flake.nix`); on Debian install `libselinux-dev libclang-dev clang` instead.
+- Test VM (Fedora/btrfs/SELinux): `ssh -i ~/.ssh/tar-dedup-vm test-user@192.168.56.101`. Full test suites run there; the host is authoring/smoke only.
 - Build: `cargo build` / `cargo build -p tar-dedup`.
 - Test: `cargo test -p tar-dedup-lib --lib` (module unit tests; dev profile only — never `--release`, `panic="abort"` breaks `catch_unwind`). Full `cargo test` also builds the `sparse-cp` 1 GiB sparse-math tests and the `examples/` bins.
 - No clippy/CI config in repo; no `.github` workflow.
