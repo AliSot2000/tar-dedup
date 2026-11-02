@@ -1657,4 +1657,31 @@ mod tests {
 
         assert!(world.proot().join("photo.jpg.json").is_file(), "sidecar beside the link");
     }
+
+    /// A canonical shared by two links: the flags-only sidecar pass must mark
+    /// each out-tree row applied after the attempt, so `batched_loop` still
+    /// terminates with more than one link per `.sources` payload.
+    #[test]
+    fn run_link_tree_sidecar_per_link_of_shared_canonical() {
+        let world = ExtractWorld::permissions_world(|c| {
+            c.placement.link_tree = true;
+            c.sidecar = SidecarMode::Always;
+        });
+        let id = world.p_add_file("a.txt", b"payload", |r| r.mode = Some(0o640));
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        let cid = world.db.get_file_by_id::<FileRecord>(id)
+            .expect("get").expect("row").content_id().expect("cid").0;
+        let src = world.proot().join(".sources").join(&cid);
+        fs::create_dir_all(src.parent().expect("parent")).expect("src dir");
+        fs::write(&src, b"payload").expect("write src");
+        // Two placed links to the same canonical.
+        world.padd_out("a.txt", id, placed_flags());
+        world.padd_out("b.txt", id, placed_flags());
+
+        run(&world.rt()).expect("run");
+
+        assert!(world.proot().join("a.txt.json").is_file(), "sidecar for first link");
+        assert!(world.proot().join("b.txt.json").is_file(), "sidecar for second link");
+        assert_eq!(on_disk_mode(&src), 0o640, "payload metadata applied once");
+    }
 }
