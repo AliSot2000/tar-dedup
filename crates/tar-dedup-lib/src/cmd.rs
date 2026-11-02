@@ -7,6 +7,7 @@
 //! implemented beyond the input plumbing yet: every command currently reports
 //! itself as `Error::Config(… not implemented)`.
 
+pub mod check;
 pub mod dump;
 pub mod inspect;
 pub mod list;
