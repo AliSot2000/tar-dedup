@@ -550,13 +550,20 @@ fn write_sidecar(
     target: &Path,
     entry: &SidecarEntry,
     hidden: bool,
-    attempts: usize,
-) -> std::result::Result<(), FileStatError> {
+    attempts: usize)
+    -> std::result::Result<(), FileStatError> {
+
     let mut seed = sidecar_seed();
-    let mut file = claim_sidecar_file(target, hidden, attempts, &mut seed)?;
-    let value = serde_json::to_value(entry).map_err(|e| FileStatError::json(target, e))?;
-    let json = serde_json::to_string_pretty(&value).map_err(|e| FileStatError::json(target, e))?;
+    // Extraction-root rows (`/`) have no place for a sidecar: skip, not an error.
+    let Some(mut file) = claim_sidecar_file(target, hidden, attempts, &mut seed)? else {
+        return Ok(());
+    };
+
+    let to_json = |e| FileStatError::json(target, e);
+    let value = serde_json::to_value(entry).map_err(to_json)?;
+    let json = serde_json::to_string_pretty(&value).map_err(to_json)?;
     file.write_all(json.as_bytes()).map_err(|e| FileStatError::io(target, e))?;
+
     Ok(())
 }
 
