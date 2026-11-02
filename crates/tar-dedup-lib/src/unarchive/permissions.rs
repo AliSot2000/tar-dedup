@@ -964,11 +964,13 @@ mod tests {
     fn apply_one_no_same_permissions_skips_mode() {
         let world = ExtractWorld::permissions_world(|c| c.attributes.no_same_permissions = true);
         let tgt = world.write_file("index.html", b"<html/>");
+        let before = on_disk_mode(&tgt);
         let rec = mk_file("index.html", FileType::File, Some(0o600), None, None, None, None,
                           None, None, None, None, None);
         let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
         assert!(errs.is_empty());
-        assert_eq!(on_disk_mode(&tgt), 0o644, "mode untouched with --no-same-permissions");
+        assert_eq!(on_disk_mode(&tgt), before,
+                   "mode untouched with --no-same-permissions (umask-independent)");
     }
 
     #[cfg(unix)]
@@ -976,6 +978,7 @@ mod tests {
     fn apply_one_symlink_skips_mode_only() {
         let world = ExtractWorld::permissions_world(|_| {});
         let real = world.write_file("target.txt", b"t");
+        let before = on_disk_mode(&real);
         let tgt = world.proot().join("link.txt");
         std::os::unix::fs::symlink(&real, &tgt).expect("symlink");
         let rec = mk_file("link.txt", FileType::Symlink(LinkType::File), Some(0o600),
@@ -983,18 +986,21 @@ mod tests {
         let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
         assert!(errs.is_empty());
         // mode is kernel-fixed on symlinks; the target keeps its own mode.
-        assert_eq!(on_disk_mode(&real), 0o644);
+        assert_eq!(on_disk_mode(&real), before,
+                   "symlink chmod must not reach the target (umask-independent)");
     }
 
     #[test]
     fn apply_one_null_mode_is_noop() {
         let world = ExtractWorld::permissions_world(|_| {});
         let tgt = world.write_file("readme.txt", b"hi");
+        let before = on_disk_mode(&tgt);
         let rec = mk_file("readme.txt", FileType::File, None, None, None, None, None, None, None,
                           None, None, None);
         let errs = apply_one(&world.config, &rec, &tgt, &ps_none());
         assert!(errs.is_empty());
-        assert_eq!(on_disk_mode(&tgt), 0o644, "no record mode -> untouched");
+        assert_eq!(on_disk_mode(&tgt), before,
+                   "no record mode -> untouched (umask-independent)");
     }
 
     #[test]
@@ -1545,12 +1551,14 @@ mod tests {
         fs::write(&target, b"x").expect("target");
 
         let mut seed = 1;
-        let f = claim_sidecar_file(&target, false, 10, &mut seed).expect("claim");
+        let f = claim_sidecar_file(&target, false, 10, &mut seed)
+            .expect("claim").expect("claimed path has a name");
         assert_eq!(sidecar_names(d.path()), vec!["name.txt", "name.txt.json"]);
         drop(f);
 
         // Deterministic name occupied -> random-suffix candidate.
-        let f2 = claim_sidecar_file(&target, false, 10, &mut seed).expect("claim");
+        let f2 = claim_sidecar_file(&target, false, 10, &mut seed)
+            .expect("claim").expect("claimed path has a name");
         let names = sidecar_names(d.path());
         assert_eq!(names.len(), 3, "one extra file claimed: {names:?}");
         let sid = &names[2];
@@ -1564,7 +1572,8 @@ mod tests {
         let target = d.path().join("note.md");
         fs::write(&target, b"x").expect("target");
         let mut seed = 7;
-        let f = claim_sidecar_file(&target, true, 1, &mut seed).expect("claim");
+        let f = claim_sidecar_file(&target, true, 1, &mut seed)
+            .expect("claim").expect("claimed path has a name");
         assert_eq!(sidecar_names(d.path()), vec![".note.md.json", "note.md"]);
         drop(f);
     }
@@ -1592,6 +1601,15 @@ mod tests {
             err.to_string().contains("no sidecar file written"),
             "message: {err}"
         );
+    }
+
+    /// Extraction-root rows (`-i /` + `-C /`): no file name, so nothing to
+    /// claim — a silent skip (`Ok(None)`), never an error or panic.
+    #[test]
+    fn claim_sidecar_root_target_skips_silently() {
+        let mut seed = 0;
+        let f = claim_sidecar_file(Path::new("/"), false, 3, &mut seed).expect("no error");
+        assert!(f.is_none(), "root has no place beside it: {f:?}");
     }
 
     /// `on-error` sidecars land beside entries whose metadata application failed.
