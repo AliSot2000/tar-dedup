@@ -123,7 +123,11 @@ mod tests {
     /// archive world; extract differs only in `kept_db_parent`.
     fn archive_world(keep_db: bool, keep_stage: bool, materialize_db: bool) -> TestWorld {
         let world = TestWorld::tuned(|c| {
-            c.process.cleanup.keep_db = keep_db;
+            c.process.cleanup.db_retention = if keep_db {
+                DbRetention::Always
+            } else {
+                DbRetention::Never
+            };
             c.process.cleanup.keep_stage = keep_stage;
         });
         if materialize_db {
