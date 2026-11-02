@@ -10,7 +10,7 @@ use chrono::{DateTime, ParseError, Utc};
 use rusqlite::{Connection, OptionalExtension, named_params};
 use std::path::PathBuf;
 
-use crate::config::{ExtractPipelinePhase, PipelinePhase};
+use crate::config::{CleanupMode, ExtractPipelinePhase, PipelinePhase};
 use crate::db::flags::{ErrorFlags, ErrorScope};
 use crate::db::types::{FileId, OutTreeId};
 use crate::error::{FileStatError, Result, ToPanic};
@@ -232,6 +232,44 @@ pub fn count_errors(conn: &Connection, phase: Option<&str>) -> Result<u64> {
             Ok(n as u64)
         }
     }
+}
+
+/// Sum error rows over every phase of the given pipeline. A run's DB holds a
+/// single pipeline, so per-phase equality never double-counts. `Done`/`Cleanup`
+/// are included: a row may be recorded during the final bookkeeping.
+pub fn count_pipeline_errors(conn: &Connection, mode: CleanupMode) -> Result<u64> {
+    let mut total = 0u64;
+    match mode {
+        CleanupMode::Archive => {
+            for p in [
+                PipelinePhase::Inventory,
+                PipelinePhase::Hash,
+                PipelinePhase::Filter,
+                PipelinePhase::Dedup,
+                PipelinePhase::Sparsify,
+                PipelinePhase::Stage,
+                PipelinePhase::Archive,
+                PipelinePhase::Done,
+            ] {
+                total += count_errors(conn, Some(p.as_str()))?;
+            }
+        }
+        CleanupMode::Extract => {
+            for p in [
+                ExtractPipelinePhase::ScanTar,
+                ExtractPipelinePhase::Filter,
+                ExtractPipelinePhase::Rehash,
+                ExtractPipelinePhase::PlacementPrologue,
+                ExtractPipelinePhase::Place,
+                ExtractPipelinePhase::Permissions,
+                ExtractPipelinePhase::Cleanup,
+                ExtractPipelinePhase::Done,
+            ] {
+                total += count_errors(conn, Some(p.as_str()))?;
+            }
+        }
+    }
+    Ok(total)
 }
 
 /// Build SQL fragments (SQLite booleans + bits are inlined as integer literals).
