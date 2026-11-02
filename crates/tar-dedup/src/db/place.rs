@@ -478,7 +478,9 @@ pub fn list_out_tree_others<R: SqlFileRow>(conn: &Connection, last_id: &OutTreeI
     rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
-/// List all rows (which aren't directories) which remain to be linked into place
+/// List all rows (which aren't directories) which remain to be linked into place.
+/// `pending=true` lists the still-to-link set and relies on the caller marking
+/// each row (Placed / ErrorWhilePlace) so a subsequent round excludes it.
 pub fn list_out_tree_for_linking<R: SqlFileRow>(
     conn: &Connection, batch_size: u64, pending: bool)
     -> Result<Vec<(R, OutTreeRecord)>> {
