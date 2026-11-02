@@ -28,15 +28,14 @@ fn footer_fixed_overhead() -> u64 {
     FOOTER_MAGIC.len() as u64 + SHA1_LEN + SHA1_LEN + FOOTER_MAGIC.len() as u64 + OFFSET_LEN
 }
 
-/// Stream-hash the first `len` bytes of `archive_path` with sha1, chunked at
-/// `ARCHIVE_IO_BUF_SIZE`, reporting progress on `bar` when given.
-fn hash_archive_bytes(archive_path: &Path, len: u64, bar: Option<&ProgressBar>)
+/// Stream-hash `len` bytes starting at `start` with sha1, chunked at
+/// `ARCHIVE_IO_BUF_SIZE`, reporting progress on `bar` (which the caller may have
+/// pre-sized to span multiple regions).
+fn hash_section(archive_path: &Path, start: u64, len: u64, bar: Option<&ProgressBar>)
     -> Result<[u8; 20]> {
-    let file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
-    if let Some(bar) = bar {
-        bar.set_length(len);
-        bar.set_position(0);
-    }
+    let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| Error::io(archive_path, e))?;
     let mut reader = HashingReader::new(file);
     let mut buf = vec![0u8; ARCHIVE_IO_BUF_SIZE];
     let mut remaining = len;
@@ -54,6 +53,16 @@ fn hash_archive_bytes(archive_path: &Path, len: u64, bar: Option<&ProgressBar>)
         }
     }
     Ok(reader.finalize())
+}
+
+/// Stream-hash the first `len` bytes of `archive_path`, sizing/positioning `bar`.
+fn hash_archive_bytes(archive_path: &Path, len: u64, bar: Option<&ProgressBar>)
+    -> Result<[u8; 20]> {
+    if let Some(bar) = bar {
+        bar.set_length(len);
+        bar.set_position(0);
+    }
+    hash_section(archive_path, 0, len, bar)
 }
 
 /// Locate the footer in `file`: `Some(offset)` when a footer is present (trailing
@@ -165,29 +174,20 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<bool> {
         .metadata()
         .map_err(|e| Error::io(archive_path, e))?
         .len();
-    let Some(offset) = locate_footer(archive_path, &mut file, len)? else {
+    let Some(layout) = FooterLayout::from_file(archive_path, &mut file, len)? else {
         return Ok(false);
     };
-    let magic_len = FOOTER_MAGIC.len() as u64;
 
-    // Skip the content integrity digest (verified separately at extract install).
-    file.seek(SeekFrom::Start(offset + magic_len + SHA1_LEN))
+    // Read the stored xz catalog blob.
+    file.seek(SeekFrom::Start(layout.xz_start))
         .map_err(|e| Error::io(archive_path, e))?;
-
-    // Read xz stream
-    let xz_len = len
-        .checked_sub(offset + magic_len + SHA1_LEN + SHA1_LEN + magic_len + OFFSET_LEN)
-        .ok_or_else(|| Error::Config("footer size underflow".into()))?;
-    let mut xz_bytes = vec![0u8; xz_len as usize];
+    let mut xz_bytes = vec![0u8; layout.xz_len as usize];
     file.read_exact(&mut xz_bytes)
         .map_err(|e| Error::io(archive_path, e))?;
 
-    // Check SHA of xz stream
-    let mut digest = [0u8; 20];
-    file.read_exact(&mut digest)
-        .map_err(|e| Error::io(archive_path, e))?;
+    // Check SHA of the xz stream.
     let expected = Sha1::digest(&xz_bytes);
-    if digest != expected.as_slice() {
+    if layout.xz_digest != expected.as_slice() {
         return Err(Error::Config(format!(
             "footer xz sha1 mismatch in {}",
             archive_path.display()
@@ -216,15 +216,11 @@ pub fn verify_archive_integrity(archive_path: &Path) -> Result<bool> {
         .metadata()
         .map_err(|e| Error::io(archive_path, e))?
         .len();
-    let Some(offset) = locate_footer(archive_path, &mut file, len)? else {
+    let Some(layout) = FooterLayout::from_file(archive_path, &mut file, len)? else {
         return Ok(false);
     };
-    // Cursor sits right after the leading MAGIC: read the stored content digest.
-    let mut stored = [0u8; 20];
-    file.read_exact(&mut stored)
-        .map_err(|e| Error::io(archive_path, e))?;
-    let actual = hash_archive_bytes(archive_path, offset, None)?;
-    Ok(actual == stored)
+    let actual = hash_archive_bytes(archive_path, layout.offset, None)?;
+    Ok(actual == layout.content_digest)
 }
 
 /// Convenience: extract footer DB next to the archive under a given name.
@@ -255,30 +251,54 @@ pub enum IntegrityVerdict {
     BothMismatch,
 }
 
-/// Hash `len` bytes starting at `start` with sha1, chunked, reporting progress on
-/// `bar` (which the caller may have pre-sized to span multiple regions).
-fn hash_region(archive_path: &Path, start: u64, len: u64, bar: Option<&ProgressBar>)
-    -> Result<[u8; 20]> {
-    let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
-    file.seek(SeekFrom::Start(start))
-        .map_err(|e| Error::io(archive_path, e))?;
-    let mut reader = HashingReader::new(file);
-    let mut buf = vec![0u8; ARCHIVE_IO_BUF_SIZE];
-    let mut remaining = len;
-    while remaining > 0 {
-        let want = remaining.min(buf.len() as u64) as usize;
-        let n = reader
-            .read(&mut buf[..want])
+/// Parsed seekable footer trailer: the two stored digests and the xz blob range.
+///
+/// Layout: `MAGIC | content_digest | xz_bytes | xz_digest | MAGIC | offset_le(8)`.
+struct FooterLayout {
+    /// Start of the trailer (points at the leading MAGIC).
+    offset: u64,
+    /// Stored `sha1(archive[0..offset))`.
+    content_digest: [u8; 20],
+    /// Start of the stored xz catalog blob (`offset + MAGIC + SHA1_LEN`).
+    xz_start: u64,
+    /// Length of the stored xz catalog blob.
+    xz_len: u64,
+    /// Stored `sha1(xz blob)` (read at `xz_start + xz_len`).
+    xz_digest: [u8; 20],
+}
+
+impl FooterLayout {
+    /// Parse the trailer of `file` (which must be at least `len` bytes long).
+    ///
+    /// `Ok(None)` = no footer present, `Err(Config(..))` = trailer present but
+    /// corrupt, `Err(io)` = filesystem failure.
+    fn from_file(archive_path: &Path, file: &mut File, len: u64) -> Result<Option<Self>> {
+        let Some(offset) = locate_footer(archive_path, file, len)? else {
+            return Ok(None);
+        };
+        let magic_len = FOOTER_MAGIC.len() as u64;
+        // locate_footer leaves the cursor right after the leading MAGIC.
+        let mut content_digest = [0u8; 20];
+        file.read_exact(&mut content_digest)
             .map_err(|e| Error::io(archive_path, e))?;
-        if n == 0 {
-            break;
-        }
-        remaining -= n as u64;
-        if let Some(bar) = bar {
-            bar.inc(n as u64);
-        }
+
+        let xz_start = offset + magic_len + SHA1_LEN;
+        // locate_footer's presence gate already guarantees `offset + fixed <= len`,
+        // so the xz length can never underflow here.
+        debug_assert!(
+            offset.saturating_add(footer_fixed_overhead()) <= len,
+            "PRECONDITION: locate_footer ensures offset + fixed <= len",
+        );
+        let xz_len = len - (offset + footer_fixed_overhead());
+
+        let mut xz_digest = [0u8; 20];
+        file.seek(SeekFrom::Start(xz_start + xz_len))
+            .map_err(|e| Error::io(archive_path, e))?;
+        file.read_exact(&mut xz_digest)
+            .map_err(|e| Error::io(archive_path, e))?;
+
+        Ok(Some(Self { offset, content_digest, xz_start, xz_len, xz_digest }))
     }
-    Ok(reader.finalize())
 }
 
 /// Verify the footer's two integrity digests: the finished compressed archive
@@ -293,47 +313,26 @@ pub fn verify_footer(archive_path: &Path, bar: Option<&ProgressBar>) -> Result<I
         .map_err(|e| Error::io(archive_path, e))?
         .len();
 
-    let found = match locate_footer(archive_path, &mut file, len) {
-        Ok(v) => v,
-        // Leading-magic mismatch: a trailer is present but corrupt.
+    let layout = match FooterLayout::from_file(archive_path, &mut file, len) {
+        Ok(Some(l)) => l,
+        // Leading-magic mismatch / malformed trailer: present but corrupt.
+        Ok(None) => return Ok(IntegrityVerdict::NoFooter),
         Err(Error::Config(_)) => return Ok(IntegrityVerdict::InvalidFooter),
         Err(e) => return Err(e),
     };
-    let Some(offset) = found else {
-        return Ok(IntegrityVerdict::NoFooter);
-    };
-
-    let magic_len = FOOTER_MAGIC.len() as u64;
-    // Cursor sits right after the leading MAGIC: read the stored content digest.
-    let mut stored_content = [0u8; 20];
-    file.read_exact(&mut stored_content)
-        .map_err(|e| Error::io(archive_path, e))?;
-
-    let Some(xz_len) = len
-        .checked_sub(offset + magic_len + SHA1_LEN + SHA1_LEN + magic_len + OFFSET_LEN)
-    else {
-        return Ok(IntegrityVerdict::InvalidFooter);
-    };
-
-    // Stored xz digest: right before the trailing MAGIC + offset.
-    let mut stored_xz = [0u8; 20];
-    file.seek(SeekFrom::Start(len - magic_len - OFFSET_LEN - SHA1_LEN))
-        .map_err(|e| Error::io(archive_path, e))?;
-    file.read_exact(&mut stored_xz)
-        .map_err(|e| Error::io(archive_path, e))?;
 
     if let Some(bar) = bar {
-        bar.set_length(offset + xz_len);
+        bar.set_length(layout.offset + layout.xz_len);
         bar.set_position(0);
         bar.set_message("hashing archive content");
     }
-    let content_match = hash_region(archive_path, 0, offset, bar)? == stored_content;
+    let content_match = hash_section(archive_path, 0, layout.offset, bar)? == layout.content_digest;
 
     if let Some(bar) = bar {
         bar.set_message("hashing database");
     }
-    let db_match = hash_region(archive_path, offset + magic_len + SHA1_LEN, xz_len, bar)?
-        == stored_xz;
+    let db_match = hash_section(archive_path, layout.xz_start, layout.xz_len, bar)?
+        == layout.xz_digest;
 
     Ok(match (content_match, db_match) {
         (true, true) => IntegrityVerdict::Ok,
