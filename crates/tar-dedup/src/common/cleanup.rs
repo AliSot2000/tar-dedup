@@ -176,7 +176,7 @@ mod tests {
                 dp.join("estage"),
                 dp.join("out"),
             );
-            c.process.cleanup.keep_db = true;
+            c.process.cleanup.db_retention = DbRetention::Always;
             c
         });
         seed_work_dir_files(&world.config);
@@ -291,5 +291,40 @@ mod tests {
             !world.config.paths.work_dir.exists(),
             "reset wipes work dir regardless of keep flags"
         );
+    }
+
+    /// `on-error` retention: a DB with recorded errors is renamed to the kept
+    /// location; a clean DB is dropped.
+    #[test]
+    fn cleanup_on_error_keeps_db_with_recorded_errors() {
+        let world = TestWorld::tuned(|c| c.process.cleanup.db_retention = DbRetention::OnError);
+        // Materialize the DB and record one error (the on-error count trigger).
+        {
+            let db = crate::db::Database::open(&world.config.paths.db_path()).expect("open db");
+            db.insert_errors(&[crate::db::RecordDraft {
+                file_id: None,
+                out_tree_id: None,
+                phase: crate::db::ErrorPhase::Pipeline(crate::config::PipelinePhase::Hash),
+                error: crate::error::FileStatError::general(None, "boom".into()),
+                flags: crate::db::flags::ErrorFlags::default(),
+            }]).expect("insert error");
+        }
+        let db_before = world.config.paths.db_path();
+        let parent = crate::config::path_parent(&world.config.paths.archive_path);
+        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup");
+        assert_kept_only(Some(db_before), &parent, "test");
+        assert!(!world.config.paths.work_dir.exists(), "work dir removed");
+    }
+
+    #[test]
+    fn cleanup_on_error_drops_db_without_errors() {
+        let world = TestWorld::tuned(|c| c.process.cleanup.db_retention = DbRetention::OnError);
+        {
+            crate::db::Database::open(&world.config.paths.db_path()).expect("open db");
+        }
+        let db_before = world.config.paths.db_path();
+        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup");
+        assert!(!db_before.is_file(), "on-error with zero recorded errors drops the db");
+        assert!(!world.config.paths.work_dir.exists(), "work dir removed");
     }
 }
