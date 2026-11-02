@@ -27,8 +27,8 @@ fn depth_order_clause(alias: &str) -> String {
 /// already-applied (`PermissionsApplied`) nor errored (`ErrorWhileApplyingMetadata`).
 pub fn list_out_tree_for_permissions_non_dir<R: SqlFileRow>(
     conn: &Connection,
-    batch_size: u64,
-) -> Result<Vec<(R, OutTreeRecord)>> {
+    batch_size: u64)
+    -> Result<Vec<(R, OutTreeRecord)>> {
     let file_cols = R::sql_columns(Some("f"));
     let out_cols = OutTreeRecord::sql_columns(Some("o"));
     let order = depth_order_clause("o");
