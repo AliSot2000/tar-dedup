@@ -336,3 +336,58 @@ fn sql_datetime_error(e: ParseError) -> rusqlite::Error {
         )),
     )
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::flags::ErrorFlags;
+
+    fn draft(phase: ErrorPhase) -> RecordDraft {
+        RecordDraft {
+            file_id: None,
+            out_tree_id: None,
+            phase,
+            error: FileStatError::general(None, "boom".into()),
+            flags: ErrorFlags::default(),
+        }
+    }
+
+    fn open_db() -> (tempfile::TempDir, crate::db::Database) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = crate::db::Database::open(&dir.path().join("t.sqlite")).expect("open");
+        (dir, db)
+    }
+
+    #[test]
+    fn count_pipeline_errors_sums_own_phases_only() {
+        // Shared phase names ("filter", "done") exist on both pipelines, but a
+        // single run's DB holds one pipeline, so per-phase equality is exact for
+        // the phases each enum owns.
+        let (_dir, db) = open_db();
+        db.insert_errors(&[
+            draft(ErrorPhase::Pipeline(PipelinePhase::Inventory)),
+            draft(ErrorPhase::Pipeline(PipelinePhase::Hash)),
+            draft(ErrorPhase::Extract(ExtractPipelinePhase::ScanTar)),
+            draft(ErrorPhase::Extract(ExtractPipelinePhase::Permissions)),
+        ]).expect("insert");
+        assert_eq!(
+            db.count_pipeline_errors(CleanupMode::Archive).expect("count archive"),
+            2,
+        );
+        assert_eq!(
+            db.count_pipeline_errors(CleanupMode::Extract).expect("count extract"),
+            2,
+        );
+    }
+
+    #[test]
+    fn count_pipeline_errors_empty_db_is_zero() {
+        let (_dir, db) = open_db();
+        assert_eq!(db.count_pipeline_errors(CleanupMode::Archive).expect("archive"), 0);
+        assert_eq!(db.count_pipeline_errors(CleanupMode::Extract).expect("extract"), 0);
+    }
+}
