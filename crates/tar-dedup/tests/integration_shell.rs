@@ -4,9 +4,9 @@
 //! `cargo test` and `cargo llvm-cov` can select one scenario at a time:
 //!
 //! ```text
-//! cargo test  -p tar-dedup-cli --test integration_shell
-//! cargo llvm-cov -p tar-dedup-cli -p tar-dedup --test integration_shell --summary-only
-//! cargo llvm-cov -p tar-dedup-cli -p tar-dedup --test integration_shell scenario_xattr_user --summary-only
+//! cargo test  -p tar-dedup --test integration_shell
+//! cargo llvm-cov -p tar-dedup -p tar-dedup-lib --test integration_shell --summary-only
+//! cargo llvm-cov -p tar-dedup -p tar-dedup-lib --test integration_shell scenario_xattr_user --summary-only
 //! ```
 //!
 //! The scenario runner is invoked through `bash` with `TAR_DEDUP_BIN` pointing
@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-/// Repo root (two levels up from `crates/tar-dedup-cli`).
+/// Repo root (two levels up from `crates/tar-dedup`).
 fn repo_root() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest

@@ -30,11 +30,11 @@ Rust workspace, edition 2024, `rust-version = 1.95`. Three crates:
 
 | Crate | Kind | Purpose |
 |-------|------|---------|
-| `crates/tar-dedup` | lib | Core pipeline, DB facade, tar read/write, footer, phases. |
-| `crates/tar-dedup-cli` | bin (`tar-dedup`) | Thin `clap` entrypoint dispatching to `archive::run` / `unarchive::run` / resume. |
+| `crates/tar-dedup-lib` | lib | Core pipeline, DB facade, tar read/write, footer, phases. |
+| `crates/tar-dedup` | bin (`tar-dedup`) | Thin `clap` entrypoint dispatching to `archive::run` / `unarchive::run` / resume. |
 | `crates/sparse-cp` | lib + bin | Sparse-aware copy and zero-block page counting (`--sparsify` support). |
 
-`crates/tar-dedup/src` module map (`lib.rs`):
+`crates/tar-dedup-lib/src` module map (`lib.rs`):
 - `archive.rs` — archive pipeline orchestrator (phase loop).
 - `unarchive.rs` — extract pipeline orchestrator.
 - `cli.rs` — all `clap` arg structs + `ExitAfterStageArg`, `ConflictPolicy`.
@@ -142,13 +142,13 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 ## Build / test / dev
 
 > Tests live inline in modules (`#[cfg(test)]`); there are **no top-level
-> integration tests** (the old `crates/tar-dedup/tests/` were stale and deleted
+> integration tests** (the old `crates/tar-dedup-lib/tests/` were stale and deleted
 > 2026-10). Known coverage gap: `archive_footer` has no tests yet; add a module
 > unit-test battery there as a follow-up.
 
 - Dev shell: `nix develop` (flake) provides rust toolchain + native libs (`flake.nix`); on Debian install `libselinux-dev libclang-dev clang` instead.
-- Build: `cargo build` / `cargo build -p tar-dedup-cli`.
-- Test: `cargo test -p tar-dedup --lib` (module unit tests; dev profile only — never `--release`, `panic="abort"` breaks `catch_unwind`). Full `cargo test` also builds the `sparse-cp` 1 GiB sparse-math tests and the `examples/` bins.
+- Build: `cargo build` / `cargo build -p tar-dedup`.
+- Test: `cargo test -p tar-dedup-lib --lib` (module unit tests; dev profile only — never `--release`, `panic="abort"` breaks `catch_unwind`). Full `cargo test` also builds the `sparse-cp` 1 GiB sparse-math tests and the `examples/` bins.
 - No clippy/CI config in repo; no `.github` workflow.
 - `sparse-cp` has its own heavy 1 GiB unit tests (large sparse-file math) — run under `-p sparse-cp` to isolate.
 

@@ -1,14 +1,14 @@
 use clap::Parser;
 
-use tar_dedup::cli::{Cli, Command};
-use tar_dedup::common::start::StartPolicy;
-use tar_dedup::config::{ArchiveConfig, ExtractConfig, ResumeConfig};
-use tar_dedup::db::Database;
-use tar_dedup::error::Error;
-use tar_dedup::shutdown::Shutdown;
+use tar_dedup_lib::cli::{Cli, Command};
+use tar_dedup_lib::common::start::StartPolicy;
+use tar_dedup_lib::config::{ArchiveConfig, ExtractConfig, ResumeConfig};
+use tar_dedup_lib::db::Database;
+use tar_dedup_lib::error::Error;
+use tar_dedup_lib::shutdown::Shutdown;
 
-fn main() -> tar_dedup::error::Result<()> {
-    tar_dedup::progress::init_tracing();
+fn main() -> tar_dedup_lib::error::Result<()> {
+    tar_dedup_lib::progress::init_tracing();
 
     let cli = Cli::parse();
     let shutdown = Shutdown::install()?;
@@ -16,11 +16,11 @@ fn main() -> tar_dedup::error::Result<()> {
     match cli.command {
         Command::Archive(args) => {
             let config = ArchiveConfig::build(&args, None)?;
-            tar_dedup::archive::run(config, shutdown)
+            tar_dedup_lib::archive::run(config, shutdown)
         }
         Command::Extract(args) => {
             let config = ExtractConfig::build(&args, None)?;
-            tar_dedup::unarchive::run(config, shutdown)
+            tar_dedup_lib::unarchive::run(config, shutdown)
         }
         Command::Resume(args) => {
             let resume = ResumeConfig::try_from(&args)?;
@@ -36,7 +36,7 @@ fn main() -> tar_dedup::error::Result<()> {
                 if let Some(exit) = resume.overrides.exit_after_stage.as_ref() {
                     stored.process.exit_after_stage = Some(*exit);
                 }
-                tar_dedup::archive::run(stored, shutdown)
+                tar_dedup_lib::archive::run(stored, shutdown)
             } else if db.load_extract_runtime_state()?.is_some() {
                 let mut stored = db.get_extract_config()?.ok_or_else(|| Error::Config(
                     "no stored extract configuration in work database; \
@@ -48,17 +48,17 @@ fn main() -> tar_dedup::error::Result<()> {
                 if let Some(exit) = resume.overrides.exit_after_stage.as_ref() {
                     stored.process.exit_after_stage = Some(*exit);
                 }
-                tar_dedup::unarchive::run(stored, shutdown)
+                tar_dedup_lib::unarchive::run(stored, shutdown)
             } else {
                 Err(Error::Config(
                     "no incomplete archive or extract state in work database".into(),
                 ))
             }
         }
-        Command::Inspect(args) => tar_dedup::cmd::inspect::run(&args),
-        Command::List(args) => tar_dedup::cmd::list::run(&args),
-        Command::Dump(args) => tar_dedup::cmd::dump::run(&args),
-        Command::Query(args) => tar_dedup::cmd::query::run(&args),
-        Command::Reset(args) => tar_dedup::cmd::reset::run(&args),
+        Command::Inspect(args) => tar_dedup_lib::cmd::inspect::run(&args),
+        Command::List(args) => tar_dedup_lib::cmd::list::run(&args),
+        Command::Dump(args) => tar_dedup_lib::cmd::dump::run(&args),
+        Command::Query(args) => tar_dedup_lib::cmd::query::run(&args),
+        Command::Reset(args) => tar_dedup_lib::cmd::reset::run(&args),
     }
 }

@@ -433,10 +433,13 @@ impl From<&FileRecord> for SidecarEntry {
 }
 
 impl SidecarEntry {
-    /// Attach the real out-tree mapping (the placed target). `From<&FileRecord>`
-    /// starts the embed at the file row's own id/path as a placeholder.
-    pub fn attach_out_tree(&mut self, id: OutTreeId, target_path: &Path) {
+    /// Consume and attach the real out-tree mapping (the placed target),
+    /// returning the populated copy. `From<&FileRecord>` starts the embed at
+    /// the file row's own id/path as a placeholder; consuming the value
+    /// guarantees no stale embed can be aliased afterwards.
+    pub fn with_out_tree(mut self, id: OutTreeId, target_path: &Path) -> Self {
         self.out_tree = SidecarOutTree { id: id.0, target_path: target_path.to_path_buf() };
+        self
     }
 }
 
@@ -610,8 +613,10 @@ fn sidecar_attach_out_tree_overrides_placeholder() {
         phase: FilePhase::Rehashed,
         new_name: None,
     };
-    let mut sid = SidecarEntry::from(&rec);
-    sid.attach_out_tree(OutTreeId(42), Path::new("/out/placed/name_1.txt"));
+    let sid = SidecarEntry::from(&rec).with_out_tree(
+        OutTreeId(42),
+        Path::new("/out/placed/name_1.txt"),
+    );
     assert_eq!(sid.out_tree.id, 42);
     assert_eq!(
         sid.out_tree.target_path,

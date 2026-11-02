@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/tar-dedup-lib",
     "crates/tar-dedup",
-    "crates/tar-dedup-cli",
     "crates/sparse-cp",
 ]
 
@@ -12,7 +12,7 @@ edition = "2024"
 rust-version = "1.95"
 
 [workspace.dependencies]
-tar-dedup = { path = "crates/tar-dedup" }
+tar-dedup-lib = { path = "crates/tar-dedup-lib" }
 sparse-cp = { path = "crates/sparse-cp" }
 
 clap = { version = "4", features = ["derive", "wrap_help"] }

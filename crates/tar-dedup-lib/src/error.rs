@@ -39,7 +39,7 @@ macro_rules! error_guarded {
 /// Use it opt-in at the call site where an error *is* a process-abort reason:
 ///
 /// ```rust
-/// use tar_dedup::error::{Error, ToPanic};
+/// use tar_dedup_lib::error::{Error, ToPanic};
 ///
 /// fn fallible() -> Result<(), Error> { Ok(()) }
 ///

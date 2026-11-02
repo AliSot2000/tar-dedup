@@ -1,10 +1,5 @@
-use std::env;
-use std::path::{Component, Path, PathBuf};
-use nix::NixPath;
 use path_clean::PathClean;
-use walkdir::WalkDir;
-use regex::Regex;
-use tar_dedup::error::Result;
+use std::path::{Component, Path, PathBuf};
 
 
 fn convert_bool(b: bool) -> char {

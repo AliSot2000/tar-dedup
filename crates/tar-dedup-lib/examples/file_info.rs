@@ -1,6 +1,5 @@
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
-use std::path::{Path};
 
 fn convert_bool(b: bool) -> char {
     match b {
