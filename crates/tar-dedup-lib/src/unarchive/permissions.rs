@@ -505,14 +505,21 @@ fn claim_sidecar_file(
     target: &Path,
     hidden: bool,
     attempts: usize,
-    seed: &mut u64,
-) -> std::result::Result<fs::File, FileStatError> {
-    let parent = target.parent().ok_or_else(|| {
-        FileStatError::general(None, format!("sidecar for {} has no parent", target.display()))
-    })?;
-    let name = target.file_name().ok_or_else(|| {
-        FileStatError::general(None, format!("sidecar for {} has no file name", target.display()))
-    })?;
+    seed: &mut u64)
+    -> std::result::Result<Option<fs::File>, FileStatError> {
+
+    // Handle Edge Case dir /
+    let tgt = target.parent();
+    let parent = if let None = tgt {
+        return Ok(None)
+    } else {
+        tgt.expect("Precondition Error, must be some")
+    };
+
+    let name = target
+        .file_name()
+        .expect("File name must exist for a row to be materialized");
+
     let prefix = if hidden {
         format!(".{}", name.to_string_lossy())
     } else {
@@ -521,13 +528,14 @@ fn claim_sidecar_file(
     let open_new = |cand: PathBuf| -> io::Result<fs::File> {
         OpenOptions::new().write(true).create_new(true).open(cand)
     };
+
     if let Ok(f) = open_new(parent.join(format!("{prefix}.json"))) {
-        return Ok(f);
+        return Ok(Some(f));
     }
     for _ in 0..attempts {
         let cand = parent.join(format!("{prefix}.{:08x}.json", sidecar_rand(seed)));
         if let Ok(f) = open_new(cand) {
-            return Ok(f);
+            return Ok(Some(f));
         }
     }
     Err(FileStatError::general(
