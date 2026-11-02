@@ -225,15 +225,15 @@ pub fn apply_permissions_flags_to_files(conn: &Connection) -> Result<(u64, u64)>
     Ok((applied as u64, errored as u64))
 }
 
-/// Placed out-tree links whose canonical payload finished the permissions pass,
-/// paged forward by `o.id` (exclusive `last_id`). The link-tree pendant of the
-/// non-dir walk: metadata is applied on the `.sources` canonicals, so the
-/// "handled" set is the canonical's metadata flags (`AppliedMetadata` /
-/// `ErrorWhileApplyingMetadata`) — not the place flags, and sidecar writing does
-/// not mutate them. Conditioned on `o.flags & Placed` (the link is in the output
-/// tree) rather than the `AtLinkSource` move marker.
+/// Pending link-tree sidecar rows: canonical file at the link source
+/// (`AtLinkSource`), link placed (`Placed`), and neither `AppliedMetadata` nor
+/// `ErrorWhileApplyingMetadata` set on the **out-tree** row. The link-tree
+/// pendant of the non-dir walk, conditioned on `placed` rather than the
+/// `AtLinkSource` move marker. No cursor: the sidecar pass marks each row
+/// applied/error after processing (see `write_link_tree_sidecars`), so
+/// `batched_loop` sees the pending set shrink and terminates.
 pub fn list_out_tree_links_for_sidecar<R: SqlFileRow>(
-    conn: &Connection, last_id: OutTreeId, batch_size: u64)
+    conn: &Connection, batch_size: u64)
     -> Result<Vec<(R, OutTreeRecord)>> {
     let file_cols = R::sql_columns(Some("can"));
     let out_cols = OutTreeRecord::sql_columns(Some("o"));
@@ -243,17 +243,18 @@ pub fn list_out_tree_links_for_sidecar<R: SqlFileRow>(
          JOIN files AS ent ON can.id = ent.canonical_id
          JOIN out_tree AS o ON ent.id = o.file_id
          WHERE ent.ftype NOT IN ('dir', 'unknown')
-           AND o.id > :last_id
+           AND can.flags & :at_source != 0
            AND o.flags & :placed != 0
-           AND (can.flags & :applied != 0 OR can.flags & :err != 0)
+           AND o.flags & :applied = 0
+           AND o.flags & :err = 0
          ORDER BY o.id LIMIT :batch_size"
     )).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
-            ":last_id": last_id.0,
+            ":at_source": FileFlag::AtLinkSource.mask_i64(),
             ":placed": OutTreeFlag::Placed.mask_i64(),
-            ":applied": FileFlag::AppliedMetadata.mask_i64(),
-            ":err": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
+            ":applied": OutTreeFlag::AppliedMetadata.mask_i64(),
+            ":err": OutTreeFlag::ErrorWhileApplyingMetadata.mask_i64(),
             ":batch_size": batch_size,
         },
         |row| {
