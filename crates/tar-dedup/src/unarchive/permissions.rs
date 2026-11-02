@@ -83,6 +83,8 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
 
     if rt.config.placement.link_tree {
         apply_permissions_link_sources(&rt, &mut recorder, &ps)?;
+        // INFO: Symlinks don't have metadata, so dump them in sidecar on request.
+        write_link_tree_sidecars(&rt, &mut recorder)?;
     } else {
         // Files (and non-directory entries) first.
         process_batched_files(
@@ -239,6 +241,27 @@ fn inner_apply_permissions(
                     out.abs_path.display()
                 )));
     }
+
+    let mut entry = record.as_ref().map(SidecarEntry::from);
+    let wanted = match rt.config.effective_sidecar_mode() {
+        SidecarMode::Always => entry.is_some(),
+        SidecarMode::OnError => !error_empty,
+        SidecarMode::Never => false,
+    };
+    if wanted {
+        if let Some(side) = entry.as_mut() {
+            side.attach_out_tree(out.id, &out.abs_path);
+            if let Err(fse) = write_sidecar(
+                &out.abs_path,
+                side,
+                rt.config.hidden_sidecar,
+                SIDECAR_MAX_NAME_ATTEMPTS,
+            ) {
+                capture_err(out.file_id, out.id, fse);
+            }
+        }
+    }
+
     rt.progress.inc_both(1);
     Ok(())
 }
@@ -280,6 +303,43 @@ fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps: &O
             Ok(())
         }
     )
+}
+
+/// `--sidecar always` for link-tree: walk the links in the output tree and write
+/// a manifest beside each. `on-error` never reaches this (degraded to `never` in
+/// `effective_sidecar_mode`; link metadata errors surface at the `.sources`
+/// canonicals, not per link).
+fn write_link_tree_sidecars(rt: &ExtractRTArgs, rec: &mut Recorder) -> Result<()> {
+    if rt.config.effective_sidecar_mode() != SidecarMode::Always {
+        return Ok(());
+    }
+    let hidden = rt.config.hidden_sidecar;
+    // Page forward by `o.id`; the getter is conditioned on the canonicals'
+    // permission flags (which sidecar writing does not mutate), so an explicit
+    // cursor is the only terminator.
+    let mut last = OutTreeId(0);
+    loop {
+        let batch = rt.db
+            .list_out_tree_links_for_sidecar::<FileRecord>(last, rt.config.process.batch_size)?;
+        if batch.is_empty() {
+            break;
+        }
+        for (record, out) in batch {
+            rt.shutdown.check_between_files()?;
+            let mut sid = SidecarEntry::from(&record);
+            sid.attach_out_tree(out.id, &out.abs_path);
+            if let Err(fse) = write_sidecar(
+                &out.abs_path,
+                &sid,
+                hidden,
+                SIDECAR_MAX_NAME_ATTEMPTS,
+            ) {
+                rec.record_file(record.id, ERROR_PHASE, fse, ErrorFlags::default());
+            }
+            last = out.id;
+        }
+    }
+    Ok(())
 }
 
 /// Apply metadata for a single canonical `Placed` row. Errors are collected and
@@ -416,6 +476,84 @@ fn apply_times(target: &Path, atime: Option<FileTime>, mtime: Option<FileTime>) 
 
 fn to_file_time(dt: DateTime<Utc>) -> FileTime {
     FileTime::from_system_time(SystemTime::from(dt))
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Sidecar manifests
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// Runtime seed for sidecar-name randomization. Wall-clock nanoseconds are not
+/// cryptographic — the component only needs to beat a name collision within one
+/// directory, and tests drive the generator with fixed seeds directly.
+fn sidecar_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+/// SplitMix64 step; pure and seed-injected so tests are deterministic.
+fn sidecar_rand(seed: &mut u64) -> u64 {
+    *seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *seed;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Claim a fresh sidecar file next to `target`, never overwriting: first the
+/// deterministic `{name}.json` (or `.{name}.json` with `hidden`), then up to
+/// `attempts` random-suffix candidates `{name}.{08x}.json`. The open file is
+/// returned; on exhaustion a `General` error names the target's directory.
+fn claim_sidecar_file(
+    target: &Path,
+    hidden: bool,
+    attempts: usize,
+    seed: &mut u64,
+) -> std::result::Result<fs::File, FileStatError> {
+    let parent = target.parent().ok_or_else(|| {
+        FileStatError::general(None, format!("sidecar for {} has no parent", target.display()))
+    })?;
+    let name = target.file_name().ok_or_else(|| {
+        FileStatError::general(None, format!("sidecar for {} has no file name", target.display()))
+    })?;
+    let prefix = if hidden {
+        format!(".{}", name.to_string_lossy())
+    } else {
+        name.to_string_lossy().into_owned()
+    };
+    let open_new = |cand: PathBuf| -> io::Result<fs::File> {
+        OpenOptions::new().write(true).create_new(true).open(cand)
+    };
+    if let Ok(f) = open_new(parent.join(format!("{prefix}.json"))) {
+        return Ok(f);
+    }
+    for _ in 0..attempts {
+        let cand = parent.join(format!("{prefix}.{:08x}.json", sidecar_rand(seed)));
+        if let Ok(f) = open_new(cand) {
+            return Ok(f);
+        }
+    }
+    Err(FileStatError::general(
+        Some(parent),
+        "failed to find suitable sidecar name, no sidecar file written".into(),
+    ))
+}
+
+/// Serialize `entry` to pretty JSON (keys come out alphabetically sorted: the
+/// `Map` of `to_value` is a BTreeMap by default) and write it beside `target`.
+fn write_sidecar(
+    target: &Path,
+    entry: &SidecarEntry,
+    hidden: bool,
+    attempts: usize,
+) -> std::result::Result<(), FileStatError> {
+    let mut seed = sidecar_seed();
+    let mut file = claim_sidecar_file(target, hidden, attempts, &mut seed)?;
+    let value = serde_json::to_value(entry).map_err(|e| FileStatError::json(target, e))?;
+    let json = serde_json::to_string_pretty(&value).map_err(|e| FileStatError::json(target, e))?;
+    file.write_all(json.as_bytes()).map_err(|e| FileStatError::io(target, e))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1375,5 +1513,152 @@ mod tests {
         let count = world.db.t_files_in_phase::<StrippedRecord>(FilePhase::PermissionsRestored)
             .expect("list").len();
         assert_eq!(count, 2, "both rows promoted regardless of phase participation");
+    }
+
+    // ---------------------------------------------------------------------
+    // sidecar manifests
+    // ---------------------------------------------------------------------
+
+    fn sidecar_names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir).expect("read dir")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn claim_sidecar_deterministic_then_random_fallback() {
+        let d = tempfile::tempdir().expect("tempdir");
+        let target = d.path().join("name.txt");
+        fs::write(&target, b"x").expect("target");
+
+        let mut seed = 1;
+        let f = claim_sidecar_file(&target, false, 10, &mut seed).expect("claim");
+        assert_eq!(sidecar_names(d.path()), vec!["name.txt", "name.txt.json"]);
+        drop(f);
+
+        // Deterministic name occupied -> random-suffix candidate.
+        let f2 = claim_sidecar_file(&target, false, 10, &mut seed).expect("claim");
+        let names = sidecar_names(d.path());
+        assert_eq!(names.len(), 3, "one extra file claimed: {names:?}");
+        let sid = &names[2];
+        assert!(sid.starts_with("name.txt.") && sid.ends_with(".json"), "{names:?}");
+        drop(f2);
+    }
+
+    #[test]
+    fn claim_sidecar_hidden_prefixes_dot() {
+        let d = tempfile::tempdir().expect("tempdir");
+        let target = d.path().join("note.md");
+        fs::write(&target, b"x").expect("target");
+        let mut seed = 7;
+        let f = claim_sidecar_file(&target, true, 1, &mut seed).expect("claim");
+        assert_eq!(sidecar_names(d.path()), vec![".note.md.json", "note.md"]);
+        drop(f);
+    }
+
+    #[test]
+    fn claim_sidecar_exhaustion_returns_general_error() {
+        let d = tempfile::tempdir().expect("tempdir");
+        let target = d.path().join("busy.txt");
+        fs::write(&target, b"x").expect("target");
+        // Occupy the deterministic name and the first three candidate names the
+        // seed produces, so `attempts = 3` cannot land a free one.
+        fs::write(d.path().join("busy.txt.json"), b"x").expect("occupy deterministic");
+        let mut seed = 0;
+        for _ in 0..3 {
+            fs::write(
+                d.path().join(format!("busy.txt.{:08x}.json", sidecar_rand(&mut seed))),
+                b"x",
+            ).expect("occupy candidate");
+        }
+        seed = 0;
+        let err = claim_sidecar_file(&target, false, 3, &mut seed)
+            .expect_err("must exhaust");
+        assert!(matches!(err, FileStatError::General { .. }), "{err:?}");
+        assert!(
+            err.to_string().contains("no sidecar file written"),
+            "message: {err}"
+        );
+    }
+
+    /// `on-error` sidecars land beside entries whose metadata application failed.
+    #[test]
+    fn run_on_error_writes_sidecar_where_metadata_failed() {
+        let world = ExtractWorld::permissions_world(|c| c.sidecar = SidecarMode::OnError);
+        // Remove the on-disk file so the metadata restore fails deterministically
+        // (mode set on a missing target -> one FileStatError).
+        let fid = world.p_add_file("broken.bin", b"data", |r| r.mode = Some(0o600));
+        fs::remove_file(world.proot().join("broken.bin")).expect("remove");
+        world.padd_out("broken.bin", fid, placed_flags());
+        // A healthy entry must NOT get an on-error sidecar.
+        let ok_id = world.p_add_file("ok.txt", b"ok", |r| r.mode = Some(0o644));
+        world.padd_out("ok.txt", ok_id, placed_flags());
+
+        run(&world.rt()).expect("run");
+
+        assert!(world.proot().join("broken.bin.json").is_file(), "on-error sidecar");
+        assert!(!world.proot().join("ok.txt.json").exists(), "no sidecar on success");
+    }
+
+    #[test]
+    fn run_always_writes_sidecar_for_every_placed_entry() {
+        let world = ExtractWorld::permissions_world(|c| c.sidecar = SidecarMode::Always);
+        let fid = world.p_add_file("a.txt", b"a", |_| {});
+        world.padd_out("a.txt", fid, placed_flags());
+
+        run(&world.rt()).expect("run");
+
+        assert!(world.proot().join("a.txt.json").is_file(), "always sidecar");
+    }
+
+    #[test]
+    fn run_never_writes_no_sidecar_even_on_error() {
+        let world = ExtractWorld::permissions_world(|c| c.sidecar = SidecarMode::Never);
+        let fid = world.p_add_file("gone.bin", b"d", |r| r.mode = Some(0o600));
+        fs::remove_file(world.proot().join("gone.bin")).expect("remove");
+        world.padd_out("gone.bin", fid, placed_flags());
+
+        run(&world.rt()).expect("run");
+
+        assert!(!world.proot().join("gone.bin.json").exists(), "never mode");
+    }
+
+    #[test]
+    fn run_sidecar_on_error_folds_to_never_with_no_errors() {
+        let world = ExtractWorld::permissions_world(|c| {
+            c.sidecar = SidecarMode::OnError;
+            c.process.no_errors = true;
+        });
+        let fid = world.p_add_file("gone2.bin", b"d", |r| r.mode = Some(0o600));
+        fs::remove_file(world.proot().join("gone2.bin")).expect("remove");
+        world.padd_out("gone2.bin", fid, placed_flags());
+
+        run(&world.rt()).expect("run");
+
+        assert_eq!(world.config.effective_sidecar_mode(), SidecarMode::Never);
+        assert!(!world.proot().join("gone2.bin.json").exists(), "folded to never");
+    }
+
+    #[test]
+    fn run_link_tree_always_writes_sidecar_per_link() {
+        let world = ExtractWorld::permissions_world(|c| {
+            c.placement.link_tree = true;
+            c.sidecar = SidecarMode::Always;
+        });
+        let id = world.p_add_file("photo.jpg", b"jpeg", |r| r.mode = Some(0o640));
+        world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
+        let cid = world.db.get_file_by_id::<FileRecord>(id)
+            .expect("get").expect("row").content_id().expect("cid").0;
+        let src = world.proot().join(".sources").join(&cid);
+        fs::create_dir_all(src.parent().expect("parent")).expect("src dir");
+        fs::write(&src, b"jpeg").expect("write src");
+        // The out-tree link row (Placed) for the walk.
+        world.padd_out("photo.jpg", id, placed_flags());
+
+        run(&world.rt()).expect("run");
+
+        assert!(world.proot().join("photo.jpg.json").is_file(), "sidecar beside the link");
     }
 }

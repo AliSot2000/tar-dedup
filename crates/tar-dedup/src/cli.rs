@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common;
 use crate::common::perms::MapResolutionTarget;
-use crate::config::WorkDirLocation;
+use crate::config::{DbRetention, SidecarMode, WorkDirLocation};
 
 #[derive(Debug, Parser)]
 #[command(name = "tar-dedup", about = "Deduplicating archival pipeline")]
@@ -345,9 +345,16 @@ pub struct ArchiveArgs {
     #[arg(long = "fresh", help_heading = "Process Options")]
     pub fresh: bool,
 
-    /// After success, keep a timestamped copy of snapshot.sqlite next to the archive.
-    #[arg(long = "keep-db", help_heading = "Process Options")]
-    pub keep_db: bool,
+    /// When to keep a timestamped copy of the work database next to the archive.
+    /// `always`: always; `on-error`: only if the run recorded errors; `never`: delete.
+    #[arg(
+        long = "db-retention",
+        value_enum,
+        value_name = "MODE",
+        default_value_t = DbRetention::OnError,
+        help_heading = "Process Options"
+    )]
+    pub db_retention: DbRetention,
 
     /// After success, keep the `{stem}.astage` work directory.
     #[arg(long = "keep-stage", help_heading = "Process Options")]
@@ -1078,12 +1085,39 @@ pub struct ExtractArgs {
     pub no_errors: bool,
 
     /// After success, keep a timestamped copy of snapshot.sqlite next to the archive.
-    #[arg(long = "keep-db", help_heading = "Process Options")]
-    pub keep_db: bool,
+    #[arg(
+        long = "db-retention",
+        value_enum,
+        value_name = "MODE",
+        default_value_t = DbRetention::OnError,
+        help_heading = "Process Options"
+    )]
+    pub db_retention: DbRetention,
 
     /// After success, keep the `{stem}.estage` work directory.
     #[arg(long = "keep-stage", help_heading = "Process Options")]
     pub keep_stage: bool,
+
+    // --- Sidecar ---
+
+    /// Write a per-entry JSON metadata manifest beside each placed entry.
+    /// `on-error` (default) writes a sidecar only where metadata application failed.
+    #[arg(
+        long = "sidecar",
+        value_enum,
+        value_name = "MODE",
+        default_value_t = SidecarMode::OnError,
+        help_heading = "Sidecar"
+    )]
+    pub sidecar: SidecarMode,
+
+    /// Alias for `--sidecar never`: never write sidecar manifests.
+    #[arg(long = "no-sidecar", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Sidecar")]
+    pub no_sidecar: bool,
+
+    /// Prefix sidecar names with a leading dot (`{name}.json` → `.{name}.json`).
+    #[arg(long = "hidden-sidecar", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Sidecar")]
+    pub hidden_sidecar: bool,
 
     /// Run through STAGE then exit cleanly (state saved).
     #[arg(
@@ -1232,11 +1266,22 @@ pub enum ConflictPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum HardLinkGrouping {
-    /// Do not hard link any files which had the same (dev, inode) as on the source file system
+    /// Do not hard link any files which had the same (dev, inode) as on the source file system.
+    /// Create a new file for each one of them
     None,
-    /// Only consider files within a tree of a single source for hard links.
+    /// Equivalent to `Global` without `--no-strict-separation`. If not, only restore hardlinks
+    /// between files inside a subtree reachable via a single source. e.g.
+    /// `-i ../../a -i ../../../c/a/` with `a/` containing `a.txt` and `b.txt` which are hardlinks
+    /// would extract to:
+    /// ```bash
+    /// a/a.txt (x, y)
+    /// a/b.txt (x, y)
+    /// c/a/a.txt (u, v)
+    /// c/a/b.txt (u, v)
+    /// ```
     Source,
-    /// Hard link files across all sources.
+    /// All materialization in the extracted tree that formerly had the same `(dev, inode)` will be
+    /// share a (dev, inode) in the extracted tree, even if it's across sources (Ref `Sources`).
     Global,
 }
 
