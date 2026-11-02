@@ -305,39 +305,37 @@ fn apply_permissions_link_sources(rt: &ExtractRTArgs, rec: &mut Recorder, ps: &O
 }
 
 /// `--sidecar always` for link-tree: walk the links in the output tree and write
-/// a manifest beside each. `on-error` never reaches this (degraded to `never` in
-/// `effective_sidecar_mode`; link metadata errors surface at the `.sources`
-/// canonicals, not per link).
+/// a manifest beside each. On error is degraded to `Never`
 fn write_link_tree_sidecars(rt: &ExtractRTArgs, rec: &mut Recorder) -> Result<()> {
     if rt.config.effective_sidecar_mode() != SidecarMode::Always {
         return Ok(());
     }
-    let hidden = rt.config.hidden_sidecar;
-    // Page forward by `o.id`; the getter is conditioned on the canonicals'
-    // permission flags (which sidecar writing does not mutate), so an explicit
-    // cursor is the only terminator.
-    let mut last = OutTreeId(0);
-    loop {
-        let batch = rt.db
-            .list_out_tree_links_for_sidecar::<FileRecord>(last, rt.config.process.batch_size)?;
-        if batch.is_empty() {
-            break;
-        }
-        for (record, out) in batch {
-            rt.shutdown.check_between_files()?;
-            let sid = SidecarEntry::from(&record).with_out_tree(out.id, &out.abs_path);
-            if let Err(fse) = write_sidecar(
-                &out.abs_path,
-                &sid,
-                hidden,
-                SIDECAR_MAX_NAME_ATTEMPTS,
-            ) {
-                rec.record_file(record.id, ERROR_PHASE, fse, ErrorFlags::default());
+    batched_loop(
+        |bs| rt.db.list_out_tree_links_for_sidecar::<FileRecord>(bs),
+        rt.config.process.batch_size,
+        |batch: Vec<(FileRecord, OutTreeRecord)>| {
+            let mut results: Vec<(OutTreeId, bool)> = Vec::with_capacity(batch.len());
+            for (record, out) in batch {
+                rt.shutdown.check_between_files()?;
+                let sid = SidecarEntry::from(&record).with_out_tree(out.id, &out.abs_path);
+                let ok = match write_sidecar(
+                    &out.abs_path,
+                    &sid,
+                    rt.config.hidden_sidecar,
+                    SIDECAR_MAX_NAME_ATTEMPTS) {
+
+                    Ok(()) => true,
+                    Err(fse) => {
+                        rec.record_file(record.id, ERROR_PHASE, fse, ErrorFlags::default());
+                        false
+                    }
+                };
+                results.push((out.id, ok));
             }
-            last = out.id;
-        }
-    }
-    Ok(())
+            rt.db.ingest_apply_permission_out_tree_results(&results)?;
+            Ok(())
+        },
+    )
 }
 
 /// Apply metadata for a single canonical `Placed` row. Errors are collected and
