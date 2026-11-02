@@ -43,3 +43,7 @@ pub const OUT_CAPACITY: usize = 1_024 * 32;
 pub const FEED_CHUNK: usize = 1_024;
 /// Outcomes committed per transaction.
 pub const DRAIN_CHUNK: usize = 1_024 * 4;
+
+/// Randomized sidecar-name attempts before giving up on a target (never
+/// overwrite an existing file when claiming `{name}.json`).
+pub const SIDECAR_MAX_NAME_ATTEMPTS: usize = 1_000_000;
