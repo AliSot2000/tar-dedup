@@ -225,6 +225,46 @@ pub fn apply_permissions_flags_to_files(conn: &Connection) -> Result<(u64, u64)>
     Ok((applied as u64, errored as u64))
 }
 
+/// Placed out-tree links whose canonical payload finished the permissions pass,
+/// paged forward by `o.id` (exclusive `last_id`). The link-tree pendant of the
+/// non-dir walk: metadata is applied on the `.sources` canonicals, so the
+/// "handled" set is the canonical's metadata flags (`AppliedMetadata` /
+/// `ErrorWhileApplyingMetadata`) — not the place flags, and sidecar writing does
+/// not mutate them. Conditioned on `o.flags & Placed` (the link is in the output
+/// tree) rather than the `AtLinkSource` move marker.
+pub fn list_out_tree_links_for_sidecar<R: SqlFileRow>(
+    conn: &Connection, last_id: OutTreeId, batch_size: u64)
+    -> Result<Vec<(R, OutTreeRecord)>> {
+    let file_cols = R::sql_columns(Some("can"));
+    let out_cols = OutTreeRecord::sql_columns(Some("o"));
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {file_cols}, {out_cols}
+         FROM files AS can
+         JOIN files AS ent ON can.id = ent.canonical_id
+         JOIN out_tree AS o ON ent.id = o.file_id
+         WHERE ent.ftype NOT IN ('dir', 'unknown')
+           AND o.id > :last_id
+           AND o.flags & :placed != 0
+           AND (can.flags & :applied != 0 OR can.flags & :err != 0)
+         ORDER BY o.id LIMIT :batch_size"
+    )).to_panic()?;
+    let rows = stmt.query_map(
+        named_params! {
+            ":last_id": last_id.0,
+            ":placed": OutTreeFlag::Placed.mask_i64(),
+            ":applied": FileFlag::AppliedMetadata.mask_i64(),
+            ":err": FileFlag::ErrorWhileApplyingMetadata.mask_i64(),
+            ":batch_size": batch_size,
+        },
+        |row| {
+            let r = R::from_row(row, Some("can"))?;
+            let o = OutTreeRecord::from_sql(row, Some("o"))?;
+            Ok((r, o))
+        },
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
+}
+
 /// List the canonical files in the link destination which were moved there successfully and set the PermissionsApplied flag (since t
 pub fn list_canonical_files_for_permissions<R: SqlFileRow>(conn: &Connection, batch_size: u64) 
     -> Result<Vec<R>> {
