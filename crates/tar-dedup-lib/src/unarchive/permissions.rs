@@ -242,21 +242,20 @@ fn inner_apply_permissions(
                 )));
     }
 
-    let entry = record.as_ref().map(SidecarEntry::from);
     let wanted = match rt.config.effective_sidecar_mode() {
-        SidecarMode::Always => entry.is_some(),
+        SidecarMode::Always => true,
         SidecarMode::OnError => !error_empty,
         SidecarMode::Never => false,
     };
     if wanted {
-        if let Some(side) = entry {
+        if let Some(side) = record.as_ref().map(SidecarEntry::from) {
             let side = side.with_out_tree(out.id, &out.abs_path);
             if let Err(fse) = write_sidecar(
                 &out.abs_path,
                 &side,
                 rt.config.hidden_sidecar,
-                SIDECAR_MAX_NAME_ATTEMPTS,
-            ) {
+                SIDECAR_MAX_NAME_ATTEMPTS) {
+
                 capture_err(out.file_id, out.id, fse);
             }
         }
