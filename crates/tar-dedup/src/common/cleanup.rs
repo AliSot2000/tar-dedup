@@ -1,11 +1,11 @@
 //! Shared work-directory cleanup for archive (`.astage`) and extract (`.estage`).
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 
-use crate::config::{WorkLayout, archive_stem};
+use crate::config::{DbRetention, WorkLayout, archive_stem};
 use crate::error::{Error, Result};
 
 pub use crate::config::CleanupMode;
@@ -14,8 +14,9 @@ pub use crate::config::CleanupMode;
 pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode) -> Result<()> {
     let db_path = config.paths().db_path();
     let keep = config.cleanup();
+    let keep_db = resolve_keep_db(config, mode, &db_path)?;
 
-    if keep.keep_db && db_path.is_file() {
+    if keep_db && db_path.is_file() {
         let dest = retained_db_path(config, mode);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
@@ -64,6 +65,24 @@ fn remove_temp_files(config: &impl WorkLayout) {
         let p = config.paths().work_dir.join(name);
         if p.is_file() {
             let _ = fs::remove_file(&p);
+        }
+    }
+}
+
+fn resolve_keep_db(config: &impl WorkLayout, mode: CleanupMode, db_path: &Path)
+    -> Result<bool> {
+    match config.cleanup().db_retention {
+        DbRetention::Always => Ok(true),
+        DbRetention::Never => Ok(false),
+        // On-error retention counts the recorded errors before the DB is moved
+        // or deleted. `--no-errors` records nothing, so the count is 0 and the
+        // DB is dropped (mirrors the validation-time warn).
+        DbRetention::OnError => {
+            if !db_path.is_file() {
+                return Ok(false);
+            }
+            let db = crate::db::Database::open(db_path)?;
+            Ok(db.count_pipeline_errors(mode)? > 0)
         }
     }
 }
