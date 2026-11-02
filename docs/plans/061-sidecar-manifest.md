@@ -126,16 +126,23 @@ output; no manual key ordering; no extra deps.
 ## Implementation notes (2026-11-01)
 
 - `list_out_tree_for_linking` is **not** reused for link-tree sidecars: its
-  progression is the place flags (`Placed` / `ErrorWhilePlace`), which the
-  sidecar walk must not mutate and which would yield no meaningful set after the
-  link tree is built. Instead `db/permissions.rs` gained
-  `list_out_tree_links_for_sidecar(conn, last_id, batch_size)`: placed links
-  (`o.flags & Placed`, paged by `o.id`) whose canonical `.sources` payload
-  finished the permissions pass (`FileFlag::AppliedMetadata` /
-  `ErrorWhileApplyingMetadata` on `can`) — the link-tree pendant of the non-dir
-  walk, conditioned on `placed` rather than the `AtLinkSource` move marker.
-- The sidecar walk pages manually (`last_id` cursor) because writing a sidecar
-  does not mutate any flags; `batched_loop` would otherwise loop forever.
+  progression is the place flags (`Placed` / `ErrorWhilePlace`). Instead the
+  sidecar pass stays **separate** from the metadata pass — the project keeps
+  phases decoupled (parallelism-friendly). `apply_permissions_link_sources`
+  remains a self-contained pass over `list_canonical_files_for_permissions`
+  (one canonical per row, no cross-batch state; application errors reported
+  exactly once per payload), and `write_link_tree_sidecars` is a **separate
+  read-only pass** over `db/permissions.rs`'s
+  `list_out_tree_links_for_sidecar(conn, last_id, batch_size)` — placed links
+  (`o.flags & Placed`, paged by `o.id`) whose canonical finished the
+  permissions pass (`FileFlag::AppliedMetadata` /
+  `ErrorWhileApplyingMetadata` on `can`) — conditioned on `placed` rather than
+  the `AtLinkSource` move marker.
+- The sidecar pass is driven by the shared `batched_stepped_loop` (common.rs,
+  the centralized cursor loop also used by the filter phase), not a
+  hand-rolled `while`. Its write failures are only recorded — never folded into
+  the applied/error flags — so a clean payload is never misreported because of
+  a sidecar problem.
 - CLI: `--sidecar {always|on-error|never}` (default on-error), `--no-sidecar`
   alias, `--hidden-sidecar`; `--db-retention {always|on-error|never}` replaces
   `--keep-db` on both archive and extract.
