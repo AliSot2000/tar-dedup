@@ -73,7 +73,7 @@ sparsified → staged → archived`), tracked in `FilePhase` (`db/types.rs`).
 2. `rehash.rs` — optional content verification.
 3. `place.rs` — build `out_tree` (target paths), `populate_out_tree` materializes each path (copy, hard-link, or symlink per `--link-tree`).
 4. `permissions.rs` — restore metadata last.
-5. `cleanup` — remove work dir unless `--keep-stage` / `--keep-db`.
+5. `cleanup` — remove work dir unless `--keep-stage`; the DB is kept per `--db-retention`.
 
 ## SQLite schema (`db/schema.rs`)
 
