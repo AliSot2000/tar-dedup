@@ -468,6 +468,158 @@ fn link_type_as_str_roundtrip() {
 }
 
 #[test]
+fn sidecar_from_file_record_maps_all_fields() {
+    use chrono::TimeZone;
+    let t = Utc.timestamp_opt(1_600_000_000, 42).unwrap();
+    let rec = FileRecord {
+        id: FileId(7),
+        abs_path: PathBuf::from("/home/alice/docs/report.pdf"),
+        ext: "pdf".into(),
+        size: 1234,
+        sha1: Some([0xAB; 20]),
+        mtime: Some(t),
+        atime: Some(t),
+        ctime: None,
+        uid: Some(1000),
+        gid: Some(100),
+        username: Some("alice".into()),
+        groupname: Some("users".into()),
+        mode: Some(0o640),
+        ftype: FileType::File,
+        device_id: Some(1),
+        inode_id: Some(99),
+        major: None,
+        minor: None,
+        xattrs: Some("{}".into()),
+        posix_acl: Some(r#"{"user-obj":7}"#.into()),
+        selinux_ctx: Some(b"system_u:object_r:etc_t:s0".to_vec()),
+        win_perm: None,
+        link_dst: None,
+        include_reason_archive: Some(ExclusionId(1)),
+        exclude_reason_archive: Some(ExclusionId(-1)),
+        include_reason_extract: None,
+        exclude_reason_extract: None,
+        canonical_id: Some(FileId(7)),
+        flags: FileFlags::default(),
+        phase: FilePhase::Rehashed,
+        new_name: Some("renamed".into()),
+    };
+    let sid = SidecarEntry::from(&rec);
+    assert_eq!(sid.id, 7);
+    assert_eq!(sid.abs_path, rec.abs_path);
+    assert_eq!(sid.ext, "pdf");
+    assert_eq!(sid.size, 1234);
+    assert_eq!(sid.sha1.as_deref(), Some("abababababababababababababababababababab"));
+    assert_eq!(sid.mtime, Some(t));
+    assert_eq!(sid.atime, Some(t));
+    assert_eq!(sid.ctime, None);
+    assert_eq!(sid.uid, Some(1000));
+    assert_eq!(sid.gid, Some(100));
+    assert_eq!(sid.username.as_deref(), Some("alice"));
+    assert_eq!(sid.groupname.as_deref(), Some("users"));
+    assert_eq!(sid.mode, Some(0o640));
+    assert_eq!(sid.ftype, "file", "stable FileType::as_str string");
+    assert_eq!(sid.device_id, Some(1));
+    assert_eq!(sid.inode, Some(99));
+    assert_eq!(sid.major, None);
+    assert_eq!(sid.minor, None);
+    assert_eq!(sid.xattrs.as_deref(), Some("{}"));
+    assert_eq!(sid.posix_acl.as_deref(), Some(r#"{"user-obj":7}"#));
+    assert_eq!(sid.selinux.as_deref(), Some("system_u:object_r:etc_t:s0"));
+    assert_eq!(sid.win_perm, None);
+    assert_eq!(sid.link_dst, None);
+    assert_eq!(sid.new_name.as_deref(), Some("renamed"));
+    // Out-tree embed starts at the file's own identity as a placeholder.
+    assert_eq!(sid.out_tree.id, 7);
+    assert_eq!(sid.out_tree.target_path, rec.abs_path);
+}
+
+#[test]
+fn sidecar_symlink_renders_type_and_target() {
+    let rec = FileRecord {
+        id: FileId(3),
+        abs_path: PathBuf::from("/data/link"),
+        ext: String::new(),
+        size: 0,
+        sha1: None,
+        mtime: None,
+        atime: None,
+        ctime: None,
+        uid: None,
+        gid: None,
+        username: None,
+        groupname: None,
+        mode: None,
+        ftype: FileType::Symlink(LinkType::File),
+        device_id: None,
+        inode_id: None,
+        major: None,
+        minor: None,
+        xattrs: None,
+        posix_acl: None,
+        selinux_ctx: None,
+        win_perm: None,
+        link_dst: Some(PathBuf::from("/data/target")),
+        include_reason_archive: None,
+        exclude_reason_archive: None,
+        include_reason_extract: None,
+        exclude_reason_extract: None,
+        canonical_id: Some(FileId(3)),
+        flags: FileFlags::default(),
+        phase: FilePhase::Rehashed,
+        new_name: None,
+    };
+    let sid = SidecarEntry::from(&rec);
+    assert_eq!(sid.ftype, "symlink_file");
+    assert_eq!(sid.link_dst.as_deref(), Some(Path::new("/data/target")));
+    assert_eq!(sid.sha1, None);
+}
+
+#[test]
+fn sidecar_attach_out_tree_overrides_placeholder() {
+    let rec = FileRecord {
+        id: FileId(11),
+        abs_path: PathBuf::from("/orig/name.txt"),
+        ext: "txt".into(),
+        size: 0,
+        sha1: None,
+        mtime: None,
+        atime: None,
+        ctime: None,
+        uid: None,
+        gid: None,
+        username: None,
+        groupname: None,
+        mode: None,
+        ftype: FileType::File,
+        device_id: None,
+        inode_id: None,
+        major: None,
+        minor: None,
+        xattrs: None,
+        posix_acl: None,
+        selinux_ctx: None,
+        win_perm: None,
+        link_dst: None,
+        include_reason_archive: None,
+        exclude_reason_archive: None,
+        include_reason_extract: None,
+        exclude_reason_extract: None,
+        canonical_id: Some(FileId(11)),
+        flags: FileFlags::default(),
+        phase: FilePhase::Rehashed,
+        new_name: None,
+    };
+    let mut sid = SidecarEntry::from(&rec);
+    sid.attach_out_tree(OutTreeId(42), Path::new("/out/placed/name_1.txt"));
+    assert_eq!(sid.out_tree.id, 42);
+    assert_eq!(
+        sid.out_tree.target_path,
+        PathBuf::from("/out/placed/name_1.txt")
+    );
+}
+
+#[test]
 fn file_type_as_str_roundtrip() {
     let kinds = [
         FileType::File,
