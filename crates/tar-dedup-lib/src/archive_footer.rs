@@ -238,6 +238,111 @@ pub fn extract_footer_db(archive_path: &Path, dest_dir: &Path) -> Result<Option<
     }
 }
 
+/// Verdict of a full footer integrity check ([`verify_footer`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegrityVerdict {
+    /// Both stored digests match the archive.
+    Ok,
+    /// No seekable footer trailer is present.
+    NoFooter,
+    /// A trailer is present but malformed (leading magic/offset mismatch or size underflow).
+    InvalidFooter,
+    /// `sha1(archive[0..offset))` differs from the stored content digest.
+    ContentMismatch,
+    /// `sha1(xz catalog blob)` differs from the stored xz digest.
+    DatabaseMismatch,
+    /// Both digests mismatch.
+    BothMismatch,
+}
+
+/// Hash `len` bytes starting at `start` with sha1, chunked, reporting progress on
+/// `bar` (which the caller may have pre-sized to span multiple regions).
+fn hash_region(archive_path: &Path, start: u64, len: u64, bar: Option<&ProgressBar>)
+    -> Result<[u8; 20]> {
+    let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| Error::io(archive_path, e))?;
+    let mut reader = HashingReader::new(file);
+    let mut buf = vec![0u8; ARCHIVE_IO_BUF_SIZE];
+    let mut remaining = len;
+    while remaining > 0 {
+        let want = remaining.min(buf.len() as u64) as usize;
+        let n = reader
+            .read(&mut buf[..want])
+            .map_err(|e| Error::io(archive_path, e))?;
+        if n == 0 {
+            break;
+        }
+        remaining -= n as u64;
+        if let Some(bar) = bar {
+            bar.inc(n as u64);
+        }
+    }
+    Ok(reader.finalize())
+}
+
+/// Verify the footer's two integrity digests: the finished compressed archive
+/// content (`[0..offset)`) and the stored xz catalog blob (hashed **as stored**,
+/// without decompression). `bar`, when given, is sized to `offset + xz_len` and
+/// reports both passes. `Err` is a generic filesystem failure (open/seek/read);
+/// the [`IntegrityVerdict`] distinguishes structure problems from hash mismatches.
+pub fn verify_footer(archive_path: &Path, bar: Option<&ProgressBar>) -> Result<IntegrityVerdict> {
+    let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
+    let len = file
+        .metadata()
+        .map_err(|e| Error::io(archive_path, e))?
+        .len();
+
+    let found = match locate_footer(archive_path, &mut file, len) {
+        Ok(v) => v,
+        // Leading-magic mismatch: a trailer is present but corrupt.
+        Err(Error::Config(_)) => return Ok(IntegrityVerdict::InvalidFooter),
+        Err(e) => return Err(e),
+    };
+    let Some(offset) = found else {
+        return Ok(IntegrityVerdict::NoFooter);
+    };
+
+    let magic_len = FOOTER_MAGIC.len() as u64;
+    // Cursor sits right after the leading MAGIC: read the stored content digest.
+    let mut stored_content = [0u8; 20];
+    file.read_exact(&mut stored_content)
+        .map_err(|e| Error::io(archive_path, e))?;
+
+    let Some(xz_len) = len
+        .checked_sub(offset + magic_len + SHA1_LEN + SHA1_LEN + magic_len + OFFSET_LEN)
+    else {
+        return Ok(IntegrityVerdict::InvalidFooter);
+    };
+
+    // Stored xz digest: right before the trailing MAGIC + offset.
+    let mut stored_xz = [0u8; 20];
+    file.seek(SeekFrom::Start(len - magic_len - OFFSET_LEN - SHA1_LEN))
+        .map_err(|e| Error::io(archive_path, e))?;
+    file.read_exact(&mut stored_xz)
+        .map_err(|e| Error::io(archive_path, e))?;
+
+    if let Some(bar) = bar {
+        bar.set_length(offset + xz_len);
+        bar.set_position(0);
+        bar.set_message("hashing archive content");
+    }
+    let content_match = hash_region(archive_path, 0, offset, bar)? == stored_content;
+
+    if let Some(bar) = bar {
+        bar.set_message("hashing database");
+    }
+    let db_match = hash_region(archive_path, offset + magic_len + SHA1_LEN, xz_len, bar)?
+        == stored_xz;
+
+    Ok(match (content_match, db_match) {
+        (true, true) => IntegrityVerdict::Ok,
+        (false, true) => IntegrityVerdict::ContentMismatch,
+        (true, false) => IntegrityVerdict::DatabaseMismatch,
+        (false, false) => IntegrityVerdict::BothMismatch,
+    })
+}
+
 //==================================================================================================
 // Testing
 //==================================================================================================
@@ -315,6 +420,78 @@ mod tests {
         let dest = dir.path().join("nope.sqlite");
         assert!(!read_footer(&config.paths.archive_path, &dest).expect("no footer"));
         assert!(!dest.exists());
+    }
+
+    #[test]
+    fn verify_footer_ok_on_valid_footer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_footer_archive(dir.path());
+        assert_eq!(
+            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            IntegrityVerdict::Ok,
+        );
+    }
+
+    #[test]
+    fn verify_footer_no_footer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_archive(dir.path());
+        assert_eq!(
+            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            IntegrityVerdict::NoFooter,
+        );
+    }
+
+    #[test]
+    fn verify_footer_invalid_format_on_leading_magic_corruption() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_footer_archive(dir.path());
+        corrupt_byte(&config.paths.archive_path, footer_offset(&config.paths.archive_path));
+        assert_eq!(
+            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            IntegrityVerdict::InvalidFooter,
+        );
+    }
+
+    #[test]
+    fn verify_footer_content_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_footer_archive(dir.path());
+        corrupt_byte(&config.paths.archive_path, 1024);
+        assert_eq!(
+            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            IntegrityVerdict::ContentMismatch,
+        );
+    }
+
+    #[test]
+    fn verify_footer_database_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_footer_archive(dir.path());
+        // A byte inside the stored xz catalog blob (after leading MAGIC + content digest).
+        corrupt_byte(
+            &config.paths.archive_path,
+            footer_offset(&config.paths.archive_path) + FOOTER_MAGIC.len() as u64 + SHA1_LEN,
+        );
+        assert_eq!(
+            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            IntegrityVerdict::DatabaseMismatch,
+        );
+    }
+
+    #[test]
+    fn verify_footer_both_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_footer_archive(dir.path());
+        corrupt_byte(&config.paths.archive_path, 1024);
+        corrupt_byte(
+            &config.paths.archive_path,
+            footer_offset(&config.paths.archive_path) + FOOTER_MAGIC.len() as u64 + SHA1_LEN + 5,
+        );
+        assert_eq!(
+            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            IntegrityVerdict::BothMismatch,
+        );
     }
 
     #[cfg(feature = "test-compression")]
