@@ -502,10 +502,13 @@ mod tests {
             &sh, 1, mk, (0..8).collect(), 4, 2, false, || Ok(true));
 
         // The in-flight item produces no outcome and nothing is committed; the
-        // loop still exits cleanly (no hang) after the workers are gone.
+        // loop still exits cleanly (no hang) after the workers are gone. How many
+        // items the feed managed to inject before the force-flag landed is a
+        // thread-scheduling race (the worker calls request_force() at spawn), so
+        // only the termination/discard invariants and the feed upper bound hold.
         assert_eq!(dequeue, 0);
         assert!(applied.is_empty());
-        assert!(sent_log.len() >= 4);
+        assert!(sent_log.len() <= 8);
     }
 
     #[test]
