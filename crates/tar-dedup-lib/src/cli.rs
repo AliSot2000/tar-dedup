@@ -122,7 +122,7 @@ pub struct ArchiveArgs {
     #[arg(long = "xz-extreme", help_heading = "Compression")]
     pub xz_extreme: bool,
 
-    // INFO: Rust does not expose bzip-small option.,
+    // INFO: Rust does not expose bzip-small option. We ignore it.
 
     /// Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`.
     #[arg(long = "memlimit-compress", value_name = "LIMIT", help_heading = "Compression")]
