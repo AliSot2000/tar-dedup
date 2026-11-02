@@ -6,7 +6,7 @@
 # `attr` (getfattr / setfattr).
 #
 # The same scenarios are also exposed as cargo tests
-# (`crates/tar-dedup-cli/tests/integration_shell.rs`) so `cargo test` /
+# (`crates/tar-dedup/tests/integration_shell.rs`) so `cargo test` /
 # `cargo llvm-cov` drive them and capture the CLI child-process coverage —
 # this file is the canonical scenario definition for both entry points.
 #
@@ -26,7 +26,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BIN="${TAR_DEDUP_BIN:-$REPO_DIR/target/release/tar-dedup}"
 
 if [ ! -x "$BIN" ]; then
-    echo "error: binary not found at $BIN (run: cargo build --release -p tar-dedup-cli)" >&2
+    echo "error: binary not found at $BIN (run: cargo build --release -p tar-dedup)" >&2
     exit 2
 fi
 
