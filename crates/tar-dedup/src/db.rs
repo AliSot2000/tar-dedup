@@ -7,7 +7,8 @@ use rusqlite::Connection;
 
 use crate::common::perms::OwnerGroupPolicy;
 use crate::config::{ArchiveRuntimeState,
-                    ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase,
+                    CleanupMode, ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState,
+                    PipelinePhase,
 };
 use crate::db::flags::{FileFlag, FileFlags, OutTreeFlag, OutTreeFlags, SourceFlags};
 use crate::db::types::{
@@ -1099,6 +1100,11 @@ impl Database {
         place::list_out_tree_for_linking(&self.conn(), batch_size, pending)
     }
 
+    pub fn list_out_tree_links_for_sidecar<R: SqlFileRow>(&self, last_id: OutTreeId, batch_size: u64)
+        -> Result<Vec<(R, OutTreeRecord)>> {
+        permissions::list_out_tree_links_for_sidecar::<R>(&self.conn(), last_id, batch_size)
+    }
+
     pub fn mark_all_canonical(&self) -> Result<u64> {
         place::mark_all_canonical(&self.conn())
     }
@@ -1214,6 +1220,11 @@ impl Database {
 
     pub fn count_errors(&self, phase: Option<&str>) -> Result<u64> {
         errors::count_errors(&self.conn(), phase)
+    }
+
+    /// Total errors recorded across every phase of the given pipeline.
+    pub fn count_pipeline_errors(&self, mode: CleanupMode) -> Result<u64> {
+        errors::count_pipeline_errors(&self.conn(), mode)
     }
 
     // --- integrity checks across the database
