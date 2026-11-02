@@ -1100,9 +1100,9 @@ impl Database {
         place::list_out_tree_for_linking(&self.conn(), batch_size, pending)
     }
 
-    pub fn list_out_tree_links_for_sidecar<R: SqlFileRow>(&self, last_id: OutTreeId, batch_size: u64)
+    pub fn list_out_tree_links_for_sidecar<R: SqlFileRow>(&self, batch_size: u64)
         -> Result<Vec<(R, OutTreeRecord)>> {
-        permissions::list_out_tree_links_for_sidecar::<R>(&self.conn(), last_id, batch_size)
+        permissions::list_out_tree_links_for_sidecar::<R>(&self.conn(), batch_size)
     }
 
     pub fn mark_all_canonical(&self) -> Result<u64> {
