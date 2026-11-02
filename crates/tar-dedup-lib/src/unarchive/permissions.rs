@@ -242,18 +242,18 @@ fn inner_apply_permissions(
                 )));
     }
 
-    let mut entry = record.as_ref().map(SidecarEntry::from);
+    let entry = record.as_ref().map(SidecarEntry::from);
     let wanted = match rt.config.effective_sidecar_mode() {
         SidecarMode::Always => entry.is_some(),
         SidecarMode::OnError => !error_empty,
         SidecarMode::Never => false,
     };
     if wanted {
-        if let Some(side) = entry.as_mut() {
-            side.attach_out_tree(out.id, &out.abs_path);
+        if let Some(side) = entry {
+            let side = side.with_out_tree(out.id, &out.abs_path);
             if let Err(fse) = write_sidecar(
                 &out.abs_path,
-                side,
+                &side,
                 rt.config.hidden_sidecar,
                 SIDECAR_MAX_NAME_ATTEMPTS,
             ) {
@@ -326,8 +326,7 @@ fn write_link_tree_sidecars(rt: &ExtractRTArgs, rec: &mut Recorder) -> Result<()
         }
         for (record, out) in batch {
             rt.shutdown.check_between_files()?;
-            let mut sid = SidecarEntry::from(&record);
-            sid.attach_out_tree(out.id, &out.abs_path);
+            let sid = SidecarEntry::from(&record).with_out_tree(out.id, &out.abs_path);
             if let Err(fse) = write_sidecar(
                 &out.abs_path,
                 &sid,
