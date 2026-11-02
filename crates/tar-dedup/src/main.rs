@@ -60,5 +60,6 @@ fn main() -> tar_dedup_lib::error::Result<()> {
         Command::Dump(args) => tar_dedup_lib::cmd::dump::run(&args),
         Command::Query(args) => tar_dedup_lib::cmd::query::run(&args),
         Command::Reset(args) => tar_dedup_lib::cmd::reset::run(&args),
+        Command::Check(args) => tar_dedup_lib::cmd::check::run(&args),
     }
 }
