@@ -55,6 +55,8 @@ pub enum Command {
     Query(ArchiveInputArgs),
     /// Update stored archive/extract parameters and reset pipeline state.
     Reset(ResetArgs),
+    /// Verify the integrity of an archive via its footer (content + catalog digests).
+    Check(CheckArgs),
 }
 
 #[derive(Debug, Args)]
@@ -1212,6 +1214,18 @@ pub struct ResetArgs {
     /// Work directory of the run (`.astage` / `.estage`), holding `tar-dedup.sqlite`.
     #[arg(long = "work-dir", value_name = "DIR")]
     pub work_dir: Option<PathBuf>,
+}
+
+/// Check the integrity of an archive via its footer trailer.
+#[derive(Debug, Args)]
+pub struct CheckArgs {
+    /// Archive path whose footer integrity is verified (relative paths use cwd).
+    #[arg(short = 'f', value_name = "ARCHIVE")]
+    pub archive: PathBuf,
+
+    /// Suppress the verdict message and the progress bar; exit code only.
+    #[arg(short = 'q', long = "quiet", default_value_t = false, action = ArgAction::SetTrue)]
+    pub quiet: bool,
 }
 
 /// Pipeline stop point for `--exit-after-stage`.
