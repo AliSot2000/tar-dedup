@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use std::path::PathBuf;
+use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 use crate::db::flags::{FileFlags, OutTreeFlags, SourceFlags};
 
@@ -349,6 +350,98 @@ pub struct SourceRecord {
     pub original_path_raw: Option<PathBuf>,
     pub line: i64,
     pub flags: SourceFlags,
+}
+
+/// `out_tree` embed in a sidecar manifest: the reverse-mapping used when a
+/// target filename was re-randomized on sidecar collision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SidecarOutTree {
+    /// `out_tree.id` of the placed target.
+    pub id: i64,
+    /// Absolute path the entry was placed at (extraction target).
+    pub target_path: PathBuf,
+}
+
+/// Metadata snapshot for a placed entry, written as a JSON sidecar next to the
+/// target (`unarchive/permissions.rs`). Down-converted from a [`FileRecord`]
+/// with no extra DB fetch. `sha1` is the lowercase-hex digest, `ftype` the
+/// stable [`FileType::as_str`] string, `selinux` the stored context (lossy UTF-8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SidecarEntry {
+    pub id: i64,
+    pub abs_path: PathBuf,
+    pub ext: String,
+    pub size: u64,
+    pub sha1: Option<String>,
+    pub mtime: Option<DateTime<Utc>>,
+    pub atime: Option<DateTime<Utc>>,
+    pub ctime: Option<DateTime<Utc>>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub username: Option<String>,
+    pub groupname: Option<String>,
+    pub mode: Option<u32>,
+    pub ftype: String,
+    pub device_id: Option<u64>,
+    pub inode: Option<u64>,
+    pub major: Option<u64>,
+    pub minor: Option<u64>,
+    pub xattrs: Option<String>,
+    pub posix_acl: Option<String>,
+    pub selinux: Option<String>,
+    pub win_perm: Option<String>,
+    pub link_dst: Option<PathBuf>,
+    pub new_name: Option<String>,
+    /// Out-tree reverse mapping (the placed target); filled by the writer.
+    pub out_tree: SidecarOutTree,
+}
+
+impl From<&FileRecord> for SidecarEntry {
+    fn from(r: &FileRecord) -> Self {
+        Self {
+            id: r.id.0,
+            abs_path: r.abs_path.clone(),
+            ext: r.ext.clone(),
+            size: r.size,
+            sha1: r.sha1.map(hex_sha1),
+            mtime: r.mtime,
+            atime: r.atime,
+            ctime: r.ctime,
+            uid: r.uid,
+            gid: r.gid,
+            username: r.username.clone(),
+            groupname: r.groupname.clone(),
+            mode: r.mode,
+            ftype: r.ftype.as_str().to_string(),
+            device_id: r.device_id,
+            inode: r.inode_id,
+            major: r.major,
+            minor: r.minor,
+            xattrs: r.xattrs.clone(),
+            posix_acl: r.posix_acl.clone(),
+            selinux: r
+                .selinux_ctx
+                .as_ref()
+                .map(|b| String::from_utf8_lossy(b).into_owned()),
+            win_perm: r.win_perm.clone(),
+            link_dst: r.link_dst.clone(),
+            new_name: r.new_name.clone(),
+            // Placeholder: the writer replaces this with the real out_tree.
+            out_tree: SidecarOutTree { id: r.id.0, target_path: r.abs_path.clone() },
+        }
+    }
+}
+
+impl SidecarEntry {
+    /// Attach the real out-tree mapping (the placed target). `From<&FileRecord>`
+    /// starts the embed at the file row's own id/path as a placeholder.
+    pub fn attach_out_tree(&mut self, id: OutTreeId, target_path: &Path) {
+        self.out_tree = SidecarOutTree { id: id.0, target_path: target_path.to_path_buf() };
+    }
+}
+
+fn hex_sha1(digest: [u8; 20]) -> String {
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 //==================================================================================================
