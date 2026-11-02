@@ -21,6 +21,19 @@ use super::{
     archive_stem, default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_file,
 };
 
+/// When per-entry JSON sidecar manifests are written beside extracted entries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum SidecarMode {
+    /// Write a sidecar manifest for every placed entry.
+    Always,
+    /// Write a sidecar only where metadata application failed.
+    #[default]
+    OnError,
+    /// Write no sidecar manifests.
+    Never,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacementOptions {
     pub absolute_names: bool,
@@ -223,6 +236,10 @@ pub struct ExtractConfig {
     pub strip_components: u32,
     pub transform_policy: TransformSource,
     pub filter: FilterOptions,
+    /// When sidecar manifests are written for placed entries.
+    pub sidecar: SidecarMode,
+    /// Prefix sidecar names with a leading dot (`{name}.json` → `.{name}.json`).
+    pub hidden_sidecar: bool,
 }
 
 impl Default for ExtractConfig {
@@ -244,6 +261,8 @@ impl Default for ExtractConfig {
             strip_components: 0,
             transform_policy: TransformSource::None,
             filter: FilterOptions::default(),
+            sidecar: SidecarMode::OnError,
+            hidden_sidecar: false,
         }
     }
 }
@@ -275,6 +294,20 @@ impl Validate for ExtractConfig {
         self.owner_group.validate()?;
         self.filter.validate()?;
 
+        // Sidecar folds (restrictor wins, warn-only like the no-overwrite-dir /
+        // overwrite-all-dir pairing).
+        if self.placement.link_tree && self.sidecar == SidecarMode::OnError {
+            tracing::warn!(
+                "--sidecar on-error has no effect with --link-tree (metadata applies to the \
+                 `.sources` canonicals, no per-link errors exist); falling back to never"
+            );
+        }
+        if self.process.no_errors && self.sidecar == SidecarMode::OnError {
+            tracing::warn!(
+                "--sidecar on-error has no effect with --no-errors (nothing is recorded); \
+                 falling back to never"
+            );
+        }
 
         Ok(())
     }
@@ -334,6 +367,8 @@ impl ExtractConfig {
             strip_components: self.strip_components,
             transform_policy: merge_pick_clone(&self.transform_policy, &base.transform_policy, &default.transform_policy),
             filter: merge_pick_clone(&self.filter, &base.filter, &default.filter),
+            sidecar: self.sidecar,
+            hidden_sidecar: self.hidden_sidecar,
         }
     }
 
@@ -425,6 +460,17 @@ impl ExtractConfig {
             Some(ls) => Some(ls.clean())
         };
 
+        let sidecar_mode = if args.no_sidecar {
+            if args.sidecar != SidecarMode::OnError {
+                tracing::warn!(
+                    "--no-sidecar is an alias for `--sidecar never`; explicit --sidecar ignored"
+                );
+            }
+            SidecarMode::Never
+        } else {
+            args.sidecar
+        };
+
         Ok(Self {
             paths: PathLayout {
                 archive_path: c_archive_path,
@@ -484,7 +530,7 @@ impl ExtractConfig {
                 force: args.force,
                 relax_utf8: args.relax_utf8,
                 progress_mode: args.progress_mode,
-                cleanup: CleanupSettings::from_flags(args.keep_db, args.keep_stage),
+                cleanup: CleanupSettings { db_retention: args.db_retention, keep_stage: args.keep_stage },
                 exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             },
             owner_policy,
@@ -508,7 +554,21 @@ impl ExtractConfig {
                 no_unicode: args.no_unicode,
                 eager_filter: !args.lazy_filter,
             },
+            sidecar: sidecar_mode,
+            hidden_sidecar: args.hidden_sidecar,
         })
+    }
+
+    /// The sidecar mode actually in effect. `OnError` degrades to `Never` when
+    /// `--no-errors` (nothing can be recorded) or `--link-tree` (no per-link
+    /// permission errors exist; link-tree never offers `OnError`).
+    pub fn effective_sidecar_mode(&self) -> SidecarMode {
+        if self.sidecar == SidecarMode::OnError
+            && (self.process.no_errors || self.placement.link_tree) {
+            SidecarMode::Never
+        } else {
+            self.sidecar
+        }
     }
 
     #[cfg(test)]
@@ -549,6 +609,8 @@ impl ExtractConfig {
             strip_components: 0,
             transform_policy: TransformSource::None,
             filter: FilterOptions::default(),
+            sidecar: SidecarMode::Never,
+            hidden_sidecar: false,
         }
     }
 
@@ -590,6 +652,8 @@ impl ExtractConfig {
             strip_components: 0,
             transform_policy: TransformSource::None,
             filter: FilterOptions::default(),
+            sidecar: SidecarMode::Never,
+            hidden_sidecar: false,
         }
     }
 
@@ -766,7 +830,7 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use crate::common::perms::infer_same_owner;
-    use crate::config::{CompressionFormat, WorkDirLocation};
+    use crate::config::{CompressionFormat, DbRetention, SidecarMode, WorkDirLocation};
     use clap::Parser;
     use std::path::{Path, PathBuf};
 
@@ -977,5 +1041,61 @@ mod tests {
             WorkDirLocation::BesideOutput,
         );
         assert_eq!(cfg.paths.work_dir, expected);
+    }
+
+    #[test]
+    fn sidecar_flags_build_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+
+        let cfg = build(&archive, &[]).expect("default");
+        assert_eq!(cfg.sidecar, SidecarMode::OnError);
+        assert!(!cfg.hidden_sidecar);
+
+        let cfg = build(&archive, &["--sidecar", "always", "--hidden-sidecar"]).expect("always");
+        assert_eq!(cfg.sidecar, SidecarMode::Always);
+        assert!(cfg.hidden_sidecar);
+
+        for args in [&["--no-sidecar"][..], &["--sidecar", "never"][..]] {
+            let cfg = build(&archive, args).expect("never");
+            assert_eq!(cfg.sidecar, SidecarMode::Never);
+        }
+    }
+
+    #[test]
+    fn db_retention_flag_builds_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+
+        let cfg = build(&archive, &[]).expect("default");
+        assert_eq!(cfg.process.cleanup.db_retention, DbRetention::OnError);
+
+        for (flag, expect) in [("always", DbRetention::Always), ("never", DbRetention::Never)] {
+            let cfg = build(&archive, &["--db-retention", flag]).expect(flag);
+            assert_eq!(cfg.process.cleanup.db_retention, expect, "--db-retention {flag}");
+        }
+    }
+
+    #[test]
+    fn effective_sidecar_mode_folds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let mut cfg = build(&archive, &["--sidecar", "on-error"]).expect("on-error");
+        assert_eq!(cfg.effective_sidecar_mode(), SidecarMode::OnError);
+
+        cfg.process.no_errors = true;
+        assert_eq!(
+            cfg.effective_sidecar_mode(),
+            SidecarMode::Never,
+            "--no-errors folds on-error sidecars to never"
+        );
+
+        let mut cfg2 = build(&archive, &["--sidecar", "on-error"]).expect("on-error");
+        cfg2.placement.link_tree = true;
+        assert_eq!(
+            cfg2.effective_sidecar_mode(),
+            SidecarMode::Never,
+            "link-tree folds on-error sidecars to never"
+        );
     }
 }

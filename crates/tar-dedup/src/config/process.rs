@@ -8,18 +8,29 @@ use crate::error::{Error, Result};
 
 use super::Validate;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CleanupSettings {
-    /// if true, keep the database.
-    pub keep_db: bool,
-    /// if true, keep the stage directory (.astage / .estage)
-    pub keep_stage: bool,
+/// When the work database is retained at the end of a successful run.
+///
+/// With `OnError` the DB survives only if at least one error was recorded in it;
+/// `--no-errors` (nothing recorded) therefore folds to `Never`. Retained copies
+/// use the timestamped `kept_db_parent` mechanism in `common/cleanup.rs`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum DbRetention {
+    /// Always keep a timestamped copy of the work database.
+    Always,
+    /// Keep a copy only when the run recorded at least one error.
+    #[default]
+    OnError,
+    /// Delete the work database (current behavior).
+    Never,
 }
 
-impl CleanupSettings {
-    pub fn from_flags(keep_db: bool, keep_stage: bool) -> Self {
-        Self { keep_db, keep_stage }
-    }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CleanupSettings {
+    /// When to keep a timestamped copy of the work database (`--db-retention`).
+    pub db_retention: DbRetention,
+    /// if true, keep the stage directory (.astage / .estage)
+    pub keep_stage: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,7 +144,7 @@ impl Default for ProcessOptions {
             force: false,
             relax_utf8: false,
             progress_mode: crate::cli::ProgressMode::PerThread,
-            cleanup: CleanupSettings { keep_db: false, keep_stage: false },
+            cleanup: CleanupSettings { db_retention: DbRetention::OnError, keep_stage: false },
             exit_after_stage: None,
         }
     }
@@ -148,12 +159,20 @@ impl ProcessOptions {
 
 impl Validate for ProcessOptions {
     fn validate(&self) -> Result<()> {
-        // INFO: Kept in case I made a mistake. But force shoud not have anything to do with this.
+        // INFO: Kept in case I made a mistake. But force should not have anything to do with this.
         // if self.relax_utf8 && self.force {
         //     return Err(Error::Config(
         //         "--relax-utf8 is mutually exclusive with --force".into(),
         //     ));
         // }
+        if self.no_errors && self.cleanup.db_retention == DbRetention::OnError {
+            // Restrictor wins: nothing is recorded under `--no-errors`, so the
+            // on-error count is always 0 and the DB is dropped.
+            tracing::warn!(
+                "--db-retention on-error has no effect with --no-errors (nothing is recorded); \
+                 the database will not be kept"
+            );
+        }
         for (value, name) in [
             (self.jobs as u64, "--jobs"),
             (self.io_jobs as u64, "--io-jobs"),
