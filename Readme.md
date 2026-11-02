@@ -133,7 +133,7 @@ also use more RAM, leading to worse system performance.
 | -     | `--jobs`               | n        | 1    | Maximum number of workers for rayon pools and xz encoder                                                                          |       |
 | -     | `--io-jobs`            | n        | 1    | Maximum concurrent io-bound workers (dedup, sparsify, place pools).                                                               |       |
 | -     | `--fresh`              | n        | 0    | Wipe `--work-dir` if there's something.                                                                                           |       |
-| -     | `--keep-db`            | n        | 0    | Retain the database after successfully finishing the archive                                                                      |       |
+| -     | `--db-retention`       | n        | 1    | When to keep a timestamped copy of the work database next to the archive: `always`, `on-error` (default), `never`.                 | TODO  |
 | -     | `--keep-stage`         | n        | 0    | Retain the stage directory (independent of database)                                                                              |       |
 | -     | `--exit-after-stage`   | n        | 1    | Exit and save state after completing a given stage.                                                                               |       |
 | -     | `--fail-fast`          | n        | 0    | Exit immediately if an error occurres. (E.g. Permission denied, Path does not Exist, ...)                                         |       |
@@ -169,6 +169,268 @@ also use more RAM, leading to worse system performance.
    pattern are then eligible. If no include filter is given, a catch-all filter is used.
 6. The database will store the overrides separately from the file metadata. On extract, the overrides will be applied 
    rather than on archive.
+
+### extract
+
+Restore a tar-dedup archive (materialize: full copy at each original path). Aborts if extract work already exists; use `--fresh` to replace.
+
+**Archive Paths**
+
+| Short | Long               | Required | Args | Description                                                                                                                                                                            | Notes |
+|-------|--------------------|----------|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -f    | -                  | y        | 1    | Archive path (relative paths use `-C` / current directory).                                                                                                                            |       |
+| -C    | `--directory`      | n        | 1    | Treat DIR as the working directory when resolving relative paths on this command line (`-f`, `-C`, `--work-dir`, …). Absolute paths are unchanged. Default: process current directory. |       |
+| -     | `--extract-to`     | n        | 1    | Extract members into DIR (the restore root); default: `-C` / current dir.                                                                                                              |       |
+| -     | `--work-dir`       | n        | 1    | Stage directory for sqlite DB, cached payloads, and locks (defaults to `{stem}.estage` next to the archive). Relative paths use `-C` / cwd.                                            |       |
+| -     | `--work-dir-location` | n    | 1    | Where `{stem}.estage` is placed when `--work-dir` is not given: `beside-archive` (default) or `beside-output` (next to the extraction root).                                                                                             |       |
+| -P    | `--absolute`       | n        | 0    | Restore using absolute catalog paths (`-P`). Extraction join abs paths under the extraction root (leading `,/` stripped). To extract to file system root, pass `/` as `-C`.            |       |
+| -     | `--one-top-level`  | n        | 0..1 | Extract loose members into a subdirectory under the extraction root (GNU tar `--one-top-level`). A bare `--one-top-level` uses the archive name as the subdirectory; DIR overrides it. |       |
+| -     | `--clean-target`           | n        | 0    | Remove the extraction root before extracting (only effective with `--one-top-level`).                                                                                                                                        |       |
+
+**Compression**
+
+| Short | Long      | Required | Args | Description                                                       | Notes |
+|-------|-----------|----------|------|-------------------------------------------------------------------|-------|
+| -     | `--gzip`  | n        | 0    | Filter the archive through gzip (overrides extension inference).  |       |
+| -     | `--bzip2` | n        | 0    | Filter the archive through bzip2 (overrides extension inference). |       |
+| -     | `--xz`    | n        | 0    | Filter the archive through xz (overrides extension inference).    |       |
+| -     | `--zstd`  | n        | 0    | Filter the archive through zstd (overrides extension inference).  |       |
+
+**Rehash**
+
+| Short | Long          | Required | Args | Description                                                      | Notes |
+|-------|---------------|----------|------|------------------------------------------------------------------|-------|
+| -     | `--no-rehash` | n        | 0    | Do not run the rehash (content verification) phase. Default: on. |       |
+
+**Overwrite Control**
+
+| Short | Long                       | Required | Args | Description                                                                                                                                                                                                                  | Notes |
+|-------|----------------------------|----------|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--keep-directory-symlink` | n        | 0    | Preserve existing directory symlinks instead of replacing them (GNU tar `--keep-directory-symlink`).                                                                                                                         |       |
+| -U    | `--unlink-first`           | n        | 0    | Remove each existing file before extracting over it (GNU tar `-U` / `--unlink-first`).                                                                                                                                       |       |
+| -     | `--no-create-dirs`         | n        | 0    | Skip the directory tree create pass. Results in the members without a parent being skipped. Results in error with --fail-fast                                                                                                |       |
+| -     | `--no-overwrite-dir`       | n        | 0    | Do not apply archived metadata to existing directories (GNU tar `--no-overwrite-dir`). Default: apply directory metadata for placed members, matching GNU tar at the end of the pipeline.                                    |       |
+| -     | `--overwrite-all-dir`      | n        | 0    | Also apply archived directory metadata to directories excluded by filters (normally only placed members are updated). Not the negation of `--no-overwrite-dir`: both flags together disable all directory updates.                                                                                                                                    |       |
+| -     | `--conflict-policy`        | n        | 1    | How to handle paths that already exist on disk.                                                                                                                                                                              |       |
+| -     | `--silent-conflicts`       | n        | 0    | Do not log path or type conflicts (pairs with `--conflict-policy`).                                                                                                                                                          |       |
+| -     | `--remove-and-replace`     | n        | 0    | On type mismatch at a path, remove the existing entry and extract the archive member.                                                                                                                                        |       |
+| -     | `--hard-link-grouping`     | n        | 1    | On type mismatch at a path, remove the existing entry and extract the archive member.                                                                                                                                        |       |
+
+**Link Tree**
+
+| Short | Long               | Required | Args | Description                                                                                                                                      | Notes |
+|-------|--------------------|----------|------|--------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--link-tree`      | n        | 0    | Build the restored tree from symlinks/hard links into the extract stage instead of copying payloads (keeps the `.estage` cache).                 |       |
+| -     | `--hard-links`     | n        | 0    | With `--link-tree`, use hard links instead of symlinks.                                                                                          |       |
+| -     | `--absolute-links` | n        | 0    | With `--link-tree`, link using absolute paths instead of paths relative to the output root.                                                      |       |
+| -     | `--link-source`    | n        | 1    | With `--link-tree`, use DIR as the directory the canonical payloads are materialized into before linking (default: the extract cache directory). |       |
+
+**Placement**
+
+| Short | Long                     | Required | Args | Description                                                                                                                                          | Notes |
+|-------|--------------------------|----------|------|------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--no-reflink`           | n        | 0    | Do not attempt copy-on-write (reflink) copies when placing payloads.                                                                                 |       |
+| -     | `--create-other-entries` | n        | 0    | Recreate non-regular entries (symlink, fifo, char/block device, socket). Off by default: those entries require privileges (`mknod`) most users lack. |       |
+
+**File Attributes**
+
+| Short | Long                          | Required | Args | Description                                                                                                                                                                                                                                                                               | Notes |
+|-------|-------------------------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--same-owner`                | n        | 0    | Restore archived uid/gid when possible (GNU tar `--same-owner`; may require root). Default: inferred from the effective uid of the extracting process.                                                                                                                                    |       |
+| -     | `--no-same-owner`             | n        | 0    | Do not restore archived ownership; files are owned by the extracting process. Default: inferred from the effective uid of the extracting process.                                                                                                                                         |       |
+| -     | `--map-target`                | n        | 1    | How to emit the resolved owner/group: `ids`, `names`, `name-id`, or `id-name` (default `name-id`).                                                                                                                                                                                        |       |
+| -     | `--validate-maps`             | n        | 0    | Fail hard on map/override destinations that the chosen --map-target cannot emit.                                                                                                                                                                                                          |       |
+| -     | `--owner`                     | n        | 1    | Force owner for restored members: `NAME`, `UID`, or `NAME:UID`. Identity is all-or-nothing: giving any of `--owner`/`--group`/`--owner-map`/`--group-map` uses the CLI for **both** identities and disables `--apply-stored-owner-map` / `--apply-stored-group-map` (no CLI/archive mix). |       |
+| -     | `--owner-map`                 | n        | 1    | Owner translation map file (GNU tar `--owner-map`). See `--owner` for the all-or-nothing identity rule.                                                                                                                                                                                   |       |
+| -     | `--group`                     | n        | 1    | Force group for restored members: `NAME`, `GID`, or `NAME:GID`. See `--owner` for the all-or-nothing identity rule.                                                                                                                                                                       |       |
+| -     | `--group-map`                 | n        | 1    | Group translation map file (GNU tar `--group-map`). See `--owner` for the all-or-nothing identity rule.                                                                                                                                                                                   |       |
+| -     | `--apply-stored-owner-map`    | n        | 0    | Apply the owner map recorded in the archive (alongside `--apply-stored-group-map`, the whole archived identity). Ignored if any of `--owner`/`--group`/`--owner-map`/`--group-map` is given: identity comes entirely from the command line or entirely from the archive — never a mix.    |       |
+| -     | `--no-apply-stored-owner-map` | n        | 0    | Do not apply the owner map recorded in the archive.                                                                                                                                                                                                                                       |       |
+| -     | `--apply-stored-group-map`    | n        | 0    | Apply the group map recorded in the archive (alongside `--apply-stored-owner-map`, the whole archived identity). Ignored if any of `--owner`/`--group`/`--owner-map`/`--group-map` is given: identity comes entirely from the command line or entirely from the archive — never a mix.    |       |
+| -     | `--no-apply-stored-group-map` | n        | 0    | Do not apply the group map recorded in the archive.                                                                                                                                                                                                                                       |       |
+| -     | `--mode`                      | n        | 1    | Force symbolic mode CHANGES for restored members; takes precedence over `--apply-mode`.                                                                                                                                                                                                   |       |
+| -     | `--apply-mode`                | n        | 0    | Apply the mode changes recorded in the archive (ignored if `--mode` given).                                                                                                                                                                                                               |       |
+| -     | `--no-apply-mode`             | n        | 0    | Do not apply the mode changes recorded in the archive.                                                                                                                                                                                                                                    |       |
+| -     | `--transform`                 | n        | 1    | Force a sed-style name transform (GNU tar `--transform`/`--xform`) at extraction; takes precedence over `--apply-transform`.                                                                                                                                                              |       |
+| -     | `--apply-transform`           | n        | 0    | Apply the name transform recorded in the archive (ignored if `--transform` given).                                                                                                                                                                                                        |       |
+| -     | `--no-apply-transform`        | n        | 0    | Do not apply the name transform recorded in the archive.                                                                                                                                                                                                                                  |       |
+| -     | `--strip-components`          | n        | 1    | Strip NUMBER leading path components from file names before extraction. (GNU tar `--strip-components`; 0 = no-op.)                                                                                                                                                                        |       |
+| -     | `--apply-atime`               | n        | 0    | Restore archived access times from the database (default: leave untouched).                                                                                                                                                                                                               |       |
+| -     | `--no-apply-atime`            | n        | 0    | Explicitly do not restore archived access times (overrides `--apply-all-metadata`).                                                                                                                                                                                                       |       |
+| -     | `--apply-mtime`               | n        | 0    | Restore archived modification times from the database (default: leave untouched).                                                                                                                                                                                                         |       |
+| -     | `--no-apply-mtime`            | n        | 0    | Explicitly do not restore archived modification times (overrides `--apply-all-metadata`).                                                                                                                                                                                                 |       |
+| -     | `--xattrs`                    | n        | 0    | Apply archived extended attributes.                                                                                                                                                                                                                                                       |       |
+| -     | `--no-xattrs`                 | n        | 0    | Do not apply archived extended attributes.                                                                                                                                                                                                                                                |       |
+| -     | `--acls`                      | n        | 0    | Apply archived POSIX ACLs.                                                                                                                                                                                                                                                                |       |
+| -     | `--no-acls`                   | n        | 0    | Do not apply archived POSIX ACLs.                                                                                                                                                                                                                                                         |       |
+| -     | `--selinux`                   | n        | 0    | Apply archived SELinux contexts.                                                                                                                                                                                                                                                          |       |
+| -     | `--no-selinux`                | n        | 0    | Do not apply archived SELinux contexts.                                                                                                                                                                                                                                                   |       |
+| -     | `--same-permissions`          | n        | 0    | Apply archived permissions (mode). Permissions are restored by default.                                                                                                                                                                                                                   |       |
+| -     | `--no-same-permissions`       | n        | 0    | Do not apply archived permissions (mode).                                                                                                                                                                                                                                                 |       |
+| -     | `--apply-all-metadata`        | n        | 0    | Apply every metadata attribute recorded in the archive (owner, stored owner/group maps, mode, transform, atime/mtime, xattrs/acls/selinux, perms). Individual `--no-*` toggles override this on a per-bit basis.                                                                          |       |
+
+**Process Options**
+
+| Short | Long                 | Required | Args | Description                                                                                                         | Notes |
+|-------|----------------------|----------|------|---------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--jobs`             | n        | 1    | Maximum concurrent workers (rayon pools and xz threads).                                                            |       |
+| -     | `--io-jobs`          | n        | 1    | Maximum concurrent io-bound workers (dedup, sparsify, place pools).                                                 |       |
+| -     | `--fresh`            | n        | 0    | Wipe extract work (`.estage`) and start over.                                                                       |       |
+| -     | `--force`            | n        | 0    | Continue even if the tool cannot guarantee the integrity of the data.                                               |       |
+| -     | `--relax-utf8`       | n        | 0    | Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept. Mutually exclusive with `--force`. |       |
+| -     | `--auto-flush-limit` | n        | 1    | Number of error drafts buffered before an auto-flush to the database.                                               |       |
+| -     | `--batch-size`       | n        | 1    | Rows pulled from the database per phase iteration.                                                                  |       |
+| -     | `--work-capacity`    | n        | 1    | Items in the producer/consumer work channel.                                                                        |       |
+| -     | `--out-capacity`     | n        | 1    | Items in the producer/consumer result channel.                                                                      |       |
+| -     | `--feed-chunk`       | n        | 1    | Rows pulled from the database per feed round.                                                                       |       |
+| -     | `--drain-chunk`      | n        | 1    | Outcomes committed per transaction.                                                                                 |       |
+| -     | `--progress-mode`    | n        | 1    | Which progress bars to draw.                                                                                        |       |
+| -     | `--fail-fast`        | n        | 0    | Abort on the first warning or error instead of continuing where possible.                                           |       |
+| -     | `--no-errors`        | n        | 0    | Do not record per-file errors in the database.                                                                      |       |
+| -     | `--db-retention`     | n        | 1    | When to keep a timestamped copy of the work database (under the extraction root): `always`, `on-error` (default), `never`.          |       |
+| -     | `--keep-stage`       | n        | 0    | After success, keep the `{stem}.estage` work directory.                                                             |       |
+| -     | `--exit-after-stage` | n        | 1    | Run through STAGE then exit cleanly (state saved).                                                                  |       |
+
+**Sidecar Manifests**
+
+| Short | Long               | Required | Args | Description                                                                              | Notes |
+|-------|--------------------|----------|------|------------------------------------------------------------------------------------------|-------|
+| -     | `--sidecar`        | n        | 1    | Write a per-entry JSON metadata manifest beside each placed entry: `always`, `on-error` (default), `never`. `on-error` writes only where metadata application failed. |       |
+| -     | `--no-sidecar`     | n        | 0    | Alias for `--sidecar never`.                                                             |       |
+| -     | `--hidden-sidecar` | n        | 0    | Prefix sidecar names with a leading dot (`{name}.json` → `.{name}.json`).                 |       |
+
+**Filtering**
+
+| Short | Long             | Required | Args | Description                                                                    | Notes |
+|-------|------------------|----------|------|--------------------------------------------------------------------------------|-------|
+| -     | `--exclude`      | n        | 1+   | Exclude paths matching regex PATTERN from extraction (repeatable).             |       |
+| -X    | `--exclude-from` | n        | 1+   | Read exclude regex patterns from FILE (repeatable).                            |       |
+| -     | `--include`      | n        | 1+   | Include only paths matching regex PATTERN for extraction (repeatable).         |       |
+| -     | `--include-from` | n        | 1+   | Read include regex patterns from FILE (repeatable).                            |       |
+| -     | `--anchored`     | n        | 0    | Patterns match from the start of the path (default: unanchored).               |       |
+| -     | `--ignore-case`  | n        | 0    | Match patterns case-insensitively (default: case-sensitive).                   |       |
+| -     | `--no-unicode`   | n        | 0    | Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte). |       |
+| -     | `--lazy-filter`  | n        | 0    | Apply include/exclude filters after a later phase (scan) instead of eagerly.   |       |
+
+**Sparse Files**
+
+| Short | Long          | Required | Args | Description                                                                                                                    | Notes |
+|-------|---------------|----------|------|--------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--sparsify`  | n        | 0    | Re-create holes in the extract cache while unpacking (sparse writer over a plain copy; uses `--page-size` for hole detection). |       |
+| -     | `--page-size` | n        | 1    | Page size in bytes for sparse-hole detection while unpacking.                                                                  |       |
+
+### resume
+
+Continue incomplete work. Policy comes from the work DB; only `--jobs`, `--io-jobs` and `--exit-after-stage` may be overridden.
+
+**Options**
+
+| Short | Long                 | Required | Args | Description                                                                                    | Notes |
+|-------|----------------------|----------|------|------------------------------------------------------------------------------------------------|-------|
+| -     | `--work-dir`         | n        | 1    | Work directory (`.astage` / `.estage`) of the interrupted run.                                 |       |
+| -     | `--db`               | n        | 1    | Path to the work database (`tar-dedup.sqlite`) directly; mutually exclusive with `--work-dir`. |       |
+| -     | `--jobs`             | n        | 1    | Maximum concurrent workers (rayon pools and xz threads).                                       |       |
+| -     | `--io-jobs`          | n        | 1    | Maximum concurrent io-bound workers (dedup, sparsify, place pools).                            |       |
+| -     | `--exit-after-stage` | n        | 1    | Run through STAGE then exit cleanly (state saved).                                             |       |
+
+### inspect
+
+Show archive metadata needed to plan an extraction (catalog, policies).
+
+**Archive Target**
+
+| Short | Long         | Required | Args | Description                                                                                                        | Notes |
+|-------|--------------|----------|------|--------------------------------------------------------------------------------------------------------------------|-------|
+| -f    | -            | n        | 1    | Archive path; the catalog is read from its seekable sqlite footer, else from the leading `manifest.sqlite` member. |       |
+| -     | `--db`       | n        | 1    | Read the catalog from an existing work database file directly.                                                     |       |
+| -     | `--work-dir` | n        | 1    | Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`.                                              |       |
+
+**Output**
+
+| Short | Long          | Required | Args | Description                                                                                                     | Notes |
+|-------|---------------|----------|------|-----------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--json`      | n        | 0    | Emit a single machine-readable JSON document instead of text sections.                                          |       |
+| -     | `--no-pretty` | n        | 0    | Compact JSON output (no wrapping/indent); only meaningful with `--json`.                                        |       |
+| -     | `--collapse`  | n        | 0    | Text mode: join records within a section on one line (`; `) instead of one per line.                            |       |
+| -     | `--only`      | n        | 1    | Text mode: emit only the section(s) whose header contains SUBSTR (case-insensitive), e.g. `--only "owner map"`. |       |
+| -     | `--force`     | n        | 0    | Prefer the last `snapshot.sqlite` member over the footer / leading manifest (not implemented yet).              |       |
+
+### list
+
+List file-tree members (rows from the `files` table).
+
+**Archive Target**
+
+| Short | Long         | Required | Args | Description                                                                                                        | Notes |
+|-------|--------------|----------|------|--------------------------------------------------------------------------------------------------------------------|-------|
+| -f    | -            | n        | 1    | Archive path; the catalog is read from its seekable sqlite footer, else from the leading `manifest.sqlite` member. |       |
+| -     | `--db`       | n        | 1    | Read the catalog from an existing work database file directly.                                                     |       |
+| -     | `--work-dir` | n        | 1    | Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`.                                              |       |
+
+**Output**
+
+| Short | Long          | Required | Args | Description                                                                                                     | Notes |
+|-------|---------------|----------|------|-----------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--json`      | n        | 0    | Emit a single machine-readable JSON document instead of text sections.                                          |       |
+| -     | `--no-pretty` | n        | 0    | Compact JSON output (no wrapping/indent); only meaningful with `--json`.                                        |       |
+| -     | `--collapse`  | n        | 0    | Text mode: join records within a section on one line (`; `) instead of one per line.                            |       |
+| -     | `--only`      | n        | 1    | Text mode: emit only the section(s) whose header contains SUBSTR (case-insensitive), e.g. `--only "owner map"`. |       |
+| -     | `--force`     | n        | 0    | Prefer the last `snapshot.sqlite` member over the footer / leading manifest (not implemented yet).              |       |
+
+### dump
+
+Machine-formatted (csv/json) dump of the file-tree members.
+
+**Archive Target**
+
+| Short | Long         | Required | Args | Description                                                                                                        | Notes |
+|-------|--------------|----------|------|--------------------------------------------------------------------------------------------------------------------|-------|
+| -f    | -            | n        | 1    | Archive path; the catalog is read from its seekable sqlite footer, else from the leading `manifest.sqlite` member. |       |
+| -     | `--db`       | n        | 1    | Read the catalog from an existing work database file directly.                                                     |       |
+| -     | `--work-dir` | n        | 1    | Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`.                                              |       |
+
+**Output**
+
+| Short | Long          | Required | Args | Description                                                                                                     | Notes |
+|-------|---------------|----------|------|-----------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--json`      | n        | 0    | Emit a single machine-readable JSON document instead of text sections.                                          |       |
+| -     | `--no-pretty` | n        | 0    | Compact JSON output (no wrapping/indent); only meaningful with `--json`.                                        |       |
+| -     | `--collapse`  | n        | 0    | Text mode: join records within a section on one line (`; `) instead of one per line.                            |       |
+| -     | `--only`      | n        | 1    | Text mode: emit only the section(s) whose header contains SUBSTR (case-insensitive), e.g. `--only "owner map"`. |       |
+| -     | `--force`     | n        | 0    | Prefer the last `snapshot.sqlite` member over the footer / leading manifest (not implemented yet).              |       |
+
+### query
+
+Search paths / ids across catalog tables.
+
+**Archive Target**
+
+| Short | Long         | Required | Args | Description                                                                                                        | Notes |
+|-------|--------------|----------|------|--------------------------------------------------------------------------------------------------------------------|-------|
+| -f    | -            | n        | 1    | Archive path; the catalog is read from its seekable sqlite footer, else from the leading `manifest.sqlite` member. |       |
+| -     | `--db`       | n        | 1    | Read the catalog from an existing work database file directly.                                                     |       |
+| -     | `--work-dir` | n        | 1    | Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`.                                              |       |
+
+**Output**
+
+| Short | Long          | Required | Args | Description                                                                                                     | Notes |
+|-------|---------------|----------|------|-----------------------------------------------------------------------------------------------------------------|-------|
+| -     | `--json`      | n        | 0    | Emit a single machine-readable JSON document instead of text sections.                                          |       |
+| -     | `--no-pretty` | n        | 0    | Compact JSON output (no wrapping/indent); only meaningful with `--json`.                                        |       |
+| -     | `--collapse`  | n        | 0    | Text mode: join records within a section on one line (`; `) instead of one per line.                            |       |
+| -     | `--only`      | n        | 1    | Text mode: emit only the section(s) whose header contains SUBSTR (case-insensitive), e.g. `--only "owner map"`. |       |
+| -     | `--force`     | n        | 0    | Prefer the last `snapshot.sqlite` member over the footer / leading manifest (not implemented yet).              |       |
+
+### reset
+
+Reset an interrupted run: re-point its stored parameters and rewind the pipeline to a consistent state. The work database is named explicitly.
+
+**Options**
+
+| Short | Long         | Required | Args | Description                                                                    | Notes |
+|-------|--------------|----------|------|--------------------------------------------------------------------------------|-------|
+| -     | `--db`       | n        | 1    | Path to the work database (`tar-dedup.sqlite`) directly.                       |       |
+| -     | `--work-dir` | n        | 1    | Work directory of the run (`.astage` / `.estage`), holding `tar-dedup.sqlite`. |       |
 
 ## Motivation
 This tool is written to improve the compression of unstructured data. A good example would be a hard drive of a desktop. 
