@@ -18,10 +18,11 @@ pub use compression::{
 };
 pub use extract::{
     ExtractAttributeOptions, ExtractConfig, OwnerGroupOptions, PlacementOptions, ScanOptions,
+    SidecarMode,
 };
 pub use paths::{PathLayout, PathSource};
 pub use phases::{ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, ArchiveRuntimeState};
-pub use process::{CleanupSettings, ExitAfterStage, ProcessOptions, ResumeOverrides};
+pub use process::{CleanupSettings, DbRetention, ExitAfterStage, ProcessOptions, ResumeOverrides};
 pub use resume::ResumeConfig;
 
 use std::path::{Path, PathBuf};
