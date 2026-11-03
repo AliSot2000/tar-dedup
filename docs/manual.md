@@ -134,30 +134,36 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
 
 **Process Options**  
 
-| Short | Long               | Required | Args | Description                                                                                                                                              | Notes |
-|-------|--------------------|----------|------|----------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
-| -     | --jobs             | n        | 1    | Maximum concurrent workers (rayon pools and xz threads)                                                                                                  |       |
-| -     | --io-jobs          | n        | 1    | Maximum concurrent io-bound workers (dedup, sparsify, place pools)                                                                                       |       |
-| -     | --fresh            | n        | 0    | Wipe existing work and archive, then start from inventory                                                                                                |       |
-| -     | --db-retention     | n        | 1    | When to keep a timestamped copy of the work database next to the archive. `always`: always; `on-error`: only if the run recorded errors; `never`: delete |       |
-| -     | --keep-stage       | n        | 0    | After success, keep the `{stem}.astage` work directory                                                                                                   |       |
-| -     | --exit-after-stage | n        | 1    | Run through STAGE then exit cleanly (state saved)                                                                                                        |       |
-| -     | --fail-fast        | n        | 0    | Abort the run on the first hard failure (instead of soft-continuing where possible)                                                                      |       |
-| -     | --no-errors        | n        | 0    | Do not record errors encountered while processing the entries in the database                                                                            |       |
-| -     | --lazy-filter      | n        | 0    | Apply include/exclude filters after the hash phase, not after inventory phase.                                                                           |       |
-| -     | --dedup-mode       | n        | 1    | Deduplication strategy                                                                                                                                   |       |
-| -     | --ordering         | n        | 1    | Generate sorted combination of data pieces in the order necessary to write. (GNU tar `--sort` analog; applies at the tar writer.)                        |       |
-| -     | --use-shards       | n        | 0    | Use content-defined chunking instead of whole-file hashes (not implemented yet)                                                                          |       |
-| -     | --max-shard-size   | n        | 1    | Maximum shard size for content-defined chunking (requires `--use-shards`)                                                                                |       |
-| -     | --relax-utf8       | n        | 0    | Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept. Mutually exclusive with `--force`                                       | 7.    |
-| -     | --auto-flush-limit | n        | 1    | Number of error drafts buffered before an auto-flush to the database                                                                                     | 8.    |
-| -     | --batch-size       | n        | 1    | Rows pulled from the database per phase iteration                                                                                                        | 8.    |
-| -     | --work-capacity    | n        | 1    | Items in the producer/consumer work channel                                                                                                              | 8.    |
-| -     | --out-capacity     | n        | 1    | Items in the producer/consumer result channel                                                                                                            | 8.    |
-| -     | --feed-chunk       | n        | 1    | Rows pulled from the database per feed round                                                                                                             | 8.    |
-| -     | --drain-chunk      | n        | 1    | Outcomes committed per transaction                                                                                                                       | 8.    |
-| -     | --progress-mode    | n        | 1    | Which progress bars to draw                                                                                                                              | 8.    |
-| -     | --log-level        | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var)                                                                                           | 8.    |
+| Short | Long                    | Required | Args  | Description                                                                                                                                              | Notes                                                    |
+|-------|-------------------------|----------|-------|----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
+| -     | --jobs                  | n        | 1     | Maximum concurrent compute bound workers                                                                                                                 |                                                          |
+| -     | --io-jobs               | n        | 1     | Maximum concurrent io-bound workers                                                                                                                      |                                                          |
+| -     | --fresh                 | n        | 0     | Wipe existing work and archive, then start from inventory                                                                                                |                                                          |
+| -     | --db-retention          | n        | 1     | When to keep a timestamped copy of the work database next to the archive. `always`: always; `on-error`: only if the run recorded errors; `never`: delete |                                                          |
+| -     | --keep-stage            | n        | 0     | After success, keep the `{stem}.astage` work directory                                                                                                   |                                                          |
+| -     | --exit-after-stage      | n        | 1     | Run through STAGE then exit gracefully                                                                                                                   |                                                          |
+| -     | --fail-fast             | n        | 0     | Abort the run on the first hard failure instead of continuing according to the best-effort principle where possible                                      |                                                          |
+| -     | --no-errors             | n        | 0     | Do not record errors encountered while processing the entries in the database. Downgrades a db-retention of `on-error` to `never`                        |                                                          |
+| -     | --lazy-filter           | n        | 0     | Apply include/exclude filters after the hash phase                                                                                                       |                                                          |
+| -     | --dedup-mode            | n        | 1     | Deduplication strategy                                                                                                                                   |                                                          |
+| -     | --ordering              | n        | 1     | Ordering used in which the files are added to the archive to improve compression                                                                         |                                                          |
+| -     | --use-shards            | n        | 0     | Use content-defined chunking instead of whole-file hashes (not implemented yet)                                                                          |                                                          |
+| -     | --max-shard-size        | n        | 1     | Maximum shard size for content-defined chunking (requires `--use-shards`)                                                                                |                                                          |
+| -     | --relax-utf8            | n        | 0     | Relax utf-8 policy to also process entries without a valid utf-8 path                                                                                    | 7.                                                       |
+| -     | --auto-flush-limit      | n        | 1     | Number of error drafts buffered before an auto-flush to the database                                                                                     | 8.                                                       |
+| -     | --batch-size            | n        | 1     | Rows pulled from the database per batch iteration                                                                                                        | 8.                                                       |
+| -     | --work-capacity         | n        | 1     | Max items in the producer/consumer work channel                                                                                                          | 8.                                                       |
+| -     | --out-capacity          | n        | 1     | Max items in the producer/consumer result channel                                                                                                        | 8.                                                       |
+| -     | --feed-chunk            | n        | 1     | Rows pulled from the database per feed round                                                                                                             | 8.                                                       |
+| -     | --drain-chunk           | n        | 1     | Outcomes committed per transaction                                                                                                                       | 8.                                                       |
+
+**Logging**  
+
+| Short | Long            | Required | Args | Description                                                    | Notes |
+|-------|-----------------|----------|------|----------------------------------------------------------------|-------|
+| -     | --progress-mode | n        | 1    | Which progress bars to draw                                    |       |
+| -     | --log-level     | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var) |       |
+
 
 **Notes**
 1. Path resolution: If the path is absolute, the path is taken as is. If the path is relative and `-C --directory` is not set, 
