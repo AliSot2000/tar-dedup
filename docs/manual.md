@@ -302,12 +302,17 @@ Restore a tar-dedup archive (materialize: full copy at each original path). Abor
 | -     | --out-capacity     | n        | 1    | Items in the producer/consumer result channel                                                                                                                    |       |
 | -     | --feed-chunk       | n        | 1    | Rows pulled from the database per feed round                                                                                                                     |       |
 | -     | --drain-chunk      | n        | 1    | Outcomes committed per transaction                                                                                                                               |       |
-| -     | --progress-mode    | n        | 1    | Which progress bars to draw                                                                                                                                      |       |
 | -     | --fail-fast        | n        | 0    | Abort on the first warning or error instead of continuing where possible                                                                                         |       |
 | -     | --no-errors        | n        | 0    | Do not record per-file errors in the database                                                                                                                    |       |
 | -     | --db-retention     | n        | 1    | When to keep a timestamped copy of the work database (under the extraction root). `always`: always; `on-error`: only if the run recorded errors; `never`: delete |       |
 | -     | --keep-stage       | n        | 0    | After success, keep the `{stem}.estage` work directory                                                                                                           |       |
 | -     | --exit-after-stage | n        | 1    | Run through STAGE then exit cleanly (state saved)                                                                                                                |       |
+
+**Logging**
+
+| Short | Long            | Required | Args | Description                 | Notes |
+|-------|-----------------|----------|------|-----------------------------|-------|
+| -     | --progress-mode | n        | 1    | Which progress bars to draw |       |
 
 **Sidecar**
 
