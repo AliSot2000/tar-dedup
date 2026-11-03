@@ -1,12 +1,1 @@
-[
-  {
-    "subcommand": "archive",
-    "help_heading": "Indexing",
-    "short": "-P",
-    "long": "--absolute-names",
-    "required": false,
-    "args": "0",
-    "description": "x",
-    "note": "removed"
-  }
-]
+[]
