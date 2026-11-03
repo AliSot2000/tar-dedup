@@ -84,8 +84,8 @@ can be remedied by using `filter` in conjunction with `--files-from` to achieve 
 | -     | --include-from        | n        | 1+    | Read include regex patterns from FILE (repeatable)                                     | 5.                                            |
 | -     | --exclude-vcs         | n        | 0     | Exclude version control system directories (not implemented yet)                       | 5.                                            |
 | -     | --exclude-vcs-ignores | n        | 0     | Read VCS ignore files for exclusions (not implemented yet)                             | 5.                                            |
-| -     | --anchored            | n        | 0     | Patterns match from the start of the relative path                                     |                                               |
-| -     | --ignore-case         | n        | 0     | Case-insensitive pattern matching                                                      |                                               |
+| -     | --anchored            | n        | 0     | Patterns match from the start of the relative path. (default unanchored)               |                                               |
+| -     | --ignore-case         | n        | 0     | Case-insensitive pattern matching. (default Case-sensitive)                            |                                               |
 | -     | --no-unicode          | n        | 0     | Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte)          |                                               |
 
 **File Attributes**  
@@ -97,23 +97,23 @@ Global default: By default, everything is turned on and can be turned off. This 
 `--no-capture-all-metadata`. That way, the default becomes off and needs to be selectively re-enabled with e.g. 
 `--acls`.
 
-| Short | Long                      | Required | Args | Description                                                                                                                                                                                         | Notes |
-|-------|---------------------------|----------|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
-| -     | --acls                    | n        | 0    | Capture POSIX ACLs (default: on via the capture umbrella)                                                                                                                                           |       |
-| -     | --no-acls                 | n        | 0    | Do not capture POSIX ACLs                                                                                                                                                                           |       |
-| -     | --xattrs                  | n        | 0    | Capture extended attributes (default: on via the capture umbrella)                                                                                                                                  |       |
-| -     | --no-xattrs               | n        | 0    | Do not capture extended attributes                                                                                                                                                                  |       |
-| -     | --selinux                 | n        | 0    | Capture SELinux contexts (default: on via the capture umbrella)                                                                                                                                     |       |
-| -     | --no-selinux              | n        | 0    | Do not capture SELinux contexts                                                                                                                                                                     |       |
-| -     | --no-capture-all-metadata | n        | 0    | Default: capture every metadata attribute (xattrs, ACLs, SELinux, ...). The `--no-*` toggles override this on a per-bit basis                                                                       |       |
-| -     | --numeric-ids-only        | n        | 0    | Record numeric uids/gids instead of resolving user/group names during inventory                                                                                                                     |       |
-| -     | --resolve-numeric-ids     | n        | 0    | Resolve user/group names during inventory (default; counters `--numeric-ids-only`)                                                                                                                  |       |
-| -     | --owner                   | n        | 1    | Force owner for archived members: `NAME`, `UID`, or `NAME:UID` (GNU tar). Stored as archive policy (meta); applied on extract                                                                       | 6.    |
-| -     | --owner-map               | n        | 1    | Owner translation map file (GNU tar `--owner-map`)                                                                                                                                                  | 6.    |
-| -     | --group                   | n        | 1    | Force group for archived members: `NAME`, `GID`, or `NAME:GID` (GNU tar). Stored as archive policy (meta); applied on extract                                                                       | 6.    |
-| -     | --group-map               | n        | 1    | Group translation map file (GNU tar `--group-map`)                                                                                                                                                  | 6.    |
-| -     | --mode                    | n        | 1    | Force symbolic mode CHANGES for added members (GNU tar `--mode`). Applies chmod-style updates (e.g. `u+rwx,go-rx`) at extraction; stored as archive policy (meta)                                   | 6.    |
-| -     | --transform               | n        | 1    | Record a sed-style name transform (GNU tar `--transform`/`--xform`, e.g. `s,^usr/,var/,`) to apply at extraction; stored as archive policy (meta). Only validated here; not applied at archive time | 6.    |
+| Short | Long                      | Required | Args | Description                                                                                                                       | Notes |
+|-------|---------------------------|----------|------|-----------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --acls                    | n        | 0    | Capture POSIX ACLs (default: on via the capture umbrella)                                                                         |       |
+| -     | --no-acls                 | n        | 0    | Do not capture POSIX ACLs                                                                                                         |       |
+| -     | --xattrs                  | n        | 0    | Capture extended attributes (default: on via the capture umbrella)                                                                |       |
+| -     | --no-xattrs               | n        | 0    | Do not capture extended attributes                                                                                                |       |
+| -     | --selinux                 | n        | 0    | Capture SELinux contexts (default: on via the capture umbrella)                                                                   |       |
+| -     | --no-selinux              | n        | 0    | Do not capture SELinux contexts                                                                                                   |       |
+| -     | --no-capture-all-metadata | n        | 0    | Default: capture every metadata attribute (xattrs, ACLs, SELinux, ...). The `--no-*` toggles override this on a per-bit basis     |       |
+| -     | --numeric-ids-only        | n        | 0    | Record numeric uids/gids instead of resolving user/group names during inventory                                                   |       |
+| -     | --resolve-numeric-ids     | n        | 0    | Resolve user/group names during inventory (default; counters `--numeric-ids-only`)                                                |       |
+| -     | --owner                   | n        | 1    | Force owner for archived members: `NAME`, `UID`, or `NAME:UID` (GNU tar)                                                          | 6.    |
+| -     | --owner-map               | n        | 1    | Owner translation map file (GNU tar `--owner-map`)                                                                                | 6.    |
+| -     | --group                   | n        | 1    | Force group for archived members: `NAME`, `GID`, or `NAME:GID` (GNU tar)                                                          | 6.    |
+| -     | --group-map               | n        | 1    | Group translation map file (GNU tar `--group-map`)                                                                                | 6.    |
+| -     | --mode                    | n        | 1    | Force symbolic mode CHANGES for added members (GNU tar `--mode`). Applies chmod-style updates (e.g. `u+rwx,go-rx`) to the entried | 6.    |
+| -     | --transform               | n        | 1    | Record a sed-style name transform (GNU tar `--transform`/`--xform`, e.g. `s,^usr/,var/,`) to apply to paths                       | 6.    |
 
 **Sparse Files**  
 The system relies on the tar reader detecting sparse files and encoding them according to the tar format. As the tar 
@@ -126,11 +126,11 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
 - Since the sparse copy relies on the underlying filesystem being able to represent sparse files, the sparsification 
   via sparse copy will not work on a file system that is not able to represent sparse files.
 
-| Short | Long        | Required | Args | Description                                                                  | Notes |
-|-------|-------------|----------|------|------------------------------------------------------------------------------|-------|
-| -     | --sparsify  | n        | 0    | Run the sparsify phase (copy with seeks using `--page-size` / `--min-pages`) |       |
-| -     | --page-size | n        | 1    | Page size in bytes for hash zero-page counting and sparsify                  |       |
-| -     | --min-pages | n        | 1    | Minimum empty-page count before sparsify treats a file as worth rewriting    |       |
+| Short | Long        | Required | Args | Description                                                                         | Notes |
+|-------|-------------|----------|------|-------------------------------------------------------------------------------------|-------|
+| -     | --sparsify  | n        | 0    | Run the sparsify phase (copy with seeks using `--page-size` increments)             |       |
+| -     | --page-size | n        | 1    | Page size in bytes for hash zero-page counting and sparsify                         |       |
+| -     | --min-pages | n        | 1    | Minimum empty-page count before sparsify treats a file as worth rewriting in sparse |       |
 
 **Process Options**  
 
