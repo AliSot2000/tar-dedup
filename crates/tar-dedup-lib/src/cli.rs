@@ -160,44 +160,10 @@ pub struct ArchiveArgs {
     )]
     pub no_strict_separation: bool,
 
-    // --- Filtering ---
+    // --- Filtering (shared with extract) ---
 
-    /// Exclude paths matching regex PATTERN (repeatable).
-    #[arg(
-        long = "exclude",
-        value_name = "PATTERN",
-        action = ArgAction::Append,
-        help_heading = "Filtering"
-    )]
-    pub exclude: Vec<String>,
-
-    /// Read exclude regex patterns from FILE (repeatable).
-    #[arg(
-        short = 'X',
-        long = "exclude-from",
-        value_name = "FILE",
-        action = ArgAction::Append,
-        help_heading = "Filtering"
-    )]
-    pub exclude_from: Vec<PathBuf>,
-
-    /// Include only paths matching regex PATTERN (repeatable).
-    #[arg(
-        long = "include",
-        value_name = "PATTERN",
-        action = ArgAction::Append,
-        help_heading = "Filtering"
-    )]
-    pub include: Vec<String>,
-
-    /// Read include regex patterns from FILE (repeatable).
-    #[arg(
-        long = "include-from",
-        value_name = "FILE",
-        action = ArgAction::Append,
-        help_heading = "Filtering"
-    )]
-    pub include_from: Vec<PathBuf>,
+    #[command(flatten, next_help_heading = "Filtering")]
+    pub filter: FilterFlags,
 
     /// Exclude version control system directories (not implemented yet).
     #[arg(long = "exclude-vcs", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
@@ -211,34 +177,6 @@ pub struct ArchiveArgs {
         help_heading = "Filtering"
     )]
     pub exclude_vcs_ignores: bool,
-
-    /// Patterns match from the start of the relative path. (default unanchored)
-    #[arg(
-        long = "anchored",
-        default_value_t = false,
-        action = ArgAction::SetTrue,
-        help_heading = "Filtering"
-    )]
-    pub anchored: bool,
-
-    /// Case-insensitive pattern matching. (default Case-sensitive)
-    #[arg(
-        long = "ignore-case",
-        default_value_t = false,
-        action = ArgAction::SetTrue,
-        help_heading = "Filtering"
-    )]
-    pub ignore_case: bool,
-
-    /// Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b`
-    /// become ASCII-only, and `\p{…}` Unicode classes are rejected.
-    #[arg(
-        long = "no-unicode",
-        default_value_t = false,
-        action = ArgAction::SetTrue,
-        help_heading = "Filtering"
-    )]
-    pub no_unicode: bool,
 
     // --- File Attributes ---
 
@@ -497,6 +435,41 @@ pub struct CompressionFlags {
     /// Filter the archive through zstd (overrides extension inference).
     #[arg(long = "zstd", group = "compress_filter")]
     pub zstd: bool,
+}
+
+/// Shared filter flags, flattened into both `archive` and `extract` so the
+/// patterns, anchoring, case handling and byte mode stay identical (no drift).
+#[derive(Debug, Args)]
+pub struct FilterFlags {
+    /// Exclude paths matching regex PATTERN (repeatable).
+    #[arg(long = "exclude", value_name = "PATTERN", action = ArgAction::Append, help_heading = "Filtering")]
+    pub exclude: Vec<String>,
+
+    /// Read exclude regex patterns from FILE (repeatable).
+    #[arg(short = 'X', long = "exclude-from", value_name = "FILE", action = ArgAction::Append, help_heading = "Filtering")]
+    pub exclude_from: Vec<PathBuf>,
+
+    /// Include only paths matching regex PATTERN (repeatable).
+    #[arg(long = "include", value_name = "PATTERN", action = ArgAction::Append, help_heading = "Filtering")]
+    pub include: Vec<String>,
+
+    /// Read include regex patterns from FILE (repeatable).
+    #[arg(long = "include-from", value_name = "FILE", action = ArgAction::Append, help_heading = "Filtering")]
+    pub include_from: Vec<PathBuf>,
+
+    /// Patterns are matched against the absolute (raw on-disk) path, never a
+    /// relative one. (default: unanchored)
+    #[arg(long = "anchored", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
+    pub anchored: bool,
+
+    /// Case-insensitive pattern matching. (default: Case-sensitive)
+    #[arg(long = "ignore-case", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
+    pub ignore_case: bool,
+
+    /// Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b`
+    /// become ASCII-only, and `\p{…}` Unicode classes are rejected.
+    #[arg(long = "no-unicode", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
+    pub no_unicode: bool,
 }
 
 #[derive(Debug, Args)]
@@ -995,56 +968,10 @@ pub struct ExtractArgs {
     )]
     pub progress_mode: ProgressMode,
 
-    // --- Filtering ---
-    /// Exclude paths matching regex PATTERN from extraction (repeatable).
-    #[arg(
-        long = "exclude",
-        value_name = "PATTERN",
-        action = ArgAction::Append,
-        help_heading = "Filtering"
-    )]
-    pub exclude: Vec<String>,
+    // --- Filtering (shared with archive) ---
 
-    /// Read exclude regex patterns from FILE (repeatable).
-    #[arg(
-        short = 'X',
-        long = "exclude-from",
-        value_name = "FILE",
-        action = ArgAction::Append,
-        help_heading = "Filtering"
-    )]
-    pub exclude_from: Vec<PathBuf>,
-
-    /// Include only paths matching regex PATTERN for extraction (repeatable).
-    #[arg(
-        long = "include",
-        value_name = "PATTERN",
-        action = ArgAction::Append,
-        help_heading = "Filtering"
-    )]
-    pub include: Vec<String>,
-
-    /// Read include regex patterns from FILE (repeatable).
-    #[arg(
-        long = "include-from",
-        value_name = "FILE",
-        action = ArgAction::Append,
-        help_heading = "Filtering"
-    )]
-    pub include_from: Vec<PathBuf>,
-
-    /// Patterns match from the start of the path (default: unanchored).
-    #[arg(long = "anchored", help_heading = "Filtering")]
-    pub anchored: bool,
-
-    /// Match patterns case-insensitively (default: case-sensitive).
-    #[arg(long = "ignore-case", help_heading = "Filtering")]
-    pub ignore_case: bool,
-
-    /// Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b`
-    /// become ASCII-only, and `\p{…}` Unicode classes are rejected.
-    #[arg(long = "no-unicode", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
-    pub no_unicode: bool,
+    #[command(flatten, next_help_heading = "Filtering")]
+    pub filter: FilterFlags,
 
     /// Apply include/exclude filters after a later phase (scan) instead of eagerly.
     #[arg(long = "lazy-filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
