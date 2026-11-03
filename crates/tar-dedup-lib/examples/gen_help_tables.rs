@@ -68,9 +68,9 @@ fn collect(sub: &clap::Command, cli: &clap::Command) -> Vec<serde_json::Value> {
         std::collections::BTreeMap::new();
 
     let mut args: Vec<&Arg> = sub.get_arguments().collect();
-    // The top-level global `--log-level` only renders in the archive tables
+    // The top-level global `--log-level` renders in the archive and extract tables
     // (see Readme layout); attribute it there.
-    if sub.get_name() == "archive" {
+    if matches!(sub.get_name(), "archive" | "extract") {
         args.extend(cli.get_arguments());
     }
 
