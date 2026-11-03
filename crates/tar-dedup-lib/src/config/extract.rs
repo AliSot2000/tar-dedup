@@ -100,9 +100,6 @@ impl Validate for PlacementOptions {
             }
             validate_name(ls, "--link-source")?;
         }
-        if let Some(ls) = self.link_source.as_ref() {
-            validate_name(ls, "--link-source")?;
-        }
         if self.clean_target && self.one_top_level.is_none() {
             tracing::warn!("--clean-target has no effect without --one-top-level");
         }
