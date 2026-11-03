@@ -96,3 +96,31 @@ struct MaterializeOutcome {
 - New: policy skip not recorded (buffered 0) yet sets `Conflict`; inject
   `Some(Interrupted)` through ingest → row stays pending.
 - New: `fail_fast` aborts on the maj/min `General`.
+
+## Implementation status (done)
+- `MaterializeOutcome { result, error }` defined in `db/place.rs`; `MaterializeResult`
+  gains `Debug/Clone/PartialEq/Eq`.
+- `check_path` → `((bool,bool,bool), Option<FileStatError>)`; the four policy judges
+  now return a `(false,true,..)` conclusion (no error, `debug!`/silent);
+  assessment io errors (`symlink_metadata`, mtime, `remove_file`)
+  → `(false,true,removed)` + `Some(Io)` (favor existing, `removed:false` on
+  `remove_file`-fail per the small-bug fix). `build_other` maj/min stays a real error.
+- `materialize_one` → `MaterializeOutcome` (never `None`); force-abort mid-copy emits
+  `Some(Error::Interrupted)`, which `ingest_materialize_results` skips (row stays
+  pending). The channel `None` remains worker-shutdown-only.
+- `materialize_worker` always sends the outcome (dropped the old `None => break` from
+  `materialize_one`); stops on shutdown / closed work channel.
+- `process_results` takes owned `Vec<MaterializeOutcome>`: ingest all results, then
+  record + `fail_fast` on `Some(FileStat)` (catches Io/Nix/Copy/maj-min).
+- `db.rs` facade + `db/place.rs::ingest_materialize_results` updated to the new shape;
+  flag-constellation validator runs only for clean (non-error) outcomes, so error
+  rows may carry any `{placed,conflict,removed}` combination.
+- Notable behavior change: `determine_file_type` failure now → favor-existing +
+  recorded `Io` for **both** silent and loud (previously loud errored, silent
+  proceeded with the fallback ftype). Consistent with "when in doubt, keep existing".
+- Tests reshaped; new coverage: policy skip not recorded yet sets `Conflict` (via
+  `check_path`/`materialize_one` tests), `Interrupted` through ingest leaves pending
+  (`process_results_ignores_interrupted`), `fail_fast` on maj/min.
+- Verified: `cargo test -p tar-dedup-lib --lib` = 722 passed / 0 failed;
+  `cargo build --workspace` clean (only pre-existing `error_guarded`/`dedup.rs`
+  warnings, untouched).
