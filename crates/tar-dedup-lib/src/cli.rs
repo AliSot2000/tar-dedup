@@ -114,7 +114,7 @@ pub struct ArchiveArgs {
     #[command(flatten, next_help_heading = "Compression")]
     pub compression: CompressionFlags,
 
-    /// Compression level. Allowed range depends on filter: gzip/bzip2 1–9, xz 0–9, zstd 1–19.
+    /// Compression level. Allowed range depends on compression algorithm: gzip/bzip2 1–9, xz 0–9, zstd 1–19.
     #[arg(long = "level", value_name = "N", help_heading = "Compression")]
     pub level: Option<u32>,
 
@@ -125,7 +125,7 @@ pub struct ArchiveArgs {
     // INFO: Rust does not expose bzip-small option. We ignore it.
 
     /// Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`.
-    #[arg(long = "memlimit-compress", value_name = "LIMIT", help_heading = "Compression")]
+    #[arg(long = "xz-memlimit-compress", value_name = "LIMIT", help_heading = "Compression")]
     pub memlimit_compress: Option<String>,
 
     // --- Indexing ---
