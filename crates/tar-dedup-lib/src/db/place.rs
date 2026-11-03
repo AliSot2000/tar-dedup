@@ -6,12 +6,23 @@ use crate::db::meta;
 use crate::db::types::{FileId, OutTreeId, OutTreeRecord};
 use crate::error::{Error, FileStatError, Result, ToPanic};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializeResult {
     pub id: OutTreeId,
     pub placed: bool,
     pub conflict: bool,
     pub removed: bool,
     pub used_copy: bool,
+}
+
+/// Outcome of materializing one output entry: the flags to ingest, plus an
+/// optional real error. `Some(Error::Interrupted)` marks a force-abort mid-copy,
+/// which ingest leaves pending (sets no flags). The `None` channel sentinel is
+/// reserved for worker shutdown and never reaches ingest.
+#[derive(Debug)]
+pub struct MaterializeOutcome {
+    pub result: MaterializeResult,
+    pub error: Option<Error>,
 }
 
 /// Outcome of moving one canonical file into the link source.
@@ -773,52 +784,68 @@ pub fn ingest_results_link_tree(conn: &mut Connection, results: &Vec<(OutTreeId,
 }
 
 #[cfg(debug_assertions)]
-fn validate_materialize_result(m: &MaterializeResult) -> () {
-    match (m.placed, m.conflict, m.removed, m.used_copy) {
-        // No conflict
-        (true, false, false, _) => (),
-        // Conflict, skip
-        (false, true, false, false) => (),
-        // Conflict, place
-        (true, true, _, _) => (),
-        _ => panic!("INVARIANT FAILED: Impossible flag constellation returned from placement "),
-    }
+fn validate_materialize_result(m: &MaterializeResult) {
+    // Universal invariants over every producible outcome (clean or errored): a
+    // reflink/copy can only mark a placed row, and a removed entry implies a
+    // conflict. Errored rows legitimately carry `{placed:false, conflict:false,
+    // removed:false}`, so these are checked independent of `error`.
+    assert!(!m.used_copy || m.placed, "INVARIANT FAILED: used_copy on a non-placed row");
+    assert!(!m.removed || m.conflict, "INVARIANT FAILED: removed entry without a conflict");
 }
 
 /// Ingest a batch of MaterializeResults into the db within a single transaction
+/// Apply an outcome's result flags (Placed/Conflict/Removed/IsHardlink/UsedRefLink).
+/// The flag-constellation validator is only meaningful for clean (non-error)
+/// outcomes; an errored row may legitimately report `{placed:false, conflict,
+/// removed}` in any combination.
+fn apply_result_flags(
+    i_conn: &Connection,
+    success: &MaterializeResult,
+    is_hardlink: bool,
+    set_reflink: bool)
+    -> Result<()> {
+    // Debug-only invariant, checked for every non-interrupted outcome (clean and
+    // errored alike), since the flags are produced by the same `materialize_one`
+    // logic.
+    #[cfg(debug_assertions)]
+    validate_materialize_result(success);
+    set_out_tree_flag(i_conn, success.id, OutTreeFlag::Placed, success.placed)?;
+    set_out_tree_flag(i_conn, success.id, OutTreeFlag::RemovedPrevious, success.removed)?;
+    set_out_tree_flag(i_conn, success.id, OutTreeFlag::Conflict, success.conflict)?;
+
+    if is_hardlink {
+        set_out_tree_flag(i_conn, success.id, OutTreeFlag::IsHardlink, true)?;
+    }
+
+    if set_reflink {
+        set_out_tree_flag(i_conn, success.id, OutTreeFlag::UsedRefLink, !success.used_copy)?;
+    }
+
+    Ok(())
+}
+
 pub fn ingest_materialize_results(
     conn: &mut Connection,
-    results: &Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>,
+    results: &[MaterializeOutcome],
     is_hardlink: bool,
     set_reflink: bool)
     -> Result<()> {
     with_transaction(conn, |i_conn| {
-        for result in results {
-            match result {
-                Err((_id, Error::Interrupted)) => (),
-                Err((id, Error::FileStat(_))) => {
-                    set_out_tree_flag(i_conn, *id, OutTreeFlag::ErrorWhilePlace, true)?;
-                },
-                Err((_id, other)) => {
-                    panic!("INVARIANT FAILED: Only Io and Interrupted errors expected, got {}",
-                           other
-                    );
+        for outcome in results {
+            match &outcome.error {
+                // Force-abort mid-copy: leave the row pending (no flags).
+                Some(Error::Interrupted) => (),
+                Some(Error::FileStat(_)) => {
+                    apply_result_flags(i_conn, &outcome.result, is_hardlink, set_reflink)?;
+                    set_out_tree_flag(i_conn, outcome.result.id, OutTreeFlag::ErrorWhilePlace, true)?;
                 }
-                Ok(success) => {
-                    // Compile-time gated: the validator only exists under
-                    // `cfg(debug_assertions)` (a runtime `cfg!` would leave the
-                    // call dangling in `--release` builds).
-                    #[cfg(debug_assertions)]
-                    validate_materialize_result(&success);
-                    set_out_tree_flag(i_conn, success.id, OutTreeFlag::Placed, success.placed)?;
-                    set_out_tree_flag(i_conn, success.id, OutTreeFlag::RemovedPrevious, success.removed)?;
-                    set_out_tree_flag(i_conn, success.id, OutTreeFlag::Conflict, success.conflict)?;
-                    if is_hardlink {
-                        set_out_tree_flag(i_conn, success.id, OutTreeFlag::IsHardlink, true)?;
-                    }
-                    if set_reflink {
-                        set_out_tree_flag(i_conn, success.id, OutTreeFlag::UsedRefLink, !success.used_copy)?;
-                    }
+                // Clean and errored rows share the same flags logic; validation —
+                // inside `apply_result_flags` — runs for both, only skipping rows
+                // that were force-aborted mid-copy (`Interrupted`).
+                None => apply_result_flags(i_conn, &outcome.result, is_hardlink, set_reflink)?,
+                Some(other) => {
+                    panic!("INVARIANT FAILED: Only FileStat and Interrupted errors expected, got {}",
+                           other)
                 }
             }
         }
