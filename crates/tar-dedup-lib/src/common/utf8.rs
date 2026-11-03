@@ -37,26 +37,29 @@ pub fn sanitize_path(relax: bool, fail_fast: bool, path: impl AsRef<Path>, path_
             text: text.to_string(),
             raw: path.to_path_buf(),
         })),
-        None if relax => {
-            tracing::warn!(
+        None => match (relax, fail_fast) {
+            // relax wins over fail_fast
+            (true, _) => {
+                tracing::warn!(
                 "Lossy-converting non-UTF-8 {path_type}-path: {}",
                 path.to_string_lossy()
             );
-            Ok(Some(SanitizedPath {
-                text: path.to_string_lossy().into_owned(),
-                raw: path.to_path_buf(),
-            }))
-        }
-        None if fail_fast => Err(Error::Config(format!(
-            "Non-UTF-8 {path_type}-path aborted by --fail-fast: {}",
-            path.to_string_lossy()
-        ))),
-        None => {
-            tracing::warn!(
+                Ok(Some(SanitizedPath {
+                    text: path.to_string_lossy().into_owned(),
+                    raw: path.to_path_buf(),
+                }))
+            },
+            (false, true) => Err(Error::Config(format!(
+                "Non-UTF-8 {path_type}-path aborted by --fail-fast: {}",
+                path.to_string_lossy()
+            ))),
+            (false, false) => {
+                tracing::warn!(
                 "Skipping non-UTF-8 {path_type}-path: {}",
                 path.to_string_lossy()
             );
-            Ok(None)
+                Ok(None)
+            }
         }
     }
 }
