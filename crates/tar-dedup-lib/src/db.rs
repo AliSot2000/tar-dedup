@@ -54,7 +54,7 @@ pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
 pub use scan::ScanRemainderTally;
 use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
-use crate::db::place::{CopyOutcome, MaterializeResult};
+use crate::db::place::CopyOutcome;
 use crate::db::rehash::RehashOutcome;
 use crate::db::sparsify::SparseOutcome;
 
@@ -1128,7 +1128,7 @@ impl Database {
 
     pub fn ingest_materialize_results(
         &self,
-        results: &Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>,
+        results: &[place::MaterializeOutcome],
         is_hardlink: bool,
         set_reflink: bool)
         -> Result<()> {
