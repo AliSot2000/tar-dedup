@@ -158,12 +158,18 @@ def splice(readme: str, data: dict, drop_obsolete: bool) -> str:
                 # Keep the heading line (canonical name) + any intro prose, then
                 # drop the entire old table region (previous table, obsolete
                 # struck block, blank lines) up to the next heading / section.
-                out.append(f"**{canonical}**\n")
+                # Preserve the original heading's trailing whitespace (e.g. the
+                # two-space hard break `**Heading**  \n` before intro prose).
+                out.append(f"**{canonical}**{line[len(line.rstrip()):]}")
                 j = i + 1
                 old_block = []
                 collecting = False
+                # Stop only at a real section heading (`**X**` / `## ` / `### `).
+                # A single-`#` comment line (e.g. `#TODO`) is prose, not a
+                # boundary, so it must not truncate the region.
                 while j < len(lines) and not is_heading_line(lines[j]) \
-                        and not lines[j].startswith("#"):
+                        and not lines[j].lstrip().startswith("## ") \
+                        and not lines[j].lstrip().startswith("### "):
                     l = lines[j].lstrip()
                     if l.startswith("<!--"):
                         collecting = False  # obsolete struck block follows
@@ -176,7 +182,11 @@ def splice(readme: str, data: dict, drop_obsolete: bool) -> str:
                             collecting = True
                             old_block.append(lines[j])
                     elif lines[j].strip() == "":
-                        pass  # blank: skipped
+                        # Preserve blank lines inside the intro-prose region
+                        # (before the first table row); blanks after the table are
+                        # dropped and re-emitted by render_table's own spacing.
+                        if not collecting:
+                            out.append(lines[j])
                     else:
                         collecting = False
                         out.append(lines[j])  # intro prose
@@ -239,7 +249,7 @@ def check(readme: str, data: dict) -> int:
                     l = lines[j].lstrip()
                     if lines[j].startswith("**") and lines[j].rstrip().endswith("**"):
                         break
-                    if lines[j].startswith("#"):
+                    if lines[j].lstrip().startswith("## ") or lines[j].lstrip().startswith("### "):
                         break
                     if not l.startswith("|"):
                         j += 1

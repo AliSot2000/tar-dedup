@@ -47,15 +47,19 @@ The tool enforces that each inode is read exactly **once**. As it can become cum
 links [...], the tool offers to loosen the restriction. Link cycles are still detected, however, every unique absolute 
 path is treated as a new entity and has its metadata recorded.
 
-| Short  | Long                    | Required | Args  | Description                                                                       | Notes                                      |
-|--------|-------------------------|----------|-------|-----------------------------------------------------------------------------------|--------------------------------------------|
-| -      | --no-recursion          | n        | 0     | Do not descend into directories                                                   |                                            |
-| -      | --dereference           | n        | 0     | Follow symlinks; archive the files they point to (GNU tar `-h`)                   |                                            |
-| -      | --one-file-system       | n        | 0     | Stay on one filesystem when walking input trees                                   |                                            |
-| -      | --no-hardlink-detection | n        | 0     | Do not coalesce same (inode, device) hard links in hash/dedup                     | 4.                                         |
-| -      | --no-strict-separation  | n        | 0     | Allow nested or duplicate `-i` / `-T` directory roots (still recorded and walked) |                                            |
+| Short | Long                    | Required | Args | Description                                                                       | Notes |
+|-------|-------------------------|----------|------|-----------------------------------------------------------------------------------|-------|
+| -     | --no-recursion          | n        | 0    | Do not descend into directories                                                   |       |
+| -     | --dereference           | n        | 0    | Follow symlinks; archive the files they point to (GNU tar `-h`)                   |       |
+| -     | --one-file-system       | n        | 0    | Stay on one filesystem when walking input trees                                   |       |
+| -     | --no-hardlink-detection | n        | 0    | Do not coalesce same (inode, device) hard links in hash/dedup                     | 4.    |
+| -     | --no-strict-separation  | n        | 0    | Allow nested or duplicate `-i` / `-T` directory roots (still recorded and walked) |       |
+<!-- obsolete/deprecated (kept for reference) -->
+| Short | Long                  | Required | Args | Description                                | Notes                                     |
+|-------|-----------------------|----------|------|--------------------------------------------|-------------------------------------------|
+| ~~-P~~ | ~~--absolute-names~~ | ~~n~~    | ~~0~~ | ~~Write absolute path names for all files.~~ | ~~removed here; extract has `--absolute`~~ |
 
-**Filtering**  
+**Filtering**
 `--include-from` and `--exclude-from` expects a file with `utf8` content and each pattern separated by a 
 newline character. This can be relaxed with `--no-unicode` if needed. If you need to match a new line for some reason, 
 use `\n` and never `0x0A`. Regex is handled with rusts regex crate. Regex is handled by Rust's regex crate. It is a 
@@ -73,22 +77,39 @@ This means, if a `.git$` is processed, it will exclude the `.git` directory but 
 When extracting, this is modeled as any attributes the `.git` directory held will not be restored but the contents of 
 it as well as their metadata will be restored as faithfully as possible. If this behavior is undesirable, consider 
 using `--files-from` or `-T` to provide your own list of files to add. `-` for stdin is supported. Currently not 
-implemented is the `--newer` ... filters. They are currently on the feature list but for the moment, this 
+implemented is the `--newer` ... filters. They are on the feature list but for the moment, this 
 can be remedied by using `filter` in conjunction with `--files-from` to achieve the same filtering.
 
-| Short | Long                  | Required | Args  | Description                                                                            | Notes                                         |
-|-------|-----------------------|----------|-------|----------------------------------------------------------------------------------------|-----------------------------------------------|
-| -     | --exclude             | n        | 1+    | Exclude paths matching regex PATTERN (repeatable)                                      | 5.                                            |
-| -X    | --exclude-from        | n        | 1+    | Read exclude regex patterns from FILE (repeatable)                                     | 5.                                            |
-| -     | --include             | n        | 1+    | Include only paths matching regex PATTERN (repeatable)                                 | 5.                                            |
-| -     | --include-from        | n        | 1+    | Read include regex patterns from FILE (repeatable)                                     | 5.                                            |
-| -     | --exclude-vcs         | n        | 0     | Exclude version control system directories (not implemented yet)                       | 5.                                            |
-| -     | --exclude-vcs-ignores | n        | 0     | Read VCS ignore files for exclusions (not implemented yet)                             | 5.                                            |
-| -     | --anchored            | n        | 0     | Patterns match from the start of the relative path. (default unanchored)               |                                               |
-| -     | --ignore-case         | n        | 0     | Case-insensitive pattern matching. (default Case-sensitive)                            |                                               |
-| -     | --no-unicode          | n        | 0     | Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte)          |                                               |
+A single file is treated as follows: 
+- The absolute path is matched first against all provided include filters. The first filter that matches, marks the 
+  path as included and promotes it to the next stage. If no include filter is provided, a catch-all filter is used.
+- If the absolute path passed the include section, the absolute path is then matched against all provided exclude 
+  filters. If none match, the file is considered to be included in the set of paths for the tool to process. 
 
-**File Attributes**  
+| Short | Long                  | Required | Args | Description                                                                                                                               | Notes |
+|-------|-----------------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --exclude             | n        | 1+   | Exclude paths matching regex PATTERN (repeatable)                                                                                         | 5.    |
+| -X    | --exclude-from        | n        | 1+   | Read exclude regex patterns from FILE (repeatable)                                                                                        | 5.    |
+| -     | --include             | n        | 1+   | Include only paths matching regex PATTERN (repeatable)                                                                                    | 5.    |
+| -     | --include-from        | n        | 1+   | Read include regex patterns from FILE (repeatable)                                                                                        | 5.    |
+| -     | --exclude-vcs         | n        | 0    | Exclude version control system directories (not implemented yet)                                                                          | 5.    |
+| -     | --exclude-vcs-ignores | n        | 0    | Read VCS ignore files for exclusions (not implemented yet)                                                                                | 5.    |
+| -     | --anchored            | n        | 0    | Patterns match from the start of the relative path. (default unanchored)                                                                  |       |
+| -     | --ignore-case         | n        | 0    | Case-insensitive pattern matching. (default Case-sensitive)                                                                               |       |
+| -     | --no-unicode          | n        | 0    | Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b` become ASCII-only, and `\p{…}` Unicode classes are rejected |       |
+| -     | --lazy-filter         | n        | 0    | Apply include/exclude filters after the hash phase                                                                                        |       |
+
+**Dedup**  
+The deduplication strategy and the optional content-defined sharding used to cluster unique payloads. 
+Sharding is not implemented yet.
+
+| Short | Long             | Required | Args | Description                                                                     | Notes |
+|-------|------------------|----------|------|---------------------------------------------------------------------------------|-------|
+| -     | --dedup-mode     | n        | 1    | Deduplication strategy                                                          |       |
+| -     | --use-shards     | n        | 0    | Use content-defined chunking instead of whole-file hashes (not implemented yet) |       |
+| -     | --max-shard-size | n        | 1    | Maximum shard size for content-defined chunking (requires `--use-shards`)       |       |
+
+**File Attributes**
 As a baseline, the tool attempts to capture as much data as possible. This includes (ctime, atime, mtime, uid, gid, 
 mode, size, selinux policy, posix_acls, xattrs, inode type, link destination and link type too for symlinks. By 
 default, the tool also attempts to resolve any uid, gid to a group name / owner name via the system database. 
@@ -134,28 +155,18 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
 
 **Process Options**  
 
-| Short | Long                    | Required | Args  | Description                                                                                                                                              | Notes                                                    |
-|-------|-------------------------|----------|-------|----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
-| -     | --jobs                  | n        | 1     | Maximum concurrent compute bound workers                                                                                                                 |                                                          |
-| -     | --io-jobs               | n        | 1     | Maximum concurrent io-bound workers                                                                                                                      |                                                          |
-| -     | --fresh                 | n        | 0     | Wipe existing work and archive, then start from inventory                                                                                                |                                                          |
-| -     | --db-retention          | n        | 1     | When to keep a timestamped copy of the work database next to the archive. `always`: always; `on-error`: only if the run recorded errors; `never`: delete |                                                          |
-| -     | --keep-stage            | n        | 0     | After success, keep the `{stem}.astage` work directory                                                                                                   |                                                          |
-| -     | --exit-after-stage      | n        | 1     | Run through STAGE then exit gracefully                                                                                                                   |                                                          |
-| -     | --fail-fast             | n        | 0     | Abort the run on the first hard failure instead of continuing according to the best-effort principle where possible                                      |                                                          |
-| -     | --no-errors             | n        | 0     | Do not record errors encountered while processing the entries in the database. Downgrades a db-retention of `on-error` to `never`                        |                                                          |
-| -     | --lazy-filter           | n        | 0     | Apply include/exclude filters after the hash phase                                                                                                       |                                                          |
-| -     | --dedup-mode            | n        | 1     | Deduplication strategy                                                                                                                                   |                                                          |
-| -     | --ordering              | n        | 1     | Ordering used in which the files are added to the archive to improve compression                                                                         |                                                          |
-| -     | --use-shards            | n        | 0     | Use content-defined chunking instead of whole-file hashes (not implemented yet)                                                                          |                                                          |
-| -     | --max-shard-size        | n        | 1     | Maximum shard size for content-defined chunking (requires `--use-shards`)                                                                                |                                                          |
-| -     | --relax-utf8            | n        | 0     | Relax utf-8 policy to also process entries without a valid utf-8 path                                                                                    | 7.                                                       |
-| -     | --auto-flush-limit      | n        | 1     | Number of error drafts buffered before an auto-flush to the database                                                                                     | 8.                                                       |
-| -     | --batch-size            | n        | 1     | Rows pulled from the database per batch iteration                                                                                                        | 8.                                                       |
-| -     | --work-capacity         | n        | 1     | Max items in the producer/consumer work channel                                                                                                          | 8.                                                       |
-| -     | --out-capacity          | n        | 1     | Max items in the producer/consumer result channel                                                                                                        | 8.                                                       |
-| -     | --feed-chunk            | n        | 1     | Rows pulled from the database per feed round                                                                                                             | 8.                                                       |
-| -     | --drain-chunk           | n        | 1     | Outcomes committed per transaction                                                                                                                       | 8.                                                       |
+| Short | Long               | Required | Args | Description                                                                                                                                              | Notes |
+|-------|--------------------|----------|------|----------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --jobs             | n        | 1    | Maximum concurrent compute bound workers                                                                                                                 |       |
+| -     | --io-jobs          | n        | 1    | Maximum concurrent io-bound workers                                                                                                                      |       |
+| -     | --fresh            | n        | 0    | Wipe existing work and archive, then start from inventory                                                                                                |       |
+| -     | --db-retention     | n        | 1    | When to keep a timestamped copy of the work database next to the archive. `always`: always; `on-error`: only if the run recorded errors; `never`: delete |       |
+| -     | --keep-stage       | n        | 0    | After success, keep the `{stem}.astage` work directory                                                                                                   |       |
+| -     | --exit-after-stage | n        | 1    | Run through STAGE then exit gracefully                                                                                                                   |       |
+| -     | --fail-fast        | n        | 0    | Abort the run on the first hard failure instead of continuing according to the best-effort principle where possible                                      |       |
+| -     | --no-errors        | n        | 0    | Do not record errors encountered while processing the entries in the database. Downgrades a db-retention of `on-error` to `never`                        |       |
+| -     | --ordering         | n        | 1    | Ordering used in which the files are added to the archive to improve compression                                                                         |       |
+| -     | --relax-utf8       | n        | 0    | Relax utf-8 policy to also process entries without a valid utf-8 path                                                                                    | 7.    |
 
 **Logging**  
 
@@ -164,6 +175,19 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
 | -     | --progress-mode | n        | 1    | Which progress bars to draw                                    |       |
 | -     | --log-level     | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var) |       |
 
+**Batching**  
+Options below tune the internal buffering and transaction batching. Sensible defaults should be set. Changes can 
+negatively impact tool performance by increasing the number of transactions in the database, and can use more RAM, 
+leading to worse system performance.
+
+| Short | Long               | Required | Args | Description                                                          | Notes |
+|-------|--------------------|----------|------|----------------------------------------------------------------------|-------|
+| -     | --auto-flush-limit | n        | 1    | Number of error drafts buffered before an auto-flush to the database |       |
+| -     | --batch-size       | n        | 1    | Rows pulled from the database per batch iteration                    |       |
+| -     | --work-capacity    | n        | 1    | Max items in the producer/consumer work channel                      |       |
+| -     | --out-capacity     | n        | 1    | Max items in the producer/consumer result channel                    |       |
+| -     | --feed-chunk       | n        | 1    | Rows pulled from the database per feed round                         |       |
+| -     | --drain-chunk      | n        | 1    | Outcomes committed per transaction                                   |       |
 
 **Notes**
 1. Path resolution: If the path is absolute, the path is taken as is. If the path is relative and `-C --directory` is not set, 
@@ -174,9 +198,8 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
    An uncompressed archive can be produced by simply supplying `.tar` as the file extension.
 4. Disabling the hardlink_detection can increase the runtime of the dedup stage because the tool will compare inode 
    with itself `n-1` times (i.e. if it was recorded `n` times.)
-5. Filtering always uses REGEX TODO FORMAT!!!. No Glob or Shell expansions are supported. Files are first indexed. If given, only files
-   matching one or more of the include filters are propagated. Lastly only files that don't match a single exclude 
-   pattern are then eligible. If no include filter is given, a catch-all filter is used.
+5. Filtering always uses PCRE-style regex (Rust regex crate; no backreferences or look-around). No Glob or 
+   Shell expansions are supported
 6. The database will store the overrides separately from the file metadata. During extraction, the overrides will be applied 
    rather than on archive. Before the overrides are stored in the database, the tool will parse them and error out, if they are invalid.
 7. All utf-8 conform paths will be processed regardless. For None utf-8 paths, the `--relax-utf8` option takes 
@@ -184,9 +207,6 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
    The original path is stored in the database for reference but is currently not treated further. If without 
    `--relax-utf8` the treatment of paths depends on `--force`. Without `--force` the path is skipped with a warning 
    and not recorded anywhere. With `--force` any non-utf8 path leads to an exit.
-8. Options with this note are used for testing purposes and performance benchmarks. Sensible defaults should be set. 
-   Changes can negatively impact tool performance by increasing the number of transactions in the database. Changes can 
-   also use more RAM, leading to worse system performance.
 
 ### extract
 
@@ -296,12 +316,6 @@ Restore a tar-dedup archive (materialize: full copy at each original path). Abor
 | -     | --fresh            | n        | 0    | Wipe extract work (`.estage`) and start over                                                                                                                     |       |
 | -     | --force            | n        | 0    | Continue even if the tool cannot guarantee the integrity of the data                                                                                             |       |
 | -     | --relax-utf8       | n        | 0    | Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept. Mutually exclusive with `--force`                                               |       |
-| -     | --auto-flush-limit | n        | 1    | Number of error drafts buffered before an auto-flush to the database                                                                                             |       |
-| -     | --batch-size       | n        | 1    | Rows pulled from the database per phase iteration                                                                                                                |       |
-| -     | --work-capacity    | n        | 1    | Items in the producer/consumer work channel                                                                                                                      |       |
-| -     | --out-capacity     | n        | 1    | Items in the producer/consumer result channel                                                                                                                    |       |
-| -     | --feed-chunk       | n        | 1    | Rows pulled from the database per feed round                                                                                                                     |       |
-| -     | --drain-chunk      | n        | 1    | Outcomes committed per transaction                                                                                                                               |       |
 | -     | --fail-fast        | n        | 0    | Abort on the first warning or error instead of continuing where possible                                                                                         |       |
 | -     | --no-errors        | n        | 0    | Do not record per-file errors in the database                                                                                                                    |       |
 | -     | --db-retention     | n        | 1    | When to keep a timestamped copy of the work database (under the extraction root). `always`: always; `on-error`: only if the run recorded errors; `never`: delete |       |
@@ -314,6 +328,18 @@ Restore a tar-dedup archive (materialize: full copy at each original path). Abor
 |-------|-----------------|----------|------|-----------------------------|-------|
 | -     | --progress-mode | n        | 1    | Which progress bars to draw |       |
 
+**Batching**  
+Options below tune the internal buffering and transaction batching. Sensible defaults should be set. Changes can negatively impact tool performance by increasing the number of transactions in the database, and can use more RAM, leading to worse system performance.
+
+| Short | Long               | Required | Args | Description                                                          | Notes |
+|-------|--------------------|----------|------|----------------------------------------------------------------------|-------|
+| -     | --auto-flush-limit | n        | 1    | Number of error drafts buffered before an auto-flush to the database |       |
+| -     | --batch-size       | n        | 1    | Rows pulled from the database per phase iteration                    |       |
+| -     | --work-capacity    | n        | 1    | Items in the producer/consumer work channel                          |       |
+| -     | --out-capacity     | n        | 1    | Items in the producer/consumer result channel                        |       |
+| -     | --feed-chunk       | n        | 1    | Rows pulled from the database per feed round                         |       |
+| -     | --drain-chunk      | n        | 1    | Outcomes committed per transaction                                   |       |
+
 **Sidecar**
 
 | Short | Long             | Required | Args | Description                                                                                                                                     | Notes |
@@ -324,16 +350,16 @@ Restore a tar-dedup archive (materialize: full copy at each original path). Abor
 
 **Filtering**
 
-| Short | Long           | Required | Args | Description                                                                   | Notes |
-|-------|----------------|----------|------|-------------------------------------------------------------------------------|-------|
-| -     | --exclude      | n        | 1+   | Exclude paths matching regex PATTERN from extraction (repeatable)             |       |
-| -X    | --exclude-from | n        | 1+   | Read exclude regex patterns from FILE (repeatable)                            |       |
-| -     | --include      | n        | 1+   | Include only paths matching regex PATTERN for extraction (repeatable)         |       |
-| -     | --include-from | n        | 1+   | Read include regex patterns from FILE (repeatable)                            |       |
-| -     | --anchored     | n        | 0    | Patterns match from the start of the path (default: unanchored)               |       |
-| -     | --ignore-case  | n        | 0    | Match patterns case-insensitively (default: case-sensitive)                   |       |
-| -     | --no-unicode   | n        | 0    | Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte) |       |
-| -     | --lazy-filter  | n        | 0    | Apply include/exclude filters after a later phase (scan) instead of eagerly   |       |
+| Short | Long           | Required | Args | Description                                                                                                                               | Notes |
+|-------|----------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --exclude      | n        | 1+   | Exclude paths matching regex PATTERN from extraction (repeatable)                                                                         |       |
+| -X    | --exclude-from | n        | 1+   | Read exclude regex patterns from FILE (repeatable)                                                                                        |       |
+| -     | --include      | n        | 1+   | Include only paths matching regex PATTERN for extraction (repeatable)                                                                     |       |
+| -     | --include-from | n        | 1+   | Read include regex patterns from FILE (repeatable)                                                                                        |       |
+| -     | --anchored     | n        | 0    | Patterns match from the start of the path (default: unanchored)                                                                           |       |
+| -     | --ignore-case  | n        | 0    | Match patterns case-insensitively (default: case-sensitive)                                                                               |       |
+| -     | --no-unicode   | n        | 0    | Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b` become ASCII-only, and `\p{…}` Unicode classes are rejected |       |
+| -     | --lazy-filter  | n        | 0    | Apply include/exclude filters after a later phase (scan) instead of eagerly                                                               |       |
 
 **Sparse Files**
 
