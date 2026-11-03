@@ -100,9 +100,6 @@ impl Validate for PlacementOptions {
             }
             validate_name(ls, "--link-source")?;
         }
-        if self.link_source.is_some() && !self.link_tree {
-            tracing::warn!("--link-source requires --link-tree");
-        }
         if let Some(ls) = self.link_source.as_ref() {
             validate_name(ls, "--link-source")?;
         }
