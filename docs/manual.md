@@ -27,15 +27,15 @@ This command takes a set of input files / directories and produces an archive.
 
 **Compression**
 
-| Short | Long                | Required | Args | Description                                                                                          | Notes |
-|-------|---------------------|----------|------|------------------------------------------------------------------------------------------------------|-------|
-| -z    | --gzip              | n        | 0    | Filter the archive through gzip (overrides extension inference)                                      | 3.    |
-| -j    | --bzip2             | n        | 0    | Filter the archive through bzip2 (overrides extension inference)                                     | 3.    |
-| -J    | --xz                | n        | 0    | Filter the archive through xz (overrides extension inference)                                        | 3.    |
-| -     | --zstd              | n        | 0    | Filter the archive through zstd (overrides extension inference)                                      | 3.    |
-| -     | --level             | n        | 1    | Compression level. Allowed range depends on compression algorithm: gzip/bzip2 1–9, xz 0–9, zstd 1–19 |       |
-| -     | --xz-extreme        | n        | 0    | xz `--extreme` / `-e` (OR into LZMA preset). Only valid with xz                                      |       |
-| -     | --memlimit-compress | n        | 1    | Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`                     |       |
+| Short | Long                   | Required | Args | Description                                                                                          | Notes |
+|-------|------------------------|----------|------|------------------------------------------------------------------------------------------------------|-------|
+| -z    | --gzip                 | n        | 0    | Filter the archive through gzip (overrides extension inference)                                      | 3.    |
+| -j    | --bzip2                | n        | 0    | Filter the archive through bzip2 (overrides extension inference)                                     | 3.    |
+| -J    | --xz                   | n        | 0    | Filter the archive through xz (overrides extension inference)                                        | 3.    |
+| -     | --zstd                 | n        | 0    | Filter the archive through zstd (overrides extension inference)                                      | 3.    |
+| -     | --level                | n        | 1    | Compression level. Allowed range depends on compression algorithm: gzip/bzip2 1–9, xz 0–9, zstd 1–19 |       |
+| -     | --xz-extreme           | n        | 0    | xz `--extreme` / `-e` (OR into LZMA preset). Only valid with xz                                      |       |
+| -     | --xz-memlimit-compress | n        | 1    | Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`                     |       |
 
 **Indexing**  
 The general assumptions when indexing are: 
