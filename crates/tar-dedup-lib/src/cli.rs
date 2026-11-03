@@ -16,7 +16,7 @@ pub struct Cli {
         global = true,
         value_enum,
         value_name = "LEVEL",
-        help_heading = "Process Options"
+        help_heading = "Logging"
     )]
     pub log_level: Option<LogLevel>,
 
@@ -212,7 +212,7 @@ pub struct ArchiveArgs {
     )]
     pub exclude_vcs_ignores: bool,
 
-    /// Patterns match from the start of the relative path.
+    /// Patterns match from the start of the relative path. (default unanchored)
     #[arg(
         long = "anchored",
         default_value_t = false,
@@ -221,7 +221,7 @@ pub struct ArchiveArgs {
     )]
     pub anchored: bool,
 
-    /// Case-insensitive pattern matching.
+    /// Case-insensitive pattern matching. (default Case-sensitive)
     #[arg(
         long = "ignore-case",
         default_value_t = false,
@@ -279,7 +279,6 @@ pub struct ArchiveArgs {
     pub resolve_numeric_ids: bool,
 
     /// Force owner for archived members: `NAME`, `UID`, or `NAME:UID` (GNU tar).
-    /// Stored as archive policy (meta); applied on extract.
     #[arg(long = "owner", value_name = "NAME[:UID]", help_heading = "File Attributes")]
     pub owner: Option<String>,
 
@@ -288,7 +287,6 @@ pub struct ArchiveArgs {
     pub owner_map: Option<PathBuf>,
 
     /// Force group for archived members: `NAME`, `GID`, or `NAME:GID` (GNU tar).
-    /// Stored as archive policy (meta); applied on extract.
     #[arg(long = "group", value_name = "NAME[:GID]", help_heading = "File Attributes")]
     pub group: Option<String>,
 
@@ -297,21 +295,19 @@ pub struct ArchiveArgs {
     pub group_map: Option<PathBuf>,
 
     /// Force symbolic mode CHANGES for added members (GNU tar `--mode`). Applies
-    /// chmod-style updates (e.g. `u+rwx,go-rx`) at extraction; stored as archive
-    /// policy (meta).
+    /// chmod-style updates (e.g. `u+rwx,go-rx`) to the entried.
     #[arg(long = "mode", value_name = "CHANGES", help_heading = "File Attributes")]
     pub mode: Option<String>,
 
     /// Record a sed-style name transform (GNU tar `--transform`/`--xform`,
-    /// e.g. `s,^usr/,var/,`) to apply at extraction; stored as archive policy
-    /// (meta). Only validated here; not applied at archive time.
+    /// e.g. `s,^usr/,var/,`) to apply to paths
     #[arg(long = "transform", alias = "xform", value_name = "EXPRESSION",
           help_heading = "File Attributes")]
     pub transform: Option<String>,
 
     // --- Sparse Files ---
 
-    /// Run the sparsify phase (copy with seeks using `--page-size` / `--min-pages`).
+    /// Run the sparsify phase (copy with seeks using `--page-size` increments).
     #[arg(long = "sparsify", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Sparse Files")]
     pub sparsify: bool,
 
@@ -324,7 +320,7 @@ pub struct ArchiveArgs {
     )]
     pub page_size: usize,
 
-    /// Minimum empty-page count before sparsify treats a file as worth rewriting.
+    /// Minimum empty-page count before sparsify treats a file as worth rewriting in sparse.
     #[arg(
         long = "min-pages",
         value_name = "PAGES",
@@ -335,11 +331,11 @@ pub struct ArchiveArgs {
 
     // --- Process Options ---
 
-    /// Maximum concurrent workers (rayon pools and xz threads).
+    /// Maximum concurrent compute bound workers.
     #[arg(long = "jobs", value_name = "N", help_heading = "Process Options")]
     pub jobs: Option<usize>,
 
-    /// Maximum concurrent io-bound workers (dedup, sparsify, place pools).
+    /// Maximum concurrent io-bound workers.
     #[arg(long = "io-jobs", value_name = "N", help_heading = "Process Options")]
     pub io_jobs: Option<usize>,
 
@@ -362,7 +358,7 @@ pub struct ArchiveArgs {
     #[arg(long = "keep-stage", help_heading = "Process Options")]
     pub keep_stage: bool,
 
-    /// Run through STAGE then exit cleanly (state saved).
+    /// Run through STAGE then exit gracefully.
     #[arg(
         long = "exit-after-stage",
         value_name = "STAGE",
@@ -371,11 +367,12 @@ pub struct ArchiveArgs {
     )]
     pub exit_after_stage: Option<ExitAfterStageArg>,
 
-    /// Abort the run on the first hard failure (instead of soft-continuing where possible).
+    /// Abort the run on the first hard failure instead of continuing according to the
+    /// best-effort principle where possible.
     #[arg(long = "fail-fast", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub fail_fast: bool,
 
-    /// Do not record errors encountered while processing the entries in the database.
+    /// Do not record errors encountered while processing the entries in the database. Downgrades a db-retention of `on-error` to `never`
     #[arg(long = "no-errors", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub no_errors: bool,
 
@@ -392,8 +389,7 @@ pub struct ArchiveArgs {
     )]
     pub dedup_mode: DedupMode,
 
-    /// Generate sorted combination of data pieces in the order necessary to write.
-    /// (GNU tar `--sort` analog; applies at the tar writer.)
+    /// Ordering used in which the files are added to the archive to improve compression.
     #[arg(
         long = "ordering",
         value_enum,
@@ -415,8 +411,7 @@ pub struct ArchiveArgs {
     )]
     pub max_shard_size: u64,
 
-    /// Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept.
-    /// Mutually exclusive with `--force`.
+    /// Relax utf-8 policy to also process entries without a valid utf-8 path.
     #[arg(long = "relax-utf8", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub relax_utf8: bool,
 
@@ -429,7 +424,7 @@ pub struct ArchiveArgs {
     )]
     pub auto_flush_limit: u64,
 
-    /// Rows pulled from the database per phase iteration.
+    /// Rows pulled from the database per batch iteration.
     #[arg(
         long = "batch-size",
         value_name = "N",
@@ -438,7 +433,7 @@ pub struct ArchiveArgs {
     )]
     pub batch_size: u64,
 
-    /// Items in the producer/consumer work channel.
+    /// Max items in the producer/consumer work channel.
     #[arg(
         long = "work-capacity",
         value_name = "N",
@@ -447,7 +442,7 @@ pub struct ArchiveArgs {
     )]
     pub work_capacity: usize,
 
-    /// Items in the producer/consumer result channel.
+    /// Max items in the producer/consumer result channel.
     #[arg(
         long = "out-capacity",
         value_name = "N",
@@ -479,7 +474,7 @@ pub struct ArchiveArgs {
         long = "progress-mode",
         value_enum,
         default_value_t = ProgressMode::PerThread,
-        help_heading = "Process Options"
+        help_heading = "Logging"
     )]
     pub progress_mode: ProgressMode,
 }
@@ -994,7 +989,7 @@ pub struct ExtractArgs {
         long = "progress-mode",
         value_enum,
         default_value_t = ProgressMode::PerThread,
-        help_heading = "Process Options"
+        help_heading = "Logging"
     )]
     pub progress_mode: ProgressMode,
 
