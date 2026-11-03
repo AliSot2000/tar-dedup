@@ -230,7 +230,8 @@ pub struct ArchiveArgs {
     )]
     pub ignore_case: bool,
 
-    /// Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte).
+    /// Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b`
+    /// become ASCII-only, and `\p{…}` Unicode classes are rejected.
     #[arg(
         long = "no-unicode",
         default_value_t = false,
@@ -377,7 +378,7 @@ pub struct ArchiveArgs {
     pub no_errors: bool,
 
     /// Apply include/exclude filters after the hash phase.
-    #[arg(long = "lazy-filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    #[arg(long = "lazy-filter", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
     pub lazy_filter: bool,
 
     /// Deduplication strategy.
@@ -385,7 +386,7 @@ pub struct ArchiveArgs {
         long = "dedup-mode",
         value_enum,
         default_value_t = DedupMode::Regular,
-        help_heading = "Process Options"
+        help_heading = "Dedup"
     )]
     pub dedup_mode: DedupMode,
 
@@ -399,7 +400,7 @@ pub struct ArchiveArgs {
     pub ordering: ArchiveOrdering,
 
     /// Use content-defined chunking instead of whole-file hashes (not implemented yet).
-    #[arg(long = "use-shards", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
+    #[arg(long = "use-shards", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Dedup")]
     pub use_shards: bool,
 
     /// Maximum shard size for content-defined chunking (requires `--use-shards`).
@@ -407,7 +408,7 @@ pub struct ArchiveArgs {
         long = "max-shard-size",
         value_name = "BYTES",
         default_value_t = 0,
-        help_heading = "Process Options"
+        help_heading = "Dedup"
     )]
     pub max_shard_size: u64,
 
@@ -420,7 +421,7 @@ pub struct ArchiveArgs {
         long = "auto-flush-limit",
         value_name = "N",
         default_value_t = common::defaults::DEFAULT_AUTO_FLUSH_LIMIT,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub auto_flush_limit: u64,
 
@@ -429,7 +430,7 @@ pub struct ArchiveArgs {
         long = "batch-size",
         value_name = "N",
         default_value_t = common::defaults::BATCH_SIZE,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub batch_size: u64,
 
@@ -438,7 +439,7 @@ pub struct ArchiveArgs {
         long = "work-capacity",
         value_name = "N",
         default_value_t = common::defaults::WORK_CAPACITY,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub work_capacity: usize,
 
@@ -447,7 +448,7 @@ pub struct ArchiveArgs {
         long = "out-capacity",
         value_name = "N",
         default_value_t = common::defaults::OUT_CAPACITY,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub out_capacity: usize,
 
@@ -456,7 +457,7 @@ pub struct ArchiveArgs {
         long = "feed-chunk",
         value_name = "N",
         default_value_t = common::defaults::FEED_CHUNK,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub feed_chunk: usize,
 
@@ -465,7 +466,7 @@ pub struct ArchiveArgs {
         long = "drain-chunk",
         value_name = "N",
         default_value_t = common::defaults::DRAIN_CHUNK,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub drain_chunk: usize,
 
@@ -935,7 +936,7 @@ pub struct ExtractArgs {
         long = "auto-flush-limit",
         value_name = "N",
         default_value_t = common::defaults::DEFAULT_AUTO_FLUSH_LIMIT,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub auto_flush_limit: u64,
 
@@ -944,7 +945,7 @@ pub struct ExtractArgs {
         long = "batch-size",
         value_name = "N",
         default_value_t = common::defaults::BATCH_SIZE,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub batch_size: u64,
 
@@ -953,7 +954,7 @@ pub struct ExtractArgs {
         long = "work-capacity",
         value_name = "N",
         default_value_t = common::defaults::WORK_CAPACITY,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub work_capacity: usize,
 
@@ -962,7 +963,7 @@ pub struct ExtractArgs {
         long = "out-capacity",
         value_name = "N",
         default_value_t = common::defaults::OUT_CAPACITY,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub out_capacity: usize,
 
@@ -971,7 +972,7 @@ pub struct ExtractArgs {
         long = "feed-chunk",
         value_name = "N",
         default_value_t = common::defaults::FEED_CHUNK,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub feed_chunk: usize,
 
@@ -980,7 +981,7 @@ pub struct ExtractArgs {
         long = "drain-chunk",
         value_name = "N",
         default_value_t = common::defaults::DRAIN_CHUNK,
-        help_heading = "Process Options"
+        help_heading = "Batching"
     )]
     pub drain_chunk: usize,
 
@@ -1039,7 +1040,8 @@ pub struct ExtractArgs {
     #[arg(long = "ignore-case", help_heading = "Filtering")]
     pub ignore_case: bool,
 
-    /// Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte).
+    /// Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b`
+    /// become ASCII-only, and `\p{…}` Unicode classes are rejected.
     #[arg(long = "no-unicode", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Filtering")]
     pub no_unicode: bool,
 
