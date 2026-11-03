@@ -347,27 +347,7 @@ impl ArchiveConfig {
         // Compression
         let format = resolve_compression(&args.compression, &c_archive_path)?;
         let compression = CompressionSettings::from_archive_args(format, args)?;
-
-        // Include & Exclude files
-        let c_exclude_from: Vec<PathBuf> = args
-            .exclude_from
-            .iter()
-            .map(|p| {
-                let resolved = resolve_path_to_abs_path(p, &c_directory);
-                validate_file(&resolved, "--exclude-from")?;
-                Ok(resolved)
-            })
-            .collect::<Result<_>>()?;
-        let c_include_from: Vec<PathBuf> = args
-            .include_from
-            .iter()
-            .map(|p| {
-                let resolved = resolve_path_to_abs_path(p, &c_directory);
-                validate_file(&resolved, "--exclude-from")?;
-                Ok(resolved)
-            })
-            .collect::<Result<_>>()?;
-
+        
         if args.exclude_vcs || args.exclude_vcs_ignores {
             return Err(Error::Config(
                 "--exclude-vcs / --exclude-vcs-ignores are not implemented yet".into(),
@@ -405,7 +385,7 @@ impl ArchiveConfig {
             paths: PathLayout {
                 archive_path: c_archive_path,
                 directory: c_directory.clone(),
-                output_dir: c_directory,
+                output_dir: c_directory.clone(),
                 work_dir: c_work_dir,
             },
             inputs: InputOptions {
@@ -420,16 +400,7 @@ impl ArchiveConfig {
                 no_hardlink_detection: args.no_hardlink_detection,
                 no_strict_separation: args.no_strict_separation,
             },
-            filter: FilterOptions {
-                exclude_patterns: args.exclude.clone(),
-                include_patterns: args.include.clone(),
-                exclude_from: c_exclude_from,
-                include_from: c_include_from,
-                anchored: args.anchored,
-                ignore_case: args.ignore_case,
-                no_unicode: args.no_unicode,
-                eager_filter: !args.lazy_filter,
-            },
+            filter: FilterOptions::build(&args.filter, &c_directory, !args.lazy_filter),
             capture: CaptureOptions {
                 do_xattrs: resolve_bool_flag(args.no_xattrs,
                                              args.xattrs,

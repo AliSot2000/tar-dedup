@@ -468,7 +468,7 @@ impl ExtractConfig {
         Ok(Self {
             paths: PathLayout {
                 archive_path: c_archive_path,
-                directory: c_directory,
+                directory: c_directory.clone(),
                 output_dir: c_output_dir,
                 work_dir: c_work_dir,
             },
@@ -538,16 +538,7 @@ impl ExtractConfig {
             mode_policy,
             strip_components: args.strip_components,
             transform_policy: resolve_transform_policy_from_args(args, apply_transform)?,
-            filter: FilterOptions {
-                exclude_patterns: args.exclude.clone(),
-                include_patterns: args.include.clone(),
-                exclude_from: args.exclude_from.clone(),
-                include_from: args.include_from.clone(),
-                anchored: args.anchored,
-                ignore_case: args.ignore_case,
-                no_unicode: args.no_unicode,
-                eager_filter: !args.lazy_filter,
-            },
+            filter: FilterOptions::build(&args.filter, &c_directory, !args.lazy_filter),
             sidecar: sidecar_mode,
             hidden_sidecar: args.hidden_sidecar,
         })

@@ -1,7 +1,8 @@
-use crate::config::Validate;
+use crate::cli::FilterFlags;
+use crate::config::{Validate, resolve_path_to_abs_path, validate_file};
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FilterOptions {
@@ -15,6 +16,32 @@ pub struct FilterOptions {
     /// Compile the filter regexes in bytes mode (`\w`/`.` ASCII-only). Default:
     /// Unicode-aware matching.
     pub no_unicode: bool,
+}
+
+impl FilterOptions {
+    pub fn build(filter_args: &FilterFlags, cwd: &Path, lazy_filter: bool) -> Self {
+        let c_include_from: Vec<PathBuf> = filter_args
+            .include_from
+            .iter()
+            .map(|p| resolve_path_to_abs_path(p, &cwd))
+            .collect();
+        let c_exclude_from: Vec<PathBuf> = filter_args
+            .exclude_from
+            .iter()
+            .map(|p| resolve_path_to_abs_path(p, &cwd))
+            .collect();
+
+        Self {
+            exclude_patterns: filter_args.exclude.clone(),
+            include_patterns: filter_args.include.clone(),
+            exclude_from: c_exclude_from,
+            include_from: c_include_from,
+            anchored: filter_args.anchored,
+            ignore_case: filter_args.ignore_case,
+            no_unicode: filter_args.no_unicode,
+            eager_filter: lazy_filter,
+        }
+    }
 }
 
 impl Default for FilterOptions {
@@ -33,9 +60,15 @@ impl Default for FilterOptions {
 }
 
 impl Validate for FilterOptions {
-    // INFO: Currently a stub to prevent bugs that result from not calling a subsequent
-    //   implementation of this trait for this Struct
     fn validate(&self) -> Result<()> {
+        self.include_from
+            .iter()
+            .map(|p| validate_file(p, "--include-from"))
+            .collect::<Result<()>>()?;
+        self.exclude_from
+            .iter()
+            .map(|p| validate_file(p, "--exclude-from"))
+            .collect::<Result<()>>()?;
         Ok(())
     }
 }
