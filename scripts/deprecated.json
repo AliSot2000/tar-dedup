@@ -1,0 +1,52 @@
+[
+  {
+    "subcommand": "archive",
+    "help_heading": "Indexing",
+    "short": "-P",
+    "long": "--absolute-names",
+    "required": false,
+    "args": "0",
+    "description": "Write absolute path names for all files.",
+    "note": "removed here; extract has `--absolute`"
+  },
+  {
+    "subcommand": "archive",
+    "help_heading": "Filtering",
+    "short": "-",
+    "long": "--no-anchored",
+    "required": false,
+    "args": "0",
+    "description": "Patterns match from the start of the relative path rather than any path component.",
+    "note": "superseded: unanchored is the default"
+  },
+  {
+    "subcommand": "archive",
+    "help_heading": "Filtering",
+    "short": "-",
+    "long": "--no-ignore-case",
+    "required": false,
+    "args": "0",
+    "description": "Perform case insensitive matching.",
+    "note": "superseded: case-sensitive is the default"
+  },
+  {
+    "subcommand": "archive",
+    "help_heading": "Process Options",
+    "short": "-",
+    "long": "--eager-filter",
+    "required": false,
+    "args": "0",
+    "description": "Perform filtering before the hash phase.",
+    "note": "superseded: the default; only `--lazy-filter` exists"
+  },
+  {
+    "subcommand": "archive",
+    "help_heading": "Process Options",
+    "short": "-",
+    "long": "--retry-missing-sha",
+    "required": false,
+    "args": "0",
+    "description": "Retry files with missing digests.",
+    "note": "removed"
+  }
+]
