@@ -3,7 +3,8 @@ A `tar` "wrapper" to deduplicate the file-tree prior to archiving to save extra 
 creation of large tar archives at the cost of lower compression ratios for compressed archives.
 
 ## Usage
-The `tar-dedup` consists of a few subcommands. 
+The `tar-dedup` consists of a few subcommands. Here are their options as well as some additional information about 
+their behavior.
 
 ### archive
 This command takes a set of input files / directories and produces an archive.
@@ -36,12 +37,15 @@ This command takes a set of input files / directories and produces an archive.
 | -     | --xz-extreme        | n        | 0    | xz `--extreme` / `-e` (OR into LZMA preset). Only valid with xz                                      |       |
 | -     | --memlimit-compress | n        | 1    | Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`                     |       |
 
-**Indexing**
+**Indexing**  
 The general assumptions when indexing are: 
-- Every entry in the file system is walked once. 
 - There's no writes to the files currently indexed. 
 - There's no writes to the metadata of the files currently indexed.
 - Files may be read.
+
+The tool enforces that each inode is read exactly **once**. As it can become cumbersome to separate trees with a lot of 
+links [...], the tool offers to loosen the restriction. Link cycles are still detected, however, every unique absolute 
+path is treated as a new entity and has its metadata recorded.
 
 | Short  | Long                    | Required | Args  | Description                                                                       | Notes                                      |
 |--------|-------------------------|----------|-------|-----------------------------------------------------------------------------------|--------------------------------------------|
@@ -50,23 +54,26 @@ The general assumptions when indexing are:
 | -      | --one-file-system       | n        | 0     | Stay on one filesystem when walking input trees                                   |                                            |
 | -      | --no-hardlink-detection | n        | 0     | Do not coalesce same (inode, device) hard links in hash/dedup                     | 4.                                         |
 | -      | --no-strict-separation  | n        | 0     | Allow nested or duplicate `-i` / `-T` directory roots (still recorded and walked) |                                            |
-<!-- obsolete/deprecated (kept for reference) -->
-| Short  | Long                    | Required | Args  | Description                                                                       | Notes                                      |
-|--------|-------------------------|----------|-------|-----------------------------------------------------------------------------------|--------------------------------------------|
-| ~~-P~~ | ~~--absolute-names~~    | ~~n~~    | ~~0~~ | ~~Write absolute path names for all files.~~                                      | ~~removed here; extract has `--absolute`~~ |
 
-**Filtering**
+**Filtering**  
 `--include-from` and `--exclude-from` expects a file with `utf8` content and each pattern separated by a 
 newline character. This can be relaxed with `--no-unicode` if needed. If you need to match a new line for some reason, 
-use `\n` and never `0x0A`. Regex is handled with rusts regex crate. TODO: Verify! This _should_ implement "PCRE-lite" - 
-so a subset minus the backreferences and lookahead/lookbehind functionality. 
-Also, please note **The include/exclude feature deviates substantially from tar!!!** The tool creates an index of all provided sources first. In doing so,
-it stores the absolute path to each item. When the filtering is applied, it is not done to the relative path but the absolute path of the files provided. 
-(We need absolute paths to detect duplicates early - where their elimination is chep) Furthermore, the filtering is applied to each item **independently** of the others. 
-This means, if a `.git$` is processed, it will exclude the `.git$` directory but not the files within. When extracting, this is modeled as any attributes the `.git` directory 
-held will not be restored but the contents of it as well as their metadata will be restored as faithfully as possible. 
-If this behavior is undesirable, consider using `--files-from` or `-T` to provide your own list of files to add. `-` for stdin is supported.
-Currently not implemented is the `--newer` ... filters. They are currently on the feature list but for the moment, this 
+use `\n` and never `0x0A`. Regex is handled with rusts regex crate. Regex is handled by Rust's regex crate. It is a 
+linear-time (ReDoS-safe) engine whose syntax is a subset of PCRE/Perl — notably it does not support backreferences, 
+look-around ((?=…), (?<=…), …), atomic groups, or possessive quantifiers. Unicode classes are on by default; 
+--no-unicode switches to byte-wise (ASCII) matching.
+
+Also, please note **The include/exclude feature deviates substantially from tar!!!** The tool creates an index of all 
+provided sources first. In doing so, it stores the absolute path to each item as well as the original path in a raw 
+byte buffer (in case the system was not utf-8 compliant). When the filtering is applied, it is not done to the relative 
+path but the absolute path of the files provided. On non-compliant systems, the invalid characters are replaced with � 
+and then filtered against that. (We needed absolute paths rather than relative paths to detect duplicates early - 
+where their elimination is cheap) Furthermore, the filtering is applied to each item **independently** of the others. 
+This means, if a `.git$` is processed, it will exclude the `.git` directory but not the files within `.git/index.html`. 
+When extracting, this is modeled as any attributes the `.git` directory held will not be restored but the contents of 
+it as well as their metadata will be restored as faithfully as possible. If this behavior is undesirable, consider 
+using `--files-from` or `-T` to provide your own list of files to add. `-` for stdin is supported. Currently not 
+implemented is the `--newer` ... filters. They are currently on the feature list but for the moment, this 
 can be remedied by using `filter` in conjunction with `--files-from` to achieve the same filtering.
 
 | Short | Long                  | Required | Args  | Description                                                                            | Notes                                         |
@@ -80,16 +87,15 @@ can be remedied by using `filter` in conjunction with `--files-from` to achieve 
 | -     | --anchored            | n        | 0     | Patterns match from the start of the relative path                                     |                                               |
 | -     | --ignore-case         | n        | 0     | Case-insensitive pattern matching                                                      |                                               |
 | -     | --no-unicode          | n        | 0     | Compile filter regexes in bytes mode (ASCII-only classes, `.` matches a byte)          |                                               |
-<!-- obsolete/deprecated (kept for reference) -->
-| Short | Long                  | Required | Args  | Description                                                                            | Notes                                         |
-|-------|-----------------------|----------|-------|----------------------------------------------------------------------------------------|-----------------------------------------------|
-| ~~-~~ | ~~--no-anchored~~     | ~~n~~    | ~~0~~ | ~~Patterns match from the start of the relative path rather than any path component.~~ | ~~superseded: unanchored is the default~~     |
-| ~~-~~ | ~~--no-ignore-case~~  | ~~n~~    | ~~0~~ | ~~Perform case insensitive matching.~~                                                 | ~~superseded: case-sensitive is the default~~ |
 
-**File Attributes**
-As a baseline, the tool attempts to capture as much data as possible. This includes (ctime, atime, mtime, uid, gid, mode, size
-selinux policy, posix_acls, xattrs, file type. By default, the tool also attempts to resolve any uid, gid to a 
-group name / owner name via the system database.
+**File Attributes**  
+As a baseline, the tool attempts to capture as much data as possible. This includes (ctime, atime, mtime, uid, gid, 
+mode, size, selinux policy, posix_acls, xattrs, inode type, link destination and link type too for symlinks. By 
+default, the tool also attempts to resolve any uid, gid to a group name / owner name via the system database. 
+
+Global default: By default, everything is turned on and can be turned off. This behavior can be inverted with 
+`--no-capture-all-metadata`. That way, the default becomes off and needs to be selectively re-enabled with e.g. 
+`--acls`.
 
 | Short | Long                      | Required | Args | Description                                                                                                                                                                                         | Notes |
 |-------|---------------------------|----------|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
@@ -106,14 +112,19 @@ group name / owner name via the system database.
 | -     | --owner-map               | n        | 1    | Owner translation map file (GNU tar `--owner-map`)                                                                                                                                                  | 6.    |
 | -     | --group                   | n        | 1    | Force group for archived members: `NAME`, `GID`, or `NAME:GID` (GNU tar). Stored as archive policy (meta); applied on extract                                                                       | 6.    |
 | -     | --group-map               | n        | 1    | Group translation map file (GNU tar `--group-map`)                                                                                                                                                  | 6.    |
-| -     | --mode                    | n        | 1    | Force symbolic mode CHANGES for added members (GNU tar `--mode`). Applies chmod-style updates (e.g. `u+rwx,go-rx`) at extraction; stored as archive policy (meta)                                   |       |
-| -     | --transform               | n        | 1    | Record a sed-style name transform (GNU tar `--transform`/`--xform`, e.g. `s,^usr/,var/,`) to apply at extraction; stored as archive policy (meta). Only validated here; not applied at archive time |       |
+| -     | --mode                    | n        | 1    | Force symbolic mode CHANGES for added members (GNU tar `--mode`). Applies chmod-style updates (e.g. `u+rwx,go-rx`) at extraction; stored as archive policy (meta)                                   | 6.    |
+| -     | --transform               | n        | 1    | Record a sed-style name transform (GNU tar `--transform`/`--xform`, e.g. `s,^usr/,var/,`) to apply at extraction; stored as archive policy (meta). Only validated here; not applied at archive time | 6.    |
 
-**Sparse Files**
-The system relies on the tar reader detecting sparse files. To be able to add sparse files to the archive, they are 
-sparse copied into the `--work-dir`, turning them into valid sparse files. Those sparse files are then used as the 
-source of truth rather than the original files. (Note that this will lead to an additional scan files that were 
-selected to be sparsified)
+**Sparse Files**  
+The system relies on the tar reader detecting sparse files and encoding them according to the tar format. As the tar 
+builder from the rust tar crate cannot create sparse files inflight, the tool first creates valid sparse files in the 
+`--work-dir` such that the tar builder can correctly detect their sparseness when it reads them back. Notes:
+- This sparse copy step will only apply to files which are detected to be sparse during the inventory pass, not all of 
+  them. Detection happens via the `--page-size` and `--min-pages` options.
+- If a compression algorithm is used, it is recommended to rely on that algorithm to deal with sparseness rather than 
+  the tool's `sparsify` stage as it will produce the archive in less time.
+- Since the sparse copy relies on the underlying filesystem being able to represent sparse files, the sparsification 
+  via sparse copy will not work on a file system that is not able to represent sparse files.
 
 | Short | Long        | Required | Args | Description                                                                  | Notes |
 |-------|-------------|----------|------|------------------------------------------------------------------------------|-------|
@@ -121,40 +132,32 @@ selected to be sparsified)
 | -     | --page-size | n        | 1    | Page size in bytes for hash zero-page counting and sparsify                  |       |
 | -     | --min-pages | n        | 1    | Minimum empty-page count before sparsify treats a file as worth rewriting    |       |
 
-**Process Options**
-Options labeled [Internal] are used for testing purposes and performance benchmarks. Sensible defaults should be set. 
-Changes can negatively impact tool performance by increasing the number of transactions in the database. Changes can 
-also use more RAM, leading to worse system performance.
+**Process Options**  
 
-| Short | Long                    | Required | Args  | Description                                                                                                                                              | Notes                                                    |
-|-------|-------------------------|----------|-------|----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
-| -     | --jobs                  | n        | 1     | Maximum concurrent workers (rayon pools and xz threads)                                                                                                  |                                                          |
-| -     | --io-jobs               | n        | 1     | Maximum concurrent io-bound workers (dedup, sparsify, place pools)                                                                                       |                                                          |
-| -     | --fresh                 | n        | 0     | Wipe existing work and archive, then start from inventory                                                                                                |                                                          |
-| -     | --db-retention          | n        | 1     | When to keep a timestamped copy of the work database next to the archive. `always`: always; `on-error`: only if the run recorded errors; `never`: delete | TODO                                                     |
-| -     | --keep-stage            | n        | 0     | After success, keep the `{stem}.astage` work directory                                                                                                   |                                                          |
-| -     | --exit-after-stage      | n        | 1     | Run through STAGE then exit cleanly (state saved)                                                                                                        |                                                          |
-| -     | --fail-fast             | n        | 0     | Abort the run on the first hard failure (instead of soft-continuing where possible)                                                                      |                                                          |
-| -     | --no-errors             | n        | 0     | Do not record errors encountered while processing the entries in the database                                                                            |                                                          |
-| -     | --lazy-filter           | n        | 0     | Apply include/exclude filters after the hash phase                                                                                                       |                                                          |
-| -     | --dedup-mode            | n        | 1     | Deduplication strategy                                                                                                                                   |                                                          |
-| -     | --ordering              | n        | 1     | Generate sorted combination of data pieces in the order necessary to write. (GNU tar `--sort` analog; applies at the tar writer.)                        |                                                          |
-| -     | --use-shards            | n        | 0     | Use content-defined chunking instead of whole-file hashes (not implemented yet)                                                                          |                                                          |
-| -     | --max-shard-size        | n        | 1     | Maximum shard size for content-defined chunking (requires `--use-shards`)                                                                                |                                                          |
-| -     | --relax-utf8            | n        | 0     | Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept. Mutually exclusive with `--force`                                       |                                                          |
-| -     | --auto-flush-limit      | n        | 1     | Number of error drafts buffered before an auto-flush to the database                                                                                     |                                                          |
-| -     | --batch-size            | n        | 1     | Rows pulled from the database per phase iteration                                                                                                        |                                                          |
-| -     | --work-capacity         | n        | 1     | Items in the producer/consumer work channel                                                                                                              |                                                          |
-| -     | --out-capacity          | n        | 1     | Items in the producer/consumer result channel                                                                                                            |                                                          |
-| -     | --feed-chunk            | n        | 1     | Rows pulled from the database per feed round                                                                                                             |                                                          |
-| -     | --drain-chunk           | n        | 1     | Outcomes committed per transaction                                                                                                                       |                                                          |
-| -     | --progress-mode         | n        | 1     | Which progress bars to draw                                                                                                                              |                                                          |
-| -     | --log-level             | n        | 1     | Verbosity of the log output (overrides the `RUST_LOG` env var)                                                                                           |                                                          |
-<!-- obsolete/deprecated (kept for reference) -->
-| Short | Long                    | Required | Args  | Description                                                                                                                                              | Notes                                                    |
-|-------|-------------------------|----------|-------|----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|
-| ~~-~~ | ~~--eager-filter~~      | ~~n~~    | ~~0~~ | ~~Perform filtering before the hash phase.~~                                                                                                             | ~~superseded: the default; only `--lazy-filter` exists~~ |
-| ~~-~~ | ~~--retry-missing-sha~~ | ~~n~~    | ~~0~~ | ~~Retry files with missing digests.~~                                                                                                                    | ~~removed~~                                              |
+| Short | Long               | Required | Args | Description                                                                                                                                              | Notes |
+|-------|--------------------|----------|------|----------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --jobs             | n        | 1    | Maximum concurrent workers (rayon pools and xz threads)                                                                                                  |       |
+| -     | --io-jobs          | n        | 1    | Maximum concurrent io-bound workers (dedup, sparsify, place pools)                                                                                       |       |
+| -     | --fresh            | n        | 0    | Wipe existing work and archive, then start from inventory                                                                                                |       |
+| -     | --db-retention     | n        | 1    | When to keep a timestamped copy of the work database next to the archive. `always`: always; `on-error`: only if the run recorded errors; `never`: delete |       |
+| -     | --keep-stage       | n        | 0    | After success, keep the `{stem}.astage` work directory                                                                                                   |       |
+| -     | --exit-after-stage | n        | 1    | Run through STAGE then exit cleanly (state saved)                                                                                                        |       |
+| -     | --fail-fast        | n        | 0    | Abort the run on the first hard failure (instead of soft-continuing where possible)                                                                      |       |
+| -     | --no-errors        | n        | 0    | Do not record errors encountered while processing the entries in the database                                                                            |       |
+| -     | --lazy-filter      | n        | 0    | Apply include/exclude filters after the hash phase, not after inventory phase.                                                                           |       |
+| -     | --dedup-mode       | n        | 1    | Deduplication strategy                                                                                                                                   |       |
+| -     | --ordering         | n        | 1    | Generate sorted combination of data pieces in the order necessary to write. (GNU tar `--sort` analog; applies at the tar writer.)                        |       |
+| -     | --use-shards       | n        | 0    | Use content-defined chunking instead of whole-file hashes (not implemented yet)                                                                          |       |
+| -     | --max-shard-size   | n        | 1    | Maximum shard size for content-defined chunking (requires `--use-shards`)                                                                                |       |
+| -     | --relax-utf8       | n        | 0    | Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept. Mutually exclusive with `--force`                                       | 7.    |
+| -     | --auto-flush-limit | n        | 1    | Number of error drafts buffered before an auto-flush to the database                                                                                     | 8.    |
+| -     | --batch-size       | n        | 1    | Rows pulled from the database per phase iteration                                                                                                        | 8.    |
+| -     | --work-capacity    | n        | 1    | Items in the producer/consumer work channel                                                                                                              | 8.    |
+| -     | --out-capacity     | n        | 1    | Items in the producer/consumer result channel                                                                                                            | 8.    |
+| -     | --feed-chunk       | n        | 1    | Rows pulled from the database per feed round                                                                                                             | 8.    |
+| -     | --drain-chunk      | n        | 1    | Outcomes committed per transaction                                                                                                                       | 8.    |
+| -     | --progress-mode    | n        | 1    | Which progress bars to draw                                                                                                                              | 8.    |
+| -     | --log-level        | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var)                                                                                           | 8.    |
 
 **Notes**
 1. Path resolution: If the path is absolute, the path is taken as is. If the path is relative and `-C --directory` is not set, 
@@ -163,13 +166,21 @@ also use more RAM, leading to worse system performance.
 2. At least one input must be given. So either one `-T` or `-i`. Multiples are supported. (so multiple `-i` and `-T`)
 3. If no compression is given, the compression is inferred by the extension. E.g. `.tar.xz` maps to the xz compression. 
    An uncompressed archive can be produced by simply supplying `.tar` as the file extension.
-4. Internally, all files are stored with an absolute path and conversion to absolute or relative happens when extracting 
-   canonical files are moved back into place.
+4. Disabling the hardlink_detection can increase the runtime of the dedup stage because the tool will compare inode 
+   with itself `n-1` times (i.e. if it was recorded `n` times.)
 5. Filtering always uses REGEX TODO FORMAT!!!. No Glob or Shell expansions are supported. Files are first indexed. If given, only files
    matching one or more of the include filters are propagated. Lastly only files that don't match a single exclude 
    pattern are then eligible. If no include filter is given, a catch-all filter is used.
-6. The database will store the overrides separately from the file metadata. On extract, the overrides will be applied 
-   rather than on archive.
+6. The database will store the overrides separately from the file metadata. During extraction, the overrides will be applied 
+   rather than on archive. Before the overrides are stored in the database, the tool will parse them and error out, if they are invalid.
+7. All utf-8 conform paths will be processed regardless. For None utf-8 paths, the `--relax-utf8` option takes 
+   priority. If given, any path without valid utf-8 is converted to utf-8, replacing any non-utf8 characters with �. 
+   The original path is stored in the database for reference but is currently not treated further. If without 
+   `--relax-utf8` the treatment of paths depends on `--force`. Without `--force` the path is skipped with a warning 
+   and not recorded anywhere. With `--force` any non-utf8 path leads to an exit.
+8. Options with this note are used for testing purposes and performance benchmarks. Sensible defaults should be set. 
+   Changes can negatively impact tool performance by increasing the number of transactions in the database. Changes can 
+   also use more RAM, leading to worse system performance.
 
 ### extract
 
