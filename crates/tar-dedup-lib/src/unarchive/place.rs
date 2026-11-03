@@ -6,7 +6,7 @@ use crate::common::{batched_loop, batched_stepped_loop, send_receive_loop};
 use crate::config::{ExtractConfig, ExtractPipelinePhase};
 use crate::db::Database;
 use crate::db::flags::ErrorFlags;
-use crate::db::place::{CopyOutcome, MaterializeResult};
+use crate::db::place::{CopyOutcome, MaterializeOutcome, MaterializeResult};
 use crate::db::types::FilePhase;
 #[warn(unused_imports)] // LinkType needed for linking back on windows.
 use crate::db::types::{FileId, FileRecord, FileType, OutTreeId, OutTreeRecord, StrippedRecord};
@@ -371,8 +371,6 @@ struct MaterializeWork {
     out_canon: Option<OutTreeRecord>,
 }
 
-type MaterializeOutcome = std::result::Result<MaterializeResult, (OutTreeId, Error)>;
-
 /// Set the canonical_id of the out_tree.
 /// PRECONDITION: This function should ouly be called with link_tree == false
 /// Iterate through the out_tree and reflink / copy all files into placed which are marked as
@@ -547,13 +545,9 @@ fn materialize_worker(
                     b.set_length(w.canonical.size);
                     b.set_message(format!("Materializing {}", w.out.abs_path.display()));
                 }
-                match materialize_one(&kind, &cache_dir, &config, &w, &shutdown, bar.as_ref()) {
-                    Some(outcome) => {
-                        out.send(Some(outcome))
-                            .expect("materialize worker: result channel closed");
-                    }
-                    None => break,
-                }
+                let outcome = materialize_one(&kind, &cache_dir, &config, &w, &shutdown, bar.as_ref());
+                out.send(Some(outcome))
+                    .expect("materialize worker: result channel closed");
             }
             Err(_) => break,
         }
@@ -561,8 +555,10 @@ fn materialize_worker(
     out.send(None).expect("materialize worker: result channel closed");
 }
 
-/// Rebuild a single output entry per its kind. Returns `None` when the run was
-/// force-aborted mid-copy: the in-flight row must not be committed.
+/// Rebuild a single output entry per its kind. `error: Some(Error::Interrupted)`
+/// signals a force-abort mid-copy: ingest leaves that row pending (the in-flight
+/// entry must not be committed). `None` is never returned here — the channel's
+/// `None` is exclusively the worker-shutdown sentinel.
 fn materialize_one(
     kind: &MaterializeKind,
     cache_dir: &Path,
@@ -570,7 +566,7 @@ fn materialize_one(
     w: &MaterializeWork,
     shutdown: &Shutdown,
     bar: Option<&ProgressBar>)
-    -> Option<MaterializeOutcome> {
+    -> MaterializeOutcome {
 
     let stripped = w.canonical.to_stripped();
     let outcome = match kind {
@@ -581,24 +577,32 @@ fn materialize_one(
                 .expect("PRECONDITION FAILED: Enqueued files must have a content_id");
             let src = cache_dir.join(id.0);
 
-            match check_path(config, &src, &stripped) {
-                Err(e) => Some(Err((target.id, Error::FileStat(e)))),
-                Ok((false, conflict, removed)) => Some(Ok(MaterializeResult {
-                    id: target.id, placed: false, conflict, removed, used_copy: false,
-                })),
-                Ok((true, conflict, removed)) => {
-                    tracing::debug!("Materializing to {} ({})", target.abs_path.display(),
-                        stripped.ftype.as_str());
-                    match copy_single_file(
-                        target.id, &src, &target.abs_path, shutdown,
-                        config.placement.no_reflink, bar) {
-
-                        Err((_, Error::Interrupted)) => None,
-                        Err(other) => Some(Err(other)),
-                        Ok((fid, used_copy)) => Some(Ok(MaterializeResult {
+            let ((writable, conflict, removed), assessment) = check_path(config, &src, &stripped);
+            if !writable || assessment.is_some() {
+                MaterializeOutcome {
+                    result: MaterializeResult{
+                        id:target.id, placed: false, conflict, removed, used_copy: false
+                    },
+                    error: assessment.map(Error::FileStat)
+                }
+            } else {
+                tracing::debug!("Materializing to {} ({})", target.abs_path.display(),
+                    stripped.ftype.as_str());
+                match copy_single_file(
+                    target.id, &src, &target.abs_path, shutdown,
+                    config.placement.no_reflink, bar) {
+                    Err((fid, e)) => MaterializeOutcome {
+                        result: MaterializeResult {
+                            id: fid, placed: false, conflict, removed, used_copy: false,
+                        },
+                        error: Some(e),
+                    },
+                    Ok((fid, used_copy)) => MaterializeOutcome {
+                        result: MaterializeResult {
                             id: fid, placed: true, conflict, removed, used_copy,
-                        })),
-                    }
+                        },
+                        error: None,
+                    },
                 }
             }
         }
@@ -609,19 +613,29 @@ fn materialize_one(
             let dst = &w.out.abs_path;
             let idx = w.out.id;
 
-            match check_path(config, dst, &stripped) {
-                Err(e) => Some(Err((idx, Error::FileStat(e)))),
-                Ok((false, conflict, removed)) => Some(Ok(MaterializeResult {
-                    id: idx, placed: false, conflict, removed, used_copy: false,
-                })),
-                Ok((true, conflict, removed)) => match fs::hard_link(
-                    &out_canon.abs_path, dst) {
-
-                    Err(e) => Some(Err((idx, Error::io(dst, e)))),
-                    Ok(()) => Some(Ok(MaterializeResult {
-                        id: idx, placed: true, conflict, removed, used_copy: false,
-                    })),
-                },
+            let ((writable, conflict, removed), assessment) = check_path(config, dst, &stripped);
+            if !writable || assessment.is_some() {
+                MaterializeOutcome {
+                    result: MaterializeResult {
+                        id: idx, placed: false, conflict, removed, used_copy: false,
+                    },
+                    error: assessment.map(Error::FileStat),
+                }
+            } else {
+                match fs::hard_link(&out_canon.abs_path, dst) {
+                    Err(e) => MaterializeOutcome {
+                        result: MaterializeResult {
+                            id: idx, placed: false, conflict, removed, used_copy: false,
+                        },
+                        error: Some(Error::io(dst, e)),
+                    },
+                    Ok(()) => MaterializeOutcome {
+                        result: MaterializeResult {
+                            id: idx, placed: true, conflict, removed, used_copy: false,
+                        },
+                        error: None,
+                    },
+                }
             }
         }
 
@@ -629,32 +643,43 @@ fn materialize_one(
             let target = &w.out;
             let idx = target.id;
 
-            match check_path(config, &target.abs_path, &stripped) {
-                Err(e) => Some(Err((idx, Error::FileStat(e)))),
-                Ok((false, conflict, removed)) => Some(Ok(MaterializeResult {
-                    id: idx, placed: false, conflict, removed, used_copy: false,
-                })),
-                Ok((true, conflict, removed)) => match build_other(
-                    &w.canonical, target, config.placement.recreate_none_file_entries) {
-
-                    Err(e) => Some(Err((idx, Error::FileStat(e)))),
-                    Ok(()) => Some(Ok(MaterializeResult {
-                        id: idx, placed: true, conflict, removed, used_copy: false,
-                    })),
-                },
+            let ((writable, conflict, removed), assessment) = check_path(config, &target.abs_path, &stripped);
+            if !writable || assessment.is_some() {
+                MaterializeOutcome {
+                    result: MaterializeResult {
+                        id: idx, placed: false, conflict, removed, used_copy: false,
+                    },
+                    error: assessment.map(Error::FileStat),
+                }
+            } else {
+                match build_other(&w.canonical, target, config.placement.recreate_none_file_entries) {
+                    Err(e) => MaterializeOutcome {
+                        result: MaterializeResult {
+                            id: idx, placed: false, conflict, removed, used_copy: false,
+                        },
+                        error: Some(Error::FileStat(e)),
+                    },
+                    Ok(()) => MaterializeOutcome {
+                        result: MaterializeResult {
+                            id: idx, placed: true, conflict, removed, used_copy: false,
+                        },
+                        error: None,
+                    },
+                }
             }
         }
     };
-    match outcome {
-        Some(Ok(ref r)) if r.placed => {
-            tracing::debug!("placed {} ({})", w.out.abs_path.display(),
-                            stripped.ftype.as_str());
-        }
-        Some(Err((_idx, ref e @ Error::FileStat(_)))) => {
+    match &outcome.error {
+        Some(Error::Interrupted) => (),
+        Some(Error::FileStat(e)) => {
             tracing::error!("place failed {} ({}): {}", w.out.abs_path.display(),
                             stripped.ftype.as_str(), e);
         }
-        _ => (),
+        None | Some(Error::Database(_)) | Some(Error::Config(_)) | Some(Error::Other(_)) => (),
+    }
+    if outcome.result.placed {
+        tracing::debug!("placed {} ({})", w.out.abs_path.display(),
+                        stripped.ftype.as_str());
     }
     outcome
 }
@@ -770,7 +795,7 @@ fn status_message_rebuilding(rt: &ExtractRTArgs)
 }
 
 fn process_results(
-    results: Vec<std::result::Result<MaterializeResult, (OutTreeId, Error)>>,
+    results: Vec<MaterializeOutcome>,
     recorder: &mut Recorder,
     db: &Database,
     is_hardlink: bool,
@@ -778,17 +803,16 @@ fn process_results(
     fail_fast: bool)
     -> Result<()> {
 
+    // INFO: We are waiting for the main thread to trip, not the workers.
+    //  I.e. no Error::Interrupted handling
     db.ingest_materialize_results(&results, is_hardlink, set_reflink)?;
-    for result in results {
-        match result {
-            Err((id, Error::FileStat(e))) => {
-                let e_temp = e.recreate();
-                recorder.record_out_tree(id, ERROR_PHASE, e, ErrorFlags::default());
-                if fail_fast {
-                    return Err(Error::FileStat(e_temp));
-                }
+    for outcome in results {
+        if let Some(Error::FileStat(e)) = outcome.error {
+            let e_temp = e.recreate();
+            recorder.record_out_tree(outcome.result.id, ERROR_PHASE, e, ErrorFlags::default());
+            if fail_fast {
+                return Err(Error::FileStat(e_temp));
             }
-            _ => ()
         }
     }
     Ok(())
@@ -1065,40 +1089,32 @@ fn build_path(
 /// - second bool is true iff there was an existing file conflicting with the extraction
 /// - third bool is true iff there was a file was removed during the prep process.
 fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
-    -> std::result::Result<(bool, bool, bool), FileStatError> {
+    -> ((bool, bool, bool), Option<FileStatError>) {
+
     if !tgt.exists() {
-        return Ok((true, false, false));
+        return ((true, false, false), None);
+    };
+
+    // Utility for logging
+    let tgt_disp = tgt.display();
+    let gated_debug = |txt: &str| {
+        if !config.placement.silent_conflicts {
+            tracing::debug!(txt);
+        }
     };
 
     // PRECONDITION: Path exists
     if matches!(config.placement.conflict_policy, ConflictPolicy::SkipExisting) {
-        return if config.placement.silent_conflicts {
-            tracing::warn!("Leaving {}, skip existing.",
-                    tgt.display()
-            );
-            Ok((false, true, false))
-        } else {
-            Err(FileStatError::General {
-                path: Some(tgt.to_path_buf()),
-                message: format!("Leaving {}, skip existing.", tgt.display()),
-            })
-        }
+        gated_debug(&format!("Leaving {}, skip existing.", tgt_disp));
+        return ((false, true, false), None);
     }
 
     let file_metadata = match tgt.symlink_metadata() {
+        // Assessment failed: favor the existing file system entry.
         Err(e) => {
-            return if config.placement.silent_conflicts {
-                tracing::warn!(
-                    "Leaving {}, could not assess conflict due to inaccessible file metadata",
-                    tgt.display()
-                );
-                Ok((false, true, false))
-            } else {
-                Err(FileStatError::Io {
-                    path: tgt.to_path_buf(),
-                    source: e,
-                })
-            };
+            return (
+                (false, true, false), Some(FileStatError::Io { path: tgt.to_path_buf(), source: e })
+            )
         }
         Ok(m) => m,
     };
@@ -1112,116 +1128,78 @@ fn check_path(config: &ExtractConfig, tgt: &Path, rec: &StrippedRecord)
         // mtime of record
         let db_mtime = match rec.mtime {
             None => {
-                if !config.placement.silent_conflicts {
-                    tracing::warn!(
-                        "Leaving {}, could not assess conflict due to missing mtime in db",
-                        tgt.display()
-                    );
-                }
-                return Ok((false, true, false));
+                gated_debug(&format!(
+                    "Leaving {}, could not assess conflict due to missing mtime in db", tgt_disp));
+                return ((false, true, false), None);
             }
             Some(t) => t,
         };
         let (res_mtime, _, _) = files::get_file_times(&file_metadata);
         let file_mtime = match res_mtime {
+            // Assessment failed: favor the existing file system entry.
             Err(e) => {
-                return if config.placement.silent_conflicts {
-                    tracing::warn!("Leaving {}, could not retrieve file mtime", tgt.display());
-                    Ok((false, true, false))
-                } else {
-                    Err(FileStatError::Io { path: tgt.to_path_buf(), source: e })
-                }
+                return (
+                    (false, true, false),
+                    Some(FileStatError::Io { path: tgt.to_path_buf(), source: e })
+                )
             }
             Ok(m) => m,
         };
         match config.placement.conflict_policy {
             ConflictPolicy::Replace => (),
             // Handled by the early return above; unreachable here but kept exhaustive.
-            ConflictPolicy::SkipExisting => return Ok((false, true, false)),
+            ConflictPolicy::SkipExisting => return ((false, true, false), None),
             ConflictPolicy::PreferNewer => {
                 if db_mtime <= file_mtime {
-                    return if !config.placement.silent_conflicts {
-                        Err(FileStatError::General {
-                            path: Some(tgt.to_path_buf()),
-                            message: "File is too old.".to_string(),
-                        })
-                    } else {
-                        tracing::warn!("Could not extract to {}, file is too old.", tgt.display());
-                        Ok((false, true, false))
-                    };
+                    gated_debug(&format!("Could not extract to {}, file is too old.", tgt_disp));
+                    return ((false, true, false), None);
                 }
             }
             ConflictPolicy::PreferOlder => {
                 if db_mtime >= file_mtime {
-                    return if !config.placement.silent_conflicts {
-                        Err(FileStatError::General {
-                            path: Some(tgt.to_path_buf()),
-                            message: "File is too new.".to_string(),
-                        })
-                    } else {
-                        tracing::warn!("Could not extract to {}, file is too new.", tgt.display());
-                        Ok((false, true, false))
-                    };
+                    gated_debug(&format!("Could not extract to {}, file is too new.", tgt_disp));
+                    return ((false, true, false), None);
                 }
             }
         }
     }
 
-    // Check if the file types are a match (cannot write do the file operations on symlink).
+    // Check if the file types are a match (cannot do the file operations on a symlink).
     let ftype = match files::determine_file_type(&file_metadata, tgt) {
         Ok(ft) => ft,
-        Err((ft, failed_path, e)) => {
-            // INFO: Error means ftype unknown. Can proceed, add error regardless
-            if config.placement.silent_conflicts {
-                tracing::warn!("Error while determining file type of {}. Got {}",
-                tgt.display(), &e);
-            } else {
-                return Err(FileStatError::Io{ path: failed_path, source: e })
-            };
-            ft
+        // Assessment failed: favor the existing file system entry.
+        Err((_, failed_path, e)) => {
+            return ((false, true, false),
+                    Some(FileStatError::Io { path: failed_path, source: e }))
         }
     };
     let remove = if ftype != rec.ftype {
         if config.placement.remove_and_replace {
-            tracing::warn!("File type mismatch, expected {} got {}",
+            tracing::debug!("File type mismatch, expected {} got {}, removing",
                 rec.ftype.as_str(), ftype.as_str());
             true
         } else {
-            return if !config.placement.silent_conflicts {
-                Err(FileStatError::General {
-                    path: Some(tgt.to_path_buf()),
-                    message: format!(
-                        "File type mismatch, expected {} got {}",
-                        rec.ftype.as_str(),
-                        ftype.as_str()
-                    ),
-                })
-            } else {
-                tracing::warn!("File type mismatch, expected {} got {}",
-                    rec.ftype.as_str(), ftype.as_str());
-                Ok((false, true, false))
-            };
+            gated_debug(&format!(
+                "File type mismatch, expected {} got {}", rec.ftype.as_str(), ftype.as_str()));
+            return ((false, true, false), None);
         }
     } else {
         false
     };
+
     // Remove file, if indicated.
     // PRECONDITION: Path exists!
     if remove || config.placement.unlink_first {
         match fs::remove_file(&tgt) {
-            Ok(()) => Ok((true, true, true)),
-            Err(e) => {
-                if config.placement.silent_conflicts {
-                    tracing::warn!("Failed to remove preexisting path {} with error {}",
-                        tgt.display(), e);
-                    Ok((false, true, true))
-                } else {
-                    Err(FileStatError::Io { path: tgt.to_path_buf(), source: e })
-                }
-            }
+            Ok(()) => ((true, true, true), None),
+            // Assessment failed: favor the existing file system entry.
+            Err(e) => (
+                (false, true, false),
+                Some(FileStatError::Io { path: tgt.to_path_buf(), source: e })
+            )
         }
     } else {
-        Ok((true, true, false))
+        ((true, true, false), None)
     }
 }
 
@@ -1675,13 +1653,25 @@ mod tests {
     // check_path
     // ---------------------------------------------------------------------
 
+    /// Assert a `check_path` outcome: the `(writable, conflict, removed)`
+    /// conclusion and whether a real error rode along.
+    fn check_path_eq(
+        config: &ExtractConfig,
+        tgt: &Path,
+        rec: &StrippedRecord,
+        conclusion: (bool, bool, bool),
+        has_err: bool) {
+        let got = check_path(config, tgt, rec);
+        assert_eq!(got.0, conclusion, "check_path conclusion");
+        assert_eq!(got.1.is_some(), has_err, "check_path error presence");
+    }
+
     #[test]
     fn check_path_missing_target_is_placeable() {
         let world = ExtractWorld::place_test(|_| {});
         let tgt = world.root().join("nope.bin");
         let rec = mk_stripped(1, "/x.bin", FileType::File, None);
-        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
-                   (true, false, false));
+        check_path_eq(&world.config, &tgt, &rec, (true, false, false), false);
     }
 
     #[test]
@@ -1695,8 +1685,7 @@ mod tests {
             let tgt = root.join("x.bin");
             fs::write(&tgt, b"x").expect("write");
             let rec = mk_stripped(1, "/x.bin", FileType::File, None);
-            assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
-                       (false, true, false));
+            check_path_eq(&world.config, &tgt, &rec, (false, true, false), false);
         }
     }
 
@@ -1714,14 +1703,13 @@ mod tests {
         let hour = chrono::TimeDelta::seconds(3600);
         // db > live -> proceed
         let rec_old = mk_stripped(1, "/x.bin", FileType::File, Some(live + hour));
-        assert_eq!(check_path(&world.config, &tgt, &rec_old).expect("check"),
-                   (true, true, false));
-        // db == live -> keep (tie favours the on-disk copy)
+        check_path_eq(&world.config, &tgt, &rec_old, (true, true, false), false);
+        // db == live -> keep (tie favours the on-disk copy) — policy judge, no error
         let rec_eq = mk_stripped(1, "/x.bin", FileType::File, Some(live));
-        assert!(check_path(&world.config, &tgt, &rec_eq).is_err());
+        check_path_eq(&world.config, &tgt, &rec_eq, (false, true, false), false);
         // db < live -> keep
         let rec_new = mk_stripped(1, "/x.bin", FileType::File, Some(live - hour));
-        assert!(check_path(&world.config, &tgt, &rec_new).is_err());
+        check_path_eq(&world.config, &tgt, &rec_new, (false, true, false), false);
     }
 
     #[test]
@@ -1734,8 +1722,7 @@ mod tests {
         let tgt = root.join("x.bin");
         fs::write(&tgt, b"x").expect("write");
         let rec = mk_stripped(1, "/x.bin", FileType::File, Some(live_dt(&tgt)));
-        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
-                   (false, true, false));
+        check_path_eq(&world.config, &tgt, &rec, (false, true, false), false);
     }
 
     #[test]
@@ -1748,14 +1735,13 @@ mod tests {
         let hour = chrono::TimeDelta::seconds(3600);
         // db < live -> proceed
         let rec_new = mk_stripped(1, "/x.bin", FileType::File, Some(live - hour));
-        assert_eq!(check_path(&world.config, &tgt, &rec_new).expect("check"),
-                   (true, true, false));
-        // db == live -> keep
+        check_path_eq(&world.config, &tgt, &rec_new, (true, true, false), false);
+        // db == live -> keep (policy judge, no error)
         let rec_eq = mk_stripped(1, "/x.bin", FileType::File, Some(live));
-        assert!(check_path(&world.config, &tgt, &rec_eq).is_err());
+        check_path_eq(&world.config, &tgt, &rec_eq, (false, true, false), false);
         // db > live -> keep
         let rec_old = mk_stripped(1, "/x.bin", FileType::File, Some(live + hour));
-        assert!(check_path(&world.config, &tgt, &rec_old).is_err());
+        check_path_eq(&world.config, &tgt, &rec_old, (false, true, false), false);
     }
 
     #[test]
@@ -1768,8 +1754,7 @@ mod tests {
         let hour = chrono::TimeDelta::seconds(3600);
         for dt in [live - hour, live, live + hour] {
             let rec = mk_stripped(1, "/x.bin", FileType::File, Some(dt));
-            assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
-                       (true, true, false));
+            check_path_eq(&world.config, &tgt, &rec, (true, true, false), false);
         }
     }
 
@@ -1782,13 +1767,12 @@ mod tests {
         let tgt = root.join("x.bin");
         std::os::unix::fs::symlink(&real, &tgt).expect("symlink");
         let rec = mk_stripped(1, "/x.bin", FileType::File, None);
-        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
-                   (true, true, true));
+        check_path_eq(&world.config, &tgt, &rec, (true, true, true), false);
         assert!(!tgt.exists(), "mismatched symlink removed");
     }
 
     #[test]
-    fn check_path_type_mismatch_loud_errors() {
+    fn check_path_type_mismatch_loud_keeps_existing() {
         let world = ExtractWorld::place_test(|_| {});
         let root = world.ensure_root();
         let real = root.join("real.bin");
@@ -1796,10 +1780,8 @@ mod tests {
         let tgt = root.join("x.bin");
         std::os::unix::fs::symlink(&real, &tgt).expect("symlink");
         let rec = mk_stripped(1, "/x.bin", FileType::File, None);
-        assert!(matches!(
-            check_path(&world.config, &tgt, &rec),
-            Err(FileStatError::General { .. })
-        ));
+        // a type mismatch is a policy judge (skip), not a recorded error
+        check_path_eq(&world.config, &tgt, &rec, (false, true, false), false);
     }
 
     #[test]
@@ -1811,8 +1793,7 @@ mod tests {
         let tgt = root.join("x.bin");
         std::os::unix::fs::symlink(&real, &tgt).expect("symlink");
         let rec = mk_stripped(1, "/x.bin", FileType::File, None);
-        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
-                   (false, true, false));
+        check_path_eq(&world.config, &tgt, &rec, (false, true, false), false);
     }
 
     #[test]
@@ -1822,8 +1803,7 @@ mod tests {
         let tgt = root.join("x.bin");
         fs::write(&tgt, b"x").expect("write");
         let rec = mk_stripped(1, "/x.bin", FileType::File, None);
-        assert_eq!(check_path(&world.config, &tgt, &rec).expect("check"),
-                   (true, true, true));
+        check_path_eq(&world.config, &tgt, &rec, (true, true, true), false);
         assert!(!tgt.exists());
     }
 
@@ -1839,12 +1819,10 @@ mod tests {
             fs::create_dir(&tgt).expect("dir");
             fs::write(tgt.join("inner"), b"x").expect("write");
             let rec = mk_stripped(1, "/d", FileType::Directory, None);
-            let res = check_path(&world.config, &tgt, &rec);
-            match (silent, res) {
-                (true, Ok((false, true, true))) => (),
-                (false, Err(FileStatError::Io { .. })) => (),
-                (silent, other) => panic!("silent={silent} got {other:?}"),
-            }
+            let got = check_path(&world.config, &tgt, &rec);
+            // Remove failed: favor the existing entry, carry the io error.
+            assert_eq!(got.0, (false, true, false), "removed must be false");
+            assert!(matches!(got.1, Some(FileStatError::Io { .. })), "io error carried");
         }
     }
 
@@ -2114,8 +2092,9 @@ mod tests {
         let w = mk_work(can, out.clone(), None);
         let res = materialize_one(&MaterializeKind::Files, &cache, &world.config, &w,
                                   &Shutdown::detached(), None);
-        let r = res.expect("some").expect("ok");
+        let r = &res.result;
         assert!(r.placed && r.id == out.id);
+        assert!(res.error.is_none());
         assert_eq!(fs::read(&out.abs_path).expect("read"), b"abc");
     }
 
@@ -2138,8 +2117,9 @@ mod tests {
         let cache = world.config.paths.extract_cache_dir();
         let res = materialize_one(&MaterializeKind::Files, &cache, &world.config, &w,
                                   &Shutdown::detached(), None);
-        let r = res.expect("some").expect("ok");
+        let r = &res.result;
         assert!(!r.placed && r.conflict);
+        assert!(res.error.is_none(), "policy skip carries no error");
         assert_eq!(fs::read(&dst).expect("read"), b"keep-me", "existing file untouched");
     }
 
@@ -2154,7 +2134,7 @@ mod tests {
         let w = mk_work(can, out, None);
         let res = materialize_one(&MaterializeKind::Files, &cache, &world.config, &w,
                                   &Shutdown::detached(), None);
-        assert!(matches!(res, Some(Err((_, Error::FileStat(_))))));
+        assert!(matches!(res.error, Some(Error::FileStat(_))));
     }
 
     #[test]
@@ -2172,7 +2152,8 @@ mod tests {
         let sh = Shutdown::detached();
         sh.request_force();
         let res = materialize_one(&MaterializeKind::Files, &cache, &world.config, &w, &sh, None);
-        assert!(res.is_none(), "force mid-copy must drop the in-flight outcome");
+        assert!(matches!(res.error, Some(Error::Interrupted)),
+                "force mid-copy emits Interrupted so ingest leaves the row pending");
     }
 
     #[test]
@@ -2189,8 +2170,9 @@ mod tests {
         let cache = world.config.paths.extract_cache_dir();
         let res = materialize_one(&MaterializeKind::Hardlinks, &cache, &world.config, &w,
                                   &Shutdown::detached(), None);
-        let r = res.expect("some").expect("ok");
+        let r = &res.result;
         assert!(r.placed && r.id == dup_out.id);
+        assert!(res.error.is_none());
         let canon = fs::metadata(root.join("sub/canon.bin")).expect("meta");
         assert_eq!(fs::metadata(&dup_out.abs_path).expect("meta").ino(), canon.ino(),
                    "hardlink shares the canonical inode");
@@ -2207,7 +2189,7 @@ mod tests {
         let cache = world.config.paths.extract_cache_dir();
         let res = materialize_one(&MaterializeKind::Hardlinks, &cache, &world.config, &w,
                                   &Shutdown::detached(), None);
-        assert!(matches!(res, Some(Err((_, Error::FileStat(_))))));
+        assert!(matches!(res.error, Some(Error::FileStat(_))));
     }
 
     #[test]
@@ -2230,8 +2212,9 @@ mod tests {
         let cache = world.config.paths.extract_cache_dir();
         let res = materialize_one(&MaterializeKind::Hardlinks, &cache, &world.config, &w,
                                   &Shutdown::detached(), None);
-        let r = res.expect("some").expect("ok");
+        let r = &res.result;
         assert!(!r.placed && r.conflict);
+        assert!(res.error.is_none());
         assert_eq!(fs::read(&dst).expect("read"), b"keep-me");
     }
 
@@ -2245,14 +2228,24 @@ mod tests {
         let cache = world.config.paths.extract_cache_dir();
         let res = materialize_one(&MaterializeKind::Others, &cache, &world.config, &w,
                                   &Shutdown::detached(), None);
-        let r = res.expect("some").expect("ok");
-        assert!(r.placed);
+        assert!(res.result.placed);
+        assert!(res.error.is_none());
         assert_eq!(fs::read_link(&out.abs_path).expect("readlink"), PathBuf::from("/tgt"));
     }
 
     // ---------------------------------------------------------------------
     // process_results
     // ---------------------------------------------------------------------
+
+    /// Build an outcome carrying a real (or `Interrupted`) error.
+    fn err_outcome(id: OutTreeId, e: Error) -> MaterializeOutcome {
+        MaterializeOutcome {
+            result: MaterializeResult {
+                id, placed: false, conflict: false, removed: false, used_copy: false,
+            },
+            error: Some(e),
+        }
+    }
 
     #[test]
     fn process_results_sets_flags_and_records_errors() {
@@ -2264,8 +2257,8 @@ mod tests {
         let ok = MaterializeResult { id: out, placed: true, conflict: false, removed: false, used_copy: true };
         let err = FileStatError::io(&out_path, IoError::new(ErrorKind::Other, "boom"));
         let results = vec![
-            Ok(ok),
-            Err((OutTreeId(99), Error::FileStat(err))),
+            MaterializeOutcome { result: ok, error: None },
+            err_outcome(OutTreeId(99), Error::FileStat(err)),
         ];
         process_results(results, &mut recorder, &world.db, false, true, false).expect("process");
         assert!(world.out_flag(out, OutTreeFlag::Placed));
@@ -2277,7 +2270,7 @@ mod tests {
     fn process_results_ignores_interrupted() {
         let world = ExtractWorld::place_test(|_| {});
         let mut recorder = Recorder::new(&world.db, true, Some(0));
-        let results = vec![Err((OutTreeId(1), Error::Interrupted))];
+        let results = vec![err_outcome(OutTreeId(1), Error::Interrupted)];
         process_results(results, &mut recorder, &world.db, false, false, false).expect("process");
         assert_eq!(recorder.buffered(), 0);
     }
@@ -2286,7 +2279,7 @@ mod tests {
     fn process_results_panics_on_unexpected_error() {
         let world = ExtractWorld::place_test(|_| {});
         let mut recorder = Recorder::new(&world.db, true, Some(0));
-        let results = vec![Err((OutTreeId(1), Error::Other(anyhow::anyhow!("x"))))];
+        let results = vec![err_outcome(OutTreeId(1), Error::Other(anyhow::anyhow!("x")))];
         let res = catch_unwind(AssertUnwindSafe(|| {
             process_results(results, &mut recorder, &world.db, false, false, false)
         }));
@@ -2299,7 +2292,7 @@ mod tests {
         let mut recorder = Recorder::new(&world.db, true, Some(0));
         let err = FileStatError::io(&world.root().join("a.bin"),
                                     IoError::new(ErrorKind::Other, "boom"));
-        let results = vec![Err((OutTreeId(1), Error::FileStat(err)))];
+        let results = vec![err_outcome(OutTreeId(1), Error::FileStat(err))];
         process_results(results, &mut recorder, &world.db, false, false, false).expect("swallow");
         assert_eq!(recorder.buffered(), 1, "error always lands in the recorder");
     }
@@ -2310,7 +2303,7 @@ mod tests {
         let mut recorder = Recorder::new(&world.db, true, Some(0));
         let err = FileStatError::io(&world.root().join("a.bin"),
                                     IoError::new(ErrorKind::Other, "boom"));
-        let results = vec![Err((OutTreeId(1), Error::FileStat(err)))];
+        let results = vec![err_outcome(OutTreeId(1), Error::FileStat(err))];
         let res = process_results(results, &mut recorder, &world.db, false, false, true);
         assert!(matches!(res, Err(Error::FileStat(_))), "{res:?}");
         assert_eq!(recorder.buffered(), 1,
@@ -2326,8 +2319,8 @@ mod tests {
         let e2 = FileStatError::io(&world.root().join("b.bin"),
                                    IoError::new(ErrorKind::Other, "bang"));
         let results = vec![
-            Err((OutTreeId(1), Error::FileStat(e1))),
-            Err((OutTreeId(2), Error::FileStat(e2))),
+            err_outcome(OutTreeId(1), Error::FileStat(e1)),
+            err_outcome(OutTreeId(2), Error::FileStat(e2)),
         ];
         let res = process_results(results, &mut recorder, &world.db, false, false, true);
         assert!(matches!(res, Err(Error::FileStat(_))), "{res:?}");
@@ -2393,8 +2386,8 @@ mod tests {
         materialize_worker(MaterializeKind::Files, world.config.clone(), None,
                            Shutdown::detached(), r, os);
         match or.recv().expect("recv") {
-            Some(Ok(res)) => assert!(res.placed),
-            other => { let _ = other; panic!("expected placed outcome") },
+            Some(res) => assert!(res.result.placed, "expected placed outcome"),
+            None => panic!("expected a placement outcome"),
         }
         assert!(matches!(or.recv(), Ok(None)));
         assert!(out.abs_path.is_file());
