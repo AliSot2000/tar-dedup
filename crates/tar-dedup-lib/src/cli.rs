@@ -250,7 +250,8 @@ pub struct ArchiveArgs {
     #[arg(long = "sparsify", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Sparse Files")]
     pub sparsify: bool,
 
-    /// Page size in bytes for hash zero-page counting and sparsify.
+    /// Page size in bytes: segment a file into pages of this size and search for
+    /// completely empty pages for sparsification.
     #[arg(
         long = "page-size",
         value_name = "BYTES",
@@ -625,7 +626,7 @@ pub struct ExtractArgs {
     )]
     pub conflict_policy: ConflictPolicy,
 
-    /// Do not log path or type conflicts (pairs with `--conflict-policy`).
+    /// Do not log any messages when a path encountered a conflict.
     #[arg(
         long = "silent-conflicts",
         default_value_t = false,
@@ -635,6 +636,7 @@ pub struct ExtractArgs {
     pub silent_conflicts: bool,
 
     /// On type mismatch at a path, remove the existing entry and extract the archive member.
+    /// Skip by default.
     #[arg(
         long = "remove-and-replace",
         default_value_t = false,
@@ -656,7 +658,7 @@ pub struct ExtractArgs {
     // --- Link Tree ---
 
     /// Build the restored tree from symlinks/hard links into the extract stage instead
-    /// of copying payloads (keeps the `.estage` cache).
+    /// of copying payloads. Payloads moved to `--link-source` directory.
     #[arg(
         long = "link-tree",
         default_value_t = false,
@@ -685,7 +687,7 @@ pub struct ExtractArgs {
     pub absolute_links: bool,
 
     /// With `--link-tree`, use DIR as the directory the canonical payloads are
-    /// materialized into before linking (default: the extract cache directory).
+    /// materialized into before linking (default: {extract-to}/.sources).
     #[arg(
         long = "link-source",
         value_name = "DIR",
@@ -741,6 +743,7 @@ pub struct ExtractArgs {
     pub map_target: MapResolutionTarget,
 
     /// Fail hard on map/override destinations that the chosen --map-target cannot emit.
+    /// (Missing values, missing owner/group name, ...)
     #[arg(long = "validate-maps", default_value_t = false, action = ArgAction::SetTrue, help_heading = "File Attributes")]
     pub validate_maps: bool,
 
@@ -884,15 +887,16 @@ pub struct ExtractArgs {
 
     // --- Process Options ---
 
-    /// Maximum concurrent workers (rayon pools and xz threads).
+    /// Maximum concurrent compute bound workers.
     #[arg(long = "jobs", value_name = "N", help_heading = "Process Options")]
     pub jobs: Option<usize>,
 
-    /// Maximum concurrent io-bound workers (dedup, sparsify, place pools).
+    /// Maximum concurrent io-bound workers.
     #[arg(long = "io-jobs", value_name = "N", help_heading = "Process Options")]
     pub io_jobs: Option<usize>,
 
-    /// Wipe extract work (`.estage`) and start over.
+    /// Wipe extract work (`.estage`) and start over; does not reset the placement
+    /// progress.
     #[arg(long = "fresh", help_heading = "Process Options")]
     pub fresh: bool,
 
@@ -900,8 +904,7 @@ pub struct ExtractArgs {
     #[arg(long = "force", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub force: bool,
 
-    /// Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept.
-    /// Mutually exclusive with `--force`.
+    /// Relax utf-8 policy to also process entries without a valid utf-8 path.
     #[arg(long = "relax-utf8", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub relax_utf8: bool,
 
@@ -979,8 +982,7 @@ pub struct ExtractArgs {
 
     // --- Sparse Files ---
 
-    /// Re-create holes in the extract cache while unpacking (sparse writer over
-    /// a plain copy; uses `--page-size` for hole detection).
+    /// Attempt to punch holes while extracting and copying files.
     #[arg(
         long = "sparsify",
         default_value_t = false,
@@ -989,7 +991,8 @@ pub struct ExtractArgs {
     )]
     pub sparsify: bool,
 
-    /// Page size in bytes for sparse-hole detection while unpacking.
+    /// Page size in bytes: segment a file into pages of this size and search for
+    /// completely empty pages for sparsification.
     #[arg(
         long = "page-size",
         value_name = "BYTES",
@@ -998,7 +1001,8 @@ pub struct ExtractArgs {
     )]
     pub page_size: usize,
 
-    /// Abort on the first warning or error instead of continuing where possible.
+    /// Abort the run on the first hard failure instead of continuing according to the
+    /// best-effort principle where possible.
     #[arg(
         long = "fail-fast",
         default_value_t = false,
@@ -1007,7 +1011,7 @@ pub struct ExtractArgs {
     )]
     pub fail_fast: bool,
 
-    /// Do not record per-file errors in the database.
+    /// Do not record errors encountered while processing the entries in the database. Downgrades a db-retention of `on-error` to `never`
     #[arg(long = "no-errors", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub no_errors: bool,
 
@@ -1047,7 +1051,7 @@ pub struct ExtractArgs {
     #[arg(long = "hidden-sidecar", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Sidecar")]
     pub hidden_sidecar: bool,
 
-    /// Run through STAGE then exit cleanly (state saved).
+    /// Run through STAGE then exit gracefully.
     #[arg(
         long = "exit-after-stage",
         value_name = "STAGE",
@@ -1209,16 +1213,8 @@ pub enum HardLinkGrouping {
     /// Do not hard link any files which had the same (dev, inode) as on the source file system.
     /// Create a new file for each one of them
     None,
-    /// Equivalent to `Global` without `--no-strict-separation`. If not, only restore hardlinks
-    /// between files inside a subtree reachable via a single source. e.g.
-    /// `-i ../../a -i ../../../c/a/` with `a/` containing `a.txt` and `b.txt` which are hardlinks
-    /// would extract to:
-    /// ```bash
-    /// a/a.txt (x, y)
-    /// a/b.txt (x, y)
-    /// c/a/a.txt (u, v)
-    /// c/a/b.txt (u, v)
-    /// ```
+    /// Only group the hardlinks within each source. (equivalent to `global` without
+    /// `--no-strict-separation`
     Source,
     /// All materialization in the extracted tree that formerly had the same `(dev, inode)` will be
     /// share a (dev, inode) in the extracted tree, even if it's across sources (Ref `Sources`).
