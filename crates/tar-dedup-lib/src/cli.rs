@@ -528,6 +528,7 @@ pub struct ExtractArgs {
 
     /// Stage directory for sqlite DB, cached payloads, and locks (defaults to
     /// `{stem}.estage` next to the archive). Relative paths use `-C` / cwd.
+    /// Overrides `--work-dir-location`.
     #[arg(long = "work-dir", value_name = "DIR", help_heading = "Archive Paths")]
     pub work_dir: Option<PathBuf>,
 
@@ -599,8 +600,8 @@ pub struct ExtractArgs {
     )]
     pub keep_dir_symlink: bool,
 
-    /// Remove each existing file before extracting over it (GNU tar `-U` /
-    /// `--unlink-first`).
+    /// Remove each existing file system entry (directory entry) before extracting
+    /// over it (GNU tar `-U` / `--unlink-first`).
     #[arg(
         short = 'U',
         long = "unlink-first",
@@ -632,8 +633,8 @@ pub struct ExtractArgs {
     pub no_overwrite_dir: bool,
     
     /// Also apply archived directory metadata to directories excluded by filters
-    /// (normally only placed members are updated). Not the negation of
-    /// `--no-overwrite-dir`: both flags together disable all directory updates.
+    /// (normally only placed members are updated). `--no-overwrite-dir` takes
+    /// precedence: with both flags set, no directory metadata is applied.
     #[arg(
         long = "overwrite-all-dir",
         default_value_t = false,
