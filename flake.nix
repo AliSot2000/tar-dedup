@@ -24,6 +24,7 @@
           pkgs.pkg-config
           pkgs.grcov        # RustRover coverage backend (source-based)
           pkgs.cargo-llvm-cov # coverage reports (`cargo llvm-cov`)
+          pkgs.gh        # GitHub CLI (`gh`) for release management
           pkgs.xz        # liblzma for xz2
           pkgs.bzip2     # bzip2 for bzip2 crate
           pkgs.zstd      # zstd C lib for zstd crate
