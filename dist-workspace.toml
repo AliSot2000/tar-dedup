@@ -17,3 +17,6 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# Commands run in build jobs to install system deps (selinux/acl/clang);
+# `.github/workflows/dist-build-setup.sh` holds a YAML list of commands.
+github-build-setup = "dist-build-setup.sh"
