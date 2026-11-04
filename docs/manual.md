@@ -139,7 +139,7 @@ Global default: By default, everything is turned on and can be turned off. This 
 | -     | --mode                    | n        | 1    | Force symbolic mode CHANGES for added members (GNU tar `--mode`). Applies chmod-style updates (e.g. `u+rwx,go-rx`) to the entried | 6.    |
 | -     | --transform               | n        | 1    | Record a sed-style name transform (GNU tar `--transform`/`--xform`, e.g. `s,^usr/,var/,`) to apply to paths                       | 6.    |
 
-**Sparse Files**  
+#### Sparse Files
 The system relies on the tar reader detecting sparse files and encoding them according to the tar format. As the tar 
 builder from the rust tar crate cannot create sparse files inflight, the tool first creates valid sparse files in the 
 `--work-dir` such that the tar builder can correctly detect their sparseness when it reads them back. Notes:
@@ -392,7 +392,7 @@ for the archive step. Allowed files are now the ones that passed both the archiv
 | -     | --no-unicode   | n        | 0    | Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b` become ASCII-only, and `\p{…}` Unicode classes are rejected |       |
 | -     | --lazy-filter  | n        | 0    | Apply include/exclude filters after a later phase (scan) instead of eagerly                                                               |       |
 
-**Sparse Files**
+#### Sparse Files
 
 As the tool has to perform file copies anyway, the sparse-copy function can be employed to attempt to punch holes in 
 the extracted files.
@@ -728,4 +728,17 @@ position are considered invalid and will not be processed.
   code with release builds.
 - Documentation / Docstrings are currently only placed sparsely. The docstrings (unless written by the LLM try to be
   sparse and explain the WHY. (the other Ws are visible in the code.))
-- To be able to run all unittests, a file system with selinx, posix_acl and xattr capabilitiy is needed.
+- To be able to run all unittests, a file system with SELinux, posix_acl and xattr capabilities is needed.
+- `test-all` is the feature to run all the test. There are debug features which break tests, so don't use 
+  `--all-features` when testing.
+
+## Trivia
+- The code was developed in conjunction with Cursor with auto-routing (100\$) and OpenCode with 
+  `DeepSeek V4 Flash 0731` (122\$). 
+- All (non-test) code was vetted by my at least twice.
+- Test design as well as cases to cover were determined by me and implemented by the LLM.
+- I don't follow the rust-fmt standard to the letter. Close but I find the exact look somewhat ugly :) with 
+  `) {` lines, ...
+- Development was about four months of more than the legal 42h week in Switzerland.
+- Additionally, [Mammouth](https://mammouth.ai) was used for the higher level discussions of the design choices.
+- The IDE of choice is Rust-Rover.
