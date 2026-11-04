@@ -139,7 +139,15 @@ def build_table(json_rows, old_notes, sub, heading, with_obsolete) -> list:
 
 
 def is_heading_line(line: str) -> bool:
-    return line.startswith("**") and line.rstrip().endswith("**")
+    s = line.rstrip()
+    return (s.startswith("**") and s.endswith("**")) or s.startswith("#### ")
+
+
+def heading_name(line: str) -> str:
+    s = line.rstrip()
+    if s.startswith("**"):
+        return s.strip("*").strip()
+    return s.lstrip("#").strip()
 
 
 def splice(readme: str, data: dict, drop_obsolete: bool) -> str:
@@ -152,7 +160,7 @@ def splice(readme: str, data: dict, drop_obsolete: bool) -> str:
         if line.startswith("### "):
             section = line[4:].strip()
         if is_heading_line(line) and section:
-            heading = line.strip().strip("*").strip()
+            heading = heading_name(line)
             canonical = HEADING_MAP.get(heading, heading)
             if section in data and any(g["heading"] == canonical for g in data[section]):
                 # Keep the heading line (canonical name) + any intro prose, then
@@ -160,7 +168,8 @@ def splice(readme: str, data: dict, drop_obsolete: bool) -> str:
                 # struck block, blank lines) up to the next heading / section.
                 # Preserve the original heading's trailing whitespace (e.g. the
                 # two-space hard break `**Heading**  \n` before intro prose).
-                out.append(f"**{canonical}**{line[len(line.rstrip()):]}")
+                head = f"**{canonical}**" if line.rstrip().startswith("**") else f"#### {canonical}"
+                out.append(f"{head}{line[len(line.rstrip()):]}")
                 j = i + 1
                 old_block = []
                 collecting = False
@@ -233,9 +242,9 @@ def check(readme: str, data: dict) -> int:
             section = lines[i][4:].strip()
             i += 1
             continue
-        is_heading = lines[i].startswith("**") and lines[i].rstrip().endswith("**")
+        is_heading = is_heading_line(lines[i])
         if is_heading and section is not None:
-            heading = lines[i].strip().strip("*").strip()
+            heading = heading_name(lines[i])
             canonical = HEADING_MAP.get(heading, heading)
             if section in data and any(g["heading"] == canonical for g in data[section]):
                 rows = next(g["rows"] for g in data[section] if g["heading"] == canonical)
@@ -247,7 +256,7 @@ def check(readme: str, data: dict) -> int:
                 # obsolete sub-tables).
                 while j < len(lines):
                     l = lines[j].lstrip()
-                    if lines[j].startswith("**") and lines[j].rstrip().endswith("**"):
+                    if is_heading_line(lines[j]):
                         break
                     if lines[j].lstrip().startswith("## ") or lines[j].lstrip().startswith("### "):
                         break
