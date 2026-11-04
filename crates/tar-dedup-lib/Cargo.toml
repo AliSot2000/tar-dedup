@@ -5,13 +5,18 @@ edition.workspace = true
 rust-version.workspace = true
 
 [features]
+# Debug-only: make DB dumps human-readable, but panic on any non-UTF-8 xattr value.
+# Intentionally NOT part of `test-all`.
 debug-force-utf8 = []
-err-to-panic = []
-# Compile the `--ordering id` debug override (plain `files(id)` order).
+# Debug-only: turn `?` pass-through `.to_panic()` into an abort, so an unexpected
+# error surfaces as a backtrace. Intentionally NOT part of `test-all`.
+debug-err-to-panic = []
+# Debug-only: compile the `--ordering id` override (plain `files(id)` order).
+# Intentionally NOT part of `test-all`.
 debug-ordering = []
-# Sleep before every progress-bar increment (env TAR_DEDUP_SLOW_PROGRESS_MS, default 100).
+# Debug-only: sleep before every progress-bar increment (env TAR_DEDUP_SLOW_PROGRESS_MS, default 100).
 # Intentionally NOT part of `test-all` (would make the suite crawl).
-slow-progress = []
+debug-slow-progress = []
 # Heavy compression round-trip test suite (all formats × all levels).
 test-compression = []
 # Meta feature aggregating the on-demand test suites.

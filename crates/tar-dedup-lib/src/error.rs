@@ -45,7 +45,7 @@ macro_rules! error_guarded {
 ///
 /// fn run() -> Result<(), Error> {
 ///     // `to_panic()` aborts the process on `Err` under `--features
-///     // err-to-panic`; without the feature it is a pass-through and `?`
+///     // debug-err-to-panic`; without the feature it is a pass-through and `?`
 ///     // simply propagates the error to the caller.
 ///     fallible().to_panic()?;
 ///     Ok(())
@@ -54,7 +54,7 @@ macro_rules! error_guarded {
 /// assert!(run().is_ok());
 /// ```
 ///
-/// With the `err-to-panic` feature enabled `.to_panic()` converts the `Err`
+/// With the `debug-err-to-panic` feature enabled `.to_panic()` converts the `Err`
 /// into a panic (with `RUST_BACKTRACE=1` you get the origin's call stack);
 /// without it the result passes through untouched and `?` propagates as usual.
 /// Errors that are handled locally (per-file recording into the DB, expected
@@ -63,7 +63,7 @@ pub trait ToPanic<T, E>: Sized {
     fn to_panic(self) -> std::result::Result<T, E>;
 }
 
-#[cfg(not(feature = "err-to-panic"))]
+#[cfg(not(feature = "debug-err-to-panic"))]
 impl<T, E> ToPanic<T, E> for std::result::Result<T, E> {
     #[inline]
     fn to_panic(self) -> std::result::Result<T, E> {
@@ -71,7 +71,7 @@ impl<T, E> ToPanic<T, E> for std::result::Result<T, E> {
     }
 }
 
-#[cfg(feature = "err-to-panic")]
+#[cfg(feature = "debug-err-to-panic")]
 impl<T, E: std::fmt::Display> ToPanic<T, E> for std::result::Result<T, E> {
     #[inline]
     #[track_caller]

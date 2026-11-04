@@ -53,9 +53,9 @@ fn style_for(kind: BarKind) -> ProgressStyle {
         .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
 }
 
-/// Milliseconds to sleep before each bar increment (`slow-progress` feature);
+/// Milliseconds to sleep before each bar increment (`debug-slow-progress` feature);
 /// read once from `TAR_DEDUP_SLOW_PROGRESS_MS`, default 100.
-#[cfg(feature = "slow-progress")]
+#[cfg(feature = "debug-slow-progress")]
 fn slow_sleep_duration() -> Duration {
     static MS: OnceLock<u64> = OnceLock::new();
     let ms = *MS.get_or_init(|| {
@@ -67,12 +67,12 @@ fn slow_sleep_duration() -> Duration {
     Duration::from_millis(ms)
 }
 
-#[cfg(feature = "slow-progress")]
+#[cfg(feature = "debug-slow-progress")]
 fn slow_sleep() {
     thread::sleep(slow_sleep_duration());
 }
 
-#[cfg(not(feature = "slow-progress"))]
+#[cfg(not(feature = "debug-slow-progress"))]
 fn slow_sleep() {}
 
 /// Wrapper around `indicatif::ProgressBar` so *every* increment in the crate —

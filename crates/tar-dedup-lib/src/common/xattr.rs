@@ -111,8 +111,7 @@ fn encode_for_db(target: &OsStr) -> String {
 fn encode_for_db(target: &OsStr) -> String {
     match target.to_str() {
         None => {
-            panic!("Implementation error: INVARIANT broken. \
-                    Previous call tor .to_str() successful, failed now");
+            panic!("Debug failed: Encountered non-utf8 value in the xattrs");
         },
         Some(s) => String::from(s),
     }
