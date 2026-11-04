@@ -3,6 +3,11 @@ name = "tar-dedup-lib"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Deduplicating tar wrapper library for efficient cold storage of unstructured data"
 
 [features]
 # Debug-only: make DB dumps human-readable, but panic on any non-UTF-8 xattr value.

@@ -3,6 +3,11 @@ name = "tar-dedup"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Command-line interface to tar-dedup-lib: resumable, metadata-preserving archive and extract"
 
 [[bin]]
 name = "tar-dedup"

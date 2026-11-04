@@ -10,10 +10,14 @@ members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
+license = "GPL-3.0-or-later"
+homepage = "https://github.com/AliSot2000/tar-dedup"
+repository = "https://github.com/AliSot2000/tar-dedup"
+authors = ["Alexander Sotoudeh"]
 
 [workspace.dependencies]
-tar-dedup-lib = { path = "crates/tar-dedup-lib" }
-sparse-cp = { path = "crates/sparse-cp" }
+tar-dedup-lib = { version = "0.1.0", path = "crates/tar-dedup-lib" }
+sparse-cp = { version = "0.1.0", path = "crates/sparse-cp" }
 
 clap = { version = "4", features = ["derive", "wrap_help"] }
 tar = "0.4"
