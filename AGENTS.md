@@ -150,6 +150,7 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 - Test VM (Fedora/btrfs/SELinux): `ssh -i ~/.ssh/tar-dedup-vm test-user@192.168.56.101`. Full test suites run there; the host is authoring/smoke only.
 - Build: `cargo build` / `cargo build -p tar-dedup`.
 - Test: `cargo test -p tar-dedup-lib --lib` (module unit tests; dev profile only — never `--release`, `panic="abort"` breaks `catch_unwind`). Full `cargo test` also builds the `sparse-cp` 1 GiB sparse-math tests and the `examples/` bins.
+- Test **everything** with `cargo test --features test-all` (heavy round-trip suites). Do **not** use `--all-features` as a test target — it also enables the debug-only hooks `debug-force-utf8`, `debug-err-to-panic`, `debug-ordering`, `debug-slow-progress`, which are intentionally excluded from `test-all` (the first three change controls flow / abort, so error-path, non-UTF-8, and binary-xattr tests fail; `debug-slow-progress` crawls).
 - No clippy/CI config in repo; no `.github` workflow.
 - `sparse-cp` has its own heavy 1 GiB unit tests (large sparse-file math) — run under `-p sparse-cp` to isolate.
 
