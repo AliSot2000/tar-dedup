@@ -2,6 +2,13 @@
 A `tar` "wrapper" to deduplicate the file-tree prior to archiving to save extra space. It capability to interrupt the 
 creation of large tar archives at the cost of lower compression ratios for compressed archives.
 
+## Disclaimers
+
+### THIS IS UNSTABLE CODE!!!
+Any archives created with this tool prior to the v1.0.0 release have **no guarantees** that future commits will still
+decompress them correctly and successfully! If you need this tool done soon, create an issue or star the project to
+show interest.
+
 ## Usage
 The `tar-dedup` consists of a few subcommands. Here are their options as well as some additional information about 
 their behavior.
@@ -54,10 +61,6 @@ path is treated as a new entity and has its metadata recorded.
 | -     | --one-file-system       | n        | 0    | Stay on one filesystem when walking input trees                                   |       |
 | -     | --no-hardlink-detection | n        | 0    | Do not coalesce same (inode, device) hard links in hash/dedup                     | 4.    |
 | -     | --no-strict-separation  | n        | 0    | Allow nested or duplicate `-i` / `-T` directory roots (still recorded and walked) |       |
-<!-- obsolete/deprecated (kept for reference) -->
-| Short | Long                  | Required | Args | Description                                | Notes                                     |
-|-------|-----------------------|----------|------|--------------------------------------------|-------------------------------------------|
-| ~~-P~~ | ~~--absolute-names~~ | ~~n~~    | ~~0~~ | ~~Write absolute path names for all files.~~ | ~~removed here; extract has `--absolute`~~ |
 
 **Filtering**
 `--include-from` and `--exclude-from` expects a file with `utf8` content and each pattern separated by a 
@@ -92,11 +95,11 @@ A single file is treated as follows:
 | -X    | --exclude-from        | n        | 1+   | Read exclude regex patterns from FILE (repeatable)                                                                                        | 5.    |
 | -     | --include             | n        | 1+   | Include only paths matching regex PATTERN (repeatable)                                                                                    | 5.    |
 | -     | --include-from        | n        | 1+   | Read include regex patterns from FILE (repeatable)                                                                                        | 5.    |
+| -     | --anchored            | n        | 0    | Patterns are matched against the absolute (raw on-disk) path, never a relative one. (default: unanchored)                                 |       |
+| -     | --ignore-case         | n        | 0    | Case-insensitive pattern matching. (default: Case-sensitive)                                                                              |       |
+| -     | --no-unicode          | n        | 0    | Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b` become ASCII-only, and `\p{…}` Unicode classes are rejected |       |
 | -     | --exclude-vcs         | n        | 0    | Exclude version control system directories (not implemented yet)                                                                          | 5.    |
 | -     | --exclude-vcs-ignores | n        | 0    | Read VCS ignore files for exclusions (not implemented yet)                                                                                | 5.    |
-| -     | --anchored            | n        | 0    | Patterns match from the start of the relative path. (default unanchored)                                                                  |       |
-| -     | --ignore-case         | n        | 0    | Case-insensitive pattern matching. (default Case-sensitive)                                                                               |       |
-| -     | --no-unicode          | n        | 0    | Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b` become ASCII-only, and `\p{…}` Unicode classes are rejected |       |
 | -     | --lazy-filter         | n        | 0    | Apply include/exclude filters after the hash phase                                                                                        |       |
 
 **Dedup**  
@@ -147,11 +150,11 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
 - Since the sparse copy relies on the underlying filesystem being able to represent sparse files, the sparsification 
   via sparse copy will not work on a file system that is not able to represent sparse files.
 
-| Short | Long        | Required | Args | Description                                                                         | Notes |
-|-------|-------------|----------|------|-------------------------------------------------------------------------------------|-------|
-| -     | --sparsify  | n        | 0    | Run the sparsify phase (copy with seeks using `--page-size` increments)             |       |
-| -     | --page-size | n        | 1    | Page size in bytes for hash zero-page counting and sparsify                         |       |
-| -     | --min-pages | n        | 1    | Minimum empty-page count before sparsify treats a file as worth rewriting in sparse |       |
+| Short | Long        | Required | Args | Description                                                                                                         | Notes |
+|-------|-------------|----------|------|---------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --sparsify  | n        | 0    | Run the sparsify phase (copy with seeks using `--page-size` increments)                                             |       |
+| -     | --page-size | n        | 1    | Page size in bytes: segment a file into pages of this size and search for completely empty pages for sparsification |       |
+| -     | --min-pages | n        | 1    | Minimum empty-page count before sparsify treats a file as worth rewriting in sparse                                 |       |
 
 **Process Options**  
 
@@ -214,18 +217,29 @@ Restore a tar-dedup archive (materialize: full copy at each original path). Abor
 
 **Archive Paths**
 
+The extraction has four important locations:
+1. The archive: The file that is intended to be extracted.
+2. The work directory: Locations of temporary files, database, lock files, extraction cache (temporarily consume as 
+   much space as the .tar archive itself.)
+3. The extraction directory: The directory where the captured file tree is rebuilt during the extraction
+4. The source directory: When building a link tree, this directory contains the actual files the links reference. 
+
+The archive is the only mandatory input. Everything else has defaults.
+
 | Short | Long                | Required | Args | Description                                                                                                                                                                           | Notes |
 |-------|---------------------|----------|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
-| -f    | -                   | y        | 1    | Archive path (relative paths use `-C` / current directory)                                                                                                                            |       |
+| -f    | -                   | y        | 1    | Archive path (relative paths use `-C` / current directory)                                                                                                                            | 1.    |
 | -C    | --directory         | n        | 1    | Treat DIR as the working directory when resolving relative paths on this command line (`-f`, `--work-dir`, …). Absolute paths are unchanged. Default: process current directory       |       |
-| -     | --extract-to        | n        | 1    | Extract members into DIR (the restore root); default: `-C` / current dir                                                                                                              |       |
-| -     | --work-dir          | n        | 1    | Stage directory for sqlite DB, cached payloads, and locks (defaults to `{stem}.estage` next to the archive). Relative paths use `-C` / cwd                                            |       |
+| -     | --extract-to        | n        | 1    | Extract members into DIR (the restore root); default: `-C` / current dir                                                                                                              | 1.    |
+| -     | --work-dir          | n        | 1    | Stage directory for sqlite DB, cached payloads, and locks (defaults to `{stem}.estage` next to the archive). Relative paths use `-C` / cwd. Overrides `--work-dir-location`           | 1.    |
 | -     | --work-dir-location | n        | 1    | Where `{stem}.estage` is placed when `--work-dir` is not given: `beside-archive` (default) or `beside-output` (next to the extraction root)                                           |       |
-| -P    | --absolute          | n        | 0    | Restore using absolute catalog paths (`-P`). Extraction join abs paths under the extraction root (leading `/` stripped). To extract to file system root, pass `/` as `-C`             |       |
-| -     | --one-top-level     | n        | 0..1 | Extract loose members into a subdirectory under the extraction root (GNU tar `--one-top-level`). A bare `--one-top-level` uses the archive name as the subdirectory; DIR overrides it |       |
+| -P    | --absolute          | n        | 0    | Restore using absolute catalog paths (`-P`). Extraction join abs paths under the extraction root (leading `/` stripped). To extract to file system root, pass `/` as `-C`             | 1. 2. |
+| -     | --one-top-level     | n        | 0..1 | Extract loose members into a subdirectory under the extraction root (GNU tar `--one-top-level`). A bare `--one-top-level` uses the archive name as the subdirectory; DIR overrides it | 2.    |
 | -     | --clean-target      | n        | 0    | Remove the extraction root before extracting (only effective with `--one-top-level`)                                                                                                  |       |
 
 **Compression**
+
+By default, the file extension is used to infer the compression if any. These options will override the inference.
 
 | Short | Long    | Required | Args | Description                                                      | Notes |
 |-------|---------|----------|------|------------------------------------------------------------------|-------|
@@ -236,32 +250,34 @@ Restore a tar-dedup archive (materialize: full copy at each original path). Abor
 
 **Rehash**
 
+After the files are extracted, they are hashed again to check if any data corruption has taken place.
+
 | Short | Long        | Required | Args | Description                                                     | Notes |
 |-------|-------------|----------|------|-----------------------------------------------------------------|-------|
 | -     | --no-rehash | n        | 0    | Do not run the rehash (content verification) phase. Default: on |       |
 
 **Overwrite Control**
 
-| Short | Long                     | Required | Args | Description                                                                                                                                                                                                       | Notes |
-|-------|--------------------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
-| -     | --keep-directory-symlink | n        | 0    | Preserve existing directory symlinks instead of replacing them (GNU tar `--keep-directory-symlink`)                                                                                                               |       |
-| -U    | --unlink-first           | n        | 0    | Remove each existing file before extracting over it (GNU tar `-U` / `--unlink-first`)                                                                                                                             |       |
-| -     | --no-create-dirs         | n        | 0    | Skip the directory tree create pass. Results in the members without a parent being skipped. Results in error with --fail-fast                                                                                     |       |
-| -     | --no-overwrite-dir       | n        | 0    | Do not apply archived metadata to existing directories (GNU tar `--no-overwrite-dir`). Default: apply directory metadata for placed members, matching GNU tar at the end of the pipeline                          |       |
-| -     | --overwrite-all-dir      | n        | 0    | Also apply archived directory metadata to directories excluded by filters (normally only placed members are updated). Not the negation of `--no-overwrite-dir`: both flags together disable all directory updates |       |
-| -     | --conflict-policy        | n        | 1    | How to handle paths that already exist on disk                                                                                                                                                                    |       |
-| -     | --silent-conflicts       | n        | 0    | Do not log path or type conflicts (pairs with `--conflict-policy`)                                                                                                                                                |       |
-| -     | --remove-and-replace     | n        | 0    | On type mismatch at a path, remove the existing entry and extract the archive member                                                                                                                              |       |
-| -     | --hard-link-grouping     | n        | 1    | Adjust how hardlinks are extracted                                                                                                                                                                                |       |
+| Short | Long                     | Required | Args | Description                                                                                                                                                                                                        | Notes |
+|-------|--------------------------|----------|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --keep-directory-symlink | n        | 0    | Preserve existing directory symlinks instead of replacing them (GNU tar `--keep-directory-symlink`)                                                                                                                |       |
+| -U    | --unlink-first           | n        | 0    | Remove each existing file system entry (directory entry) before extracting over it (GNU tar `-U` / `--unlink-first`)                                                                                               |       |
+| -     | --no-create-dirs         | n        | 0    | Skip the directory tree create pass. Results in the members without a parent being skipped. Results in error with --fail-fast                                                                                      |       |
+| -     | --no-overwrite-dir       | n        | 0    | Do not apply archived metadata to existing directories (GNU tar `--no-overwrite-dir`). Default: apply directory metadata for placed members, matching GNU tar at the end of the pipeline                           |       |
+| -     | --overwrite-all-dir      | n        | 0    | Also apply archived directory metadata to directories excluded by filters (normally only placed members are updated). `--no-overwrite-dir` takes precedence: with both flags set, no directory metadata is applied |       |
+| -     | --conflict-policy        | n        | 1    | How to handle paths that already exist on disk                                                                                                                                                                     |       |
+| -     | --silent-conflicts       | n        | 0    | Do not log any messages when a path encountered a conflict                                                                                                                                                         |       |
+| -     | --remove-and-replace     | n        | 0    | On type mismatch at a path, remove the existing entry and extract the archive member. Skip by default                                                                                                              |       |
+| -     | --hard-link-grouping     | n        | 1    | Adjust how hardlinks are extracted                                                                                                                                                                                 | 3.    |
 
 **Link Tree**
 
-| Short | Long             | Required | Args | Description                                                                                                                                     | Notes |
-|-------|------------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------------------|-------|
-| -     | --link-tree      | n        | 0    | Build the restored tree from symlinks/hard links into the extract stage instead of copying payloads (keeps the `.estage` cache)                 |       |
-| -     | --hard-links     | n        | 0    | With `--link-tree`, use hard links instead of symlinks                                                                                          |       |
-| -     | --absolute-links | n        | 0    | With `--link-tree`, link using absolute paths instead of paths relative to the output root                                                      |       |
-| -     | --link-source    | n        | 1    | With `--link-tree`, use DIR as the directory the canonical payloads are materialized into before linking (default: the extract cache directory) |       |
+| Short | Long             | Required | Args | Description                                                                                                                                      | Notes |
+|-------|------------------|----------|------|--------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --link-tree      | n        | 0    | Build the restored tree from symlinks/hard links into the extract stage instead of copying payloads. Payloads moved to `--link-source` directory |       |
+| -     | --hard-links     | n        | 0    | With `--link-tree`, use hard links instead of symlinks                                                                                           |       |
+| -     | --absolute-links | n        | 0    | With `--link-tree`, link using absolute paths instead of paths relative to the output root                                                       |       |
+| -     | --link-source    | n        | 1    | With `--link-tree`, use DIR as the directory the canonical payloads are materialized into before linking (default: {extract-to}/.sources)        |       |
 
 **Placement**
 
@@ -272,20 +288,24 @@ Restore a tar-dedup archive (materialize: full copy at each original path). Abor
 
 **File Attributes**
 
+File Attributers also have on/off flags. Providing both at the same time produces an error. Default is everything off. 
+The default can be swapped to on with `--apply-all-metadata`. Then every `--no-*` override can be used to disable 
+selected attributes.
+
 | Short | Long                        | Required | Args | Description                                                                                                                                                                                                                                                                               | Notes |
 |-------|-----------------------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
 | -     | --same-owner                | n        | 0    | Restore archived uid/gid when possible (GNU tar `--same-owner`; may require root). Default: inferred from the effective uid of the extracting process                                                                                                                                     |       |
 | -     | --no-same-owner             | n        | 0    | Do not restore archived ownership; files are owned by the extracting process. Default: inferred from the effective uid of the extracting process                                                                                                                                          |       |
 | -     | --map-target                | n        | 1    | How to emit the resolved owner/group: `ids`, `names`, `name-id`, or `id-name` (default `name-id`)                                                                                                                                                                                         |       |
-| -     | --validate-maps             | n        | 0    | Fail hard on map/override destinations that the chosen --map-target cannot emit                                                                                                                                                                                                           |       |
-| -     | --owner                     | n        | 1    | Force owner for restored members: `NAME`, `UID`, or `NAME:UID`. Identity is all-or-nothing: giving any of `--owner`/`--group`/`--owner-map`/ `--group-map` uses the CLI for **both** identities and disables `--apply-stored-owner-map` / `--apply-stored-group-map` (no CLI/archive mix) |       |
-| -     | --owner-map                 | n        | 1    | Owner translation map file (GNU tar `--owner-map`). See `--owner` for the all-or-nothing identity rule                                                                                                                                                                                    |       |
-| -     | --group                     | n        | 1    | Force group for restored members: `NAME`, `GID`, or `NAME:GID`. See `--owner` for the all-or-nothing identity rule                                                                                                                                                                        |       |
-| -     | --group-map                 | n        | 1    | Group translation map file (GNU tar `--group-map`). See `--owner` for the all-or-nothing identity rule                                                                                                                                                                                    |       |
-| -     | --apply-stored-owner-map    | n        | 0    | Apply the owner map recorded in the archive (alongside `--apply-stored-group-map`, the whole archived identity). Ignored if any of `--owner`/`--group`/ `--owner-map`/`--group-map` is given: identity comes entirely from the command line or entirely from the archive — never a mix    |       |
-| -     | --no-apply-stored-owner-map | n        | 0    | Do not apply the owner map recorded in the archive                                                                                                                                                                                                                                        |       |
-| -     | --apply-stored-group-map    | n        | 0    | Apply the group map recorded in the archive (alongside `--apply-stored-owner-map`, the whole archived identity). Ignored if any of `--owner`/`--group`/ `--owner-map`/`--group-map` is given: identity comes entirely from the command line or entirely from the archive — never a mix    |       |
-| -     | --no-apply-stored-group-map | n        | 0    | Do not apply the group map recorded in the archive                                                                                                                                                                                                                                        |       |
+| -     | --validate-maps             | n        | 0    | Fail hard on map/override destinations that the chosen --map-target cannot emit. (Missing values, missing owner/group name, ...)                                                                                                                                                          |       |
+| -     | --owner                     | n        | 1    | Force owner for restored members: `NAME`, `UID`, or `NAME:UID`. Identity is all-or-nothing: giving any of `--owner`/`--group`/`--owner-map`/ `--group-map` uses the CLI for **both** identities and disables `--apply-stored-owner-map` / `--apply-stored-group-map` (no CLI/archive mix) | 4.    |
+| -     | --owner-map                 | n        | 1    | Owner translation map file (GNU tar `--owner-map`). See `--owner` for the all-or-nothing identity rule                                                                                                                                                                                    | 4.    |
+| -     | --group                     | n        | 1    | Force group for restored members: `NAME`, `GID`, or `NAME:GID`. See `--owner` for the all-or-nothing identity rule                                                                                                                                                                        | 4.    |
+| -     | --group-map                 | n        | 1    | Group translation map file (GNU tar `--group-map`). See `--owner` for the all-or-nothing identity rule                                                                                                                                                                                    | 4.    |
+| -     | --apply-stored-owner-map    | n        | 0    | Apply the owner map recorded in the archive (alongside `--apply-stored-group-map`, the whole archived identity). Ignored if any of `--owner`/`--group`/ `--owner-map`/`--group-map` is given: identity comes entirely from the command line or entirely from the archive — never a mix    | 4.    |
+| -     | --no-apply-stored-owner-map | n        | 0    | Do not apply the owner map recorded in the archive                                                                                                                                                                                                                                        | 4.    |
+| -     | --apply-stored-group-map    | n        | 0    | Apply the group map recorded in the archive (alongside `--apply-stored-owner-map`, the whole archived identity). Ignored if any of `--owner`/`--group`/ `--owner-map`/`--group-map` is given: identity comes entirely from the command line or entirely from the archive — never a mix    | 4.    |
+| -     | --no-apply-stored-group-map | n        | 0    | Do not apply the group map recorded in the archive                                                                                                                                                                                                                                        | 4.    |
 | -     | --mode                      | n        | 1    | Force symbolic mode CHANGES for restored members; takes precedence over `--apply-mode`                                                                                                                                                                                                    |       |
 | -     | --apply-mode                | n        | 0    | Apply the mode changes recorded in the archive (ignored if `--mode` given)                                                                                                                                                                                                                |       |
 | -     | --no-apply-mode             | n        | 0    | Do not apply the mode changes recorded in the archive                                                                                                                                                                                                                                     |       |
@@ -311,25 +331,28 @@ Restore a tar-dedup archive (materialize: full copy at each original path). Abor
 
 | Short | Long               | Required | Args | Description                                                                                                                                                      | Notes |
 |-------|--------------------|----------|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
-| -     | --jobs             | n        | 1    | Maximum concurrent workers (rayon pools and xz threads)                                                                                                          |       |
-| -     | --io-jobs          | n        | 1    | Maximum concurrent io-bound workers (dedup, sparsify, place pools)                                                                                               |       |
-| -     | --fresh            | n        | 0    | Wipe extract work (`.estage`) and start over                                                                                                                     |       |
+| -     | --jobs             | n        | 1    | Maximum concurrent compute bound workers                                                                                                                         |       |
+| -     | --io-jobs          | n        | 1    | Maximum concurrent io-bound workers                                                                                                                              |       |
+| -     | --fresh            | n        | 0    | Wipe extract work (`.estage`) and start over; does not reset the placement progress                                                                              |       |
 | -     | --force            | n        | 0    | Continue even if the tool cannot guarantee the integrity of the data                                                                                             |       |
-| -     | --relax-utf8       | n        | 0    | Lossily convert non-UTF-8 paths (`to_string_lossy`, never skip); raw bytes kept. Mutually exclusive with `--force`                                               |       |
-| -     | --fail-fast        | n        | 0    | Abort on the first warning or error instead of continuing where possible                                                                                         |       |
-| -     | --no-errors        | n        | 0    | Do not record per-file errors in the database                                                                                                                    |       |
+| -     | --relax-utf8       | n        | 0    | Relax utf-8 policy to also process entries without a valid utf-8 path                                                                                            |       |
+| -     | --fail-fast        | n        | 0    | Abort the run on the first hard failure instead of continuing according to the best-effort principle where possible                                              |       |
+| -     | --no-errors        | n        | 0    | Do not record errors encountered while processing the entries in the database. Downgrades a db-retention of `on-error` to `never`                                |       |
 | -     | --db-retention     | n        | 1    | When to keep a timestamped copy of the work database (under the extraction root). `always`: always; `on-error`: only if the run recorded errors; `never`: delete |       |
 | -     | --keep-stage       | n        | 0    | After success, keep the `{stem}.estage` work directory                                                                                                           |       |
-| -     | --exit-after-stage | n        | 1    | Run through STAGE then exit cleanly (state saved)                                                                                                                |       |
+| -     | --exit-after-stage | n        | 1    | Run through STAGE then exit gracefully                                                                                                                           |       |
 
 **Logging**
 
-| Short | Long            | Required | Args | Description                 | Notes |
-|-------|-----------------|----------|------|-----------------------------|-------|
-| -     | --progress-mode | n        | 1    | Which progress bars to draw |       |
+| Short | Long            | Required | Args | Description                                                    | Notes |
+|-------|-----------------|----------|------|----------------------------------------------------------------|-------|
+| -     | --progress-mode | n        | 1    | Which progress bars to draw                                    |       |
+| -     | --log-level     | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var) |       |
 
 **Batching**  
-Options below tune the internal buffering and transaction batching. Sensible defaults should be set. Changes can negatively impact tool performance by increasing the number of transactions in the database, and can use more RAM, leading to worse system performance.
+Options below tune the internal buffering and transaction batching. Sensible defaults should be set. Changes can 
+negatively impact tool performance by increasing the number of transactions in the database, and can use more RAM, 
+leading to worse system performance.
 
 | Short | Long               | Required | Args | Description                                                          | Notes |
 |-------|--------------------|----------|------|----------------------------------------------------------------------|-------|
@@ -342,6 +365,11 @@ Options below tune the internal buffering and transaction batching. Sensible def
 
 **Sidecar**
 
+If a file system cannot accept a given piece of metadata, the tool can store the metadata in a sidecar json sidecar file.
+By default, the name is the `{target_name}.json` with hidden `.{target_name}.json` Should the name be taken, the tool 
+attempts to find a free random suffix to add to the file like: `.{target_name}.{08x}.json`. After a certain number of 
+attempts, the tool give ups and records an error in the database.
+
 | Short | Long             | Required | Args | Description                                                                                                                                     | Notes |
 |-------|------------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------------------|-------|
 | -     | --sidecar        | n        | 1    | Write a per-entry JSON metadata manifest beside each placed entry. `on-error` (default) writes a sidecar only where metadata application failed |       |
@@ -350,23 +378,98 @@ Options below tune the internal buffering and transaction batching. Sensible def
 
 **Filtering**
 
+When extracting, the tool allows to filter all files which were archived again. The logic is exactly the same as 
+for the archive step. Allowed files are now the ones that passed both the archive and the extract filter.
+
 | Short | Long           | Required | Args | Description                                                                                                                               | Notes |
 |-------|----------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------------------|-------|
-| -     | --exclude      | n        | 1+   | Exclude paths matching regex PATTERN from extraction (repeatable)                                                                         |       |
+| -     | --exclude      | n        | 1+   | Exclude paths matching regex PATTERN (repeatable)                                                                                         |       |
 | -X    | --exclude-from | n        | 1+   | Read exclude regex patterns from FILE (repeatable)                                                                                        |       |
-| -     | --include      | n        | 1+   | Include only paths matching regex PATTERN for extraction (repeatable)                                                                     |       |
+| -     | --include      | n        | 1+   | Include only paths matching regex PATTERN (repeatable)                                                                                    |       |
 | -     | --include-from | n        | 1+   | Read include regex patterns from FILE (repeatable)                                                                                        |       |
-| -     | --anchored     | n        | 0    | Patterns match from the start of the path (default: unanchored)                                                                           |       |
-| -     | --ignore-case  | n        | 0    | Match patterns case-insensitively (default: case-sensitive)                                                                               |       |
+| -     | --anchored     | n        | 0    | Patterns are matched against the absolute (raw on-disk) path, never a relative one. (default: unanchored)                                 |       |
+| -     | --ignore-case  | n        | 0    | Case-insensitive pattern matching. (default: Case-sensitive)                                                                              |       |
 | -     | --no-unicode   | n        | 0    | Compile filter regexes in bytes mode: `.` matches a byte, `\d \w \s` and `\b` become ASCII-only, and `\p{…}` Unicode classes are rejected |       |
 | -     | --lazy-filter  | n        | 0    | Apply include/exclude filters after a later phase (scan) instead of eagerly                                                               |       |
 
 **Sparse Files**
 
-| Short | Long        | Required | Args | Description                                                                                                                   | Notes |
-|-------|-------------|----------|------|-------------------------------------------------------------------------------------------------------------------------------|-------|
-| -     | --sparsify  | n        | 0    | Re-create holes in the extract cache while unpacking (sparse writer over a plain copy; uses `--page-size` for hole detection) |       |
-| -     | --page-size | n        | 1    | Page size in bytes for sparse-hole detection while unpacking                                                                  |       |
+As the tool has to perform file copies anyway, the sparse-copy function can be employed to attempt to punch holes in 
+the extracted files.
+
+| Short | Long        | Required | Args | Description                                                                                                         | Notes |
+|-------|-------------|----------|------|---------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --sparsify  | n        | 0    | Attempt to punch holes while extracting and copying files                                                           |       |
+| -     | --page-size | n        | 1    | Page size in bytes: segment a file into pages of this size and search for completely empty pages for sparsification |       |
+
+**Notes**
+1. **Path resolution:**
+
+   If the path is absolute, the path is taken as is. If the path is relative and `-C --directory` is not set,
+   the current process working directory is taken from the environment and used as the root for the relative paths. If
+   `-C --directory` is given, relative paths are resolved with this as a root instead.
+2. **Materialization:** 
+
+   When materializing, the path given is taken as is and the extraction tree grafted onto that. 
+   Given `/home/user/Desktop/archive` and `file.txt` plus `dir/deep.txt`, the result will be:
+   - `/home/user/Desktop/archive/file.txt`
+   - `/home/user/Desktop/archive/dir/deep.txt`
+   
+   If absolute paths are selected and the two entries originally belonged to `/home/user2/temp`, extraction becomes:
+   - `/home/user/Desktop/archive/home/user2/temp/file.txt`
+   - `/home/user/Desktop/archive/home/user2/temp/dir/deep.txt`
+   
+   `--one-top-level` adds another nameable directory into the path s.t. the two entries don't float around in the 
+   directory (useful, if the directory wasn't empty to begin with). Without absolute paths again:
+   - `/home/user/Desktop/archive/one-top-level-dir/file.txt`
+   - `/home/user/Desktop/archive/one-top-level-dir/dir/deep.txt`
+    
+   Path reconstruction in relative mode:  
+   Since the tool internally operates with absolute_paths, relative paths are reconstructed as follows:
+   - `-i ../other/../../var` is first resolved against the directory `--directory` 
+   - `/home/user` + `../other/../../var` => `/home/user/../other/../../var` then normalized => `/var`
+   - `/var` is then added to the queue of starting directories to index.
+   
+   Suppose we found `/var/log/app.log`, we compute the extract path as follows:
+   - Strip abs prefix and trailing `/`: `/var/log/app.log` - `/var/` => `log/app.log`
+   - Graft relative prefix => `../other/../../var` + `log/app.log` => `../other/../../var/log/app.log`
+   - Normalize: `../other/../../var/log/app.log` => `../../var/log/app.log`
+   - Strip parent: `../../var/log/app.log` => `var/log/app.log`
+   - Attach to the effective extraction root: `/home/User/Desktop/archive/{one-top-level}` + `var/log/app.log` 
+   => `/home/User/Desktop/archive/{one-top-level}/var/log/app.log`
+
+3. **Hardlink Groups:**
+
+   Hardlinks have three modes how they are grouped.
+   - `None` - should be self-explanatory. No hardlinking is performed at all.
+   - `Global` - Across the entire file tree that is created, any entry that shares its original (dev, inode) with 
+     another entry in the extract file tree, will become a hardlink.
+   - `Source` - Equivalent to `Global` without `--no-strict-separation`. If not, only restore hardlinks between files 
+     inside a subtree reachable via a single source. e.g. `-i ../../a` `-i ../../../c/a/` with `a/` containing `a.txt` 
+     and `b.txt` which are hardlinks would extract to:
+     `a/a.txt (x, y)`  
+     `a/b.txt (x, y)`  
+     `c/a/a.txt (u, v)`  
+     `c/a/b.txt (u, v)`  
+
+4. To avoid having complex merge procedures between what is given in the cli and what might be present in the archive 
+   an all or nothing policy is used. Once any of `--owner`/`--group`/`--owner-map`/ `--group-map` is supplied, all maps 
+   are **exclusively** taken from the cli and not the database. I.e. `--apply-stored-owner-map` /
+   `--apply-stored-group-map` have no effect. The `inspect` subcommand can dump the map structures 
+   for the user to rebuild them outside the tar-dedup process. Another intended side effect is to shift the 
+   responsibility of providing a fully sound map to the user rather than the tar-dedup tool to merge the maps.
+
+5. **Resolution logic:**
+
+   For any user or group, the resolution works as follows:
+   - Resolve target user via the map if provided.
+   - If no map was provided or the map didn't return a result, defer to owner or group override.
+   - If `--same-owner` is provided, query the database for the owner / group.
+   - If no result is found, the owner / group is skipped and the extracting process owner / group is used.
+
+   If `ids` or `name` are provided for `--map-target` this resolution process is done once. For `name-id` or `id-name` 
+   the first the process for the first type. Only if this failed to produce a result, the other type is queried. The 
+   order is vertical and not in parallel (so not uid owner map, then name owner map, ...). 
 
 ### resume
 
@@ -505,91 +608,100 @@ are accepted.
 This tool aims to enhance the use case of unstructured cold data, that needs to be stored as efficiently as possible 
 for long periods of time. It assumes that delete, modify and append operations won't be performed on the archive 
 (thus no implementation for it exists) and that either a subset or the full dataset itself are unarchived. To compress 
-the data as best as possible, we rely on tar and xz as the base. We explcitly do not use zip archives since the per-file 
-compression as well as manifest make the files less compact than tar archives. This optimization is further motivated 
-by our omission of delete, modify, append. As our assumption is, that this data is cold, and we aim to store it as 
-efficiently as possibe, the work is very asymetrically distributed. The act of creating an archive has a very high 
+the data as best as possible, we rely on tar and xz as the base. We explicitly do not use zip archives since the per-file 
+compression as well as manifest make the files less compact than tar archives. 
+
+The tool is constructed in an asymmetric fashion. The act of creating an archive has a very high 
 up-front cost with 3 / 4 reads per file as the lower bound, with additional scans happening as a consequence of 
 deduplication, <1 to 2 writes per file (depending on if the sparse materialization pass happens or not) and 
-compression results. On the other hand, decompression is fairly easy with a single scan of the archive, 
-a single write of the uncompressed archive size or a single write of the original tree size depending on the 
-restoration mode. 
-
-## Disclaimers
-
-### THIS IS UNSTABLE CODE!!!  
-Any archives created with this tool prior to the v1.0.0 release have **no guarantees** that future commits will still 
-decompress them correctly and successfully! If you need this tool done soon, create an issue or star the project to 
-show interest.
-
+compressed archive. On the other hand, decompression is fairly easy. The files are first cached and then reflinked or 
+copied into place. This gives the archive size in writes plus the writes of the fully extracted tree.
 
 ### Compression Algorithms
 The current offering of compression algorithms is due to both the availability of rust crates for the algorithms and
-also a thought of recentness of the algorithm. The program will default to the most aggressive compression possible
-(xz, cpu_count threads, extreme compression profile and no regard for RAM consumption) if the options of the command
-exposes du not suite your needs, the command offers to write to a simple tar file you can compress yourself
-(and also subsequently decompress if the format is not supported.)
-
-As the tool is using rust, it expects all its inputs to be in valid utf-8. // TODO further enhancement
+also a thought of recentness of the algorithm. The recommendation is to use the xz algorithm, since the tool has been 
+built with a focus on this algorithm. Giving a simple `.tar` extension and no compression override will produce a 
+regular tar file. Since compression usually deals with sparse files well, sparsification is mainly here to facilitate 
+smaller archives for regular tar files. For better performance it is not recommended to perform a sparse pass and 
+compress.  
+As the tool is using rust, it expects all its inputs to be in valid utf-8. Escape hatches are available for non-utf8 
+filters and indexing but the tool currently lacks good support for extraction with non-utf8 paths. **Extraction will 
+coerce non-utf8 paths to a lossy format, replacing invalid characters with �.**
 
 ### Divergence from the `tar` command
 
 #### File Filtering 
 The tool also sacrifices functionality the regular tar command offers. Since this tool is not intended to be backwards 
-compatible the decision was made to only support a subset of the tar command options. We tried to retain a manageable 
-overhead and an easy interface (e.g. `--exclude`, `--exclude-from`, `--files-from` are the main options supported from 
-tar. However, the exclude options expect full regex to match paths against and `--files-from` is the alternative 
-approach to exclude and supports \n or \0 terminated lines. Paths are expected to be unescaped.) Additionally, the
-inverse can also be done `--include` and `--include-from` allow you to whitelist rather than black list. Defaults are 
-treated as follows: no inclusion => everything is included, no exclusion => nothing is excluded. The tool has no rule 
-order. The list of all members of the given directories and paths are scanned. A subset is then selected based on the 
-include filters. Everything selected by the include filters is then passed through the exclude filters which then strip 
-the remainder of entries before the hash phase begins. 
+compatible the decision was made to only support a subset of the tar command options. I tried to retain a manageable 
+overhead and an easy interface. Filtering in the two passes (include, exclude) should offer a sufficiently ergonomic 
+way to express restrictions. An escape hatch is provided via `--files-from`.
 
 Filtering is not recursive. The filters are applied to each element separately. This is a consequence how the tool 
 optimizes path traversal and allocation of files (we want to minimize the archive size after all). All regex for filters 
 are matched against each absolute path recorded in during the inventory stage.
 
-// Todo entry vs path restoration.path
 #### Directory scanning.
-By default, tar-dedup expects to scan disjoint trees (consequence of the mapping and )
+By default, tar-dedup expects to scan disjoint trees. If multiple roots are provided and a following root is either 
+identical to a previous root, is a previous root's parent or is a child of a previous root, the input is rejected. 
+This also applies for any directories encountered inside the `--files-from` inputs and leads to an abort during the 
+indexing stage. Should it not be possible to provide disjoint sources, the `--no-strict-separation` escape hatch 
+disables the check. 
+
+Any file system entry is recorded by its absolute path. If the same path is encountered twice, it will only be 
+recorded once. What is not checked if the same inode is reached via a symlink. Then the same file gets two entries in 
+the archive. 
+
+#### Sparsification
+Since the tar archive writer inside rust currently does not support detecting sparse files on the fly but instead 
+requires the files to be sparse on disk, the tool opts to perform a sparse copy to the staging directory for the tar 
+library to detect the sparse file. This has the sad side effect, that sparsification with this tool does not work on a 
+file system that does not support sparse files. As the tool is geared towards compression anyway, this was deemed an 
+acceptable trade-off for the moment.
 
 ### Security    
-As this tool is meant to produce a coherent and complete picture of a file tree [...] for archival purposes, the security concerns 
-are higher for this tool compared to the regular `tar` command! The sqlite manifest stores absolute paths to all files 
+As this tool is only meant to produce a coherent and complete picture of a file tree for archival purposes, this tool 
+offers less security than the normal `tar` command. The sqlite manifest stores absolute paths to all files 
 archived and the full metadata of files is also stored in plain format. Please use caution when using this tool to 
-produce archives ment to be publicly accessible.
+produce archives meant to be publicly accessible. 
 
-## Development
+Also, the tool claims no robustness against injection of malicious content or tar offset attacks. Please only extract 
+archives you trust with the tool. As I'm currently writing this as a set-it-and-forget-it tool it probably won't see 
+24h support in case a vulnerability inside any of the dependencies is published.
 
-Features:
-- [ ] For debugging purposes, the `force-utf8-encoding` can be used for better readability of the database. However, 
-**if at any point a non-utf8 compliant byte is found, the binary will panic**. 
+The tool includes hashes of all its members as well as of the database in the footer and the final archive. However, it 
+has **no healing ability**. The tool offers error detection but no error recovery. Storing data in an archive like this 
+is not meant to replace your 3-2-1 backup strategy!
 
-Compile hints on Debian:  
+Compile hints on Ubuntu:  
 `sudo apt install libselinux-dev libclang-dev clang`
 
 ### Returned Archive
-Note on the returned file. The file is a valid archive with an appended footer. This looks like this:
+Note on the returned file. The file is a valid tar archive with an appended footer. This looks like this:
 ```
 [ compressed(tar archive) | MAGIC | sha1 of archive content | xz(-9e) of final-database.sqlite | sha1 of xz blob | MAGIC | u64 offset ]
 ```
 - `MAGIC` is `"Tar-Dedup-SQLite-Footer"` - to make finding the footer by hand analyzing the file with a program like `less`.
-- `sha1 of archive content` is the hash of the finished compressed archive (the bytes before the footer) to detect corruption of the stream. It is verified once when the footer catalog is first installed during extraction; under `--force` a mismatch is downgraded to a warning.
-- `xz(-9e) of final-database.sqlite` is the finalized work database compressed with a fixed `xz -9 -e` preset (independent of tar stream compression). It contains the finished session info and allows tar-dedup to instantly have the manifest in the correct state rather than having to apply one snapshot after the other.
+- `sha1 of archive content` is the hash of the finished compressed archive (the bytes before the footer) to detect 
+  corruption of the stream. It is verified once when the footer catalog is first installed during extraction; 
+  under `--force` a mismatch is downgraded to a warning.
+- `xz(-9e) of final-database.sqlite` is the finalized work database compressed with a fixed `xz -9 -e` preset 
+  (independent of tar stream compression). It contains the finished session info and allows tar-dedup to instantly have 
+  the manifest in the correct state rather than having to apply one snapshot after the other.
 - `sha1 of xz blob` is the hash of the compressed footer payload (not the raw sqlite) to check for corruption.
 - `u64 offset` is the offset of the first `MAGIC` string relative to the beginning of the file
-
-Archives with the previous raw-sqlite footer format are not supported.
 
 The returned file can be opened by associated compressor or the tar archive. The footer will most likely be ignored 
 by the compression algorithm and the tar stream and the contents can be viewed and used as is. A warning is also 
 possible.
 
+A **valid** archive is one that starts with an initial snapshot of the database, followed by canonical files, 
+(a snapshot of the database in progress, followed by canonical files), one last snapshot of the database. Multiple in 
+progress snapshots are expected, if the compression process is interrupted at least once. The extractor will allow 
+archives that are truncated at the beginning, at the end or on both sides. Invalid members, no database, not valid 
+canonical files, or an initial database not as the first member will cause an immediate abort. Truncated archives need 
+to be extracted with `--force`, since they consitute archive the tool cannot guaranteed the integrity for anymore.
 
 ### Archive Content
-The tool expects to encounter canonical files or databases. It will refuse to proceed, if it encounters any file that 
-does not match the established contract.
 
 #### Canonical Files
 The tool saves storage by only storing one copy per file cluster. These unique or canonical files have special naming 
@@ -607,6 +719,13 @@ canonical files to add or because the user sent a graceful interrupt) a `snapsho
 This `snapshot.sqlite` confirms to the extractor that, up to here, the files marked as `Archived` inside the database
 were added to the archive. Since a rescan of the archive / the removal of the last appended `snapshot.sqlite` is not
 efficiently possible, the tool opts to just add another `snapshot.sqlite` when it halts the next time. This design 
-choice was intentional for data security but with frequent stops and starts of the tool, this will lead to bloat. 
+choice was intentional for data security but with frequent stop-and-go of the tool, this will lead to bloat. 
 `snapshot.sqlite` databases have no positional requirements. However, an archive with `manifest.sqlite` not in first 
 position are considered invalid and will not be processed.
+
+## Development
+- Unittests are only run in dev-mode (the tool uses debug_asserts). This is sound, since we do not gate any section of
+  code with release builds.
+- Documentation / Docstrings are currently only placed sparsely. The docstrings (unless written by the LLM try to be
+  sparse and explain the WHY. (the other Ws are visible in the code.))
+- To be able to run all unittests, a file system with selinx, posix_acl and xattr capabilitiy is needed.
