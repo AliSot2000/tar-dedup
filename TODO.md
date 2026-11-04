@@ -9,9 +9,9 @@
 - [ ] Parallel compression (Dedup, Sparsify, Stage, Archive)
 - [X] Filter first
 - [X] Force utf8 (any non-utf8 string panics and aborts.)
-- [ ] list / inspect command (go through the db and dump the files. csv, parameter to list the columns which we want. 
+- [X] list / inspect command (go through the db and dump the files. csv, parameter to list the columns which we want. 
       (join filter, join filter, join source))
-- [ ] query (query by file, out_tree or error table.)
+- [X] query (query by file, out_tree or error table.)
 - [X] Add a warn_if_times_changed -> Should also set a flag in the db.
 - [ ] Err variant check (add a wraper around functions returning a subset of errors to check that they follow the 
       contract)
@@ -65,7 +65,7 @@
 - [X] finish testing for [place]
 - [X] finish testing for [permissions]
 - [ ] fix flush / try_flush
-- [ ] finish the readme
+- [X] finish the readme
 - [ ] publish to crates.io
 - [ ] publish to gh releases
 - [ ] ~~publish to flatpak~~
