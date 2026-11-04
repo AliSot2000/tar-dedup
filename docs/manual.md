@@ -16,7 +16,7 @@ their behavior.
 ### archive
 This command takes a set of input files / directories and produces an archive.
 
-**Archive Paths**
+#### Archive Paths
 
 | Short | Long        | Required | Args | Description                                                                                                                                                                                 | Notes |
 |-------|-------------|----------|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
@@ -24,7 +24,7 @@ This command takes a set of input files / directories and produces an archive.
 | -C    | --directory | n        | 1    | Treat DIR as the working directory when resolving relative paths on this command line (`-f`, `-i`, `-T`, `--work-dir`, …). Absolute paths are unchanged. Default: process current directory | 1.    |
 | -     | --work-dir  | n        | 1    | Stage directory for sqlite DB, staged payloads, and locks (defaults to `{stem}.astage` next to the archive). Relative paths use `-C` / cwd                                                  | 1.    |
 
-**Inputs**
+#### Inputs
 
 | Short | Long         | Required | Args | Description                                                            | Notes |
 |-------|--------------|----------|------|------------------------------------------------------------------------|-------|
@@ -32,7 +32,7 @@ This command takes a set of input files / directories and produces an archive.
 | -T    | --files-from | n        | 1+   | Read member paths from FILE (`-` = stdin). Repeatable; union with `-i` | 1. 2. |
 | -     | --null       | n        | 0    | `-T` records are NUL-terminated (default: newline-separated)           |       |
 
-**Compression**
+#### Compression
 
 | Short | Long                   | Required | Args | Description                                                                                          | Notes |
 |-------|------------------------|----------|------|------------------------------------------------------------------------------------------------------|-------|
@@ -44,7 +44,7 @@ This command takes a set of input files / directories and produces an archive.
 | -     | --xz-extreme           | n        | 0    | xz `--extreme` / `-e` (OR into LZMA preset). Only valid with xz                                      |       |
 | -     | --xz-memlimit-compress | n        | 1    | Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`                     |       |
 
-**Indexing**  
+#### Indexing
 The general assumptions when indexing are: 
 - There's no writes to the files currently indexed. 
 - There's no writes to the metadata of the files currently indexed.
@@ -62,7 +62,7 @@ path is treated as a new entity and has its metadata recorded.
 | -     | --no-hardlink-detection | n        | 0    | Do not coalesce same (inode, device) hard links in hash/dedup                     | 4.    |
 | -     | --no-strict-separation  | n        | 0    | Allow nested or duplicate `-i` / `-T` directory roots (still recorded and walked) |       |
 
-**Filtering**
+#### Filtering
 `--include-from` and `--exclude-from` expects a file with `utf8` content and each pattern separated by a 
 newline character. This can be relaxed with `--no-unicode` if needed. If you need to match a new line for some reason, 
 use `\n` and never `0x0A`. Regex is handled with rusts regex crate. Regex is handled by Rust's regex crate. It is a 
@@ -102,7 +102,7 @@ A single file is treated as follows:
 | -     | --exclude-vcs-ignores | n        | 0    | Read VCS ignore files for exclusions (not implemented yet)                                                                                | 5.    |
 | -     | --lazy-filter         | n        | 0    | Apply include/exclude filters after the hash phase                                                                                        |       |
 
-**Dedup**  
+#### Dedup
 The deduplication strategy and the optional content-defined sharding used to cluster unique payloads. 
 Sharding is not implemented yet.
 
@@ -112,7 +112,7 @@ Sharding is not implemented yet.
 | -     | --use-shards     | n        | 0    | Use content-defined chunking instead of whole-file hashes (not implemented yet) |       |
 | -     | --max-shard-size | n        | 1    | Maximum shard size for content-defined chunking (requires `--use-shards`)       |       |
 
-**File Attributes**
+#### File Attributes
 As a baseline, the tool attempts to capture as much data as possible. This includes (ctime, atime, mtime, uid, gid, 
 mode, size, selinux policy, posix_acls, xattrs, inode type, link destination and link type too for symlinks. By 
 default, the tool also attempts to resolve any uid, gid to a group name / owner name via the system database. 
@@ -156,7 +156,7 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
 | -     | --page-size | n        | 1    | Page size in bytes: segment a file into pages of this size and search for completely empty pages for sparsification |       |
 | -     | --min-pages | n        | 1    | Minimum empty-page count before sparsify treats a file as worth rewriting in sparse                                 |       |
 
-**Process Options**  
+#### Process Options
 
 | Short | Long               | Required | Args | Description                                                                                                                                              | Notes |
 |-------|--------------------|----------|------|----------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
@@ -171,14 +171,14 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
 | -     | --ordering         | n        | 1    | Ordering used in which the files are added to the archive to improve compression                                                                         |       |
 | -     | --relax-utf8       | n        | 0    | Relax utf-8 policy to also process entries without a valid utf-8 path                                                                                    | 7.    |
 
-**Logging**  
+#### Logging
 
 | Short | Long            | Required | Args | Description                                                    | Notes |
 |-------|-----------------|----------|------|----------------------------------------------------------------|-------|
 | -     | --progress-mode | n        | 1    | Which progress bars to draw                                    |       |
 | -     | --log-level     | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var) |       |
 
-**Batching**  
+#### Batching
 Options below tune the internal buffering and transaction batching. Sensible defaults should be set. Changes can 
 negatively impact tool performance by increasing the number of transactions in the database, and can use more RAM, 
 leading to worse system performance.
@@ -192,7 +192,7 @@ leading to worse system performance.
 | -     | --feed-chunk       | n        | 1    | Rows pulled from the database per feed round                         |       |
 | -     | --drain-chunk      | n        | 1    | Outcomes committed per transaction                                   |       |
 
-**Notes**
+#### Notes
 1. Path resolution: If the path is absolute, the path is taken as is. If the path is relative and `-C --directory` is not set, 
    the current process working directory is taken from the environment and used as the root for the relative paths. If
    `-C --directory` is given, relative paths are resolved with this as a root instead.
@@ -215,7 +215,7 @@ leading to worse system performance.
 
 Restore a tar-dedup archive (materialize: full copy at each original path). Aborts if extract work already exists; use `--fresh` to replace.
 
-**Archive Paths**
+#### Archive Paths
 
 The extraction has four important locations:
 1. The archive: The file that is intended to be extracted.
@@ -237,7 +237,7 @@ The archive is the only mandatory input. Everything else has defaults.
 | -     | --one-top-level     | n        | 0..1 | Extract loose members into a subdirectory under the extraction root (GNU tar `--one-top-level`). A bare `--one-top-level` uses the archive name as the subdirectory; DIR overrides it | 2.    |
 | -     | --clean-target      | n        | 0    | Remove the extraction root before extracting (only effective with `--one-top-level`)                                                                                                  |       |
 
-**Compression**
+#### Compression
 
 By default, the file extension is used to infer the compression if any. These options will override the inference.
 
@@ -248,7 +248,7 @@ By default, the file extension is used to infer the compression if any. These op
 | -J    | --xz    | n        | 0    | Filter the archive through xz (overrides extension inference)    |       |
 | -     | --zstd  | n        | 0    | Filter the archive through zstd (overrides extension inference)  |       |
 
-**Rehash**
+#### Rehash
 
 After the files are extracted, they are hashed again to check if any data corruption has taken place.
 
@@ -256,7 +256,7 @@ After the files are extracted, they are hashed again to check if any data corrup
 |-------|-------------|----------|------|-----------------------------------------------------------------|-------|
 | -     | --no-rehash | n        | 0    | Do not run the rehash (content verification) phase. Default: on |       |
 
-**Overwrite Control**
+#### Overwrite Control
 
 | Short | Long                     | Required | Args | Description                                                                                                                                                                                                        | Notes |
 |-------|--------------------------|----------|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
@@ -270,7 +270,7 @@ After the files are extracted, they are hashed again to check if any data corrup
 | -     | --remove-and-replace     | n        | 0    | On type mismatch at a path, remove the existing entry and extract the archive member. Skip by default                                                                                                              |       |
 | -     | --hard-link-grouping     | n        | 1    | Adjust how hardlinks are extracted                                                                                                                                                                                 | 3.    |
 
-**Link Tree**
+#### Link Tree
 
 | Short | Long             | Required | Args | Description                                                                                                                                      | Notes |
 |-------|------------------|----------|------|--------------------------------------------------------------------------------------------------------------------------------------------------|-------|
@@ -279,14 +279,14 @@ After the files are extracted, they are hashed again to check if any data corrup
 | -     | --absolute-links | n        | 0    | With `--link-tree`, link using absolute paths instead of paths relative to the output root                                                       |       |
 | -     | --link-source    | n        | 1    | With `--link-tree`, use DIR as the directory the canonical payloads are materialized into before linking (default: {extract-to}/.sources)        |       |
 
-**Placement**
+#### Placement
 
 | Short | Long                   | Required | Args | Description                                                                                                                                 | Notes |
 |-------|------------------------|----------|------|---------------------------------------------------------------------------------------------------------------------------------------------|-------|
 | -     | --no-reflink           | n        | 0    | Do not attempt copy-on-write (reflink) copies when placing payloads                                                                         |       |
 | -     | --create-other-entries | n        | 0    | Recreate non-regular entries (symlink, fifo, char/block device, socket). Off by default: those entries require `mknod` privileges or `root` |       |
 
-**File Attributes**
+#### File Attributes
 
 File Attributers also have on/off flags. Providing both at the same time produces an error. Default is everything off. 
 The default can be swapped to on with `--apply-all-metadata`. Then every `--no-*` override can be used to disable 
@@ -327,7 +327,7 @@ selected attributes.
 | -     | --no-same-permissions       | n        | 0    | Do not apply archived permissions (mode)                                                                                                                                                                                                                                                  |       |
 | -     | --apply-all-metadata        | n        | 0    | Apply every metadata attribute recorded in the archive (owner, stored owner/group maps, mode, transform, atime/mtime, xattrs/acls/selinux, perms). Individual `--no-*` toggles override this on a per-bit basis                                                                           |       |
 
-**Process Options**
+#### Process Options
 
 | Short | Long               | Required | Args | Description                                                                                                                                                      | Notes |
 |-------|--------------------|----------|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
@@ -342,14 +342,14 @@ selected attributes.
 | -     | --keep-stage       | n        | 0    | After success, keep the `{stem}.estage` work directory                                                                                                           |       |
 | -     | --exit-after-stage | n        | 1    | Run through STAGE then exit gracefully                                                                                                                           |       |
 
-**Logging**
+#### Logging
 
 | Short | Long            | Required | Args | Description                                                    | Notes |
 |-------|-----------------|----------|------|----------------------------------------------------------------|-------|
 | -     | --progress-mode | n        | 1    | Which progress bars to draw                                    |       |
 | -     | --log-level     | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var) |       |
 
-**Batching**  
+#### Batching
 Options below tune the internal buffering and transaction batching. Sensible defaults should be set. Changes can 
 negatively impact tool performance by increasing the number of transactions in the database, and can use more RAM, 
 leading to worse system performance.
@@ -363,7 +363,7 @@ leading to worse system performance.
 | -     | --feed-chunk       | n        | 1    | Rows pulled from the database per feed round                         |       |
 | -     | --drain-chunk      | n        | 1    | Outcomes committed per transaction                                   |       |
 
-**Sidecar**
+#### Sidecar
 
 If a file system cannot accept a given piece of metadata, the tool can store the metadata in a sidecar json sidecar file.
 By default, the name is the `{target_name}.json` with hidden `.{target_name}.json` Should the name be taken, the tool 
@@ -376,7 +376,7 @@ attempts, the tool give ups and records an error in the database.
 | -     | --no-sidecar     | n        | 0    | Alias for `--sidecar never`: never write sidecar manifests                                                                                      |       |
 | -     | --hidden-sidecar | n        | 0    | Prefix sidecar names with a leading dot (`{name}.json` → `.{name}.json`)                                                                        |       |
 
-**Filtering**
+#### Filtering
 
 When extracting, the tool allows to filter all files which were archived again. The logic is exactly the same as 
 for the archive step. Allowed files are now the ones that passed both the archive and the extract filter.
@@ -402,7 +402,7 @@ the extracted files.
 | -     | --sparsify  | n        | 0    | Attempt to punch holes while extracting and copying files                                                           |       |
 | -     | --page-size | n        | 1    | Page size in bytes: segment a file into pages of this size and search for completely empty pages for sparsification |       |
 
-**Notes**
+#### Notes
 1. **Path resolution:**
 
    If the path is absolute, the path is taken as is. If the path is relative and `-C --directory` is not set,
@@ -475,7 +475,7 @@ the extracted files.
 
 Continue incomplete work. Policy comes from the work DB; only `--jobs`, `--io-jobs` and `--exit-after-stage` may be overridden.
 
-**Options**
+#### Options
 
 | Short | Long               | Required | Args | Description                                                                                   | Notes |
 |-------|--------------------|----------|------|-----------------------------------------------------------------------------------------------|-------|
@@ -489,7 +489,7 @@ Continue incomplete work. Policy comes from the work DB; only `--jobs`, `--io-jo
 
 Show archive metadata needed to plan an extraction (catalog, policies).
 
-**Archive Target**
+#### Archive Target
 
 | Short | Long       | Required | Args | Description                                                                                                       | Notes |
 |-------|------------|----------|------|-------------------------------------------------------------------------------------------------------------------|-------|
@@ -497,7 +497,7 @@ Show archive metadata needed to plan an extraction (catalog, policies).
 | -     | --db       | n        | 1    | Read the catalog from an existing work database file directly                                                     |       |
 | -     | --work-dir | n        | 1    | Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`                                              |       |
 
-**Output**
+#### Output
 
 | Short | Long        | Required | Args | Description                                                                                                    | Notes |
 |-------|-------------|----------|------|----------------------------------------------------------------------------------------------------------------|-------|
@@ -511,7 +511,7 @@ Show archive metadata needed to plan an extraction (catalog, policies).
 
 List file-tree members (rows from the `files` table).
 
-**Archive Target**
+#### Archive Target
 
 | Short | Long       | Required | Args | Description                                                                                                       | Notes |
 |-------|------------|----------|------|-------------------------------------------------------------------------------------------------------------------|-------|
@@ -519,7 +519,7 @@ List file-tree members (rows from the `files` table).
 | -     | --db       | n        | 1    | Read the catalog from an existing work database file directly                                                     |       |
 | -     | --work-dir | n        | 1    | Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`                                              |       |
 
-**Output**
+#### Output
 
 | Short | Long        | Required | Args | Description                                                                                                    | Notes |
 |-------|-------------|----------|------|----------------------------------------------------------------------------------------------------------------|-------|
@@ -533,7 +533,7 @@ List file-tree members (rows from the `files` table).
 
 Machine-formatted (csv/json) dump of the file-tree members.
 
-**Archive Target**
+#### Archive Target
 
 | Short | Long       | Required | Args | Description                                                                                                       | Notes |
 |-------|------------|----------|------|-------------------------------------------------------------------------------------------------------------------|-------|
@@ -541,7 +541,7 @@ Machine-formatted (csv/json) dump of the file-tree members.
 | -     | --db       | n        | 1    | Read the catalog from an existing work database file directly                                                     |       |
 | -     | --work-dir | n        | 1    | Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`                                              |       |
 
-**Output**
+#### Output
 
 | Short | Long        | Required | Args | Description                                                                                                    | Notes |
 |-------|-------------|----------|------|----------------------------------------------------------------------------------------------------------------|-------|
@@ -555,7 +555,7 @@ Machine-formatted (csv/json) dump of the file-tree members.
 
 Search paths / ids across catalog tables.
 
-**Archive Target**
+#### Archive Target
 
 | Short | Long       | Required | Args | Description                                                                                                       | Notes |
 |-------|------------|----------|------|-------------------------------------------------------------------------------------------------------------------|-------|
@@ -563,7 +563,7 @@ Search paths / ids across catalog tables.
 | -     | --db       | n        | 1    | Read the catalog from an existing work database file directly                                                     |       |
 | -     | --work-dir | n        | 1    | Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`                                              |       |
 
-**Output**
+#### Output
 
 | Short | Long        | Required | Args | Description                                                                                                    | Notes |
 |-------|-------------|----------|------|----------------------------------------------------------------------------------------------------------------|-------|
@@ -577,7 +577,7 @@ Search paths / ids across catalog tables.
 
 Reset an interrupted run: re-point its stored parameters and rewind the pipeline to a consistent state. The work database is named explicitly.
 
-**Options**
+#### Options
 
 | Short | Long       | Required | Args | Description                                                                   | Notes |
 |-------|------------|----------|------|-------------------------------------------------------------------------------|-------|
@@ -591,7 +591,7 @@ archive content and the sha1 of the stored compressed catalog (xz) are recompute
 against the values recorded in the footer. Exits non-zero when no footer is present, the footer
 format is invalid, or a hash does not match.
 
-**Options**
+#### Options
 
 | Short | Long    | Required | Args | Description                                                              | Notes |
 |-------|---------|----------|------|--------------------------------------------------------------------------|-------|
