@@ -413,6 +413,14 @@ mod tests {
         if let Some(_) = world.hashed_digest(id_bad) {
             panic!("unreadable file must not get a digest");
         }
+        // `sha_error` is a terminal outcome: the odds row must still advance
+        // out of the hash phase so a later phase can sweep it (regression for
+        // the eager pipeline strangling it in `filtered`).
+        assert_eq!(
+            world.db.get_file_by_id::<StrippedRecord>(id_bad)
+                .expect("get row").expect("row").phase,
+            FilePhase::Hashed
+        );
         assert_ne!(
             world.db.get_records_by_file_id(id_bad).expect("records").len(),
             0
