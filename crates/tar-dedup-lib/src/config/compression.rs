@@ -342,8 +342,8 @@ mod tests {
             Err(Error::Config(_))
         ));
 
-        // --xz-extreme / --memlimit-compress on a non-xz filter.
-        for extra in [vec!["--xz-extreme"], vec!["--memlimit-compress", "64MiB"]] {
+        // --xz-extreme / --xz-memlimit-compress on a non-xz filter.
+        for extra in [vec!["--xz-extreme"], vec!["--xz-memlimit-compress", "64MiB"]] {
             let args = archive_args("a.tar", &extra);
             assert!(
                 matches!(
@@ -355,7 +355,7 @@ mod tests {
         }
 
         // memlimit parses to bytes on xz.
-        let args = archive_args("a.tar", &["--memlimit-compress", "64MiB"]);
+        let args = archive_args("a.tar", &["--xz-memlimit-compress", "64MiB"]);
         let s = CompressionSettings::from_archive_args(CompressionFormat::Xz, &args)
             .expect("xz memlimit accepted");
         assert_eq!(s.memlimit_compress, Some(64 * 1024 * 1024));
