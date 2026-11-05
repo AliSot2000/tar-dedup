@@ -42,3 +42,7 @@ header and `scripts/deprecated.json` for details.
 
 Pre-1.0, unstable software. Archives created before **v1.0.0** have no
 compatibility guarantees — see [Disclaimers](docs/manual.md#disclaimers).
+
+## Reason for CLA
+As I might roll this tool into a foundation or similar with everything I'm writing, I would like to avoid a lengthy 
+resolution process to get every contributor's consent. This is why I want to be the sole copyright owner. 
