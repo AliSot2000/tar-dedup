@@ -147,7 +147,7 @@ mod tests {
                 device_id: None, inode_id: None, major: None, minor: None,
             }).expect("insert");
             let id = self.db.file_id_by_abs_path(&p).expect("lookup").expect("row");
-            self.db.mark_file_phase(id, FilePhase::Unarchived).expect("phase");
+            self.db.set_file_phase(id, FilePhase::Unarchived).expect("phase");
             id
         }
     }

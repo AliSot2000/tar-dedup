@@ -372,9 +372,9 @@ pub fn write_catalog(path: &Path) -> String {
     db.set_canonical(duplicate, canonical).expect("canonical");
     db.set_file_flag(canonical, FileFlag::AppendedPath, true)
         .expect("appended");
-    db.mark_file_phase(canonical, FilePhase::Archived)
+    db.set_file_phase(canonical, FilePhase::Archived)
         .expect("phase");
-    db.mark_file_phase(duplicate, FilePhase::Archived)
+    db.set_file_phase(duplicate, FilePhase::Archived)
         .expect("phase");
 
     let member = db
@@ -463,7 +463,7 @@ pub fn add_archived_canonical(db: &Database, abs_path: &str, sha: u8, phase: Fil
     db.update_file_inspection_per_id(id, [sha; 20], 0, false).expect("digest");
     db.mark_self_canonical(id).expect("self canonical");
     db.set_file_flag(id, FileFlag::AppendedPath, true).expect("appended");
-    db.mark_file_phase(id, phase).expect("phase");
+    db.set_file_phase(id, phase).expect("phase");
     id
 }
 
@@ -513,7 +513,7 @@ pub fn build_multi_catalog(dir: &Path, n: usize) -> (ExtractConfig, Vec<String>)
     db.set_canonical(dup, last_id).expect("canonical");
     db.update_file_inspection_per_id(dup, [last_id.0 as u8; 20], 0, false)
         .expect("dupe digest");
-    db.mark_file_phase(dup, FilePhase::Archived).expect("phase");
+    db.set_file_phase(dup, FilePhase::Archived).expect("phase");
     db.checkpoint().expect("checkpoint");
     drop(db);
 

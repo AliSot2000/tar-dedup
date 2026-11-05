@@ -1360,7 +1360,7 @@ mod tests {
             self.db.mark_self_canonical(id).expect("self canonical");
             self.db.update_file_inspection_per_id(id, [sha; 20], 0, false).expect("digest");
             self.db.set_file_flag(id, FileFlag::FileExtracted, true).expect("extracted");
-            self.db.mark_file_phase(id, FilePhase::Rehashed).expect("phase");
+            self.db.set_file_phase(id, FilePhase::Rehashed).expect("phase");
             id
         }
 
@@ -1385,7 +1385,7 @@ mod tests {
             let id = self.db.file_id_by_abs_path(&path).expect("lookup").expect("row");
             seed_filter_reasons(&self.db, id);
             self.db.set_canonical(id, canonical).expect("set canonical");
-            self.db.mark_file_phase(id, FilePhase::Rehashed).expect("phase");
+            self.db.set_file_phase(id, FilePhase::Rehashed).expect("phase");
             id
         }
 
@@ -1409,7 +1409,7 @@ mod tests {
             seed_filter_reasons(&self.db, id);
             self.db.mark_self_canonical(id).expect("self canonical");
             self.db.update_file_inspection_per_id(id, [2; 20], 0, false).expect("digest");
-            self.db.mark_file_phase(id, FilePhase::Rehashed).expect("phase");
+            self.db.set_file_phase(id, FilePhase::Rehashed).expect("phase");
             id
         }
 

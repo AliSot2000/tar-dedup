@@ -115,7 +115,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             for outcome in take(&mut *results.lock().expect("stage results lock")) {
                 match outcome {
                     Ok((id, modified)) => {
-                        rt.db.mark_file_phase(id, FilePhase::Staged)?;
+                        rt.db.set_file_phase(id, FilePhase::Staged)?;
                         if modified { rt.db.set_file_flag(id, FileFlag::Modified, true)?; }
                         staged += 1;
                         rt.progress.inc_both(1);

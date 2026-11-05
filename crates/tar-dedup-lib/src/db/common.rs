@@ -499,7 +499,7 @@ pub fn global_mark_phase(conn: &Connection, phase: FilePhase) -> Result<u64> {
     Ok(res as u64)
 }
 
-pub fn mark_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
+pub fn set_file_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
     conn.execute(
         "UPDATE files SET phase = :phase WHERE id = :id",
         named_params! {

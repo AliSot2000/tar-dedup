@@ -639,7 +639,7 @@ mod tests {
             seed_filter_reasons(&self.db, id);
             self.db.mark_self_canonical(id).expect("self canonical");
             self.db.update_file_inspection_per_id(id, [7; 20], 0, false).expect("digest");
-            self.db.mark_file_phase(id, FilePhase::Rehashed).expect("phase");
+            self.db.set_file_phase(id, FilePhase::Rehashed).expect("phase");
             id
         }
 

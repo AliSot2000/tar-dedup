@@ -1,6 +1,6 @@
 use crate::db::SqlFileRow;
 use crate::db::common::generate_archive_and_extract_filter;
-use crate::db::common::mark_phase;
+use crate::db::common::set_file_phase;
 use crate::db::flags::{FileFlag, set_file_flag};
 use crate::db::types::{FileId, FilePhase};
 use crate::error::{FileStatError, Result, ToPanic};
@@ -198,15 +198,15 @@ pub fn ingest_rehash_outcome(
         match outcome {
             RehashOutcome::Match(id) => {
                 assert_eq!(1, set_file_flag(&tx, *id, FileFlag::RehashVerified, true)?);
-                mark_phase(&tx, *id, FilePhase::Rehashed)?;
+                set_file_phase(&tx, *id, FilePhase::Rehashed)?;
             }
             RehashOutcome::Mismatch(id) => {
                 assert_eq!(1, set_file_flag(&tx, *id, FileFlag::RehashMismatch, true)?);
-                mark_phase(&tx, *id, FilePhase::Rehashed)?;
+                set_file_phase(&tx, *id, FilePhase::Rehashed)?;
             }
             RehashOutcome::Errored(id, _fse) => {
                 assert_eq!(1, set_file_flag(&tx, *id, FileFlag::ErrorWhileRehashing, true)?);
-                mark_phase(&tx, *id, FilePhase::Rehashed)?;
+                set_file_phase(&tx, *id, FilePhase::Rehashed)?;
             }
         }
     }
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(count_files_to_rehash(&conn).expect("count"), 2);
         assert_eq!(count_rehashed_files(&conn).expect("done"), 0);
 
-        mark_phase(&conn, FileId(1), FilePhase::Rehashed).expect("mark");
+        set_file_phase(&conn, FileId(1), FilePhase::Rehashed).expect("mark");
 
         assert_eq!(count_files_to_rehash(&conn).expect("stable"), 2);
         assert_eq!(count_rehashed_files(&conn).expect("done"), 1);
@@ -359,7 +359,7 @@ mod tests {
         insert_row(&conn, 3, 2 * 1024 * 1024, "file", Some([3u8; 20]), Some(3), true, true);
         create_rehash_queue(&conn).expect("create queue");
         populate_rehash_queue(&conn).expect("populate queue");
-        mark_phase(&conn, FileId(2), FilePhase::Rehashed).expect("mark rehashed");
+        set_file_phase(&conn, FileId(2), FilePhase::Rehashed).expect("mark rehashed");
 
         let got = pull_pending_rehash_rows::<StrippedRecord>(&conn, 0, 100)
             .expect("pull")
@@ -416,7 +416,7 @@ mod tests {
             "UPDATE files SET phase = 'unarchived' WHERE id = 2",
             [],
         ).expect("phase unarchived");
-        mark_phase(&conn, FileId(3), FilePhase::Rehashed).expect("already rehashed");
+        set_file_phase(&conn, FileId(3), FilePhase::Rehashed).expect("already rehashed");
 
         let n = skip_rehash(&conn).expect("skip");
 

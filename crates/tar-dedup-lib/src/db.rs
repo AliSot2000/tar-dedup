@@ -196,8 +196,8 @@ impl Database {
         common::global_mark_phase(&self.conn(), phase)
     }
 
-    pub fn mark_file_phase(&self, file_id: FileId, phase: FilePhase) -> Result<()> {
-        common::mark_phase(&*self.conn(), file_id, phase)
+    pub fn set_file_phase(&self, file_id: FileId, phase: FilePhase) -> Result<()> {
+        common::set_file_phase(&*self.conn(), file_id, phase)
     }
 
     pub fn resolve_numeric_ids(&self, recorder: &mut Recorder) -> Result<()> {

@@ -354,7 +354,7 @@ mod tests {
             self.db.set_file_flag(id, FileFlag::FileExtracted, true).expect("extracted flag");
             self.db.update_file_inspection_per_id(id, sha1_of(payload), 0, false)
                 .expect("set sha1");
-            self.db.mark_file_phase(id, FilePhase::ExtractFiltered).expect("phase");
+            self.db.set_file_phase(id, FilePhase::ExtractFiltered).expect("phase");
             self.db.with_transaction(|conn| {
                 conn.execute(
                     "UPDATE files SET include_reason_archive = -1, exclude_reason_archive = 0, \

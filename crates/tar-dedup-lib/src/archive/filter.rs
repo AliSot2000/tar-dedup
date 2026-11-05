@@ -72,7 +72,7 @@ mod tests {
     fn seed_hashed(world: &TestWorld, names: &[&str]) {
         for (i, name) in names.iter().enumerate() {
             let id = world.add_file(name, &[i as u8]);
-            world.db.mark_file_phase(id, FilePhase::Hashed).expect("hashed");
+            world.db.set_file_phase(id, FilePhase::Hashed).expect("hashed");
         }
     }
 

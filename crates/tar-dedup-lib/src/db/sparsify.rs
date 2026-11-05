@@ -1,6 +1,6 @@
 use rusqlite::{Connection, named_params};
 
-use crate::db::common::{SqlFileRow, generate_archive_filter, mark_phase};
+use crate::db::common::{SqlFileRow, generate_archive_filter, set_file_phase};
 use crate::db::flags::{FileFlag, set_file_flag};
 use crate::db::types::{FileId, FilePhase};
 use crate::error::{Error, Result, ToPanic};
@@ -205,14 +205,14 @@ pub fn ingest_sparsify_outcome(
         match &outcome.err {
             None => {
                 assert_eq!(1, set_file_flag(&tx, outcome.id, FileFlag::HasSparse, true)?);
-                mark_phase(&tx, outcome.id, FilePhase::Sparsified)?;
+                set_file_phase(&tx, outcome.id, FilePhase::Sparsified)?;
                 resolved += 1;
             }
             Some(e) => match e {
                 Error::FileStat(_) => {
                     assert_eq!(1, set_file_flag(
                         &tx, outcome.id, FileFlag::ErrorWhileSparsify, true)?);
-                    mark_phase(&tx, outcome.id, FilePhase::Sparsified)?;
+                    set_file_phase(&tx, outcome.id, FilePhase::Sparsified)?;
                     resolved += 1;
                 }
                 Error::Interrupted => (),

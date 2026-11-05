@@ -898,7 +898,7 @@ mod tests {
         seed_filter_reasons(&snap, s1);
         snap.update_file_inspection_per_id(s1, [7u8; 20], 0, false).expect("digest");
         snap.mark_self_canonical(s1).expect("self canonical");
-        snap.mark_file_phase(s1, FilePhase::Archived).expect("phase");
+        snap.set_file_phase(s1, FilePhase::Archived).expect("phase");
         snap.checkpoint().expect("checkpoint");
         drop(snap);
 
