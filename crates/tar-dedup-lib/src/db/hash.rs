@@ -417,7 +417,9 @@ mod tests {
         if let Some(_) = row_sha1(&conn, 1) {
             panic!("FileStat error must not store a digest");
         }
-        assert_eq!(row_phase(&conn, 1), "inventoried");
+        // `sha_error` is a terminal outcome: it must still leave the hash phase
+        // so dedup can sweep it instead of stranding the row in `filtered`.
+        assert_eq!(row_phase(&conn, 1), "hashed");
     }
 
     #[test]
