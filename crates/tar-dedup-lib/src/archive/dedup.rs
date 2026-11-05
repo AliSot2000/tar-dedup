@@ -34,6 +34,12 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // The bulk skips above left the phase; credit the global for each of them.
     rt.progress.inc_global(ineligible);
 
+    // Zero-byte files share one content digest, but `dedup_progress` rejects
+    // `size = 0`, so the regular FSM would strand the whole group (a panic on
+    // `sanity_check_flags`). Promote it up-front with a single canonical.
+    let empty = rt.db.promote_empty_files_to_dedup(eager_filter)?;
+    rt.progress.inc_global(empty);
+
     let prev_phase = if eager_filter {
         FilePhase::Hashed
     } else {

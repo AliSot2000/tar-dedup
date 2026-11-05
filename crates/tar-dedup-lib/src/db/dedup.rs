@@ -596,6 +596,29 @@ pub fn promote_ineligible_entries_to_dedup(conn: &Connection, eager_filter: bool
     Ok(n as u64)
 }
 
+/// Zero-byte files share one content digest (the empty sha1), forming a single
+/// `(sha1, size = 0)` group — which `dedup_progress` cannot hold because of its
+/// `CHECK(size > 0)`. Promote the whole group up-front with `MIN(id)` as the
+/// one canonical; a lone empty file collapses onto itself. Idempotent via the
+/// `phase = <prev>` guard.
+pub fn promote_empty_files_to_dedup(conn: &Connection, eager_filter: bool) -> Result<u64> {
+    let n = conn.execute(
+        &format!(
+            "UPDATE files SET phase = 'deduped', canonical_id = (
+                 SELECT MIN(id) FROM files AS g
+                 WHERE g.ftype = 'file' AND g.sha1 IS NOT NULL AND g.size = 0
+                   AND g.phase = '{}'
+             )
+             WHERE phase = '{}'
+               AND ftype = 'file' AND sha1 IS NOT NULL AND size = 0",
+            prev_phase(eager_filter),
+            prev_phase(eager_filter)
+        ),
+        [],
+    ).to_panic()?;
+    Ok(n as u64)
+}
+
 /// Unique `(sha1, size)` content: no compare round. A unique-content file is
 /// its own canonical.
 pub fn promote_singleton_filtered_to_deduped(conn: &Connection, eager_filter: bool) -> Result<u64> {

@@ -326,6 +326,10 @@ impl Database {
         dedup::promote_ineligible_entries_to_dedup(&*self.conn(), eager_filter)
     }
 
+    pub fn promote_empty_files_to_dedup(&self, eager_filter: bool) -> Result<u64> {
+        dedup::promote_empty_files_to_dedup(&*self.conn(), eager_filter)
+    }
+
     /// See [`dedup::promote_hash_mode_to_dedup`].
     pub fn promote_hash_mode_to_dedup(&self, eager_filter: bool) -> Result<u64> {
         dedup::promote_hash_mode_to_dedup(&mut self.conn_mut(), eager_filter)
