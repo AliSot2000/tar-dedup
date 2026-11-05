@@ -1391,6 +1391,54 @@ mod tests {
     }
 
     #[test]
+    fn promote_empty_files_to_dedup_single_canonical_per_group() {
+        let (_dir, conn) = open_db();
+        // Three-member empty group + a lone empty singleton.
+        seed_file(&conn, 1, "/tmp/e1.bin", 0xda, 0);
+        seed_file(&conn, 2, "/tmp/e2.bin", 0xda, 0);
+        seed_file(&conn, 3, "/tmp/e3.bin", 0xda, 0);
+        seed_file(&conn, 4, "/tmp/e4.bin", 0xda, 0);
+        // Non-empty rows (distinct + duplicate-content) must stay in the crop.
+        seed_file(&conn, 5, "/tmp/real.bin", 1, 10);
+        seed_file(&conn, 6, "/tmp/real2.bin", 1, 10);
+        seed_file(&conn, 7, "/tmp/other.bin", 2, 20);
+
+        assert_eq!(promote_empty_files_to_dedup(&conn, false).expect("promote"), 4);
+
+        assert_eq!(row_phase(&conn, 1), "deduped");
+        assert_eq!(row_canonical(&conn, 1), Some(1));
+        assert_eq!(row_canonical(&conn, 2), Some(1));
+        assert_eq!(row_canonical(&conn, 3), Some(1));
+        assert_eq!(row_canonical(&conn, 4), Some(1));
+        assert_eq!(row_phase(&conn, 5), "filtered");
+        assert_eq!(row_phase(&conn, 6), "filtered");
+        assert_eq!(row_phase(&conn, 7), "filtered");
+
+        // Idempotent: a second pass promotes nothing.
+        assert_eq!(promote_empty_files_to_dedup(&conn, false).expect("promote again"), 0);
+    }
+
+    #[test]
+    fn promote_empty_files_to_dedup_honors_prev_phase() {
+        let (_dir, conn) = open_db();
+        seed_file(&conn, 1, "/tmp/e1.bin", 0xda, 0);
+        seed_file(&conn, 2, "/tmp/e2.bin", 0xda, 0);
+        set_phase(&conn, 1, "hashed");
+        set_phase(&conn, 2, "hashed");
+
+        // Non-eager targets `filtered`; the `hashed` rows must stay put.
+        assert_eq!(promote_empty_files_to_dedup(&conn, false).expect("promote"), 0);
+        assert_eq!(row_phase(&conn, 1), "hashed");
+        assert_eq!(row_phase(&conn, 2), "hashed");
+
+        // Eager targets `hashed` and leaves alone.
+        assert_eq!(promote_empty_files_to_dedup(&conn, true).expect("promote eager"), 2);
+        assert_eq!(row_phase(&conn, 1), "deduped");
+        assert_eq!(row_phase(&conn, 2), "deduped");
+        assert_eq!(row_canonical(&conn, 1), Some(1));
+    }
+
+    #[test]
     fn promote_non_ineligible_and_singleton() {
         let (_dir, conn) = open_db();
         seed_file(&conn, 1, "/tmp/single.bin", 1, 10);

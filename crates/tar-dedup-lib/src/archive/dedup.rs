@@ -1273,6 +1273,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn run_empty_group_promotes_no_panic() {
+        // Zero-byte files share one `(empty sha1, size 0)` content group, which
+        // `dedup_progress` cannot hold (its `CHECK(size > 0)`). The up-front
+        // empty promote must elect a single canonical and drain the phase —
+        // the live panic regression (`dedup finished with N file(s) still in
+        // hashed`) for the eager pipeline.
+        let mut world = test_world();
+        world.config.filter.eager_filter = true;
+        let id_e1 = world.add_file("e1.bin", &[]);
+        let id_e2 = world.add_file("e2.bin", &[]);
+        let id_e3 = world.add_file("e3.bin", &[]);
+        // A real duplicate pair keeps the FSM busy next to the empties.
+        let payload = pattern(512 * 1024, 5);
+        let id_d1 = world.add_file("d1.bin", &payload);
+        let id_d2 = world.add_file("d2.bin", &payload);
+        world.db.apply_no_filter_archive().expect("filter");
+        seed_rows(&world, Vec::from([
+            (id_e1, 0xda), (id_e2, 0xda), (id_e3, 0xda),
+            (id_d1, 7), (id_d2, 7),
+        ]));
+        world.seed_eager();
+
+        run(&world.rt()).expect("run");
+
+        for id in [id_e1, id_e2, id_e3, id_d1, id_d2] {
+            assert_eq!(world.phase(id), FilePhase::Deduped);
+        }
+        assert_eq!(world.canonical_of(id_e1), Some(id_e1));
+        assert_eq!(world.canonical_of(id_e2), Some(id_e1));
+        assert_eq!(world.canonical_of(id_e3), Some(id_e1));
+        assert_eq!(world.canonical_of(id_d1), Some(id_d1));
+        assert_eq!(world.canonical_of(id_d2), Some(id_d1));
+        assert!(world.db.count_files_in_phase(FilePhase::Hashed).expect("leftover") == 0);
+    }
+
     // =========================================================================
     // Dedup-mode corpus: the same rows are seeded for every `--dedup-mode`, so
     // the three strategies can be compared 1:1. Distinct `(sha1, size)` keys
