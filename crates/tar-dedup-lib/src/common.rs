@@ -194,7 +194,13 @@ pub fn at_least_one_running(threads: &Vec<&JoinHandle<()>>) -> bool {
 ///   must be a no-op (full channel, exhausted feed).
 /// - [`tick`]:   per-iteration phase hook (the dedup FSM); `false` stops the
 ///   feed. Runs **after** the drain so applied outcomes are visible to it.
-/// - [`apply`]:  commit a batch of outcomes (ingest + recorder + progress).
+/// - [`apply`]:  commit a batch of outcomes (ingest + recorder).
+/// - [`on_dequeue`]: observe the number of outcomes pulled off the result
+///   channel in a drain pass, **before** they are `apply`-committed. Advances
+///   progress early: the batch phases only `apply` every `drain_chunk`, so
+///   counting inside `apply` makes the bar stall for a whole batch. Each phase
+///   wires this to its own `inc_*`; `apply` then skips progress. Aggregate is
+///   exact — every dequeued outcome is eventually applied.
 ///
 /// Returns the number of committed outcomes.
 ///
@@ -217,7 +223,8 @@ pub fn send_receive_loop<W, O>(
     mut pull:    impl FnMut() -> Result<Vec<W>>,
     mut on_sent: impl FnMut(&[W]) -> Result<()>,
     mut tick:    impl FnMut() -> Result<bool>,
-    mut apply:   impl FnMut(&mut Vec<O>) -> Result<()>)
+    mut apply:   impl FnMut(&mut Vec<O>) -> Result<()>,
+    mut on_dequeue: impl FnMut(u64))
     -> Result<u64>
 where
     W: Clone + Send,
@@ -240,6 +247,7 @@ where
         dequeue: &mut u64,
         exit: &mut u64| -> Result<()> {
         // Drain finished outcomes into a small batch.
+        let dequeue_before = *dequeue;
         while pending_out.len() < drain_chunk {
             match recv.try_recv() {
                 Ok(Some(outcome)) => {
@@ -250,6 +258,12 @@ where
                 Ok(None) => *exit += 1,
                 Err(_) => break,
             }
+        }
+        // Early progress: count this pass's outcomes before the `apply` commit
+        // (batch phases otherwise stall the bar for a whole `drain_chunk`).
+        let dequeued = *dequeue - dequeue_before;
+        if dequeued > 0 {
+            on_dequeue(dequeued);
         }
         if pending_out.len() >= drain_chunk || drain_override {
             // INFO: Apply sets takes from pending_out s.t. is_empty() is true afterwards.
