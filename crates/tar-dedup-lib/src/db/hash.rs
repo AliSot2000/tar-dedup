@@ -1,7 +1,7 @@
 use crate::db::SqlFileRow;
-use crate::db::common::generate_archive_filter;
+use crate::db::common::{generate_archive_filter, set_file_phase};
 use crate::db::flags::{FileFlag, set_file_flag};
-use crate::db::types::FileId;
+use crate::db::types::{FileId, FilePhase};
 use crate::error::{Error, Result, ToPanic};
 use rusqlite::{Connection, named_params};
 
@@ -266,6 +266,7 @@ pub fn ingest_hash_outcome(
                     Error::Interrupted => (),
                     Error::FileStat(_) => {
                         let _ = set_file_flag(&tx, he.id, FileFlag::ErrorWhileHash, true)?;
+                        set_file_phase(&tx, he.id, FilePhase::Hashed)?;
                     },
                     other => panic!(
                         "Invariant Error. Only FileStatError and Interrupted expected. Got: {other}"
