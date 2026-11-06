@@ -249,40 +249,35 @@ fn count_sparsify_flag_violations(conn: &Connection, min_pages: u64) -> Result<u
     Ok(count as u64)
 }
 
-/// A7 — `canonical_id = id ⟹ AppendedPath XOR ErrorWhileArchive`. Violation =
-/// the two flags agree.
+/// A7 — `canonical_id = id ⟹ payload-present XOR ErrorWhileArchive`. Payload
+/// present = `session_id IS NOT NULL` (the old `AppendedPath`). Violation = the
+/// two agree.
 fn count_append_flag_violations(conn: &Connection) -> Result<u64> {
-    let app = FileFlag::AppendedPath.mask_i64();
     let err = FileFlag::ErrorWhileArchive.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
          WHERE canonical_id = id
            AND (
-                ((flags & :app) != 0 AND (flags & :err) != 0)
-             OR ((flags & :app) = 0 AND (flags & :err) = 0)
+                (session_id IS NOT NULL AND (flags & :err) != 0)
+             OR (session_id IS NULL AND (flags & :err) = 0)
            )",
-        named_params! {
-            ":app": app,
-            ":err": err,
-        },
+        named_params! { ":err": err },
         |r| r.get("count")).to_panic()?;
     Ok(count as u64)
 }
 
-/// E1 — canonical `AppendedPath ⟹ FileExtracted OR ErrorWhileExtracting`.
+/// E1 — canonical `session_id IS NOT NULL ⟹ FileExtracted OR ErrorWhileExtracting`.
 /// `count_missing_payloads` minus the rows tolerated via `ErrorWhileExtracting`.
 fn count_e1_payload_missing(conn: &Connection) -> Result<u64> {
-    let appended = FileFlag::AppendedPath.mask_i64();
     let extracted = FileFlag::FileExtracted.mask_i64();
     let extracting_err = FileFlag::ErrorWhileExtracting.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
          WHERE canonical_id = id
-           AND (flags & :appended) != 0
+           AND session_id IS NOT NULL
            AND (flags & :extracted) = 0
            AND (flags & :extracting_err) = 0",
         named_params! {
-            ":appended": appended,
             ":extracted": extracted,
             ":extracting_err": extracting_err,
         },
@@ -290,19 +285,17 @@ fn count_e1_payload_missing(conn: &Connection) -> Result<u64> {
     Ok(count as u64)
 }
 
-/// E2 — canonical `FileExtracted OR ErrorWhileExtracting ⟹ AppendedPath`
-/// (stray cache payloads / truncation salvage).
+/// E2 — canonical `FileExtracted OR ErrorWhileExtracting ⟹ payload present`
+/// (`session_id IS NOT NULL`; stray cache payloads / truncation salvage).
 fn count_e2_stray_extracted(conn: &Connection) -> Result<u64> {
-    let appended = FileFlag::AppendedPath.mask_i64();
     let extracted = FileFlag::FileExtracted.mask_i64();
     let extracting_err = FileFlag::ErrorWhileExtracting.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
          WHERE canonical_id = id
            AND ((flags & :extracted) != 0 OR (flags & :extracting_err) != 0)
-           AND (flags & :appended) = 0",
+           AND session_id IS NULL",
         named_params! {
-            ":appended": appended,
             ":extracted": extracted,
             ":extracting_err": extracting_err,
         },
@@ -577,7 +570,7 @@ fn check_archive_battery(conn: &Connection, gate: &ArchiveGate, phase: PipelineP
              count_sparsify_flag_violations(conn, gate.min_pages)?);
     }
     if phase.index() >= PipelinePhase::Archive.index() {
-        done("A7 canonical ⟹ AppendedPath XOR ErrorWhileArchive",
+        done("A7 canonical ⟹ payload-present XOR ErrorWhileArchive",
              count_append_flag_violations(conn)?);
         done("A8 count_in_phase(Staged)", count_files_entries_in_phase(conn, FilePhase::Staged)?);
     }
@@ -671,9 +664,9 @@ pub fn check_after_extract_phase(conn: &Connection, config: &ExtractConfig,
             p()
         }
     };
-    note("E1 AppendedPath ⟹ FileExtracted OR ErrorWhileExtracting",
+    note("E1 payload-present ⟹ FileExtracted OR ErrorWhileExtracting",
          count_e1_payload_missing(conn)?);
-    note("E2 FileExtracted OR ErrorWhileExtracting ⟹ AppendedPath",
+    note("E2 FileExtracted OR ErrorWhileExtracting ⟹ payload-present",
          count_e2_stray_extracted(conn)?);
     done("E3 count_in_phase(Archived)", count_files_entries_in_phase(conn, FilePhase::Archived)?);
     if phase.index() >= ExtractPipelinePhase::Rehash.index() && config.rehash {
@@ -729,6 +722,13 @@ mod tests {
                 [],
             ).expect("seed filter reasons");
         }
+        // A synthetic archived session (id 1) so tests can set `files.session_id`
+        // without tripping the FK.
+        conn.execute(
+            "INSERT OR IGNORE INTO archive_sessions (id, archive_offset, started_at, finalized) \
+             VALUES (1, 0, '2026-01-01T00:00:00Z', 1)",
+            [],
+        ).expect("seed session");
         (dir, conn)
     }
 
@@ -858,49 +858,58 @@ mod tests {
     #[test]
     fn a7_append_xor() {
         let (_dir, conn) = open_db();
-        file_row(&conn, 1, "/f1", "file", "archived", Some(&[1; 20]), Some(1), 0,
-                 m(FileFlag::AppendedPath));
+        // payload present (session 1), no error
+        file_row(&conn, 1, "/f1", "file", "archived", Some(&[1; 20]), Some(1), 0, 0);
+        conn.execute("UPDATE files SET session_id = 1 WHERE id = 1", []).unwrap();
+        // no payload, error
         file_row(&conn, 2, "/f2", "file", "archived", Some(&[2; 20]), Some(2), 0,
                  m(FileFlag::ErrorWhileArchive));
         assert_eq!(count_append_flag_violations(&conn).unwrap(), 0);
 
-        // neither flag
+        // neither payload nor error
         file_row(&conn, 3, "/f3", "file", "archived", Some(&[3; 20]), Some(3), 0, 0);
         assert_eq!(count_append_flag_violations(&conn).unwrap(), 1);
-        // both
+        // payload AND error
         file_row(&conn, 4, "/f4", "file", "archived", Some(&[4; 20]), Some(4), 0,
-                 m(FileFlag::AppendedPath) | m(FileFlag::ErrorWhileArchive));
+                 m(FileFlag::ErrorWhileArchive));
+        conn.execute("UPDATE files SET session_id = 1 WHERE id = 4", []).unwrap();
         assert_eq!(count_append_flag_violations(&conn).unwrap(), 2);
-        // duplicate (canonical != id) with an append flag is out of scope
-        file_row(&conn, 5, "/f5", "file", "archived", Some(&[5; 20]), Some(1), 0,
-                 m(FileFlag::AppendedPath));
+        // duplicate (canonical != id) with a payload is out of scope
+        file_row(&conn, 5, "/f5", "file", "archived", Some(&[5; 20]), Some(1), 0, 0);
+        conn.execute("UPDATE files SET session_id = 1 WHERE id = 5", []).unwrap();
         assert_eq!(count_append_flag_violations(&conn).unwrap(), 2);
     }
 
     #[test]
     fn e1_payload_missing() {
         let (_dir, conn) = open_db();
+        // payload present + extracted
         file_row(&conn, 1, "/f1", "file", "unarchived", Some(&[1; 20]), Some(1), 0,
-                 m(FileFlag::AppendedPath) | m(FileFlag::FileExtracted));
+                 m(FileFlag::FileExtracted));
+        conn.execute("UPDATE files SET session_id = 1 WHERE id = 1", []).unwrap();
+        // payload present + tolerated extract error
         file_row(&conn, 2, "/f2", "file", "unarchived", Some(&[2; 20]), Some(2), 0,
-                 m(FileFlag::AppendedPath) | m(FileFlag::ErrorWhileExtracting));
+                 m(FileFlag::ErrorWhileExtracting));
+        conn.execute("UPDATE files SET session_id = 1 WHERE id = 2", []).unwrap();
         assert_eq!(count_e1_payload_missing(&conn).unwrap(), 0);
 
-        // missing payload, not tolerated
-        file_row(&conn, 3, "/f3", "file", "archived", Some(&[3; 20]), Some(3), 0,
-                 m(FileFlag::AppendedPath));
+        // payload present but no extract confirmation
+        file_row(&conn, 3, "/f3", "file", "archived", Some(&[3; 20]), Some(3), 0, 0);
+        conn.execute("UPDATE files SET session_id = 1 WHERE id = 3", []).unwrap();
         assert_eq!(count_e1_payload_missing(&conn).unwrap(), 1);
-        // duplicate with AppendedPath is out of scope
-        file_row(&conn, 4, "/f4", "file", "archived", Some(&[4; 20]), Some(1), 0,
-                 m(FileFlag::AppendedPath));
+        // duplicate (canonical != id) with a payload is out of scope
+        file_row(&conn, 4, "/f4", "file", "archived", Some(&[4; 20]), Some(1), 0, 0);
+        conn.execute("UPDATE files SET session_id = 1 WHERE id = 4", []).unwrap();
         assert_eq!(count_e1_payload_missing(&conn).unwrap(), 1);
     }
 
     #[test]
     fn e2_stray_extracted() {
         let (_dir, conn) = open_db();
+        // payload present + extracted -> not stray
         file_row(&conn, 1, "/f1", "file", "unarchived", Some(&[1; 20]), Some(1), 0,
-                 m(FileFlag::AppendedPath) | m(FileFlag::FileExtracted));
+                 m(FileFlag::FileExtracted));
+        conn.execute("UPDATE files SET session_id = 1 WHERE id = 1", []).unwrap();
         assert_eq!(count_e2_stray_extracted(&conn).unwrap(), 0);
 
         file_row(&conn, 2, "/f2", "file", "unarchived", Some(&[2; 20]), Some(2), 0,
@@ -1130,7 +1139,7 @@ mod tests {
         // an elected row without a rehash verdict trips E4 (archive battery still passes)
         let (_dir2, conn2) = open_db();
         file_row(&conn2, 1, "/f1", "file", "rehashed", Some(&[1; 20]), Some(1), 0,
-                 m(FileFlag::FileExtracted) | m(FileFlag::AppendedPath));
+                 m(FileFlag::FileExtracted));
         assert!(count_rehash_verdict_violations(&conn2).unwrap() == 1);
         let res = catch_unwind(AssertUnwindSafe(|| {
             check_after_extract_phase(&conn2, &config, ExtractPipelinePhase::Rehash, None)
