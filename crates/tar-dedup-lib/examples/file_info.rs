@@ -48,4 +48,10 @@ fn main(){
 
         println!("File Name: {file_name:10} File Type casting: file: {is_file}, dir: {is_dir}, is_sym: {is_symlink}, block device: {is_blockdev}, char device: {is_chardev}, fifo: {is_fifo}, socket: {is_socket}, Permissions: {:#0b}", metadata.mode() & 0o7777);
     }
+
+    let res = tar_dedup_lib::db::content_id::parse_content_id("wrquiNY2TYeP1n53jGpdgwatSrA.DwAAAAAAAAA.exYAAAAAAAA");
+    match res {
+        Ok((a, b, c, d)) => println!("Sha {a:?}, file size: {b}, id: {}, ext: {d}", c.0),
+        Err(e) => println!("Error: {e}"),
+    }
 }
