@@ -535,7 +535,7 @@ mod tests {
             false,
         ).expect("open xz writer");
         writer.append_path(&in_file, "payload.bin", |_| {}).expect("append");
-        writer.finalize_archive().expect("finalize xz stream");
+        writer.finalize(true).expect("finalize xz stream");
 
         let catalog = dir.path().join("catalog.sqlite");
         crate::test_support::write_catalog(&catalog);
