@@ -499,6 +499,8 @@ pub fn global_mark_phase(conn: &Connection, phase: FilePhase) -> Result<u64> {
     Ok(res as u64)
 }
 
+// TODO change return type : returns `()` where archive callers
+// previously got a `u64` success signal from `promote_to_archived`.
 pub fn set_file_phase(conn: &Connection, file_id: FileId, phase: FilePhase) -> Result<()> {
     conn.execute(
         "UPDATE files SET phase = :phase WHERE id = :id",
