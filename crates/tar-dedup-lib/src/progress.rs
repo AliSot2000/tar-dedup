@@ -11,9 +11,13 @@ use tracing::Level;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::{FilterExt, LevelFilter, filter_fn};
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry;
+
+use crate::cli::LogLevel;
 
 
 /// Number of element-iterating phases in the archive pipeline (Cleanup-style
