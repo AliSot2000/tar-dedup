@@ -85,6 +85,9 @@ CREATE TABLE IF NOT EXISTS files (
     sparse_count   INTEGER DEFAULT 0,
     canonical_id   INTEGER REFERENCES files(id),
     phase          TEXT NOT NULL DEFAULT 'inventoried',
+    -- The archive session this row's payload was appended in (NULL = not yet
+    -- appended in a finalized/non-truncated session). Replaces `AppendedPath`.
+    session_id     INTEGER REFERENCES archive_sessions(id),
     flags          INTEGER NOT NULL DEFAULT 0
 );
 
