@@ -267,17 +267,16 @@ pub fn apply_snapshot_promote_unarchived(
     Ok(promoted as u64)
 }
 
-/// Canonical rows with `AppendedPath` but without `FileExtracted`.
+/// Canonical rows whose payload is in the archive (`session_id IS NOT NULL`) but
+/// without `FileExtracted`.
 pub fn count_missing_payloads(conn: &Connection) -> Result<u64> {
-    let appended = FileFlag::AppendedPath.mask_i64();
     let extracted = FileFlag::FileExtracted.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
          WHERE canonical_id = id
-           AND (flags & :appended) != 0
+           AND session_id IS NOT NULL
            AND (flags & :extracted) = 0",
         named_params! {
-            ":appended": appended,
             ":extracted": extracted,
         },
         |row| row.get("count"),
@@ -288,12 +287,11 @@ pub fn count_missing_payloads(conn: &Connection) -> Result<u64> {
 /// Encoded payloads: self-canonical rows that were appended to the archive. Each
 /// is exactly one tar member in the stream, so this is the scan-phase bar total.
 pub fn count_encoded_payloads(conn: &Connection) -> Result<u64> {
-    let appended = FileFlag::AppendedPath.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM files
          WHERE canonical_id = id
-           AND (flags & :appended) != 0",
-        named_params! { ":appended": appended },
+           AND session_id IS NOT NULL",
+        [],
         |row| row.get("count"),
     ).to_panic()?;
     Ok(count as u64)
@@ -317,12 +315,11 @@ pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool
     let res = conn.query_row(&format!(
         "SELECT COUNT(*) AS count
         FROM files
-        WHERE flags & :archived
+        WHERE session_id IS NOT NULL
             AND ftype = 'file'
             AND {filter_cols}
             AND canonical_id = :id"),
         named_params! {
-            ":archived": FileFlag::AppendedPath.mask_i64(),
             ":id": id.0
         },
         |row| row.get::<_, i64>("count")
