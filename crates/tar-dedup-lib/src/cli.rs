@@ -1359,4 +1359,40 @@ mod tests {
         let Command::Extract(a) = dir.command else { panic!("expected extract") };
         assert_eq!(a.one_top_level, Some(Some(PathBuf::from("my"))));
     }
+
+    #[test]
+    fn log_format_defaults_short_and_parses_values() {
+        // Default preset is Short; `--log-time` / per-axis toggles parse clean.
+        let default = Cli::try_parse_from(["tar-dedup", "archive", "-f", "x.tar"])
+            .expect("parse default");
+        assert_eq!(default.log_format, LogFormat::Short);
+        assert_eq!(default.log_level, None);
+        assert_eq!(default.log_time, None);
+        assert!(!default.log_short_time && !default.log_long_time
+            && !default.log_no_target && !default.log_target);
+
+        let verbose = Cli::try_parse_from([
+            "tar-dedup", "archive", "-f", "x.tar", "--log-format", "verbose",
+        ]).expect("parse short/verbose");
+        assert_eq!(verbose.log_format, LogFormat::Verbose);
+
+        let time = Cli::try_parse_from([
+            "tar-dedup", "archive", "-f", "x.tar",
+            "--log-format", "short", "--log-time", "%H:%M:%S",
+        ]).expect("parse log-time");
+        assert_eq!(time.log_format, LogFormat::Short);
+        assert_eq!(time.log_time.as_deref(), Some("%H:%M:%S"));
+
+        let toggles = Cli::try_parse_from([
+            "tar-dedup", "archive", "-f", "x.tar",
+            "--log-short-time", "--log-target",
+        ]).expect("parse toggles");
+        assert!(toggles.log_short_time);
+        assert!(toggles.log_target);
+
+        let bad = Cli::try_parse_from([
+            "tar-dedup", "archive", "-f", "x.tar", "--log-format", "bogus",
+        ]);
+        assert!(bad.is_err(), "unknown LogFormat value must be rejected");
+    }
 }
