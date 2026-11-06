@@ -222,9 +222,11 @@ fn run_inner(
     };
     let footer_this_pass = !resume_db && footer;
 
-    // Verify the integrity of the archive by the footer sha, if the sha is present
-    if footer_this_pass {
-        match verify_archive_integrity(&rt.config.paths.archive_path) {
+    // Only perform check if
+    if footer_this_pass && rt.config.scan.verify_archive {
+        rt.pb.set_message("verifying archive");
+        match verify_archive_integrity(&rt.config.paths.archive_path, rt.shutdown, Some(&rt.pb)) {
+            Err(e @ Error::Interrupted) => return Err(e),
             Ok(true) => (),
             Ok(false) => {
                 let msg = format!(
@@ -250,6 +252,7 @@ fn run_inner(
                 }
             }
         }
+        rt.pb.set_message("extracting");
     }
 
     rt.db = if resume_db {
