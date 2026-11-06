@@ -358,8 +358,10 @@ fn end_session(
                 match archive_footer::write_footer(
                     &rt.config.paths.archive_path,
                     &rt.config.paths.db_path(),
+                    rt.shutdown,
                     Some(&hash_bar)) {
                     Ok(()) => (),
+                    Err(e @ Error::Interrupted) => return Err(e),
                     Err(e) => {
                         recorder.record_session(
                             ERROR_PHASE,
