@@ -33,6 +33,18 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // Crash / force leftover: truncate incomplete stream C, keep finished A.B.
     recover_incomplete_session(rt, &mut recorder)?;
 
+    // Handle writing footer in case compression stream is finished and footer interrupted during
+    // hash.
+    if rt.config.pipeline.write_archive_footer
+        && !archive_footer::has_valid_footer(&rt.config.paths.archive_path)
+        && rt.db.has_finalized_archive_session()? {
+
+        tracing::info!("archive finalized but footer missing; completing the trailer");
+        run_footer_one_shot(rt)?;
+        rt.db.drop_archive_queue()?;
+        return Ok(());
+    }
+
     let archive_offset = archive_file_len(&rt.config.paths.archive_path);
     check_archive_bytes_out(rt.db, archive_offset)?;
 
