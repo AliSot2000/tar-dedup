@@ -17,6 +17,22 @@
       contract)
 - [ ] correct error variant for the issues when we fail in the extract stage
 
+## Pre 1.0 Release fixes
+- [X] Bug for files with 0 bytes size
+- [X] Continuous progress during send_recv_loop
+- [ ] Freeze progress while no archive is consumed. 
+
+## Refactor:
+- [X] Drop unused db functions
+- [ ] Degrate ExtractRuntimeState - ArchiveRuntimeState what is the snapshot doing???
+- [ ] Restructure db.rs
+- [ ] Batched rename / transaction
+- [ ] Visibility of functions.
+
+---
+
+# Done or discarded!!!
+
 # NOW TODO
 - [X] Placement Conflict Handling
 - [X] Mode parsing
@@ -66,16 +82,9 @@
 - [X] finish testing for [permissions]
 - [ ] fix flush / try_flush
 - [X] finish the readme
-- [ ] publish to crates.io
-- [ ] publish to gh releases
+- [X] publish to crates.io
+- [X] publish to gh releases
 - [ ] ~~publish to flatpak~~
-
-## Strip
-- [X] Drop unused db functions
-- [ ] Degrate ExtractRuntimeState - ArchiveRuntimeState what is the snapshot doing??? 
-- [ ] Restructure db.rs
-- [ ] Batched rename / transaction
-- [ ] Visibility of functions.
 
 ## General:
 - [X] Testing
@@ -131,23 +140,23 @@ Should be done?
 - ~~[ ] Finish shell-out use plain for that.~~
 
 ### Scan/Extract
-- [ ] Potentially data driven file extraction (DDFE)
+- ~~[ ] Potentially data driven file extraction (DDFE)~~
 
 ### Hash
 - [X] Hash file on extraction
-- [ ] Hash eager (DDFE)
+- ~~[ ] Hash eager (DDFE)~~
 
 ### Move / Place
-- [ ] Move eager (DDFE)
+- ~~[ ] Move eager (DDFE)~~
 - [X] Link into Place (!! Does not allow for apply permissions) => Do user vs read only
 
 ### Apply permissions
 - [X] Apply permissions to the files (bottom up - in case the user does not have the same rights as the user creating the files initially)
-- [ ] Apply permissions eagerly (DDFE) + Warning might lock you out of file.
+- ~~[ ] Apply permissions eagerly (DDFE) + Warning might lock you out of file.~~
 
 ### Clear
 - [X] Clean up database and stage dir, in case the dir was not cleared already
-- [ ] Emit any errors
+- ~~[ ] Emit any errors~~
 - [X] Delete database if needed.
 
 # Tar Command TODOs:
@@ -369,7 +378,3 @@ Uncompressed plain tar is supported by omitting filters / non-compressed suffix 
 |----------|------------------------------------------------|-------------|---------------------------------------------------------------|---------------------------|--------------------|
 |          | `--strip-components=NUMBER`                    | IMPLEMENTED | strip NUMBER leading components from file names on extraction | Requires new field in db! | place / extract    |
 |          | `--transform=EXPRESSION`, `--xform=EXPRESSION` | IMPLEMENTED | use sed replace EXPRESSION to transform file names            | Requires new field in db! | place / extract    |
-
----
-
-## TODO
