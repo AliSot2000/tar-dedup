@@ -8,10 +8,9 @@ use tar_dedup_lib::error::Error;
 use tar_dedup_lib::shutdown::Shutdown;
 
 fn main() -> tar_dedup_lib::error::Result<()> {
-    tar_dedup_lib::progress::init_tracing();
-
     let cli = Cli::parse();
     let shutdown = Shutdown::install()?;
+    tar_dedup_lib::progress::init_tracing(cli.log_level, cli.log_format, cli.log_time.as_deref());
 
     match cli.command {
         Command::Archive(args) => {
