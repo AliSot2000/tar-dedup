@@ -74,12 +74,11 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
             db = Some(Database::open(&db_path)?);
             filter_buffer = Some(ParseFilterBuffer::default());
             config_written = true; // stored by the original run
+            progress.set_table_size(db
+                .as_ref()
+                .expect(OPT_DB_ERROR)
+                .count_entries()?);
         }
-    }
-
-    // Resume anchor: an existing work DB already holds the full catalog.
-    if let Some(edb) = db.as_ref() {
-        progress.set_table_size(edb.count_entries()?);
     }
 
     while state.phase != ExtractPipelinePhase::Done {
@@ -97,8 +96,10 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                     ldb.set_extract_config(&config)?;
                     config_written = true;
                 }
-                let ldb = db.as_ref().expect(OPT_DB_ERROR);
-                progress.set_table_size(ldb.count_entries()?);
+                progress.set_table_size(db
+                    .as_ref()
+                    .expect(OPT_DB_ERROR)
+                    .count_entries()?);
             }
             ExtractPipelinePhase::Filter if let Some(ref edb) = db => {
                 let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
