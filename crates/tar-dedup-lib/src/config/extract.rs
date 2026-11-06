@@ -192,6 +192,8 @@ impl Validate for OwnerGroupOptions {
 pub struct ScanOptions {
     pub sparsify: bool,
     pub page_size: usize,
+    /// Verify the stored archive's footer content sha1 before extracting. Default: on.
+    pub verify_archive: bool,
 }
 
 impl Default for ScanOptions {
@@ -199,6 +201,7 @@ impl Default for ScanOptions {
         Self {
             sparsify: false,
             page_size: 4096,
+            verify_archive: true,
         }
     }
 }
@@ -507,6 +510,7 @@ impl ExtractConfig {
             scan: ScanOptions {
                 sparsify: args.sparsify,
                 page_size: args.page_size,
+                verify_archive: !args.no_verify_archive,
             },
             rehash: !args.no_rehash,
             process: ProcessOptions {
@@ -902,6 +906,7 @@ mod tests {
         );
         assert_eq!(cfg.paths.work_dir, expected_work);
         assert!(cfg.rehash, "rehash on by default");
+        assert!(cfg.scan.verify_archive, "archive verify on by default");
         assert_eq!(cfg.owner_group.same_owner, infer_same_owner());
         assert_eq!(cfg.strip_components, 0);
         assert_eq!(cfg.decompression, CompressionFormat::None);
