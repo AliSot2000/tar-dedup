@@ -177,7 +177,6 @@ fn handle_send_receive_loop(
         if items.is_empty() {
             return Ok(());
         }
-        let n = items.len() as u64;
         rt.db.ingest_rehash_outcome(&items)?;
         for outcome in items.iter() {
             match outcome {
@@ -194,14 +193,15 @@ fn handle_send_receive_loop(
                 }
             }
         }
-        rt.progress.inc_both(n);
         Ok(())
     };
+    // Count each drained outcome early so the bar never stalls a whole batch.
+    let on_dequeue = |n| rt.progress.inc_both(n);
 
     let _ = send_receive_loop(
         rt.shutdown, send, recv, thread_handles,
         rt.config.process.drain_chunk, false,
-        pull, |_| Ok(()), || Ok(true), apply)?;
+        pull, |_| Ok(()), || Ok(true), apply, on_dequeue)?;
     recorder.flush()?;
     Ok(counts)
 }
