@@ -5,6 +5,7 @@ use crate::cli::CheckArgs;
 use crate::config::resolve_path_to_abs_path;
 use crate::error::Result;
 use crate::progress::ProgressBar;
+use crate::shutdown::Shutdown;
 
 fn exit_code(verdict: IntegrityVerdict) -> i32 {
     match verdict {
@@ -19,7 +20,7 @@ fn exit_code(verdict: IntegrityVerdict) -> i32 {
 
 /// Check the footer of `args.archive`; prints a verdict (unless `--quiet`) and
 /// exits with the mapped code. Filesystem failures propagate as `Err` (exit 1).
-pub fn run(args: &CheckArgs) -> Result<()> {
+pub fn run(args: &CheckArgs, shutdown: &Shutdown) -> Result<()> {
     let cwd = std::env::current_dir().map_err(crate::error::Error::from)?;
     let archive = resolve_path_to_abs_path(&args.archive, &cwd);
 
@@ -36,7 +37,7 @@ pub fn run(args: &CheckArgs) -> Result<()> {
         Some(pb)
     };
 
-    let verdict = archive_footer::verify_footer(&archive, bar.as_ref())?;
+    let verdict = archive_footer::verify_footer(&archive, shutdown, bar.as_ref())?;
 
     if let Some(pb) = bar.as_ref() {
         pb.finish_and_clear();
