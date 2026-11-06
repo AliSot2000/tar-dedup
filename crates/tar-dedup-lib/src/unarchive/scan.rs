@@ -410,8 +410,8 @@ fn run_inner(
         );
     }
 
-    // On successful exit, all rows should be in 'unarchived' state and all rows with a AppendedPath
-    // flag set should have an associated `FileExtracted` or `ErrorWhileExtracting` Flag
+    // On successful exit, all rows should be in 'unarchived' state and all rows with an
+    // archive session_id should have an associated `FileExtracted` or `ErrorWhileExtracting` Flag
     let tally = sdb.tally_scan_remainders(rt.config.filter.eager_filter)?;
     if tally.filter_excluded > 0 {
         let promoted = sdb.promote_filter_excluded_remainders()?;
@@ -1101,7 +1101,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
 
     #[test]
     fn scan_missing_member_triaged_under_force() {
-        // A canonical marked `AppendedPath` whose payload member never appears in
+        // A canonical whose `session_id` marks its payload present, but the member never appears in
         // the stream (head/middle-truncated or fabricated archive) lands in the
         // "payload not found" bucket and is swept to `unarchived` under --force.
         let dir = tempfile::tempdir().expect("tempdir");
