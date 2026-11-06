@@ -35,13 +35,8 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
 
     // Handle writing footer in case compression stream is finished and footer interrupted during
     // hash.
-    if rt.config.pipeline.write_archive_footer
-        && !archive_footer::has_valid_footer(&rt.config.paths.archive_path)
-        // TODO fix: This is wrong. If we have an incomplete archive, this would trigger.
-        //  Condition should be, all entries are in phase 'archived' and we have no open session.
-        //  Only then, do we trigger. But not on at least one session finsihed.
-        && rt.db.has_finalized_archive_session()? {
-
+    // PRECONDITION: No open session.
+    if footer_pending(rt)? {
         tracing::info!("archive finalized but footer missing; completing the trailer");
         run_footer_one_shot(rt)?;
         return Ok(());
@@ -379,6 +374,21 @@ fn end_session(
         }
         Err(e) => Err(e), // (Expected to be Io, Config, DB)
     }
+}
+
+/// True when the archive is a complete, finalized stream missing only its
+/// trailer: footer enabled, no valid footer yet, the session finalized, and
+/// every row `archived`. Both the finalized guard and the full promotion guard
+/// are required: a graceful mid-archive interrupt finalizes the session but
+/// leaves un-appended rows `staged` (so `count(Archived) == count_entries` fails),
+/// while a crash between `promote_pending_archived` and `finalize_archive_session`
+/// leaves every row `archived` with the session still open (so the finalized
+/// guard fails). Only the true fork is the interrupted-footer-hash state.
+fn footer_pending(rt: &ArchiveRTArgs) -> Result<bool> {
+    Ok(rt.config.pipeline.write_archive_footer
+        && !archive_footer::has_valid_footer(&rt.config.paths.archive_path)
+        && rt.db.has_finalized_archive_session()?
+        && rt.db.count_files_in_phase(FilePhase::Archived)? == rt.db.count_entries()?)
 }
 
 /// One-shot completion of a footerless-but-finalized archive (see the resume
