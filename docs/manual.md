@@ -173,10 +173,16 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
 
 #### Logging
 
-| Short | Long            | Required | Args | Description                                                    | Notes |
-|-------|-----------------|----------|------|----------------------------------------------------------------|-------|
-| -     | --progress-mode | n        | 1    | Which progress bars to draw                                    |       |
-| -     | --log-level     | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var) |       |
+| Short | Long             | Required | Args | Description                                                                                                                                                                                                                                 | Notes |
+|-------|------------------|----------|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --progress-mode  | n        | 1    | Which progress bars to draw                                                                                                                                                                                                                 |       |
+| -     | --log-level      | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var)                                                                                                                                                                              |       |
+| -     | --log-format     | n        | 1    | Preset baseline for the log output: `short` = seconds timestamp + no module target, `verbose` = sub-second timestamp + module target. Per-axis `--log-short-time`/`--log-long-time` and `--log-no-target`/`--log-target` override each axis |       |
+| -     | --log-short-time | n        | 0    | Force the log timestamp to seconds (overrides the `--log-format` time)                                                                                                                                                                      |       |
+| -     | --log-long-time  | n        | 0    | Force the log timestamp to sub-second precision (overrides the `--log-format` time)                                                                                                                                                         |       |
+| -     | --log-no-target  | n        | 0    | Hide the module target in the log output (overrides `--log-format`)                                                                                                                                                                         |       |
+| -     | --log-target     | n        | 0    | Show the module target in the log output (overrides `--log-format`)                                                                                                                                                                         |       |
+| -     | --log-time       | n        | 1    | Free chrono strftime template for the log timestamp; overrides the short/long time axis when given (e.g. `%H:%M:%S`, `%a %d %b %T`)                                                                                                         |       |
 
 #### Batching
 Options below tune the internal buffering and transaction batching. Sensible defaults should be set. Changes can 
@@ -344,10 +350,16 @@ selected attributes.
 
 #### Logging
 
-| Short | Long            | Required | Args | Description                                                    | Notes |
-|-------|-----------------|----------|------|----------------------------------------------------------------|-------|
-| -     | --progress-mode | n        | 1    | Which progress bars to draw                                    |       |
-| -     | --log-level     | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var) |       |
+| Short | Long             | Required | Args | Description                                                                                                                                                                                                                                 | Notes |
+|-------|------------------|----------|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --progress-mode  | n        | 1    | Which progress bars to draw                                                                                                                                                                                                                 |       |
+| -     | --log-level      | n        | 1    | Verbosity of the log output (overrides the `RUST_LOG` env var)                                                                                                                                                                              |       |
+| -     | --log-format     | n        | 1    | Preset baseline for the log output: `short` = seconds timestamp + no module target, `verbose` = sub-second timestamp + module target. Per-axis `--log-short-time`/`--log-long-time` and `--log-no-target`/`--log-target` override each axis |       |
+| -     | --log-short-time | n        | 0    | Force the log timestamp to seconds (overrides the `--log-format` time)                                                                                                                                                                      |       |
+| -     | --log-long-time  | n        | 0    | Force the log timestamp to sub-second precision (overrides the `--log-format` time)                                                                                                                                                         |       |
+| -     | --log-no-target  | n        | 0    | Hide the module target in the log output (overrides `--log-format`)                                                                                                                                                                         |       |
+| -     | --log-target     | n        | 0    | Show the module target in the log output (overrides `--log-format`)                                                                                                                                                                         |       |
+| -     | --log-time       | n        | 1    | Free chrono strftime template for the log timestamp; overrides the short/long time axis when given (e.g. `%H:%M:%S`, `%a %d %b %T`)                                                                                                         |       |
 
 #### Batching
 Options below tune the internal buffering and transaction batching. Sensible defaults should be set. Changes can 
