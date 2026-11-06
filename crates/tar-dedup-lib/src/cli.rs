@@ -618,6 +618,14 @@ pub struct ExtractArgs {
     #[arg(long = "no-rehash", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Rehash")]
     pub no_rehash: bool,
 
+    // --- Scan ---
+
+    /// Skip the up-front integrity check of the stored compressed archive
+    /// (footer content sha1). Default: on. Extraction's per-file rehash still
+    /// verifies content when `--no-rehash` is not set.
+    #[arg(long = "no-verify-archive", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Scan")]
+    pub no_verify_archive: bool,
+
     // --- Overwrite Control ---
 
     /// Preserve existing directory symlinks instead of replacing them (GNU tar
