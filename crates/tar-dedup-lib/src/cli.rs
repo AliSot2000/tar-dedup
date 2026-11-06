@@ -20,6 +20,51 @@ pub struct Cli {
     )]
     pub log_level: Option<LogLevel>,
 
+    /// Preset baseline for the log output: `short` = seconds timestamp + no
+    /// module target, `verbose` = sub-second timestamp + module target.
+    /// Per-axis `--log-short-time`/`--log-long-time` and
+    /// `--log-no-target`/`--log-target` override each axis.
+    #[arg(
+        long = "log-format",
+        global = true,
+        value_enum,
+        value_name = "FORMAT",
+        default_value_t = LogFormat::Short,
+        help_heading = "Logging"
+    )]
+    pub log_format: LogFormat,
+
+    /// Force the log timestamp to seconds (overrides the `--log-format` time).
+    #[arg(long = "log-short-time", global = true, default_value_t = false,
+          action = ArgAction::SetTrue, help_heading = "Logging")]
+    pub log_short_time: bool,
+
+    /// Force the log timestamp to sub-second precision (overrides the
+    /// `--log-format` time).
+    #[arg(long = "log-long-time", global = true, default_value_t = false,
+          action = ArgAction::SetTrue, help_heading = "Logging")]
+    pub log_long_time: bool,
+
+    /// Hide the module target in the log output (overrides `--log-format`).
+    #[arg(long = "log-no-target", global = true, default_value_t = false,
+          action = ArgAction::SetTrue, help_heading = "Logging")]
+    pub log_no_target: bool,
+
+    /// Show the module target in the log output (overrides `--log-format`).
+    #[arg(long = "log-target", global = true, default_value_t = false,
+          action = ArgAction::SetTrue, help_heading = "Logging")]
+    pub log_target: bool,
+
+    /// Free chrono strftime template for the log timestamp; overrides the
+    /// short/long time axis when given (e.g. `%H:%M:%S`, `%a %d %b %T`).
+    #[arg(
+        long = "log-time",
+        global = true,
+        value_name = "STRFTIME",
+        help_heading = "Logging"
+    )]
+    pub log_time: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -33,6 +78,17 @@ pub enum LogLevel {
     Info,
     Debug,
     Trace,
+}
+
+/// Log line format preset for `--log-format`: the baseline for the two
+/// orthogonal axes, each overridable by the `--log-short-time`/`--log-long-time`
+/// and `--log-no-target`/`--log-target` toggles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormat {
+    /// seconds timestamp, module target hidden.
+    Short,
+    /// sub-second timestamp, module target shown.
+    Verbose,
 }
 
 #[derive(Debug, Subcommand)]
