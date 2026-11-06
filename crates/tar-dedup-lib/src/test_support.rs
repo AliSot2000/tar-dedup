@@ -305,7 +305,7 @@ impl ExtractWorld {
 // -----------------------------------------------------------------------------
 
 /// Catalog with one canonical regular file and one duplicate pointing at it,
-/// both `archived`, canonical flagged `AppendedPath`. Returns the member name.
+    /// both `archived`, canonical carrying a `session_id` (payload present). Returns the member name.
 pub fn write_catalog(path: &Path) -> String {
     let db = Database::open(path).expect("open catalog");
     let canonical = insert(&db, "/canonical.txt", 4, FileType::File);
@@ -370,8 +370,14 @@ pub fn write_catalog(path: &Path) -> String {
         .expect("dupe digest");
     db.mark_self_canonical(canonical).expect("self canonical");
     db.set_canonical(duplicate, canonical).expect("canonical");
-    db.set_file_flag(canonical, FileFlag::AppendedPath, true)
-        .expect("appended");
+    // Record the canonical's payload as present in a real (synthetic) archive
+    // session so the `session_id` FK holds.
+    let sid = db.begin_archive_session(0).expect("begin session");
+    db.with_transaction(|conn| {
+        conn.execute("UPDATE files SET session_id = :sid WHERE id = :id",
+            rusqlite::named_params! { ":sid": sid, ":id": canonical.0 }).expect("set session");
+        Ok(())
+    }).expect("session tx");
     db.set_file_phase(canonical, FilePhase::Archived)
         .expect("phase");
     db.set_file_phase(duplicate, FilePhase::Archived)
@@ -455,17 +461,22 @@ pub fn seed_filter_reasons(db: &Database, id: FileId) {
     }).expect("filter seed tx");
 }
 
-/// A self-canonical regular file, `AppendedPath` (+`phase`) so the eager
-/// extract gate and promotions treat it as an archived participant.
-pub fn add_archived_canonical(db: &Database, abs_path: &str, sha: u8, phase: FilePhase) -> FileId {
-    let id = insert(db, abs_path, 4, FileType::File);
-    seed_filter_reasons(db, id);
-    db.update_file_inspection_per_id(id, [sha; 20], 0, false).expect("digest");
-    db.mark_self_canonical(id).expect("self canonical");
-    db.set_file_flag(id, FileFlag::AppendedPath, true).expect("appended");
-    db.set_file_phase(id, phase).expect("phase");
-    id
-}
+/// A self-canonical regular file, `session_id` set (+`phase`) so the eager
+    /// extract gate and promotions treat it as an archived participant.
+    pub fn add_archived_canonical(db: &Database, abs_path: &str, sha: u8, phase: FilePhase) -> FileId {
+        let id = insert(db, abs_path, 4, FileType::File);
+        seed_filter_reasons(db, id);
+        db.update_file_inspection_per_id(id, [sha; 20], 0, false).expect("digest");
+        db.mark_self_canonical(id).expect("self canonical");
+        let sid = db.begin_archive_session(0).expect("begin session");
+        db.with_transaction(|conn| {
+            conn.execute("UPDATE files SET session_id = :sid WHERE id = :id",
+                rusqlite::named_params! { ":sid": sid, ":id": id.0 }).expect("set session");
+            Ok(())
+        }).expect("session tx");
+        db.set_file_phase(id, phase).expect("phase");
+        id
+    }
 
 /// `manifest.sqlite`, one payload, `snapshot.sqlite` — an uncompressed archive.
 pub fn build_archive(dir: &Path) -> (ExtractConfig, String) {
