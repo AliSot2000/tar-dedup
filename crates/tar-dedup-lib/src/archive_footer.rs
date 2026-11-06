@@ -186,7 +186,8 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<bool> {
 /// `Ok(false)` when it does not (content corruption or no footer), and `Err` when
 /// the footer structure cannot be read. `bar`, when given, reports the hash
 /// progress over the archive content.
-pub fn verify_archive_integrity(archive_path: &Path, bar: Option<&ProgressBar>)
+pub fn verify_archive_integrity(archive_path: &Path, shutdown: &Shutdown,
+    bar: Option<&ProgressBar>)
     -> Result<bool> {
     let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
     let len = file
@@ -196,7 +197,7 @@ pub fn verify_archive_integrity(archive_path: &Path, bar: Option<&ProgressBar>)
     let Some(layout) = FooterLayout::from_file(archive_path, &mut file, len)? else {
         return Ok(false);
     };
-    let actual = hash_archive_bytes(archive_path, layout.offset, bar)?;
+    let actual = hash_archive_bytes(archive_path, layout.offset, shutdown, bar)?;
     Ok(actual == layout.content_digest)
 }
 
