@@ -369,7 +369,7 @@ mod tests {
     fn verify_integrity_true_on_valid_footer() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _m) = build_footer_archive(dir.path());
-        assert!(verify_archive_integrity(&config.paths.archive_path).expect("verify"));
+        assert!(verify_archive_integrity(&config.paths.archive_path, None).expect("verify"));
     }
 
     #[test]
@@ -379,7 +379,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _m) = build_footer_archive(dir.path());
         corrupt_byte(&config.paths.archive_path, 1024);
-        assert!(!verify_archive_integrity(&config.paths.archive_path).expect("verify"));
+        assert!(!verify_archive_integrity(&config.paths.archive_path, None).expect("verify"));
     }
 
     #[test]
@@ -390,7 +390,7 @@ mod tests {
         let (config, _m) = build_footer_archive(dir.path());
         corrupt_byte(&config.paths.archive_path, footer_offset(&config.paths.archive_path));
         assert!(matches!(
-            verify_archive_integrity(&config.paths.archive_path),
+            verify_archive_integrity(&config.paths.archive_path, None),
             Err(Error::Config(_)),
         ));
     }
@@ -399,7 +399,7 @@ mod tests {
     fn verify_integrity_false_without_footer() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _m) = build_archive(dir.path());
-        assert!(!verify_archive_integrity(&config.paths.archive_path).expect("verify"));
+        assert!(!verify_archive_integrity(&config.paths.archive_path, None).expect("verify"));
     }
 
     #[test]
@@ -532,7 +532,7 @@ mod tests {
         write_footer(&archive_path, &catalog, None).expect("write footer");
 
         assert!(
-            verify_archive_integrity(&archive_path).expect("verify"),
+            verify_archive_integrity(&archive_path, None).expect("verify"),
             "compressed archive content must hash clean against the footer"
         );
         let dest = dir.path().join("extracted.sqlite");
