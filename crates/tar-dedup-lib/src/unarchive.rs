@@ -102,23 +102,33 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                     .count_entries()?);
             }
             ExtractPipelinePhase::Filter if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
+                let rt = ExtractRTArgs {
+                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                };
                 filter::run(&rt, false)?;
             }
             ExtractPipelinePhase::Rehash if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
+                let rt = ExtractRTArgs {
+                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                };
                 rehash::run(&rt)?;
             }
             ExtractPipelinePhase::PlacementPrologue if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
+                let rt = ExtractRTArgs {
+                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                };
                 place_prologue::run(&rt)?;
             }
             ExtractPipelinePhase::Place if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
+                let rt = ExtractRTArgs {
+                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                };
                 place::run(&rt)?;
             }
             ExtractPipelinePhase::Permissions if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs { config: &config, db: edb, shutdown: &shutdown, progress: &progress };
+                let rt = ExtractRTArgs {
+                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                };
                 permissions::run(&rt)?;
             }
             ExtractPipelinePhase::Cleanup if let Some(ref edb) = db => {
@@ -148,6 +158,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         let Some(next) = state.phase.next() else {
             break;
         };
+
         state.phase = next;
         if let Some(ref edb) = db {
             edb.save_extract_runtime_state(&state)?;
