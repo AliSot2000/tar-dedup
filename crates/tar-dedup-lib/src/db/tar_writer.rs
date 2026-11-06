@@ -387,6 +387,21 @@ mod tests {
         ).expect("read phase")
     }
 
+    fn row_session(conn: &Connection, id: i64) -> i64 {
+        conn.query_row(
+            "SELECT COALESCE(session_id, 0) FROM files WHERE id = :id",
+            named_params! { ":id": id },
+            |row| row.get(0),
+        ).expect("read session")
+    }
+
+    fn set_session(conn: &Connection, id: i64, session: i64) {
+        conn.execute(
+            "UPDATE files SET session_id = :session WHERE id = :id",
+            named_params! { ":session": session, ":id": id },
+        ).expect("set session");
+    }
+
     fn row_flag(conn: &Connection, id: i64, flag: FileFlag) -> bool {
         conn.query_row(
             "SELECT flags FROM files WHERE id = :id",
@@ -410,41 +425,45 @@ mod tests {
         (dir, conn)
     }
 
-    /// Seed the `files` matrix used by the abort/clear tests: (a) pending
-    /// non-archived, (b) pending + archived, (c) plain staged, (d) plain archived.
+    /// Seed the `files` matrix used by the abort/clear tests, tagging rows 1/2 as
+    /// appended in open session 1: (a) appended non-archived, (b) appended +
+    /// archived, (c) plain staged, (d) plain archived.
     fn seed_pending_matrix(conn: &Connection) {
         insert_archive_candidate(conn, 1, 1, "a", 10);
         insert_archive_candidate(conn, 2, 2, "b", 20);
         insert_archive_candidate(conn, 3, 3, "c", 30);
         insert_archive_candidate(conn, 4, 4, "d", 40);
-        set_flag(conn, 1, FileFlag::AppendedPath);   // (a) pending non-archived
-        set_flag(conn, 2, FileFlag::AppendedPath);
-        set_phase(conn, 2, "archived");              // (b) pending + archived
-        set_phase(conn, 4, "archived");              // (d) plain archived
-    }
-
-    #[test]
-    fn abort_incomplete_session_resets_only_pending_non_archived() {
-        let (_dir, conn) = open_db();
-        seed_pending_matrix(&conn);
-        conn.execute(
+        // The open session (id 1) the rows are appended in; must exist for the FK.
+        let fc = conn.execute(
             "INSERT INTO archive_sessions (id, archive_offset, started_at, finalized) \
              VALUES (1, 100, '2026-01-01T00:00:00Z', 0)",
             [],
         ).expect("insert open session");
+        assert_eq!(fc, 1);
+        set_session(conn, 1, 1);   // (a) appended non-archived
+        set_session(conn, 2, 1);   // (b) appended + archived
+        set_phase(conn, 2, "archived");
+        set_phase(conn, 4, "archived");
+    }
+
+    #[test]
+    fn abort_incomplete_session_reverts_rows_of_the_truncated_session() {
+        let (_dir, conn) = open_db();
+        seed_pending_matrix(&conn);
 
         abort_incomplete_session(&conn, &ArchiveSession { id: 1, archive_offset: 100 })
             .expect("abort session");
 
-        // (a) reset to staged + flag cleared; (c) untouched; (d) untouched.
+        // Rows appended in the truncated session — including (b) already promoted
+        // to `archived` — revert to `staged` with no payload marker (re-append).
         assert_eq!(row_phase(&conn, 1), "staged");
-        assert!(!row_flag(&conn, 1, FileFlag::AppendedPath));
-        // (b) already archived: flag kept, phase kept.
-        assert_eq!(row_phase(&conn, 2), "archived");
-        assert!(row_flag(&conn, 2, FileFlag::AppendedPath));
-        // (c)/(d) untouched.
+        assert_eq!(row_session(&conn, 1), 0);
+        assert_eq!(row_phase(&conn, 2), "staged");
+        assert_eq!(row_session(&conn, 2), 0);
+        // (c) untouched; (d) untouched (archived in an earlier finalized session).
         assert_eq!(row_phase(&conn, 3), "staged");
         assert_eq!(row_phase(&conn, 4), "archived");
+        assert_eq!(row_session(&conn, 4), 0);
         // Session marked aborted.
         let finalized: i64 = conn.query_row(
             "SELECT finalized FROM archive_sessions WHERE id = 1",
@@ -455,34 +474,29 @@ mod tests {
     }
 
     #[test]
-    fn clear_archive_session_pending_only_resets_non_archived() {
+    fn clear_archive_session_pending_reverts_all_rows_of_the_session() {
         let (_dir, conn) = open_db();
         seed_pending_matrix(&conn);
 
-        let n = clear_archive_session_pending(&conn).expect("clear pending");
+        let n = clear_archive_session_pending(&conn, 1).expect("clear pending");
 
-        assert_eq!(n, 1);
+        assert_eq!(n, 2);
         assert_eq!(row_phase(&conn, 1), "staged");
-        assert!(!row_flag(&conn, 1, FileFlag::AppendedPath));
-        assert!(row_flag(&conn, 2, FileFlag::AppendedPath));   // archived rows keep flag
-        assert_eq!(row_phase(&conn, 2), "archived");
+        assert_eq!(row_session(&conn, 1), 0);
+        assert_eq!(row_phase(&conn, 2), "staged");
+        assert_eq!(row_session(&conn, 2), 0);
     }
 
     #[test]
     fn reset_archive_state_returns_to_staged_and_wipes_sessions() {
         let (_dir, conn) = open_db();
         seed_pending_matrix(&conn);
-        conn.execute(
-            "INSERT INTO archive_sessions (id, archive_offset, started_at, finalized) \
-             VALUES (1, 100, '2026-01-01T00:00:00Z', 0)",
-            [],
-        ).expect("insert open session");
 
         reset_archive_state(&conn).expect("reset state");
 
         for id in 1..=4 {
             assert_eq!(row_phase(&conn, id), "staged");
-            assert!(!row_flag(&conn, id, FileFlag::AppendedPath));
+            assert_eq!(row_session(&conn, id), 0);
         }
         let n_sessions: i64 = conn.query_row(
             "SELECT COUNT(*) FROM archive_sessions",
