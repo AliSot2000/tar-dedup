@@ -37,11 +37,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     // hash.
     if rt.config.pipeline.write_archive_footer
         && !archive_footer::has_valid_footer(&rt.config.paths.archive_path)
+        // TODO fix: This is wrong. If we have an incomplete archive, this would trigger.
+        //  Condition should be, all entries are in phase 'archived' and we have no open session.
+        //  Only then, do we trigger. But not on at least one session finsihed.
         && rt.db.has_finalized_archive_session()? {
 
         tracing::info!("archive finalized but footer missing; completing the trailer");
         run_footer_one_shot(rt)?;
-        rt.db.drop_archive_queue()?;
         return Ok(());
     }
 
