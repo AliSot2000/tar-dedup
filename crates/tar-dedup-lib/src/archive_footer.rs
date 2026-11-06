@@ -348,7 +348,7 @@ mod tests {
     fn verify_integrity_true_on_valid_footer() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _m) = build_footer_archive(dir.path());
-        assert!(verify_archive_integrity(&config.paths.archive_path, None).expect("verify"));
+        assert!(verify_archive_integrity(&config.paths.archive_path, &Shutdown::detached(), None).expect("verify"));
     }
 
     #[test]
@@ -358,7 +358,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _m) = build_footer_archive(dir.path());
         corrupt_byte(&config.paths.archive_path, 1024);
-        assert!(!verify_archive_integrity(&config.paths.archive_path, None).expect("verify"));
+        assert!(!verify_archive_integrity(&config.paths.archive_path, &Shutdown::detached(), None).expect("verify"));
     }
 
     #[test]
@@ -369,7 +369,7 @@ mod tests {
         let (config, _m) = build_footer_archive(dir.path());
         corrupt_byte(&config.paths.archive_path, footer_offset(&config.paths.archive_path));
         assert!(matches!(
-            verify_archive_integrity(&config.paths.archive_path, None),
+            verify_archive_integrity(&config.paths.archive_path, &Shutdown::detached(), None),
             Err(Error::Config(_)),
         ));
     }
@@ -378,7 +378,7 @@ mod tests {
     fn verify_integrity_false_without_footer() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _m) = build_archive(dir.path());
-        assert!(!verify_archive_integrity(&config.paths.archive_path, None).expect("verify"));
+        assert!(!verify_archive_integrity(&config.paths.archive_path, &Shutdown::detached(), None).expect("verify"));
     }
 
     #[test]
@@ -407,7 +407,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _m) = build_footer_archive(dir.path());
         assert_eq!(
-            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            verify_footer(&config.paths.archive_path, &Shutdown::detached(), None).expect("verify"),
             IntegrityVerdict::Ok,
         );
     }
@@ -417,7 +417,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _m) = build_archive(dir.path());
         assert_eq!(
-            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            verify_footer(&config.paths.archive_path, &Shutdown::detached(), None).expect("verify"),
             IntegrityVerdict::NoFooter,
         );
     }
@@ -428,7 +428,7 @@ mod tests {
         let (config, _m) = build_footer_archive(dir.path());
         corrupt_byte(&config.paths.archive_path, footer_offset(&config.paths.archive_path));
         assert_eq!(
-            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            verify_footer(&config.paths.archive_path, &Shutdown::detached(), None).expect("verify"),
             IntegrityVerdict::InvalidFooter,
         );
     }
@@ -439,7 +439,7 @@ mod tests {
         let (config, _m) = build_footer_archive(dir.path());
         corrupt_byte(&config.paths.archive_path, 1024);
         assert_eq!(
-            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            verify_footer(&config.paths.archive_path, &Shutdown::detached(), None).expect("verify"),
             IntegrityVerdict::ContentMismatch,
         );
     }
@@ -454,7 +454,7 @@ mod tests {
             footer_offset(&config.paths.archive_path) + FOOTER_MAGIC.len() as u64 + SHA1_LEN,
         );
         assert_eq!(
-            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            verify_footer(&config.paths.archive_path, &Shutdown::detached(), None).expect("verify"),
             IntegrityVerdict::DatabaseMismatch,
         );
     }
@@ -469,7 +469,7 @@ mod tests {
             footer_offset(&config.paths.archive_path) + FOOTER_MAGIC.len() as u64 + SHA1_LEN + 5,
         );
         assert_eq!(
-            verify_footer(&config.paths.archive_path, None).expect("verify"),
+            verify_footer(&config.paths.archive_path, &Shutdown::detached(), None).expect("verify"),
             IntegrityVerdict::BothMismatch,
         );
     }
@@ -539,10 +539,10 @@ mod tests {
 
         let catalog = dir.path().join("catalog.sqlite");
         crate::test_support::write_catalog(&catalog);
-        write_footer(&archive_path, &catalog, None).expect("write footer");
+        write_footer(&archive_path, &catalog, &Shutdown::detached(), None).expect("write footer");
 
         assert!(
-            verify_archive_integrity(&archive_path, None).expect("verify"),
+            verify_archive_integrity(&archive_path, &Shutdown::detached(), None).expect("verify"),
             "compressed archive content must hash clean against the footer"
         );
         let dest = dir.path().join("extracted.sqlite");
