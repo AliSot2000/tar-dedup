@@ -1402,7 +1402,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         append_member(&mut builder, &member, b"data");
         append_member(&mut builder, SNAPSHOT_TAR_NAME, &catalog_bytes);
         builder.finish().expect("finish tar");
-        crate::archive_footer::write_footer(&archive_path, &catalog, None).expect("write footer");
+        crate::archive_footer::write_footer(&archive_path, &catalog, &Shutdown::detached(), None)
+            .expect("write footer");
 
         let config = ExtractConfig::for_scan_test(
             archive_path,
@@ -1456,6 +1457,26 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db = run_scan(&config, &db_path);
         assert!(config.paths.extract_cache_dir().join(&member).is_file());
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
+    }
+
+    #[test]
+    fn scan_archive_verify_force_interrupt_aborts() {
+        // A force abort while the footer content-hash runs must surface as an
+        // Interrupted stop (not a Config error), before any catalog install.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _member) = build_footer_archive(dir.path());
+        let db_path = config.paths.db_path();
+        let shutdown = Shutdown::detached();
+        shutdown.request_force();
+
+        let res = run(&config, &db_path, &shutdown,
+                      &mut Recorder::speculative(false, None),
+                      &mut Some(ParseFilterBuffer::default()),
+                      &ProgressBarSet::new(EXTRACT_MULTIPLIER));
+        assert!(res.is_err(), "force during verify must abort the scan");
+        assert!(matches!(res, Err(Error::Interrupted)), "expected Interrupted");
+        // The verify precedes the catalog install; an abort leaves no work DB.
+        assert!(!db_path.exists());
     }
 
     #[test]
