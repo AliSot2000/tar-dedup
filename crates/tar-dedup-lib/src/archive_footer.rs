@@ -88,6 +88,7 @@ fn locate_footer(archive_path: &Path, file: &mut File, len: u64) -> Result<Optio
 pub fn write_footer(
     archive_path: &Path,
     sqlite_path: &Path,
+    shutdown: &Shutdown,
     bar: Option<&ProgressBar>)
     -> Result<()> {
     let mut db_bytes = Vec::new();
@@ -100,7 +101,7 @@ pub fn write_footer(
         .map_err(|e| Error::io(archive_path, e))?
         .len();
     // Integrity of the finished compressed archive: hash [0..offset).
-    let content_digest = hash_archive_bytes(archive_path, offset, bar)?;
+    let content_digest = hash_archive_bytes(archive_path, offset, shutdown, bar)?;
     let xz_db_digest = Sha1::digest(&xz_db_bytes);
 
     let mut out = OpenOptions::new()
