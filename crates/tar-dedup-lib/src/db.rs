@@ -599,12 +599,12 @@ impl Database {
         tar_writer::promote_pending_archived(&*self.conn())
     }
 
-    pub fn mark_archive_session_pending(&self, file_id: FileId) -> Result<()> {
-        tar_writer::mark_archive_session_pending(&*self.conn(), file_id)
+    pub fn mark_archive_session_pending(&self, file_id: FileId, session_id: i64) -> Result<()> {
+        tar_writer::mark_archive_session_pending(&*self.conn(), file_id, session_id)
     }
 
-    pub fn clear_archive_session_pending(&self) -> Result<u64> {
-        tar_writer::clear_archive_session_pending(&*self.conn())
+    pub fn clear_archive_session_pending(&self, session_id: i64) -> Result<u64> {
+        tar_writer::clear_archive_session_pending(&*self.conn(), session_id)
     }
 
     pub fn open_archive_session(&self) -> Result<Option<ArchiveSession>> {
@@ -720,10 +720,6 @@ impl Database {
 
     pub fn sum_archived_canonical_bytes(&self) -> Result<u64> {
         tar_writer::sum_archived_canonical_bytes(&*self.conn())
-    }
-
-    pub fn promote_to_archived(&self, id: &FileId) -> Result<u64> {
-        tar_writer::promote_to_archived(&self.conn(), id)
     }
 
     /// See [`tar_writer::create_archive_queue`].
