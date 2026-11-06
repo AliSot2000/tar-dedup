@@ -206,10 +206,7 @@ fn acquire_workdir_lock(config: &ArchiveConfig) -> Result<std::fs::File> {
     Ok(lock)
 }
 
-fn run_phase(
-    phase: &PipelinePhase,
-    rt: &ArchiveRTArgs,
-) -> Result<()> {
+fn run_phase(phase: &PipelinePhase, rt: &ArchiveRTArgs) -> Result<()> {
     match phase {
         PipelinePhase::Inventory => inventory::run(rt),
         PipelinePhase::Hash => hash::run(rt),
