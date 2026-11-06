@@ -332,13 +332,8 @@ fn end_session(
     append_snapshot(&mut writer, rt, false, recorder)?;
 
     rt.progress.set_phase_msg("archive finalizing compression stream");
-    let result = if write_tar_eof {
-        // ARCHIVE!!!
-        writer.finalize_archive()
-    } else {
-        // SESSION!!!
-        writer.finalize_session()
-    };
+    // `write_tar_eof` = final archive close (commit EOF); false = graceful session end.
+    let result = writer.finalize(write_tar_eof);
 
     match result {
         Ok((session_bytes_in, bytes_out)) => {

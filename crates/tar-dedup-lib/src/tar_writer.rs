@@ -133,42 +133,16 @@ impl TarWriter {
         Ok(())
     }
 
-    /// Graceful session end: flush tar (no EOF), finish compression stream.
-    /// INFO: Errors are io and config
-    pub fn finalize_session(mut self) -> Result<(u64, u64)> {
-        
+    /// Close the compression stream. `emit_tar_eof` = true for the final archive
+    /// close (trailing tar EOF is committed); false for a graceful mid-archive
+    /// session end (the EOF hold-back is dropped). INFO: Errors are io and config.
+    pub fn finalize(mut self, emit_tar_eof: bool) -> Result<(u64, u64)> {
         let bytes_in = self.bytes_in;
         let archive_path = self.archive_path.clone();
         let error_factory = |e| Error::io(&archive_path, e);
         let err_fac = error_factory; // Info: Alias for convenience.
 
-        let mut sink = self.take_sink(false)?;
-
-        sink.resolve_trailing_eof().map_err(err_fac)?;
-        sink.flush().map_err(err_fac)?;
-
-        let bytes_out = sink
-            .inner
-            .into_layer()
-            .map_err(err_fac)?
-            .finish()
-            .map_err(err_fac)?
-            .metadata()
-            .map_err(err_fac)?
-            .len();
-        Ok((bytes_in, bytes_out))
-    }
-
-    /// Final archive close: emit tar EOF, then finish compression.
-    /// INFO: Errors are io and config
-    pub fn finalize_archive(mut self) -> Result<(u64, u64)> {
-
-        let bytes_in = self.bytes_in;
-        let archive_path = self.archive_path.clone();
-        let error_factory = |e| Error::io(&archive_path, e);
-        let err_fac = error_factory; // Info: Alias for convenience.
-
-        let mut sink = self.take_sink(true)?;
+        let mut sink = self.take_sink(emit_tar_eof)?;
         sink.resolve_trailing_eof().map_err(err_fac)?;
         sink.flush().map_err(err_fac)?;
 
@@ -520,7 +494,7 @@ mod compression_tests {
         for (name, path) in members {
             writer.append_path(path, name, |_| {}).expect("append member");
         }
-        writer.finalize_archive().expect("finalize archive");
+        writer.finalize(true).expect("finalize archive");
     }
 
     fn read_members(archive_path: &Path, format: &CompressionFormat) -> Vec<(String, Vec<u8>)> {
