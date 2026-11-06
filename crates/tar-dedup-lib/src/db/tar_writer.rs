@@ -125,10 +125,10 @@ pub fn mark_session_aborted(conn: &Connection, session_id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Startup recovery: mark session aborted, clear pending flags.
+/// Startup recovery: mark session aborted, revert rows appended in that session.
 pub fn abort_incomplete_session(conn: &Connection, session: &ArchiveSession) -> Result<()> {
     mark_session_aborted(conn, session.id)?;
-    clear_archive_session_pending(conn)?;
+    clear_archive_session_pending(conn, session.id)?;
     Ok(())
 }
 
@@ -138,13 +138,12 @@ pub fn abort_incomplete_session(conn: &Connection, session: &ArchiveSession) -> 
 
 /// Nuclear reset: every archived canonical → staged, wipe all sessions.
 pub fn reset_archive_state(conn: &Connection) -> Result<()> {
-    let pending = FileFlag::AppendedPath.mask_i64();
     conn.execute(
         "UPDATE files
          SET phase = 'staged',
-             flags = flags & ~:pending
-         WHERE phase = 'archived' OR (flags & :pending) != 0",
-        named_params! { ":pending": pending },
+             session_id = NULL
+         WHERE phase = 'archived' OR session_id IS NOT NULL",
+        [],
     ).to_panic()?;
     conn.execute("DELETE FROM archive_sessions", []).to_panic()?;
     Ok(())
