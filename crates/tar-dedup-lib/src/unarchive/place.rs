@@ -202,15 +202,16 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
     // queue drainer
     let apply = |pending: &mut Vec<CopyOutcome>| -> Result<()> {
         let items = take(pending);
-        let n = rt.db.ingest_copy_results(&items)?;
+        rt.db.ingest_copy_results(&items)?;
         for result in items {
             if let Err((id, Error::FileStat(e))) = result{
                 recorder.record_file(id, ERROR_PHASE, e, ErrorFlags::default());
             };
         }
-        moved_bar.inc(n);
         Ok(())
     };
+    // Count each drained outcome early so the bar never stalls a whole batch.
+    let on_dequeue = |n| moved_bar.inc(n);
 
     send_receive_loop(
         rt.shutdown,
@@ -222,7 +223,8 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
         pull,
         |_| Ok(()),
         || Ok(true),
-        apply)?;
+        apply,
+        on_dequeue)?;
 
     rt.progress.drop_thread_bars();
     recorder.flush()?;
@@ -485,7 +487,6 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
         if items.is_empty() {
             return Ok(());
         }
-        let n = items.len() as u64;
         process_results(
             items,
             recorder,
@@ -494,9 +495,10 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
             matches!(kind, MaterializeKind::Files),
             rt.config.process.fail_fast,
         )?;
-        rt.progress.inc_both(n);
         Ok(())
     };
+    // Count each drained outcome early so the bar never stalls a whole batch.
+    let on_dequeue = |n| rt.progress.inc_both(n);
 
     send_receive_loop(
         rt.shutdown,
@@ -508,7 +510,8 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
         pull,
         |_| Ok(()),
         || Ok(true),
-        apply)?;
+        apply,
+        on_dequeue)?;
 
     rt.progress.drop_thread_bars();
     recorder.flush()?;
