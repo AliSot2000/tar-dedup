@@ -1,6 +1,7 @@
 mod archive;
 mod compression;
 mod extract;
+mod logging;
 mod paths;
 pub mod phases;
 mod process;
@@ -24,6 +25,7 @@ pub use paths::{PathLayout, PathSource};
 pub use phases::{ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, ArchiveRuntimeState};
 pub use process::{CleanupSettings, DbRetention, ExitAfterStage, ProcessOptions, ResumeOverrides};
 pub use resume::ResumeConfig;
+pub use logging::resolve_log_flags;
 
 use std::path::{Path, PathBuf};
 
