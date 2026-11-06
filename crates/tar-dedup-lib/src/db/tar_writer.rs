@@ -186,14 +186,6 @@ pub fn sum_archived_canonical_bytes(conn: &Connection) -> Result<u64> {
     Ok(total as u64)
 }
 
-pub fn promote_to_archived(conn: &Connection, id: &FileId) -> Result<u64> {
-    let tot = conn.execute(
-            "UPDATE files SET phase = 'archived' WHERE id = :id",
-            named_params! { ":id" : id.0 },
-    ).to_panic()?;
-    Ok(tot as u64)
-}
-
 /// Shared WHERE for the archive-quened payloads: self-canonical staged regular
 /// files that pass the archive filter.
 fn archive_queue_where() -> String {
