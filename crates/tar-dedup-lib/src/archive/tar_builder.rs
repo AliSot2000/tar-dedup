@@ -21,7 +21,7 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhas
 //  Ineligible files are promoted first.
 //  Then, the eligible files are appended to the archive one by one.
 //  If it fails, the ErrorWhileArchive is set
-//  If it succeeds the AppendedPath is set
+//  If it succeeds the append records the archive session_id
 //  If a session is force aborted, the stream is abandoned and the database committed
 //  If a session is exiting gracefully or was not interrupted, the set the phase of the files with
 //  the ArchivedPath to 'archived'. Then we append a snapshot of the database into the stream prior
@@ -169,7 +169,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                         capture_error(e, &mut recorder, record.id);
                         rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
                         rt.db.promote_to_archived(&record.id)?;
-                        // Do not set AppendedPath — member was not successfully written.
+                        // Do not mark the archive session — the member was not written.
                     }
                     Err(Error::Interrupted) => {
                         // Force abort surfaced mid-member; stop the batch loop now.
@@ -732,7 +732,7 @@ mod tests {
         let id = world.add_file("a.bin", &[1u8; 8][..]);
         world.seed_staged_row(id);
         world.place_symlink(id);
-        // No AppendedPath: promote_pending leaves it staged -> invariant panic.
+        // No session_id: promote_pending leaves it staged -> invariant panic.
         let sid = world.begin_session(0);
 
         let writer = TarWriter::open(
