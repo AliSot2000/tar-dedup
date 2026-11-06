@@ -138,7 +138,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                     Err(e) => {
                         capture_error(Error::copy_io(&source, &e), &mut recorder, record.id);
                         rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
-                        rt.db.promote_to_archived(&record.id)?;
+                        rt.db.set_file_phase(record.id, FilePhase::Archived)?;
                         if rt.config.process.fail_fast {
                             return Err(Error::io(&source, e));
                         }
@@ -154,7 +154,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                     &source, &tar_name, |n| progress.inc_phase(n)) {
                     Ok(()) => {
                         tracing::debug!("appended {} ({} bytes)", tar_name, record.size);
-                        rt.db.set_file_flag(record.id, FileFlag::AppendedPath, true)?;
+                        rt.db.mark_archive_session_pending(record.id, session_id)?;
                         if modified {
                             rt.db.set_file_flag(record.id, FileFlag::Modified, true)?;
                         }
@@ -168,7 +168,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                         );
                         capture_error(e, &mut recorder, record.id);
                         rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
-                        rt.db.promote_to_archived(&record.id)?;
+                        rt.db.set_file_phase(record.id, FilePhase::Archived)?;
                         // Do not mark the archive session — the member was not written.
                     }
                     Err(Error::Interrupted) => {
@@ -451,7 +451,7 @@ mod tests {
     use crate::test_support::TestWorld;
     use chrono::{DateTime, Utc};
     use nix::unistd::geteuid;
-    use rusqlite::named_params;
+    use rusqlite::{OptionalExtension, named_params};
     use std::os::unix::fs::PermissionsExt;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -492,6 +492,17 @@ mod tests {
                 ).expect("read session finalized");
                 Ok(f)
             }).expect("session finalized tx")
+        }
+
+        /// The archive session this row's payload was appended in (None = not yet).
+        fn session_of(&self, id: FileId) -> Option<i64> {
+            self.db.with_transaction(|conn| {
+                let s: Option<i64> = conn
+                    .query_row("SELECT session_id FROM files WHERE id = :id",
+                        named_params! { ":id": id.0 }, |row| row.get(0))
+                    .optional().expect("read session").and_then(|s| s);
+                Ok(s)
+            }).expect("session tx")
         }
     }
 
@@ -643,7 +654,7 @@ mod tests {
         assert!(world.db.get_archive_bytes_out().expect("bytes out").is_none());
         assert_eq!(world.db.get_archive_bytes_in().expect("bytes in"), 0);
         assert_eq!(world.phase(id), FilePhase::Staged);
-        assert!(!world.flags(id).get(FileFlag::AppendedPath));
+        assert!(world.session_of(id).is_none(), "force abort must not record a session");
     }
 
     #[test]
@@ -659,7 +670,7 @@ mod tests {
             true,
         ).expect("open writer");
         append_snapshot(&mut writer, &world.rt(), true, &mut recorder).expect("init snapshot");
-        writer.finalize_archive().expect("finalize init");
+        writer.finalize(true).expect("finalize init");
 
         let raw = fs::read(&world.config.paths.archive_path).expect("read archive");
         assert!(raw.windows(SNAPSHOT_INIT_TAR_NAME.len())
@@ -681,7 +692,7 @@ mod tests {
         append_snapshot(&mut writer, &world.rt(), false, &mut recorder).expect("snapshot");
         let staging = world.config.paths.stage_archive_snapshot();
         assert!(!staging.exists(), "staging copy must be removed after append");
-        writer.finalize_archive().expect("finalize");
+        writer.finalize(true).expect("finalize");
     }
 
     #[test]
@@ -700,7 +711,7 @@ mod tests {
         // Snapshot is the progress checkpoint; a graceful request must not kill
         // it (check_in_flight between files is where interrupts land).
         append_snapshot(&mut writer, &world.rt(), false, &mut recorder).expect("still appends");
-        writer.finalize_archive().expect("finalize");
+        writer.finalize(true).expect("finalize");
     }
 
     #[test]
@@ -709,8 +720,8 @@ mod tests {
         let id = world.add_file("a.bin", &[1u8; 8][..]);
         world.seed_staged_row(id);
         world.place_symlink(id);
-        world.db.set_file_flag(id, FileFlag::AppendedPath, true).expect("mark appended");
         let sid = world.begin_session(0);
+        world.db.mark_archive_session_pending(id, sid).expect("mark appended");
 
         let writer = TarWriter::open(
             world.config.paths.archive_path.clone(),
@@ -757,8 +768,8 @@ mod tests {
         let id = world.add_file("a.bin", &[1u8; 8][..]);
         world.seed_staged_row(id);
         world.place_symlink(id);
-        world.db.set_file_flag(id, FileFlag::AppendedPath, true).expect("mark appended");
         let sid = world.begin_session(0);
+        world.db.mark_archive_session_pending(id, sid).expect("mark appended");
 
         let writer = TarWriter::open(
             config.paths.archive_path.clone(),
@@ -798,7 +809,7 @@ mod tests {
         for id in &ids {
             assert_eq!(world.phase(*id), FilePhase::Archived);
             let flags = world.flags(*id);
-            assert!(flags.get(FileFlag::AppendedPath));
+            assert!(world.session_of(*id).is_some(), "payload recorded in a session");
             assert!(!flags.get(FileFlag::ErrorWhileArchive));
         }
         // Session finalized with byte counters recorded.
@@ -954,13 +965,13 @@ mod tests {
     }
 
     #[test]
-    fn run_append_success_sets_appended_path() {
+    fn run_append_success_records_session() {
         let world = TestWorld::new();
         let id = world.add_file("a.bin", &[1u8; 8][..]);
         world.seed_staged_row(id);
         world.place_symlink(id);
         run(&world.rt()).expect("run ok");
-        assert!(world.flags(id).get(FileFlag::AppendedPath));
+        assert!(world.session_of(id).is_some(), "successful append records a session");
         assert_eq!(world.phase(id), FilePhase::Archived);
     }
 
@@ -1002,7 +1013,7 @@ mod tests {
 
         let flags = world.flags(unreadable);
         assert!(flags.get(FileFlag::ErrorWhileArchive));
-        assert!(!flags.get(FileFlag::AppendedPath));
+        assert!(world.session_of(unreadable).is_none(), "failed append must not record a session");
         assert_eq!(world.phase(unreadable), FilePhase::Archived);
         assert_eq!(world.phase(ok), FilePhase::Archived);
     }
