@@ -289,10 +289,15 @@ fn run_enqueue_dequeue_loop_dedup(
         Ok(())
     };
 
+    // Dedup advances progress via its FSM `tick` and per-outcome `apply`
+    // (`apply_on_partial = true`), which already move continuously; the
+    // dequeue hook is a no-op to avoid double counting.
+    let on_dequeue = |_| ();
+
     let completed = send_receive_loop(
         rt.shutdown, send, recv, thread_handles,
         rt.config.process.drain_chunk, true,
-        pull, on_sent, tick, apply)?;
+        pull, on_sent, tick, apply, on_dequeue)?;
     recorder.flush()?;
     Ok((fail_fast_hit, completed))
 }
