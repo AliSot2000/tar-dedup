@@ -238,8 +238,8 @@ pub fn populate_archive_queue(conn: &Connection, order: crate::cli::ArchiveOrder
 /// Next slice of still-pending archive rows, in `archive_queue` order.
 ///
 /// Joins the queue against `files`, returning only rows still needing a tar
-/// payload (`phase = 'staged'`, no AppendedPath, no ErrorWhileArchive), so a
-/// resume skips already-appended members; the queue supplies the ordering. The
+/// payload (`phase = 'staged'`, `session_id IS NULL`, no ErrorWhileArchive), so
+/// a resume skips already-appended members; the queue supplies the ordering. The
 /// returned `u64` is the queue position of each row, letting the caller advance
 /// the read `index` across slices. Same cursor contract as the sparsify queue;
 /// see `db/sparsify.rs`.
@@ -254,7 +254,7 @@ pub fn pull_pending_archive_rows<R: SqlFileRow>(
          FROM files JOIN archive_queue ON archive_queue.file_id = files.id
          WHERE archive_queue.id > :index
            AND files.phase = 'staged'
-           AND (files.flags & :appended) = 0
+           AND files.session_id IS NULL
            AND (files.flags & :error_flag) = 0
          ORDER BY archive_queue.id
          LIMIT :limit"
@@ -263,7 +263,6 @@ pub fn pull_pending_archive_rows<R: SqlFileRow>(
     let rows = stmt.query_map(
         named_params! {
             ":index": index as i64,
-            ":appended": FileFlag::AppendedPath.mask_i64(),
             ":error_flag": FileFlag::ErrorWhileArchive.mask_i64(),
             ":limit": limit,
         },
@@ -300,44 +299,46 @@ pub fn promote_ineligible_to_archived(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
-/// Promote all `AppendedPath` rows to `archived`.
-/// Leaves `AppendedPath` set (sticky proof the payload was written); abort recovery
-/// only clears the flag for rows that are still not `archived`.
+/// Promote rows whose payload is in the archive (`session_id IS NOT NULL`, i.e.
+/// the old feed `AppendedPath`) to `archived`. Leaves `session_id` set.
 pub fn promote_pending_archived(conn: &Connection) -> Result<u64> {
-    let pending = FileFlag::AppendedPath.mask_i64();
     let n = conn.execute(
         "UPDATE files
          SET phase = 'archived'
-         WHERE (flags & :pending) != 0
+         WHERE session_id IS NOT NULL
            AND phase != 'archived'",
-        named_params! { ":pending": pending },
+        [],
     ).to_panic()?;
     Ok(n as u64)
 }
 
-/// Mark members written into the open session (durable across crash until finalize/abort).
-pub fn mark_archive_session_pending(conn: &Connection, file_id: FileId) -> Result<()> {
-    let bit = FileFlag::AppendedPath.mask_i64();
+/// Record `file_id` as appended in the (open) session `session_id`. Durable
+/// across crash until the session finalizes or is aborted.
+pub fn mark_archive_session_pending(
+    conn: &Connection, file_id: FileId, session_id: i64)
+    -> Result<()> {
     conn.execute(
-        "UPDATE files SET flags = flags | :bit WHERE id = :id",
+        "UPDATE files SET session_id = :session_id WHERE id = :id",
         named_params! {
-            ":bit": bit,
+            ":session_id": session_id,
             ":id": file_id.0,
         },
     ).to_panic()?;
     Ok(())
 }
 
-/// After truncate/abort: clear pending on non-archived rows; files stay `staged` for rewrite.
-/// Does not touch `AppendedPath` on rows already promoted to `archived`.
-pub fn clear_archive_session_pending(conn: &Connection) -> Result<u64> {
-    let bit = FileFlag::AppendedPath.mask_i64();
+/// After truncate/abort of session `session_id`: revert **every** row of that
+/// session — including ones already promoted to `archived` — back to `staged`
+/// and clear the payload marker, so their truncated-out bytes are re-appended
+/// on the next run. Rows appended in earlier, finalized sessions (below the
+/// truncation offset) are untouched because their `session_id` differs.
+pub fn clear_archive_session_pending(conn: &Connection, session_id: i64) -> Result<u64> {
     let n = conn.execute(
         "UPDATE files
-         SET flags = flags & ~:bit
-         WHERE (flags & :bit) != 0
-           AND phase != 'archived'",
-        named_params! { ":bit": bit },
+         SET session_id = NULL,
+             phase = CASE WHEN phase = 'archived' THEN 'staged' ELSE phase END
+         WHERE session_id = :session_id",
+        named_params! { ":session_id": session_id },
     ).to_panic()?;
     Ok(n as u64)
 }
