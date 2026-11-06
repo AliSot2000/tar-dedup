@@ -284,7 +284,8 @@ impl FooterLayout {
 /// without decompression). `bar`, when given, is sized to `offset + xz_len` and
 /// reports both passes. `Err` is a generic filesystem failure (open/seek/read);
 /// the [`IntegrityVerdict`] distinguishes structure problems from hash mismatches.
-pub fn verify_footer(archive_path: &Path, bar: Option<&ProgressBar>) -> Result<IntegrityVerdict> {
+pub fn verify_footer(archive_path: &Path, shutdown: &Shutdown, bar: Option<&ProgressBar>)
+    -> Result<IntegrityVerdict> {
     let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
     let len = file
         .metadata()
@@ -304,13 +305,15 @@ pub fn verify_footer(archive_path: &Path, bar: Option<&ProgressBar>) -> Result<I
         bar.set_position(0);
         bar.set_message("hashing archive content");
     }
-    let content_match = hash_section(archive_path, 0, layout.offset, bar)? == layout.content_digest;
+    let content_match =
+        hash_file_range(archive_path, 0, layout.offset, shutdown, bar)? == layout.content_digest;
 
     if let Some(bar) = bar {
         bar.set_message("hashing database");
     }
-    let db_match = hash_section(archive_path, layout.xz_start, layout.xz_len, bar)?
-        == layout.xz_digest;
+    let db_match =
+        hash_file_range(archive_path, layout.xz_start, layout.xz_len, shutdown, bar)?
+            == layout.xz_digest;
 
     Ok(match (content_match, db_match) {
         (true, true) => IntegrityVerdict::Ok,
