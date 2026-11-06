@@ -2,7 +2,7 @@ use clap::Parser;
 
 use tar_dedup_lib::cli::{Cli, Command};
 use tar_dedup_lib::common::start::StartPolicy;
-use tar_dedup_lib::config::{ArchiveConfig, ExtractConfig, ResumeConfig};
+use tar_dedup_lib::config::{ArchiveConfig, ExtractConfig, ResumeConfig, resolve_log_flags};
 use tar_dedup_lib::db::Database;
 use tar_dedup_lib::error::Error;
 use tar_dedup_lib::shutdown::Shutdown;
@@ -10,7 +10,11 @@ use tar_dedup_lib::shutdown::Shutdown;
 fn main() -> tar_dedup_lib::error::Result<()> {
     let cli = Cli::parse();
     let shutdown = Shutdown::install()?;
-    tar_dedup_lib::progress::init_tracing(cli.log_level, cli.log_format, cli.log_time.as_deref());
+    let (log_long_time, log_target) = resolve_log_flags(
+        cli.log_format, cli.log_short_time, cli.log_long_time,
+        cli.log_no_target, cli.log_target,
+    );
+    tar_dedup_lib::progress::init_tracing(cli.log_level, log_long_time, log_target, cli.log_time.as_deref());
 
     match cli.command {
         Command::Archive(args) => {
@@ -59,6 +63,6 @@ fn main() -> tar_dedup_lib::error::Result<()> {
         Command::Dump(args) => tar_dedup_lib::cmd::dump::run(&args),
         Command::Query(args) => tar_dedup_lib::cmd::query::run(&args),
         Command::Reset(args) => tar_dedup_lib::cmd::reset::run(&args),
-        Command::Check(args) => tar_dedup_lib::cmd::check::run(&args),
+        Command::Check(args) => tar_dedup_lib::cmd::check::run(&args, &shutdown),
     }
 }
