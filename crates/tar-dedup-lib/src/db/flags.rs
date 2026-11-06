@@ -196,45 +196,40 @@ define_flags! {
         HasSparse = 9,
         /// Sparse copy failed (permissions, IO, …). Sticky.
         ErrorWhileSparsify = 10,
-        /// Payload was written into an archive session.
-        /// Set on successful `append_path`. Left standing when the session finalizes
-        /// (`phase` → `archived`). Cleared only on abort/truncate for rows that are
-        /// still not `archived` (incomplete session rewrite).
-        AppendedPath = 11,
         /// `append_path` failed during the archive process.
-        ErrorWhileArchive = 12,
+        ErrorWhileArchive = 11,
 
         /// Payload for this content landed in the extract cache (canonical row only).
         /// Set after a successful `unpack`; cleared on catalog install normalization.
-        FileExtracted = 13,
+        FileExtracted = 12,
         /// An error occurred while extracting a given file
-        ErrorWhileExtracting = 14,
+        ErrorWhileExtracting = 13,
         /// Rehashing Encountered a mismatch
-        RehashMismatch = 15,
+        RehashMismatch = 14,
         /// While attempting the rehash, an error occurred
-        ErrorWhileRehashing = 16,
+        ErrorWhileRehashing = 15,
         /// Source ready for linking
-        AtLinkSource = 17,
+        AtLinkSource = 16,
         /// File has been placed in the output tree
-        Placed = 18,
+        Placed = 17,
         /// At the target destination was a preexisting entry which was overwritten during the
         /// extraction or which prevented the extraction
-        Conflict = 19,
+        Conflict = 18,
         /// Either unlink_first was given or there was a type conflict which necessitated the
         /// removal of the previous entry. The flag encodes that remove was called successfully.
-        RemovedPrevious = 20,
+        RemovedPrevious = 19,
         /// Used RefLink (if false -> used (sparse) copy)
-        UsedRefLink = 21,
+        UsedRefLink = 20,
         /// An Error prevented the file from being placed in its correct position
-        ErrorWhilePlacing = 22,
+        ErrorWhilePlacing = 21,
         /// File materialized corectly with metadata applied.
-        AppliedMetadata = 23,
+        AppliedMetadata = 22,
         /// At least one error occurred while applying metadata
-        ErrorWhileApplyingMetadata = 24,
+        ErrorWhileApplyingMetadata = 23,
         /// Rehash verified the payload against the catalog `sha1` (digest matched).
         /// Verdict flags are mutually exclusive on elected rows: exactly one of
         /// `RehashMismatch` / `ErrorWhileRehashing` / `RehashVerified`.
-        RehashVerified = 25,
+        RehashVerified = 24,
     }
     /// Bitset stored in `files.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -453,20 +448,17 @@ mod tests {
         flags.set(FileFlag::HasSparse, true);
         flags.set(FileFlag::CheckWithCanonicalCompleted, true);
         flags.set(FileFlag::ErrorWhileDedup, true);
-        flags.set(FileFlag::AppendedPath, true);
         assert!(flags.get(FileFlag::FileExtracted));
         assert!(!flags.get(FileFlag::Modified));
         assert!(flags.get(FileFlag::HasSparse));
         assert!(flags.get(FileFlag::CheckWithCanonicalCompleted));
         assert!(flags.get(FileFlag::ErrorWhileDedup));
-        assert!(flags.get(FileFlag::AppendedPath));
         assert_eq!(
             FileFlags::from_i64(flags.to_i64()).bits(),
             FileFlag::FileExtracted.mask()
                 | FileFlag::HasSparse.mask()
                 | FileFlag::CheckWithCanonicalCompleted.mask()
                 | FileFlag::ErrorWhileDedup.mask()
-                | FileFlag::AppendedPath.mask()
         );
     }
 
