@@ -797,4 +797,54 @@ mod tests {
         assert_eq!(set.phase_position(), base_phase + 1);
         assert_eq!(set.global_position(), base_global + 1);
     }
+
+    fn fmt_timer(timer: &impl FormatTime) -> String {
+        struct Fmt<'a>(&'a dyn FormatTime);
+        impl std::fmt::Display for Fmt<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.format_time(&mut Writer::new(f))
+            }
+        }
+        Fmt(timer).to_string()
+    }
+
+    #[test]
+    fn second_timer_renders_whole_seconds_utc() {
+        let s = fmt_timer(&SecondTimer);
+        assert_eq!(s.len(), 20, "expected `YYYY-MM-DDTHH:MM:SSZ`, got {s:?}");
+        assert!(s.ends_with('Z'), "must end with Z: {s}");
+        // `T` at index 10, `Z` last, no fractional part.
+        assert!(s.as_bytes()[10] == b'T');
+        assert!(s.chars().nth(19) == Some('Z'));
+        assert!(!s.contains('.'), "no sub-second digits: {s}");
+        let (date, _rest) = s.split_once('T').expect("T");
+        assert_eq!(date.len(), 10, "date {date}");
+    }
+
+    #[test]
+    fn strf_timer_uses_provided_template() {
+        let s = fmt_timer(&StrfTimer("%H:%M:%S".to_string()));
+        assert_eq!(s.len(), 8, "HH:MM:SS expected, got {s:?}");
+        assert!(s.as_bytes()[2] == b':' && s.as_bytes()[5] == b':');
+        assert!(s.as_bytes().iter().all(|b| b.is_ascii_digit() || *b == b':'));
+
+        let literal = fmt_timer(&StrfTimer("fixed".to_string()));
+        assert_eq!(literal, "fixed");
+    }
+
+    #[test]
+    fn log_level_maps_to_level_filter() {
+        use tracing_subscriber::filter::LevelFilter;
+        let cases = [
+            (LogLevel::Off, LevelFilter::OFF),
+            (LogLevel::Error, LevelFilter::ERROR),
+            (LogLevel::Warn, LevelFilter::WARN),
+            (LogLevel::Info, LevelFilter::INFO),
+            (LogLevel::Debug, LevelFilter::DEBUG),
+            (LogLevel::Trace, LevelFilter::TRACE),
+        ];
+        for (lv, want) in cases {
+            assert_eq!(level_filter(lv), want, "{lv:?}");
+        }
+    }
 }
