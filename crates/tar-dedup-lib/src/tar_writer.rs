@@ -35,8 +35,9 @@ impl TarWriter {
         settings: &CompressionSettings,
         jobs: usize,
         shutdown: Shutdown,
-        sparse: bool,
-    ) -> Result<Self> {
+        sparse: bool)
+
+        -> Result<Self> {
         let format = settings.format;
         let compress_level = settings.level;
         let xz_extreme = settings.xz_extreme;
