@@ -125,6 +125,11 @@ static LOG_MPB: Mutex<Option<Arc<MultiProgress>>> = Mutex::new(None);
 pub struct ProgressBarSet {
     mp: Arc<MultiProgress>,
     global: ProgressBar,
+    /// Whether `global` is currently a member of `mp` (and therefore anchors the
+    /// phase bar via `insert_before`). `false` only while the single-bar footer
+    /// step has removed it (`unregister_global`); `begin_phase` / `thread_bar`
+    /// assert this so any progress after that footer panics with a clear message.
+    global_registered: Mutex<bool>,
     phase: Mutex<Option<ProgressBar>>,
     /// While `Some`, every phase-targeting operation drives this bar instead of the
     /// real phase bar, and `inc_both`/`inc_global` stop advancing the global. Used
@@ -161,6 +166,7 @@ impl ProgressBarSet {
         Self {
             mp,
             global,
+            global_registered: Mutex::new(true),
             phase: Mutex::new(None),
             override_phase: Mutex::new(None),
             subs: Mutex::new(Vec::new()),
@@ -172,6 +178,51 @@ impl ProgressBarSet {
             table_size: Mutex::new(1),
             multiplier,
         }
+    }
+
+    /// (Re-)join the global bar to the [`MultiProgress`], clearing the internal
+    /// presence flag. Idempotent — no-op when it is already registered.
+    pub fn register_global(&self) {
+        let mut f = self.global_registered
+            .lock()
+            .expect("global-registered lock poisoned");
+
+        if !*f {
+            self.mp.add(self.global.0.clone());
+            *f = true;
+        }
+    }
+
+    /// Detach the global bar from the [`MultiProgress`] (it stays fully
+    /// functional as a handle, just not drawn) and set the internal presence
+    /// flag. Idempotent — no-op when it is already unregistered. Used by the
+    /// single-bar footer step; while unregistered, `begin_phase`/`thread_bar`
+    /// panic because they need the global as their `insert_before` anchor.
+    pub fn unregister_global(&self) {
+        let mut f = self.global_registered
+            .lock()
+            .expect("global-registered lock poisoned");
+
+        if *f {
+            self.mp.remove(&self.global.0);
+            *f = false;
+        }
+    }
+
+    /// Tear the phase and global bars down so only the caller's own sub-bar
+    /// renders — the terminal step for an archive's footer integrity hash. The
+    /// phase bar is dropped (the next `begin_phase` rebuilds it) and the global
+    /// is unregistered; nothing on this `ProgressBarSet` may draw a new phase
+    /// afterwards.
+    pub fn single_bar(&self) {
+        if let Some(p) = self.phase
+            .lock()
+            .expect("progress phase lock poisoned").take() {
+
+            reset_bar(&p, ResetKind::Finish);
+            self.mp.remove(&p);
+        }
+        self.unregister_global();
     }
 
     /// Scale the global bar to the full table: length = `n * multiplier`.
@@ -188,6 +239,12 @@ impl ProgressBarSet {
         self.global.set_position(idx.saturating_mul(total));
         self.finish_current(ResetKind::Finish);
         let bar = make_bar(kind, msg);
+        assert!(
+            *self.global_registered.lock().expect("global-registered lock poisoned"),
+            "no global progressbar: `unregister_global()`/`single_bar()` removed it as the \
+             last bar-modifying (footer) step; nothing may `begin_phase` on this \
+             `ProgressBarSet` afterwards"
+        );
         self.mp.insert_before(&self.global, bar.0.clone());
         *self.phase.lock().expect("progress phase lock poisoned") = Some(bar);
     }
@@ -315,7 +372,15 @@ impl ProgressBarSet {
         // Insert the bar into the MultiProgress bar.
         match self.phase.lock().expect("progress phase lock poisoned").as_ref() {
             Some(p) => self.mp.insert_before(p, bar.0.clone()),
-            None => self.mp.insert_before(&self.global, bar.0.clone()),
+            None => {
+                assert!(
+                    *self.global_registered.lock().expect("global-registered lock poisoned"),
+                    "no global progressbar: `unregister_global()`/`single_bar()` removed it as \
+                     the last bar-modifying (footer) step; no thread bar may be created \
+                     afterwards"
+                );
+                self.mp.insert_before(&self.global, bar.0.clone())
+            }
         };
 
         // Update the vector with the new bar.
