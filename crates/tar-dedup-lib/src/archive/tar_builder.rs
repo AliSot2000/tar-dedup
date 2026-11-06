@@ -354,8 +354,9 @@ fn end_session(
             if write_tar_eof && rt.config.pipeline.write_archive_footer {
                 rt.db.checkpoint()?;
                 // Footer catalog is always xz -9e, independent of tar stream compression.
-                // The content-integrity hash reads the finished archive back, so give
-                // it a bar on top of the phase + global bars.
+                // The content-integrity hash reads the finished archive back; drop the
+                // phase/global bars so the trailer hash is the only bar shown.
+                rt.progress.single_bar();
                 let hash_bar = rt.progress.push_sub_bar("archive integrity: ", BarKind::Bytes);
                 match archive_footer::write_footer(
                     &rt.config.paths.archive_path,
@@ -384,6 +385,8 @@ fn end_session(
 /// branch in `run`): re-open the finalized work DB, hash the stream bytes and
 /// append the trailer. Runs before any new session / re-compression.
 fn run_footer_one_shot(rt: &ArchiveRTArgs) -> Result<()> {
+    // Drop the phase/global bars so the trailer hash is the only bar shown.
+    rt.progress.single_bar();
     let hash_bar = rt.progress.push_sub_bar("archive integrity: ", BarKind::Bytes);
     archive_footer::write_footer(
         &rt.config.paths.archive_path,
