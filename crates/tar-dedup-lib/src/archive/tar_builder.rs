@@ -378,6 +378,18 @@ fn end_session(
     }
 }
 
+/// One-shot completion of a footerless-but-finalized archive (see the resume
+/// branch in `run`): re-open the finalized work DB, hash the stream bytes and
+/// append the trailer. Runs before any new session / re-compression.
+fn run_footer_one_shot(rt: &ArchiveRTArgs) -> Result<()> {
+    let hash_bar = rt.progress.push_sub_bar("archive integrity: ", BarKind::Bytes);
+    archive_footer::write_footer(
+        &rt.config.paths.archive_path,
+        &rt.config.paths.db_path(),
+        rt.shutdown,
+        Some(&hash_bar))
+}
+
 // -------------------------------------------------------------------------------------------------
 // UTIL
 // -------------------------------------------------------------------------------------------------
