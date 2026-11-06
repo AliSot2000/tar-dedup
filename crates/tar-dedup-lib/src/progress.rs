@@ -863,6 +863,48 @@ mod tests {
         assert_eq!(set.global_position(), base_global + 1);
     }
 
+    #[test]
+    fn register_unregister_global_toggles_flag_and_begin_phase_panics_while_unregistered() {
+        // The global is the `insert_before` anchor for a new phase; with it
+        // unregistered (as the single-bar footer leaves it) any `begin_phase` is
+        // a structural misuse and must panic with an explicit message rather than
+        // falling through to indicatif's bare `index().unwrap()`.
+        let set = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+        set.begin_phase(0, "scan", BarKind::Counter); // registered by default -> ok
+        set.unregister_global();
+
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            set.begin_phase(1, "scan", BarKind::Counter);
+        }));
+        let msg = res.err().expect("begin_phase must panic after unregister_global");
+        let msg = msg.downcast_ref::<&str>().expect("panic payload is a &str");
+        assert!(msg.contains("no global progressbar"), "{msg}");
+
+        // register_global restores the anchor.
+        set.register_global();
+        set.begin_phase(1, "scan", BarKind::Counter);
+    }
+
+    #[test]
+    fn single_bar_removes_phase_and_global_leaving_one_bar() {
+        // A fresh phase bar exists; `single_bar` drops it (and the global), so the
+        // caller's own sub-bar becomes the only rendered bar and `finish()` still
+        // completes without touching a stale anchor.
+        let set = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+        set.begin_phase(0, "scan", BarKind::Counter);
+        set.set_phase_total(100);
+        set.inc_both(5);
+        assert_eq!(set.phase_position(), 5);
+
+        set.single_bar();
+        assert_eq!(set.phase_position(), 0, "phase bar dropped");
+
+        let hash = set.push_sub_bar("archive integrity: ", BarKind::Bytes);
+        hash.inc(7);
+        assert_eq!(hash.position(), 7, "the lone sub-bar carries the progress");
+        set.finish(); // no panic: the removed global's final draw is a safe no-op
+    }
+
     fn fmt_timer(timer: &impl FormatTime) -> String {
         struct Fmt<'a>(&'a dyn FormatTime);
         impl std::fmt::Display for Fmt<'_> {
