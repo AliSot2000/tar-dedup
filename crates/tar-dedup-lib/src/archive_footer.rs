@@ -474,6 +474,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn write_footer_force_interrupt_leaves_archive_footerless() {
+        // A force abort during the content-hash pass must propagate Interrupted
+        // and append nothing: the archive stays a complete-but-footerless stream
+        // that a resume can finish with a footer-only step.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, _m) = build_archive(dir.path());
+        let baseline = std::fs::metadata(&config.paths.archive_path).expect("meta").len();
+        // `build_archive` already minted the working catalog next to the archive.
+        let catalog = dir.path().join("catalog.sqlite");
+        assert!(catalog.is_file(), "catalog precondition");
+
+        let sh = Shutdown::detached();
+        sh.request_force();
+        match write_footer(&config.paths.archive_path, &catalog, &sh, None) {
+            Err(Error::Interrupted) => {}
+            other => panic!("expected Interrupted, got {other:?}"),
+        }
+        assert!(!has_valid_footer(&config.paths.archive_path));
+        assert_eq!(
+            std::fs::metadata(&config.paths.archive_path).expect("meta").len(),
+            baseline,
+            "footer must not be appended after an interrupted hash"
+        );
+
+        // A clean retry (as a resume would) appends the footer successfully.
+        write_footer(&config.paths.archive_path, &catalog, &Shutdown::detached(), None)
+            .expect("retry write");
+        assert!(has_valid_footer(&config.paths.archive_path));
+    }
+
     #[cfg(feature = "test-compression")]
     #[test]
     fn compressed_stream_with_footer_reads_back() {
