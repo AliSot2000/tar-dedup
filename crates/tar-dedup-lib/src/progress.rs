@@ -508,11 +508,37 @@ impl Drop for BarScope<'_> {
 /// - `tracing::error` → plain stderr;
 /// - warn/info/debug/trace → stdout above the bars via the MPB.
 ///
-/// Base verbosity is INFO unless RUST_LOG overrides it.
-pub fn init_tracing() {
+/// Base verbosity is INFO unless `--log-level` / `RUST_LOG` override it. The
+/// two axes are resolved by the caller (`config::resolve_log_flags`): `long_time`
+/// picks seconds vs sub-second, `target_visible` shows/hides the module target.
+/// A `--log-time` template (chrono strftime) overrides the time axis entirely.
+pub fn init_tracing(log_level: Option<LogLevel>, long_time: bool, target_visible: bool, log_time: Option<&str>) {
+    let default_directive = log_level.map(level_filter).unwrap_or(LevelFilter::INFO);
     let env = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
+        .with_default_directive(default_directive.into())
         .from_env_lossy();
+
+    // Timestamp precedence: user template > short timer > long (sub-second) default.
+    if let Some(template) = log_time.filter(|s| !s.trim().is_empty()) {
+        let t = template.to_string();
+        install_tracer(target_visible, move || StrfTimer(t.clone()), env);
+    } else if !long_time {
+        install_tracer(target_visible, || SecondTimer, env);
+    } else {
+        install_tracer(target_visible, || tracing_subscriber::fmt::time::SystemTime, env);
+    }
+}
+
+/// Build and install the two-layer subscriber with a shared timer. `with_timer`
+/// must run before `with_filter` (which wraps the layer into a `Filtered`).
+fn install_tracer<M, F>(
+    target_visible: bool,
+    make_timer: F,
+    env: EnvFilter)
+where
+    M: FormatTime + Send + Sync + 'static,
+    F: Fn() -> M,
+{
     // `Level` ordinals invert with severity here, so use explicit predicates
     // rather than `LevelFilter` to split ERROR (stderr) from the rest (stdout).
     let error_only = filter_fn(|meta| *meta.level() == Level::ERROR);
@@ -521,16 +547,52 @@ pub fn init_tracing() {
     let error_layer = tracing_subscriber::fmt::layer()
         .with_writer(io::stderr)
         .with_ansi(io::stderr().is_terminal())
+        .with_target(target_visible)
+        .with_timer(make_timer())
         .with_filter(env.clone().and(error_only));
-
     let stdout_layer = tracing_subscriber::fmt::layer()
         .with_writer(LogWriter)
         // ANSI-free: colored lines would break indicatif's width/line accounting
         // when they are piped through `MultiProgress::println`.
         .with_ansi(false)
+        .with_target(target_visible)
+        .with_timer(make_timer())
         .with_filter(env.and(below_error));
 
     registry().with(error_layer).with(stdout_layer).init();
+}
+
+/// UTC timestamp truncated to whole seconds: `2026-11-06T01:12:28Z`.
+#[derive(Clone, Copy, Default)]
+struct SecondTimer;
+
+impl FormatTime for SecondTimer {
+    fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ"))
+    }
+}
+
+/// `--log-time`: render the current UTC time with a user-supplied chrono
+/// strftime template. Unknown specifiers render literally (best-effort, no panic).
+#[derive(Clone)]
+struct StrfTimer(String);
+
+impl FormatTime for StrfTimer {
+    fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", chrono::Utc::now().format(&self.0))
+    }
+}
+
+/// Map the `--log-level` enum onto `tracing`'s `LevelFilter`.
+fn level_filter(level: LogLevel) -> LevelFilter {
+    match level {
+        LogLevel::Off => LevelFilter::OFF,
+        LogLevel::Error => LevelFilter::ERROR,
+        LogLevel::Warn => LevelFilter::WARN,
+        LogLevel::Info => LevelFilter::INFO,
+        LogLevel::Debug => LevelFilter::DEBUG,
+        LogLevel::Trace => LevelFilter::TRACE,
+    }
 }
 
 /// Writes to stdout, suspending the active bar set for the duration so the
