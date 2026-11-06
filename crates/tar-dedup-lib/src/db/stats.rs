@@ -116,12 +116,12 @@ pub fn sum_bytes_canonical(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
-/// Sum of `size` over rows whose payload was appended to an archive session.
+/// Sum of `size` over rows whose payload was appended to an archive session
+/// (`session_id IS NOT NULL`).
 pub fn sum_bytes_archived(conn: &Connection) -> Result<u64> {
-    let bit = FileFlag::AppendedPath.mask_i64();
     let n: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(size), 0) FROM files WHERE (flags & :bit) != 0",
-        rusqlite::named_params! { ":bit": bit },
+        "SELECT COALESCE(SUM(size), 0) FROM files WHERE session_id IS NOT NULL",
+        [],
         |r| r.get(0),
     ).to_panic()?;
     Ok(n as u64)
