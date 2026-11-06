@@ -142,7 +142,6 @@ fn handle_send_receive_loop(
         if items.is_empty() {
             return Ok(());
         }
-        let n = items.len() as u64;
         rt.db.ingest_hash_outcome(&items, !rt.config.indexing.no_hardlink_detection)?;
         for res in items {
             match res {
@@ -161,14 +160,16 @@ fn handle_send_receive_loop(
                 } ,
             }
         }
-        rt.progress.inc_both(n);
         Ok(())
     };
+    // Progress earlier than the `apply` commit: count each drained outcome as
+    // it leaves the channel, so the bar never stalls a whole `drain_chunk`.
+    let on_dequeue = |n| rt.progress.inc_both(n);
 
     let completed = send_receive_loop(
         rt.shutdown, send, recv, thread_handles,
         rt.config.process.drain_chunk, false,
-        pull, |_| Ok(()), || Ok(true), apply)?;
+        pull, |_| Ok(()), || Ok(true), apply, on_dequeue)?;
     recorder.flush()?;
     Ok(completed)
 }
