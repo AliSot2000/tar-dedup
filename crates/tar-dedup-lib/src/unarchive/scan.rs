@@ -270,9 +270,7 @@ fn run_inner(
         s
     } else {
         tracing::info!("starting scan: no catalog yet (awaiting manifest)");
-        let mut scn = ScanState::default();
-        scn.from_footer |= footer_this_pass;
-        scn
+        ScanState::default()
     };
     scan.from_footer |= footer_this_pass;
 
