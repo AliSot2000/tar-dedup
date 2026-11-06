@@ -262,6 +262,12 @@ After the files are extracted, they are hashed again to check if any data corrup
 |-------|-------------|----------|------|-----------------------------------------------------------------|-------|
 | -     | --no-rehash | n        | 0    | Do not run the rehash (content verification) phase. Default: on |       |
 
+#### Scan
+
+| Short | Long                | Required | Args | Description                                                                                                                                                                              | Notes |
+|-------|---------------------|----------|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------|
+| -     | --no-verify-archive | n        | 0    | Skip the up-front integrity check of the stored compressed archive (footer content sha1). Default: on. Extraction's per-file rehash still verifies content when `--no-rehash` is not set |       |
+
 #### Overwrite Control
 
 | Short | Long                     | Required | Args | Description                                                                                                                                                                                                        | Notes |
