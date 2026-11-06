@@ -15,10 +15,10 @@ use std::path::{Path, PathBuf};
 use crate::progress::ProgressBar;
 use sha1::{Digest, Sha1};
 
-use crate::common::defaults::ARCHIVE_IO_BUF_SIZE;
-use crate::common::hash::HashingReader;
+use crate::common::hash::hash_file_range;
 use crate::compression::{compress_footer_bytes, decompress_footer_bytes};
 use crate::error::{Error, Result};
+use crate::shutdown::Shutdown;
 
 pub const FOOTER_MAGIC: &[u8] = b"Tar-Dedup-SQLite-Footer";
 const SHA1_LEN: u64 = 20;
@@ -28,41 +28,15 @@ fn footer_fixed_overhead() -> u64 {
     FOOTER_MAGIC.len() as u64 + SHA1_LEN + SHA1_LEN + FOOTER_MAGIC.len() as u64 + OFFSET_LEN
 }
 
-/// Stream-hash `len` bytes starting at `start` with sha1, chunked at
-/// `ARCHIVE_IO_BUF_SIZE`, reporting progress on `bar` (which the caller may have
-/// pre-sized to span multiple regions).
-fn hash_section(archive_path: &Path, start: u64, len: u64, bar: Option<&ProgressBar>)
-    -> Result<[u8; 20]> {
-    let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
-    file.seek(SeekFrom::Start(start))
-        .map_err(|e| Error::io(archive_path, e))?;
-    let mut reader = HashingReader::new(file);
-    let mut buf = vec![0u8; ARCHIVE_IO_BUF_SIZE];
-    let mut remaining = len;
-    while remaining > 0 {
-        let want = remaining.min(buf.len() as u64) as usize;
-        let n = reader
-            .read(&mut buf[..want])
-            .map_err(|e| Error::io(archive_path, e))?;
-        if n == 0 {
-            break;
-        }
-        remaining -= n as u64;
-        if let Some(bar) = bar {
-            bar.inc(n as u64);
-        }
-    }
-    Ok(reader.finalize())
-}
-
 /// Stream-hash the first `len` bytes of `archive_path`, sizing/positioning `bar`.
-fn hash_archive_bytes(archive_path: &Path, len: u64, bar: Option<&ProgressBar>)
+fn hash_archive_bytes(archive_path: &Path, len: u64, shutdown: &Shutdown,
+    bar: Option<&ProgressBar>)
     -> Result<[u8; 20]> {
     if let Some(bar) = bar {
         bar.set_length(len);
         bar.set_position(0);
     }
-    hash_section(archive_path, 0, len, bar)
+    hash_file_range(archive_path, 0, len, shutdown, bar)
 }
 
 /// Locate the footer in `file`: `Some(offset)` when a footer is present (trailing
