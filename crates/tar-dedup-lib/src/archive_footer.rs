@@ -209,8 +209,10 @@ pub fn read_footer(archive_path: &Path, dest: &Path) -> Result<bool> {
 ///
 /// Returns `Ok(true)` when the stored digest matches `archive[0..offset)`,
 /// `Ok(false)` when it does not (content corruption or no footer), and `Err` when
-/// the footer structure cannot be read.
-pub fn verify_archive_integrity(archive_path: &Path) -> Result<bool> {
+/// the footer structure cannot be read. `bar`, when given, reports the hash
+/// progress over the archive content.
+pub fn verify_archive_integrity(archive_path: &Path, bar: Option<&ProgressBar>)
+    -> Result<bool> {
     let mut file = File::open(archive_path).map_err(|e| Error::io(archive_path, e))?;
     let len = file
         .metadata()
@@ -219,7 +221,7 @@ pub fn verify_archive_integrity(archive_path: &Path) -> Result<bool> {
     let Some(layout) = FooterLayout::from_file(archive_path, &mut file, len)? else {
         return Ok(false);
     };
-    let actual = hash_archive_bytes(archive_path, layout.offset, None)?;
+    let actual = hash_archive_bytes(archive_path, layout.offset, bar)?;
     Ok(actual == layout.content_digest)
 }
 
