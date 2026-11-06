@@ -384,7 +384,8 @@ mod tests {
         work_cap: usize,
         drain_chunk: usize,
         apply_on_partial: bool,
-        tick: impl FnMut() -> Result<bool>) -> (u64, Vec<u64>, Vec<u64>, Vec<Vec<u64>>) {
+        tick: impl FnMut() -> Result<bool>,
+        on_dequeue: impl FnMut(u64)) -> (u64, Vec<u64>, Vec<u64>, Vec<Vec<u64>>) {
         let (work_s, work_r) = bounded::<u64>(work_cap);
         let (out_s, out_r) = bounded::<Option<u64>>(1024);
         let mut handles = Vec::with_capacity(workers);
@@ -425,6 +426,7 @@ mod tests {
                 out.clear();
                 Ok(())
             },
+            on_dequeue,
         ).expect("toy loop");
         (dequeue, applied, sent_log, batches)
     }
@@ -439,7 +441,7 @@ mod tests {
         let sh = Shutdown::detached();
         // 8 items through a cap-4 channel; drain_chunk=2 forces batched applies.
         let (dequeue, applied, sent_log, batches) = run_toy(
-            &sh, 1, map_worker, (0..8).collect(), 4, 2, false, || Ok(true));
+            &sh, 1, map_worker, (0..8).collect(), 4, 2, false, || Ok(true), |_| {});
 
         assert_eq!(dequeue, 8);
         assert_eq!(sorted(applied), (1..=8).collect::<Vec<_>>());
@@ -453,7 +455,7 @@ mod tests {
         let sh = Shutdown::detached();
         // drain_chunk=2, 3 outcomes: the ragged tail must still be committed.
         let (dequeue, applied, _, _) = run_toy(
-            &sh, 1, map_worker, vec![0, 1, 2], 4, 2, false, || Ok(true));
+            &sh, 1, map_worker, vec![0, 1, 2], 4, 2, false, || Ok(true), |_| {});
 
         assert_eq!(dequeue, 3);
         assert_eq!(sorted(applied), vec![1, 2, 3]);
@@ -464,7 +466,7 @@ mod tests {
         let sh = Shutdown::detached();
         sh.request_graceful();
         let (dequeue, applied, sent_log, _) = run_toy(
-            &sh, 1, map_worker, (0..8).collect(), 4, 2, false, || Ok(true));
+            &sh, 1, map_worker, (0..8).collect(), 4, 2, false, || Ok(true), |_| {});
 
         assert_eq!(dequeue, 0);
         assert!(applied.is_empty());
@@ -491,7 +493,7 @@ mod tests {
             }
         }) as ToyWorker;
         let (dequeue, applied, sent_log, _) = run_toy(
-            &sh, 1, mk, (0..8).collect(), 4, 2, false, || Ok(true));
+            &sh, 1, mk, (0..8).collect(), 4, 2, false, || Ok(true), |_| {});
 
         // Exactly one outcome was delivered and it is applied; the feed stopped
         // well short of the full slice.
@@ -513,7 +515,7 @@ mod tests {
             }
         }) as ToyWorker;
         let (dequeue, applied, sent_log, _) = run_toy(
-            &sh, 1, mk, (0..8).collect(), 4, 2, false, || Ok(true));
+            &sh, 1, mk, (0..8).collect(), 4, 2, false, || Ok(true), |_| {});
 
         // The in-flight item produces no outcome and nothing is committed; the
         // loop still exits cleanly (no hang) after the workers are gone. How many
@@ -532,7 +534,7 @@ mod tests {
             panic!("toy worker crashed")
         }) as ToyWorker;
         let (dequeue, applied, _, _) = run_toy(
-            &sh, 1, mk, (0..8).collect(), 4, 2, false, || Ok(true));
+            &sh, 1, mk, (0..8).collect(), 4, 2, false, || Ok(true), |_| {});
 
         // No None marker arrives; the loop must terminate via `is_finished`
         // and commit the (empty) results.
@@ -553,7 +555,7 @@ mod tests {
             out.send(None).expect("toy worker out");
         }) as ToyWorker;
         let (dequeue, applied, _, _) = run_toy(
-            &sh, 1, mk, vec![0], 4, 6, false, || Ok(true));
+            &sh, 1, mk, vec![0], 4, 6, false, || Ok(true), |_| {});
 
         assert_eq!(dequeue, 7);
         assert_eq!(sorted(applied), (1000..1007).collect::<Vec<_>>());
@@ -569,7 +571,7 @@ mod tests {
             out.send(None).expect("toy worker out");
         }) as ToyWorker;
         let (dequeue, applied, sent_log, _) = run_toy(
-            &sh, 1, mk, (0..8).collect(), 2, 2, false, || Ok(true));
+            &sh, 1, mk, (0..8).collect(), 2, 2, false, || Ok(true), |_| {});
 
         assert_eq!(sent_log, vec![0, 1]);   // only the two the cap-2 channel took
         assert_eq!(dequeue, 0);
@@ -582,7 +584,7 @@ mod tests {
         let mut calls = 0u64;
         let tick = move || { calls += 1; if calls < 2 { Ok(true) } else { Ok(false) } };
         let (dequeue, applied, sent_log, _) = run_toy(
-            &sh, 1, map_worker, (0..8).collect(), 4, 2, false, tick);
+            &sh, 1, map_worker, (0..8).collect(), 4, 2, false, tick, |_| {});
 
         // The tick stops the feed — but how many items the fast worker lets
         // through before `tick(2)` lands is a thread-scheduling race, so only
@@ -601,10 +603,30 @@ mod tests {
         // Two workers each send a `None` exit marker; the loop must count both
         // and commit every outcome before returning.
         let (dequeue, applied, _, _) = run_toy(
-            &sh, 2, map_worker, (0..6).collect(), 4, 2, false, || Ok(true));
+            &sh, 2, map_worker, (0..6).collect(), 4, 2, false, || Ok(true), |_| {});
 
         assert_eq!(dequeue, 6);
         assert_eq!(sorted(applied), (1..=6).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn on_dequeue_sums_to_dequeued_outcomes() {
+        let sh = Shutdown::detached();
+        // Two workers, 8 items through a cap-2 channel: `on_dequeue` fires once
+        // per drain pass — a batched `(0, drain_chunk]` count per outcome, never
+        // per-outcome and never over-threshold. Aggregate must equal the applied
+        // outcome count (exit markers are not counted).
+        let mut deq_counts = Vec::<u64>::new();
+        let (dequeue, applied, _, _) = run_toy(
+            &sh, 2, map_worker, (0..8).collect(), 2, 2, false, || Ok(true),
+            |n| deq_counts.push(n));
+
+        let sum: u64 = deq_counts.iter().sum();
+        assert_eq!(dequeue, 8);
+        assert_eq!(sum, 8, "on_dequeue must observe every dequeued outcome");
+        assert_eq!(sum as usize, applied.len());
+        assert!(deq_counts.iter().all(|&c| c > 0), "never called with 0");
+        assert!(deq_counts.iter().all(|&c| c <= 2), "batched, never over drain_chunk");
     }
 
     #[test]
