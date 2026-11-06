@@ -847,6 +847,39 @@ mod tests {
                 "footer must extend the archive beyond the recorded tar bytes");
     }
 
+    /// Fresh world with `archived` + `staged` counts and a session that is either
+    /// finalized or left open; returns the `footer_pending` verdict.
+    fn footer_state(archived: usize, staged: usize, finalize: bool, footer_enabled: bool) -> bool {
+        let world = TestWorld::new();
+        let mut config = world.config.clone();
+        config.pipeline.write_archive_footer = footer_enabled;
+        let ids: Vec<FileId> = (0..(archived + staged))
+            .map(|i| world.add_file(&format!("f{i}.bin"), &[i as u8; 4][..]))
+            .collect();
+        for id in &ids[..archived] { world.seed_archived_row(*id); }
+        for id in &ids[archived..] { world.seed_staged_row(*id); }
+        let sid = world.begin_session(0);
+        if finalize { world.db.finalize_archive_session(sid).expect("finalize session"); }
+        let rt = ArchiveRTArgs {
+            config: &config, db: &world.db, shutdown: &world.shutdown, progress: &world.progress,
+        };
+        footer_pending(&rt).expect("footer_pending")
+    }
+
+    #[test]
+    fn footer_pending_distinguishes_footer_ready_from_interrupted_modes() {
+        // Target: stream closed + session finalized + every row archived -> the
+        // interrupted-footer-hash state and the only true fork.
+        assert!(footer_state(2, 0, true, true));
+        // Graceful mid-archive: session finalized but a row still staged
+        // (not yet appended) -> must NOT footer an incomplete stream.
+        assert!(!footer_state(1, 1, true, true));
+        // Crash before session-finalize: all rows archived, session still open.
+        assert!(!footer_state(2, 0, false, true));
+        // Footer not requested.
+        assert!(!footer_state(2, 0, true, false));
+    }
+
     #[test]
     fn run_graceful_interrupt_then_resume() {
         let world = TestWorld::new();
