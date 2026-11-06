@@ -44,8 +44,9 @@ pub enum StartAction {
 pub fn resolve_start(
     policy: StartPolicy,
     work: WorkPresence,
-    product: ProductPresence,
-) -> Result<StartAction> {
+    product: ProductPresence)
+    -> Result<StartAction> {
+
     match policy {
         StartPolicy::Fresh => Ok(StartAction::RunFresh),
         StartPolicy::Resume => match work {
