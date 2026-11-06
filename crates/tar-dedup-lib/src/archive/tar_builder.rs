@@ -802,6 +802,39 @@ mod tests {
     }
 
     #[test]
+    fn run_resume_completes_missing_footer_when_enabled() {
+        // A footerless-but-finalized archive (stream closed + session finalized,
+        // interrupted before the trailer) is finished on resume by a footer-only
+        // step — the resumable-fallback path for a mid-footer-hash interrupt.
+        let world = TestWorld::new();
+        let mut cfg = world.config.clone();
+        cfg.pipeline.write_archive_footer = false; // pass 1 writes no trailer
+        let id = world.add_file("a.bin", &[1u8; 8][..]);
+        world.seed_staged_row(id);
+        world.place_symlink(id);
+        run(&ArchiveRTArgs { config: &cfg, db: &world.db, shutdown: &world.shutdown,
+                             progress: &world.progress })
+            .expect("first run");
+        assert!(!archive_footer::has_valid_footer(&cfg.paths.archive_path));
+        assert!(world.db.has_finalized_archive_session().expect("has finalized"));
+        let bytes_out = world.db.get_archive_bytes_out().expect("bytes out").expect("recorded");
+
+        // Resume with the trailer now enabled: append only the footer, advance to Done.
+        cfg.pipeline.write_archive_footer = true;
+        let fresh = Shutdown::detached();
+        run(&ArchiveRTArgs { config: &cfg, db: &world.db, shutdown: &fresh,
+                             progress: &world.progress })
+            .expect("resume appends footer");
+        assert!(archive_footer::has_valid_footer(&cfg.paths.archive_path));
+        // bytes_out still records the tar-content length (footer is out-of-band);
+        // the archive file has grown past it.
+        assert_eq!(world.db.get_archive_bytes_out().expect("bytes out").expect("recorded"),
+                   bytes_out);
+        assert!(arrow_archive_len(&world) > bytes_out,
+                "footer must extend the archive beyond the recorded tar bytes");
+    }
+
+    #[test]
     fn run_graceful_interrupt_then_resume() {
         let world = TestWorld::new();
         let ids: Vec<FileId> = (0..3)
