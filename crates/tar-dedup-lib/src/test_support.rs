@@ -540,7 +540,7 @@ pub fn build_multi_catalog(dir: &Path, n: usize) -> (ExtractConfig, Vec<String>)
 pub fn build_footer_archive(dir: &Path) -> (ExtractConfig, String) {
     let (config, member) = build_archive(dir);
     let catalog = dir.join("catalog.sqlite");
-    crate::archive_footer::write_footer(&config.paths.archive_path, &catalog, None)
+    crate::archive_footer::write_footer(&config.paths.archive_path, &catalog, &Shutdown::detached(), None)
         .expect("write footer");
     (config, member)
 }
