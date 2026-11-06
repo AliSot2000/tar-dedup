@@ -190,7 +190,6 @@ fn run_enqueue_dequeue_loop_sparsify(
         if items.is_empty() {
             return Ok(());
         }
-        let n = items.len() as u64;
         rt.db.ingest_sparsify_outcome(&items)?;
         for res in items {
             match &res.err {
@@ -207,14 +206,15 @@ fn run_enqueue_dequeue_loop_sparsify(
                 },
             }
         }
-        rt.progress.inc_both(n);
         Ok(())
     };
+    // Count each drained outcome early so the bar never stalls a whole batch.
+    let on_dequeue = |n| rt.progress.inc_both(n);
 
     let completed = send_receive_loop(
         rt.shutdown, send, recv, thread_handles,
         rt.config.process.drain_chunk, false,
-        pull, |_| Ok(()), || Ok(true), apply)?;
+        pull, |_| Ok(()), || Ok(true), apply, on_dequeue)?;
     recorder.flush()?;
     Ok((completed, errored))
 }
