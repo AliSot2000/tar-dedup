@@ -192,7 +192,7 @@ fn hash_worker(
                 bar.reset();
                 bar.set_length(row.size);
                 bar.set_message(format!("Hashing {}", row.abs_path.display()));
-                let modified = warn_if_times_changed(
+                let times = warn_if_times_changed(
                     row.fs_path(), row.mtime, row.atime, row.ctime
                 );
                 let res = match hash_one(
@@ -200,11 +200,11 @@ fn hash_worker(
                     Ok((hash, zero_pages)) => {
                         tracing::debug!("hashed {}", row.abs_path.display());
                         Ok(HashSuccess {
-                            id: row.id, hash, zero_pages, modified
+                            id: row.id, hash, zero_pages, times
                         })
                     }
                     Err(err) => Err(HashError {
-                        id: row.id, err, modified
+                        id: row.id, err, times
                     })
                 };
                 out.send(Some(res)).expect("hash worker: result channel closed");
