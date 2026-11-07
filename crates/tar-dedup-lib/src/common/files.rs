@@ -438,6 +438,35 @@ mod tests {
     }
 
     #[test]
+    fn times_changed_to_flags_maps_each_channel_independently() {
+        let none = TimesChanged::default();
+        assert!(!none.to_file_flags().get(FileFlag::MtimeChanged));
+        assert!(!none.to_file_flags().get(FileFlag::AtimeChanged));
+        assert!(!none.to_file_flags().get(FileFlag::CtimeChanged));
+
+        let m = TimesChanged { mtime: true, ..Default::default() };
+        assert!(m.to_file_flags().get(FileFlag::MtimeChanged));
+        assert!(!m.to_file_flags().get(FileFlag::AtimeChanged));
+        assert!(!m.to_file_flags().get(FileFlag::CtimeChanged));
+
+        let a = TimesChanged { atime: true, ..Default::default() };
+        assert!(!a.to_file_flags().get(FileFlag::MtimeChanged));
+        assert!(a.to_file_flags().get(FileFlag::AtimeChanged));
+        assert!(!a.to_file_flags().get(FileFlag::CtimeChanged));
+
+        let c = TimesChanged { ctime: true, ..Default::default() };
+        assert!(!c.to_file_flags().get(FileFlag::MtimeChanged));
+        assert!(!c.to_file_flags().get(FileFlag::AtimeChanged));
+        assert!(c.to_file_flags().get(FileFlag::CtimeChanged));
+
+        let m_ac = TimesChanged { mtime: true, atime: true, ctime: true };
+        let flags = m_ac.to_file_flags();
+        assert!(flags.get(FileFlag::MtimeChanged));
+        assert!(flags.get(FileFlag::AtimeChanged));
+        assert!(flags.get(FileFlag::CtimeChanged));
+    }
+
+    #[test]
     fn copy_reader_batched_copies_all_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("src.bin");
