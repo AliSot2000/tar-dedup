@@ -1,7 +1,8 @@
 use rusqlite::{Connection, named_params};
 
+use crate::common::files::TimesChanged;
 use crate::db::common::{SqlFileRow, generate_archive_filter, set_file_phase};
-use crate::db::flags::{FileFlag, set_file_flag};
+use crate::db::flags::{FileFlag, or_file_flags, set_file_flag};
 use crate::db::types::{FileId, FilePhase};
 use crate::error::{Error, Result, ToPanic};
 
@@ -11,7 +12,7 @@ use crate::error::{Error, Result, ToPanic};
 /// - `Some(Error::Interrupted)` — aborted in-flight (row stays `deduped`).
 pub struct SparseOutcome {
     pub id: FileId,
-    pub modified: bool,
+    pub times: TimesChanged,
     pub err: Option<Error>,
 }
 
@@ -199,9 +200,7 @@ pub fn ingest_sparsify_outcome(
     let tx = conn.transaction().to_panic()?;
     let mut resolved = 0u64;
     for outcome in results.iter() {
-        if outcome.modified {
-            assert_eq!(1, set_file_flag(&tx, outcome.id, FileFlag::Modified, true)?);
-        }
+        or_file_flags(&tx, outcome.id, outcome.times.to_file_flags())?;
         match &outcome.err {
             None => {
                 assert_eq!(1, set_file_flag(&tx, outcome.id, FileFlag::HasSparse, true)?);
