@@ -3,8 +3,8 @@ scenario_xattr_user() {
     begin
     local src="$RUN/src" sub="$RUN/src/sub"
     mkdir -p "$sub"
-    printf 'alpha payload\n' > "$src/a.txt"
-    printf 'beta payload\n' > "$sub/b.bin"
+    write_file "$src/a.txt" 'alpha payload\n'
+    write_file "$sub/b.bin" 'beta payload\n'
     setfattr -n user.author -v alice "$src/a.txt"
     setfattr -n user.note -v 'hello xattr' "$sub/b.bin"
 

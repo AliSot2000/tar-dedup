@@ -4,7 +4,7 @@ scenario_link_tree() {
     begin
     local src="$RUN/src"
     mkdir -p "$src"
-    printf 'link payload\n' > "$src/payload.txt"
+    write_file "$src/payload.txt" 'link payload\n'
 
     ar -i "$src"
     ex --link-tree

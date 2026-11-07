@@ -5,7 +5,7 @@ scenario_xattr_on_symlink() {
     begin
     local src="$RUN/src"
     mkdir -p "$src"
-    printf 'body\n' > "$src/a.txt"
+    write_file "$src/a.txt" 'body\n'
     ln -s a.txt "$src/link"
 
     if ! setfattr -h -n user.probe -v p "$src/link" 2>/dev/null; then

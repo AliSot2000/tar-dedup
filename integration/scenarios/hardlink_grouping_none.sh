@@ -4,9 +4,9 @@ scenario_hardlink_grouping_none() {
     begin
     local src="$RUN/src"
     mkdir -p "$src"
-    printf 'group payload\n' > "$src/h1.txt"
+    write_file "$src/h1.txt" 'group payload\n'
     ln "$src/h1.txt" "$src/h2.txt"
-    printf 'solo payload\n' > "$src/solo.txt"
+    write_file "$src/solo.txt" 'solo payload\n'
 
     ar -i "$src"
     ex --hard-link-grouping none

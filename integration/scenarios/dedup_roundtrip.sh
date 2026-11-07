@@ -3,7 +3,7 @@ scenario_dedup_roundtrip() {
     begin
     local src="$RUN/src" dup="$RUN/src/dup"
     mkdir -p "$dup"
-    printf 'same content here\n' > "$src/a.txt"
+    write_file "$src/a.txt" 'same content here\n'
     cp "$src/a.txt" "$dup/b.txt"
     setfattr -n user.mark -v first "$src/a.txt"
     setfattr -n user.mark -v second "$dup/b.txt"

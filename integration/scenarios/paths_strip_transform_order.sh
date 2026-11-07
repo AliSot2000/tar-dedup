@@ -3,7 +3,7 @@ scenario_paths_strip_transform_order() {
     begin
     local src="$RUN/src"
     mkdir -p "$src/a/l1/l2"
-    printf 'order payload\n' > "$src/a/l1/l2/f.txt"
+    write_file "$src/a/l1/l2/f.txt" 'order payload\n'
 
     ar -i "$src"
 

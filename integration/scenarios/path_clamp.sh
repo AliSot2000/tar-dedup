@@ -3,7 +3,7 @@ scenario_path_clamp() {
     begin
     local src="$RUN/src"
     mkdir -p "$src"
-    printf 'payload\n' > "$src/payload.txt"
+    write_file "$src/payload.txt" 'payload\n'
 
     ar -i "$src"
 

@@ -4,13 +4,13 @@ scenario_resume_archive() {
     local src="$RUN/src"
     mkdir -p "$src"
     local i
-    for i in $(seq 1 40); do printf 'row %s\n' "$i" > "$src/f$i.txt"; done
+    for i in $(seq 1 40); do write_file "$src/f$i.txt" 'row %s\n' "$i"; done
 
     ar -i "$src" --exit-after-stage inventory > "$RUN/step1.log" 2>&1
     [ -d "$RUN/out.astage" ] || fail "work dir missing after exit-after-stage"
     [ ! -e "$RUN/out.astar" ] || fail "archive written before it should be"
 
-    "$BIN" resume --work-dir "$RUN/out.astage" > "$RUN/step2.log" 2>&1
+    bin resume --work-dir "$RUN/out.astage" > "$RUN/step2.log" 2>&1
     [ -f "$RUN/out.astar" ] || fail "archive not completed after resume"
 
     ex --xattrs

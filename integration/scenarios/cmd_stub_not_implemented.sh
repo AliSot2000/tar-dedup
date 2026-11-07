@@ -5,12 +5,12 @@ scenario_cmd_stub_not_implemented() {
     begin
     local src="$RUN/src"
     mkdir -p "$src"
-    printf 'payload\n' > "$src/a.txt"
+    write_file "$src/a.txt" 'payload\n'
 
     ar -i "$src"
 
     for sub in list dump query; do
-        if "$BIN" "$sub" -f "$RUN/out.astar" >/dev/null 2>"$RUN/err.txt"; then
+        if bin "$sub" -f "$RUN/out.astar" >/dev/null 2>"$RUN/err.txt"; then
             fail "$sub unexpectedly succeeded"
         fi
         grep -q "not implemented" "$RUN/err.txt" \
@@ -18,9 +18,9 @@ scenario_cmd_stub_not_implemented() {
     done
 
     # Leave an interrupted archive so reset has a work db to resolve.
-    "$BIN" archive -f "$RUN/reset.astar" -i "$src" --exit-after-stage inventory \
+    bin archive -f "$RUN/reset.astar" -i "$src" --exit-after-stage inventory \
         >/dev/null 2>&1
-    if "$BIN" reset --work-dir "$RUN/reset.astage" >/dev/null 2>"$RUN/err.txt"; then
+    if bin reset --work-dir "$RUN/reset.astage" >/dev/null 2>"$RUN/err.txt"; then
         fail "reset unexpectedly succeeded"
     fi
     grep -q "not implemented" "$RUN/err.txt" \

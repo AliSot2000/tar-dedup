@@ -5,10 +5,10 @@ scenario_no_strict_separation_fanout() {
     begin
     local top="$RUN/top" sub="$RUN/top/sub"
     mkdir -p "$sub"
-    printf 'shared payload a\n' > "$top/a.txt"
-    printf 'shared payload s\n' > "$sub/s.txt"
+    write_file "$top/a.txt" 'shared payload a\n'
+    write_file "$sub/s.txt" 'shared payload s\n'
     ln "$top/a.txt" "$sub/a2.txt"
-    printf 'own payload\n' > "$top/b.txt"
+    write_file "$top/b.txt" 'own payload\n'
 
     ar -i "$top" -i "$sub" --no-strict-separation
     ex

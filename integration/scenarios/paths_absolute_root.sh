@@ -3,7 +3,7 @@ scenario_paths_absolute_root() {
     begin
     local src="$RUN/src"
     mkdir -p "$src"
-    printf 'abs payload\n' > "$src/a.txt"
+    write_file "$src/a.txt" 'abs payload\n'
 
     ar -i "$src"
     ex

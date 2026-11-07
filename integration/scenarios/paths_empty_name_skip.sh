@@ -3,8 +3,8 @@ scenario_paths_empty_name_skip() {
     begin
     local src="$RUN/src"
     mkdir -p "$src/sub"
-    printf 'wanted payload\n' > "$src/keep.txt"
-    printf 'dropped payload\n' > "$src/sub/drop.txt"
+    write_file "$src/keep.txt" 'wanted payload\n'
+    write_file "$src/sub/drop.txt" 'dropped payload\n'
 
     ar -i "$src"
     ex --transform 's,^.*/drop\.txt$,,'

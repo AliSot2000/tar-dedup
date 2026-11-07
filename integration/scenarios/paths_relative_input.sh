@@ -3,10 +3,10 @@ scenario_paths_relative_input() {
     begin
     local cwd="$RUN/cwd" src="$RUN/src"
     mkdir -p "$cwd" "$src"
-    printf 'relative payload\n' > "$src/r.txt"
+    write_file "$src/r.txt" 'relative payload\n'
 
-    "$BIN" archive -f "$RUN/out.astar" -C "$cwd" -i ../src >/dev/null 2>&1
-    "$BIN" extract -f "$RUN/out.astar" -C "$RUN/ext" >/dev/null 2>&1
+    bin archive -f "$RUN/out.astar" -C "$cwd" -i ../src >/dev/null 2>&1
+    bin extract -f "$RUN/out.astar" -C "$RUN/ext" >/dev/null 2>&1
 
     # `../src` is clamped to `src` under the extraction root.
     assert_file_eq "$RUN/ext/src/r.txt" "$src/r.txt"

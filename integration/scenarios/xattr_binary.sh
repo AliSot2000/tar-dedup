@@ -3,7 +3,7 @@ scenario_xattr_binary() {
     begin
     local src="$RUN/src"
     mkdir -p "$src"
-    printf 'blob\n' > "$src/bin.dat"
+    write_file "$src/bin.dat" 'blob\n'
     local expect_b64
     expect_b64="$(printf '\x01\x02\xff\xfe\x5a' | base64)"
     setfattr -n user.blob -v "$(printf '\x01\x02\xff\xfe\x5a')" "$src/bin.dat"

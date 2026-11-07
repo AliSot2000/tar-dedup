@@ -3,7 +3,7 @@ scenario_xattr_none_default() {
     begin
     local src="$RUN/src"
     mkdir -p "$src"
-    printf 'x\n' > "$src/a.txt"
+    write_file "$src/a.txt" 'x\n'
     setfattr -n user.note -v present "$src/a.txt"
 
     ar -i "$src"
