@@ -317,6 +317,7 @@ fn sanity_no_deduped(db: &Database) -> Result<()> {
 mod tests {
     use super::*;
     use crate::common::defaults::OUT_CAPACITY;
+    use crate::common::files::TimesChanged;
     use crate::db::flags::FileFlag;
     use crate::db::types::{FileId, FilePhase};
     use crate::error::FileStatError;
@@ -521,7 +522,7 @@ mod tests {
         match out_r.recv().expect("recv outcome") {
             Some(o) => {
                 assert_eq!(o.id, id);
-                assert_eq!(o.modified, false);
+                assert_eq!(o.times, TimesChanged::default());
                 assert!(matches!(o.err, None));
             }
             None => panic!("expected an outcome, got None"),
@@ -574,7 +575,7 @@ mod tests {
         // only FileStat / Interrupted are valid outcome errors.
         out_s.send(Some(SparseOutcome {
             id: FileId(1),
-            modified: false,
+            times: TimesChanged::default(),
             err: Some(Error::Config("boom".into())),
         })).expect("push bad outcome");
         drop(out_s);
@@ -834,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn modified_file_flagged() {
+    fn mtime_change_flagged() {
         let world = TestWorld::new();
         let stale = DateTime::from_timestamp(Utc::now().timestamp() - 3600, 0).expect("stale");
         // Recorded mtime is an hour old while the on-disk mtime is now:
@@ -848,7 +849,7 @@ mod tests {
         world.progress.drop_thread_bars();
 
         assert_eq!(completed, 1);
-        assert!(world.flag(id, FileFlag::Modified));
+        assert!(world.flag(id, FileFlag::MtimeChanged));
         assert!(world.flag(id, FileFlag::HasSparse));
     }
 
@@ -859,7 +860,7 @@ mod tests {
         let mut recorder = Recorder::new(&world.db, true, None);
         record_sparsify_error(&mut recorder, &SparseOutcome {
             id,
-            modified: false,
+            times: TimesChanged::default(),
             err: Some(Error::FileStat(FileStatError::Io {
                 path: world.path("e.bin"),
                 source: std::io::Error::new(
