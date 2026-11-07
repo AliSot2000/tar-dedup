@@ -312,6 +312,22 @@ pub fn set_file_flags(conn: &Connection, file_id: FileId, flags: FileFlags) -> R
     Ok(())
 }
 
+/// OR-union `flags` into `files.flags` — additive, unlike [`set_file_flags`] which
+/// *replaces* the whole column. A no-op (empty `flags`) causes no write.
+pub fn or_file_flags(conn: &Connection, file_id: FileId, flags: FileFlags) -> Result<()> {
+    if flags.bits() == 0 {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE files SET flags = flags | :flags WHERE id = :id",
+        named_params! {
+            ":flags": flags.to_i64(),
+            ":id": file_id.0,
+        },
+    ).to_panic()?;
+    Ok(())
+}
+
 pub fn get_file_flag(conn: &Connection, file_id: FileId, flag: FileFlag) -> Result<bool> {
     let set: i64 = conn.query_row(
         "SELECT (flags & :bit) != 0 FROM files WHERE id = :id",

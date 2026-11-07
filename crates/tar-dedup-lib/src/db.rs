@@ -228,6 +228,10 @@ impl Database {
         flags::set_file_flag(&*self.conn(), file_id, flag, on)
     }
 
+    pub fn or_file_flags(&self, file_id: FileId, value: FileFlags) -> Result<()> {
+        flags::or_file_flags(&*self.conn(), file_id, value)
+    }
+
     pub fn get_out_tree_flags(&self, out_id: OutTreeId) -> Result<OutTreeFlags> {
         flags::get_out_tree_flags(&*self.conn(), out_id)
     }
