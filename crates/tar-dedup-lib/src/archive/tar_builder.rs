@@ -984,7 +984,7 @@ mod tests {
         world.seed_staged_row(id);
         world.place_symlink(id);
         run(&world.rt()).expect("run ok");
-        assert!(world.flags(id).get(FileFlag::Modified));
+        assert!(world.flags(id).get(FileFlag::MtimeChanged));
     }
 
     /// chmod-000 append: read of the payload fails mid-tar-write; the member is
