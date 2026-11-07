@@ -723,11 +723,11 @@ mod tests {
         let mut recorder = Recorder::new(&world.db, true, None);
         record_dedup_error(&mut recorder, &CompareOutcome {
             canonical_id: FileId(1), candidate_id: id, equal: Ok(true),
-            canonical_modified: false, candidate_modified: false,
+            canonical_times: TimesChanged::default(), candidate_times: TimesChanged::default(),
         });
         record_dedup_error(&mut recorder, &CompareOutcome {
             canonical_id: FileId(1), candidate_id: id, equal: Ok(false),
-            canonical_modified: false, candidate_modified: false,
+            canonical_times: TimesChanged::default(), candidate_times: TimesChanged::default(),
         });
         record_dedup_error(&mut recorder, &CompareOutcome {
             canonical_id: FileId(1),
@@ -737,8 +737,8 @@ mod tests {
                 source: std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied, "denied".to_string()),
             })),
-            canonical_modified: false,
-            candidate_modified: false,
+            canonical_times: TimesChanged::default(),
+            candidate_times: TimesChanged::default(),
         });
         recorder.flush().expect("flush recorder");
 
@@ -766,8 +766,8 @@ mod tests {
         let id_b = world.add_file("b.bin", &payload);
         let outcome = compare_one_pair(&world, id_a, id_b, false);
         assert_equal_outcome(&outcome, true);
-        assert_eq!(outcome.canonical_modified, false);
-        assert_eq!(outcome.candidate_modified, false);
+        assert_eq!(outcome.canonical_times, TimesChanged::default());
+        assert_eq!(outcome.candidate_times, TimesChanged::default());
     }
 
     #[test]
@@ -821,8 +821,8 @@ mod tests {
 
         let outcome = compare_one_pair(&world, id_canon, id_cand, false);
 
-        assert_eq!(outcome.canonical_modified, false);
-        assert_eq!(outcome.candidate_modified, true);
+        assert_eq!(outcome.canonical_times, TimesChanged::default());
+        assert_eq!(outcome.candidate_times, TimesChanged { mtime: true, ..Default::default() });
     }
 
     #[test]
