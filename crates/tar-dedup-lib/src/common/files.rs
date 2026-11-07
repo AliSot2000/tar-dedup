@@ -143,45 +143,64 @@ impl TimesChanged {
 
 /// Heuristic check: compare live timestamps to values captured at inventory.
 ///
-/// Emits a warning if any recorded stamp differs — useful for catching accidental
-/// in-tree edits (`sed`, `cat >>`, …). Does **not** fail the caller.
+/// Emits a log if any recorded stamp differs — a **mtime** drift warns (likely a
+/// concurrent in-tree edit: `sed`, `cat >>`, …); a lone **atime**/`ctime` bump is
+/// usually self-inflicted (our own reads, chmod metadata) so it logs at debug.
+/// Does **not** fail the caller.
 ///
-/// Note: our own reads often bump **atime**; a lone atime mismatch is usually
-/// self-inflicted, but we still report it when recorded.
+/// Each stamp is its own independent channel (no propagation between them); on a
+/// stat failure the fail-safe is to report all three as changed.
 pub fn warn_if_times_changed(
     path: &Path,
     mtime: Option<DateTime<Utc>>,
     atime: Option<DateTime<Utc>>,
     ctime: Option<DateTime<Utc>>)
-    -> bool {
+    -> TimesChanged {
     let meta = match fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(
                 path = %path.display(),
                 error = %e,
-                "could not stat file for timestamp check"
+                "could not stat file for timestamp check; assuming all timestamps changed"
             );
-            return true;
+            return TimesChanged { mtime: true, atime: true, ctime: true };
         }
     };
 
     let (live_mtime, live_atime, live_ctime) = get_file_times(&meta);
-    let mut changed = Vec::new();
+    let mt = times_differ(mtime, live_mtime);
+    let at = times_differ(atime, live_atime);
+    let ct = times_differ(ctime, live_ctime);
 
-    push_if_changed(&mut changed, "mtime", mtime, live_mtime);
-    push_if_changed(&mut changed, "atime", atime, live_atime);
-    push_if_changed(&mut changed, "ctime", ctime, live_ctime);
-
-    if !changed.is_empty() {
-        tracing::warn!(
-            path = %path.display(),
-            changed = %changed.join(","),
-            "file timestamps changed since inventory (possible concurrent modification)"
-        );
-        return true;
+    if mt || at || ct {
+        // Changed stamps, emitted in atime, ctime, mtime order.
+        let mut changed = Vec::new();
+        if at {
+            changed.push("atime");
+        }
+        if ct {
+            changed.push("ctime");
+        }
+        if mt {
+            changed.push("mtime");
+        }
+        let joined = changed.join(",");
+        if mt {
+            tracing::warn!(
+                path = %path.display(),
+                changed = %joined,
+                "file timestamps changed since inventory (possible concurrent modification)"
+            );
+        } else {
+            tracing::debug!(
+                path = %path.display(),
+                changed = %joined,
+                "file timestamps changed since inventory (self-inflicted atime/ctime)"
+            );
+        }
     }
-    false
+    TimesChanged { mtime: mt, atime: at, ctime: ct }
 }
 
 /// True iff `expected` and `live` both destruct to values and differ at second resolution.
