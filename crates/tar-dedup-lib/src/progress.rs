@@ -4,7 +4,9 @@ use std::ops::Deref;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use crate::common::formatting::{format_bytes_per_sec, format_elapsed};
 
 use indicatif::{MultiProgress, ProgressStyle};
 use tracing::Level;
@@ -38,6 +40,11 @@ pub enum BarKind {
     Count,
     /// Spinner + byte bar: `{spinner} {msg} [{bar:40}] {bytes}/{total_bytes} @ {bytes_per_sec}`.
     Bytes,
+    /// Like [`Bytes`](BarKind::Bytes) but a `{prefix}` slot is fed a cumulative
+    /// `@ avg (elapsed)` by a refresher thread started at construction (instead of
+    /// indicatif's sliding `@ {bytes_per_sec}`). The thread computes `avg` from the
+    /// bar's own `position()`/elapsed and exits once the bar is finished/gone.
+    BytesRate,
 }
 
 const GLOBAL_TEMPLATE: &str = "{msg} [{bar:48.green/black}] {percent:>3}%";
@@ -50,11 +57,19 @@ fn style_for(kind: BarKind) -> ProgressStyle {
         BarKind::Bytes => {
             "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} @ {bytes_per_sec}"
         }
+        BarKind::BytesRate => {
+            "{spinner} {prefix} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes}"
+        }
     };
     ProgressStyle::with_template(template)
         .expect("valid indicatif template")
         .progress_chars("=>-")
-        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+        .tick_strings(tick_strings())
+}
+
+/// Spinner frames shared by the phase bar styles.
+fn tick_strings() -> &'static [&'static str] {
+    &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 }
 
 /// Milliseconds to sleep before each bar increment (`debug-slow-progress` feature);
@@ -535,12 +550,43 @@ impl Drop for ProgressBarSet {
 fn make_bar(kind: BarKind, msg: &str) -> ProgressBar {
     let bar = match kind {
         BarKind::Counter => ProgressBar::new_spinner(),
-        BarKind::Count | BarKind::Bytes => ProgressBar::new(0),
+        BarKind::Count | BarKind::Bytes | BarKind::BytesRate => ProgressBar::new(0),
     };
     bar.set_style(style_for(kind));
     bar.set_message(msg.to_string());
     bar.enable_steady_tick(Duration::from_millis(100));
+    if kind == BarKind::BytesRate {
+        start_byte_rate_refresher(&bar);
+    }
     bar
+}
+
+/// Start the cumulative `@ avg (elapsed)` refresher for a [`BarKind::BytesRate`]
+/// bar. Each second it reads the bar's own `position()` and the elapsed since
+/// construction, writes the rate into the `{prefix}` slot, and exits once the bar
+/// is finished/removed. Progress is driven entirely through the normal `inc`.
+fn start_byte_rate_refresher(bar: &ProgressBar) {
+    let inner = bar.0.clone();
+    let start = Instant::now();
+    thread::Builder::new()
+        .name("tar-dedup-byte-rate".into())
+        .spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(1));
+                if inner.is_finished() {
+                    return;
+                }
+                let elapsed = start.elapsed();
+                let secs = elapsed.as_secs_f64().max(1e-3);
+                let prefix = format!(
+                    "@ {} ({})",
+                    format_bytes_per_sec(inner.position() as f64 / secs),
+                    format_elapsed(elapsed)
+                );
+                inner.set_prefix(prefix);
+            }
+        })
+        .expect("spawn byte-rate refresher");
 }
 
 /// Local scope wrapper: finishes the bars on success, abandons them on any
