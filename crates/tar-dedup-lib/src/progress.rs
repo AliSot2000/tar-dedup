@@ -932,6 +932,20 @@ mod tests {
     }
 
     #[test]
+    fn bytes_rate_bar_is_a_bar_kind_and_finishes() {
+        // The rate is a plain `BarKind` variant: normal inc drives it, and
+        // finishing the bar lets its refresher thread observe `is_finished()` and
+        // exit. Nothing perpendicular to the wrapper is touched.
+        let set = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+        set.begin_phase(0, "archive", BarKind::BytesRate);
+        set.set_phase_total(100);
+        set.inc_phase(25);
+        set.inc_phase(5);
+        assert_eq!(set.phase_position(), 30);
+        set.finish();
+        assert_eq!(set.phase_position(), 0);
+    }
+
     fn single_bar_removes_phase_and_global_leaving_one_bar() {
         // A fresh phase bar exists; `single_bar` drops it (and the global), so the
         // caller's own sub-bar becomes the only rendered bar and `finish()` still
