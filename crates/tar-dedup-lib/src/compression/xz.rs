@@ -5,6 +5,7 @@ use xz2::read::XzDecoder;
 use xz2::stream::{Action, Check, MtStreamBuilder, Status, Stream};
 use xz2::write::XzEncoder;
 
+use crate::common::formatting::format_mib;
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
@@ -95,19 +96,6 @@ pub fn resolve_xz_threads(requested: usize, memlimit: Option<u64>, preset: u32) 
     Ok(threads)
 }
 
-pub fn format_mib(bytes: u64) -> String {
-    let mib = (bytes + (1024 * 1024 - 1)) / (1024 * 1024);
-    // Thin space grouping like xz (ASCII apostrophe fallback).
-    let s = mib.to_string();
-    let mut out = String::new();
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            out.push('\'');
-        }
-        out.push(ch);
-    }
-    format!("{} MiB", out.chars().rev().collect::<String>())
-}
 
 fn physical_ram_bytes() -> Option<u64> {
     let line = std::fs::read_to_string("/proc/meminfo")
@@ -287,28 +275,6 @@ mod tests {
             let dec = decompress_footer_bytes(&enc).expect("decompress footer");
             assert_eq!(dec, input, "footer xz round-trip mismatch ({label})");
         }
-    }
-
-    // #####################################################################
-    // format_mib
-    // #####################################################################
-
-    #[test]
-    fn format_mib_rounds_up_to_next_mib() {
-        assert_eq!(format_mib(0), "0 MiB");
-        assert_eq!(format_mib(1), "1 MiB");
-        assert_eq!(format_mib(1024 * 1024), "1 MiB");
-        // one byte past a full MiB rounds up.
-        assert_eq!(format_mib(1024 * 1024 + 1), "2 MiB");
-        // 1023 KiB rounds down to 1 MiB (ceil), not up to 2.
-        assert_eq!(format_mib(1024 * 1024 - 1024), "1 MiB");
-    }
-
-    #[test]
-    fn format_mib_groups_thousands_with_apostrophe() {
-        assert_eq!(format_mib(1_048_576u64 * 1024 * 1024), "1'048'576 MiB");
-        assert_eq!(format_mib(123_456_789u64 * 1024 * 1024), "123'456'789 MiB");
-        assert_eq!(format_mib(999 * 1024 * 1024), "999 MiB");
     }
 
     // #####################################################################
