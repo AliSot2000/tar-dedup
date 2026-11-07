@@ -235,9 +235,9 @@ mod tests {
     use std::path::PathBuf;
 
     const MIN_PAGES: u64 = 4;
-    const FLAG_HAS_SPARSE: i64 = 1i64 << 9;
-    const FLAG_ERR_SPARSIFY: i64 = 1i64 << 10;
-    const FLAG_MODIFIED: i64 = 1i64 << 5;
+    const FLAG_HAS_SPARSE: i64 = 1i64 << 11;
+    const FLAG_ERR_SPARSIFY: i64 = 1i64 << 12;
+    const FLAG_MTIME: i64 = 1i64 << 5;
 
     fn open_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -278,6 +278,10 @@ mod tests {
             "UPDATE files SET phase = :phase WHERE id = :id",
             named_params! { ":id": id, ":phase": phase },
         ).expect("set phase");
+    }
+
+    fn mtime_changed() -> TimesChanged {
+        TimesChanged { mtime: true, ..Default::default() }
     }
 
     fn set_flag(conn: &Connection, id: i64, flag: FileFlag) {
@@ -426,7 +430,7 @@ mod tests {
         );
 
         let mut batch = Vec::<SparseOutcome>::new();
-        batch.push(SparseOutcome { id: FileId(1), modified: false, err: None });
+        batch.push(SparseOutcome { id: FileId(1), times: TimesChanged::default(), err: None });
         assert_eq!(ingest_sparsify_outcome(&mut conn, &batch).expect("ingest"), 1);
 
         assert_eq!(
@@ -439,8 +443,8 @@ mod tests {
         );
 
         let mut rest = Vec::<SparseOutcome>::new();
-        rest.push(SparseOutcome { id: FileId(2), modified: false, err: None });
-        rest.push(SparseOutcome { id: FileId(3), modified: false, err: None });
+        rest.push(SparseOutcome { id: FileId(2), times: TimesChanged::default(), err: None });
+        rest.push(SparseOutcome { id: FileId(3), times: TimesChanged::default(), err: None });
         assert_eq!(ingest_sparsify_outcome(&mut conn, &rest).expect("ingest rest"), 2);
 
         assert_eq!(
@@ -461,12 +465,12 @@ mod tests {
         insert_candidate(&conn, 3, 1024, 8);
 
         let mut batch = Vec::<SparseOutcome>::new();
-        batch.push(SparseOutcome { id: FileId(1), modified: false, err: None });
+        batch.push(SparseOutcome { id: FileId(1), times: TimesChanged::default(), err: None });
         batch.push(SparseOutcome {
-            id: FileId(2), modified: false, err: Some(file_stat_err()),
+            id: FileId(2), times: TimesChanged::default(), err: Some(file_stat_err()),
         });
         batch.push(SparseOutcome {
-            id: FileId(3), modified: false, err: Some(Error::Interrupted),
+            id: FileId(3), times: TimesChanged::default(), err: Some(Error::Interrupted),
         });
 
         let resolved = ingest_sparsify_outcome(&mut conn, &batch).expect("ingest");
@@ -491,18 +495,18 @@ mod tests {
         insert_candidate(&conn, 3, 1024, 8);
 
         let mut batch = Vec::<SparseOutcome>::new();
-        batch.push(SparseOutcome { id: FileId(1), modified: true, err: None });
+        batch.push(SparseOutcome { id: FileId(1), times: mtime_changed(), err: None });
         batch.push(SparseOutcome {
-            id: FileId(2), modified: true, err: Some(file_stat_err()),
+            id: FileId(2), times: mtime_changed(), err: Some(file_stat_err()),
         });
         batch.push(SparseOutcome {
-            id: FileId(3), modified: false, err: Some(file_stat_err()),
+            id: FileId(3), times: TimesChanged::default(), err: Some(file_stat_err()),
         });
         ingest_sparsify_outcome(&mut conn, &batch).expect("ingest");
 
-        assert!(row_flags(&conn, 1) & FLAG_MODIFIED != 0);
-        assert!(row_flags(&conn, 2) & FLAG_MODIFIED != 0);
-        assert_eq!(row_flags(&conn, 3) & FLAG_MODIFIED, 0);
+        assert!(row_flags(&conn, 1) & FLAG_MTIME != 0);
+        assert!(row_flags(&conn, 2) & FLAG_MTIME != 0);
+        assert_eq!(row_flags(&conn, 3) & FLAG_MTIME, 0);
     }
 
     #[test]
@@ -516,7 +520,7 @@ mod tests {
             let (_dir, mut conn) = open_db();
             insert_candidate(&conn, 1, 1024, 8);
             let mut batch = Vec::<SparseOutcome>::new();
-            batch.push(SparseOutcome { id: FileId(1), modified: false, err: Some(variant) });
+            batch.push(SparseOutcome { id: FileId(1), times: TimesChanged::default(), err: Some(variant) });
             let res = catch_unwind(AssertUnwindSafe(|| -> Result<()> {
                 let _ = ingest_sparsify_outcome(&mut conn, &batch)?;
                 Ok(())
