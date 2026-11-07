@@ -465,7 +465,8 @@ mod tests {
         flags.set(FileFlag::CheckWithCanonicalCompleted, true);
         flags.set(FileFlag::ErrorWhileDedup, true);
         assert!(flags.get(FileFlag::FileExtracted));
-        assert!(!flags.get(FileFlag::Modified));
+        assert!(!flags.get(FileFlag::AtimeChanged));
+        assert!(!flags.get(FileFlag::CtimeChanged));
         assert!(flags.get(FileFlag::HasSparse));
         assert!(flags.get(FileFlag::CheckWithCanonicalCompleted));
         assert!(flags.get(FileFlag::ErrorWhileDedup));
@@ -506,6 +507,33 @@ mod tests {
 
     #[test]
     fn max_file_flag_bit_within_range() {
-        assert!(FileFlag::ErrorWhileApplyingMetadata as u8 <= MAX_FLAG_BIT);
+        assert!(FileFlag::RehashVerified as u8 <= MAX_FLAG_BIT);
+    }
+
+    #[test]
+    fn add_file_flags_or_unions_and_noops_on_empty() {
+        use rusqlite::Connection;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = Connection::open(dir.path().join("t.sqlite")).expect("open");
+        crate::db::schema::initialize(&conn).expect("schema init");
+        conn.execute(
+            "INSERT INTO files (id, abs_path, abs_path_raw, ext, size, ftype, phase) \
+             VALUES (1, '/tmp/x.bin', 'x.bin', '.bin', 0, 'file', 'inventoried')",
+            [],
+        ).expect("insert row");
+
+        let none = FileFlags::default();
+        or_file_flags(&conn, FileId(1), none).expect("empty add");
+        assert_eq!(get_file_flags(&conn, FileId(1)).expect("flags"), FileFlags::default());
+
+        let m = FileFlags::default().with(FileFlag::MtimeChanged, true);
+        or_file_flags(&conn, FileId(1), m).expect("add mtime");
+        let a = FileFlags::default().with(FileFlag::AtimeChanged, true);
+        or_file_flags(&conn, FileId(1), a).expect("add atime");
+
+        let flags = get_file_flags(&conn, FileId(1)).expect("flags");
+        assert!(flags.get(FileFlag::MtimeChanged));
+        assert!(flags.get(FileFlag::AtimeChanged));
+        assert!(!flags.get(FileFlag::CtimeChanged));
     }
 }
