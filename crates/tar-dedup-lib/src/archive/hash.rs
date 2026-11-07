@@ -447,7 +447,7 @@ mod tests {
         run(&world.rt()).expect("hash run");
 
         assert_eq!(
-            world.db.get_file_flag(id, FileFlag::Modified).expect("flag"),
+            world.db.get_file_flag(id, FileFlag::MtimeChanged).expect("flag"),
             true
         );
         assert_eq!(world.hashed_digest(id), Some(sha1_of(&payload)));
