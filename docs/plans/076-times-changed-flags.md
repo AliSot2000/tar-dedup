@@ -1,7 +1,7 @@
 # 076 — Split `Modified` into per-timestamp change flags
 
-Status: **agreed (2026-11)**, not yet implemented (context will be compacted
-after this file is written; resume here).
+Status: **done (2026-11)** — implemented; local `-p tar-dedup-lib --lib` (748) and VM
+`--features test-all` (lib 773 + empty/prog/doctest) all green.
 
 ## Problem
 
