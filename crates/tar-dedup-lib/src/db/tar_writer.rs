@@ -246,8 +246,8 @@ pub fn populate_archive_queue(conn: &Connection, order: crate::cli::ArchiveOrder
 pub fn pull_pending_archive_rows<R: SqlFileRow>(
     conn: &Connection,
     index: u64,
-    limit: u64,
-) -> Result<Vec<(u64, R)>> {
+    limit: u64)
+    -> Result<Vec<(u64, R)>> {
     let cols = R::sql_columns(Some("files"));
     let sql = format!(
         "SELECT archive_queue.id AS pos, {cols}
