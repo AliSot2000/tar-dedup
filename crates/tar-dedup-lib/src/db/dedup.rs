@@ -823,9 +823,9 @@ mod tests {
     use crate::db::schema;
     use std::path::PathBuf;
 
-    const FLAG_CHECK: i64 = 1i64 << 7;
-    const FLAG_ERROR: i64 = 1i64 << 8;
-    const FLAG_MODIFIED: i64 = 1i64 << 5;
+    const FLAG_CHECK: i64 = 1i64 << 9;
+    const FLAG_ERROR: i64 = 1i64 << 10;
+    const FLAG_MTIME: i64 = 1i64 << 5;
 
     fn open_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -839,6 +839,10 @@ mod tests {
             [],
         ).expect("seed internal include rule");
         (dir, conn)
+    }
+
+    fn mtime_changed() -> TimesChanged {
+        TimesChanged { mtime: true, ..Default::default() }
     }
 
     fn seed_file(conn: &Connection, id: i64, abs_path: &str, sha1_byte: u8, size: u64) {
@@ -1178,8 +1182,8 @@ mod tests {
             canonical_id: FileId(1),
             candidate_id: FileId(2),
             equal: Ok(false),
-            canonical_modified: false,
-            candidate_modified: false,
+            canonical_times: TimesChanged::default(),
+            candidate_times: TimesChanged::default(),
         });
         assert_eq!(ingest_compare_outcome(&mut conn, &results).expect("ingest"), 0);
         assert_eq!(searching_to_finished(&mut conn, false).expect("s2f"), 1);
@@ -1211,11 +1215,11 @@ mod tests {
         let mut round1 = Vec::<CompareOutcome>::new();
         round1.push(CompareOutcome {
             canonical_id: FileId(1), candidate_id: FileId(2), equal: Ok(false),
-            canonical_modified: false, candidate_modified: false,
+            canonical_times: TimesChanged::default(), candidate_times: TimesChanged::default(),
         });
         round1.push(CompareOutcome {
             canonical_id: FileId(1), candidate_id: FileId(3), equal: Ok(false),
-            canonical_modified: false, candidate_modified: false,
+            canonical_times: TimesChanged::default(), candidate_times: TimesChanged::default(),
         });
         ingest_compare_outcome(&mut conn, &round1).expect("round 1 ingest");
         assert_eq!(inflight_count(&conn), 0);
@@ -1233,7 +1237,7 @@ mod tests {
         let mut round2_res = Vec::<CompareOutcome>::new();
         round2_res.push(CompareOutcome {
             canonical_id: FileId(2), candidate_id: FileId(3), equal: Ok(true),
-            canonical_modified: false, candidate_modified: false,
+            canonical_times: TimesChanged::default(), candidate_times: TimesChanged::default(),
         });
         assert_eq!(ingest_compare_outcome(&mut conn, &round2_res).expect("round 2 ingest"), 1);
         assert_eq!(inflight_count(&conn), 0);
@@ -1261,7 +1265,7 @@ mod tests {
         let mut results = Vec::<CompareOutcome>::new();
         results.push(CompareOutcome {
             canonical_id: FileId(1), candidate_id: FileId(2), equal: Ok(true),
-            canonical_modified: false, candidate_modified: false,
+            canonical_times: TimesChanged::default(), candidate_times: TimesChanged::default(),
         });
         let resolved = ingest_compare_outcome(&mut conn, &results).expect("ingest");
 
@@ -1282,7 +1286,7 @@ mod tests {
         let mut results = Vec::<CompareOutcome>::new();
         results.push(CompareOutcome {
             canonical_id: FileId(1), candidate_id: FileId(2), equal: Ok(false),
-            canonical_modified: false, candidate_modified: false,
+            canonical_times: TimesChanged::default(), candidate_times: TimesChanged::default(),
         });
         let resolved = ingest_compare_outcome(&mut conn, &results).expect("ingest");
 
@@ -1309,8 +1313,8 @@ mod tests {
                 source: std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied, "denied".to_string()),
             })),
-            canonical_modified: false,
-            candidate_modified: false,
+            canonical_times: TimesChanged::default(),
+            candidate_times: TimesChanged::default(),
         });
         let resolved = ingest_compare_outcome(&mut conn, &results).expect("ingest");
 
@@ -1330,12 +1334,12 @@ mod tests {
         let mut results = Vec::<CompareOutcome>::new();
         results.push(CompareOutcome {
             canonical_id: FileId(1), candidate_id: FileId(2), equal: Ok(true),
-            canonical_modified: true, candidate_modified: true,
+            canonical_times: mtime_changed(), candidate_times: mtime_changed(),
         });
         ingest_compare_outcome(&mut conn, &results).expect("ingest");
 
-        assert_ne!(row_flags(&conn, 1) & FLAG_MODIFIED, 0);
-        assert_ne!(row_flags(&conn, 2) & FLAG_MODIFIED, 0);
+        assert_ne!(row_flags(&conn, 1) & FLAG_MTIME, 0);
+        assert_ne!(row_flags(&conn, 2) & FLAG_MTIME, 0);
     }
 
     #[test]
