@@ -182,54 +182,59 @@ define_flags! {
         PosixAclError = 3,
         /// An Error occurred while querying SELinux Policies
         SELinuxError = 4,
-        /// File changed while the archive pipeline was touching it.
-        Modified = 5,
+        /// This file's mtime changed since inventory (possible concurrent edit).
+        /// Independent of `Atime`/`Ctime`: each stamp is its own channel.
+        MtimeChanged = 5,
+        /// This file's atime changed since inventory.
+        AtimeChanged = 6,
+        /// This file's ctime changed since inventory.
+        CtimeChanged = 7,
         /// An error occurred during the first scan pass (sha + hole)
-        ErrorWhileHash = 6,
+        ErrorWhileHash = 8,
         /// Compare vs this round's canonical finished; content differs.
         /// Cleared on round end for the whole `(sha1, size)` group.
-        CheckWithCanonicalCompleted = 7,
+        CheckWithCanonicalCompleted = 9,
         /// Read/compare failed during dedup. Sticky — never cleared on later success.
         /// Excludes the file from canonical election.
-        ErrorWhileDedup = 8,
+        ErrorWhileDedup = 10,
         /// Sparse rewrite exists; stage/archive should use the sparsified target.
-        HasSparse = 9,
+        HasSparse = 11,
         /// Sparse copy failed (permissions, IO, …). Sticky.
-        ErrorWhileSparsify = 10,
+        ErrorWhileSparsify = 12,
         /// `append_path` failed during the archive process.
-        ErrorWhileArchive = 11,
+        ErrorWhileArchive = 13,
 
         /// Payload for this content landed in the extract cache (canonical row only).
         /// Set after a successful `unpack`; cleared on catalog install normalization.
-        FileExtracted = 12,
+        FileExtracted = 14,
         /// An error occurred while extracting a given file
-        ErrorWhileExtracting = 13,
+        ErrorWhileExtracting = 15,
         /// Rehashing Encountered a mismatch
-        RehashMismatch = 14,
+        RehashMismatch = 16,
         /// While attempting the rehash, an error occurred
-        ErrorWhileRehashing = 15,
+        ErrorWhileRehashing = 17,
         /// Source ready for linking
-        AtLinkSource = 16,
+        AtLinkSource = 18,
         /// File has been placed in the output tree
-        Placed = 17,
+        Placed = 19,
         /// At the target destination was a preexisting entry which was overwritten during the
         /// extraction or which prevented the extraction
-        Conflict = 18,
+        Conflict = 20,
         /// Either unlink_first was given or there was a type conflict which necessitated the
         /// removal of the previous entry. The flag encodes that remove was called successfully.
-        RemovedPrevious = 19,
+        RemovedPrevious = 21,
         /// Used RefLink (if false -> used (sparse) copy)
-        UsedRefLink = 20,
+        UsedRefLink = 22,
         /// An Error prevented the file from being placed in its correct position
-        ErrorWhilePlacing = 21,
+        ErrorWhilePlacing = 23,
         /// File materialized corectly with metadata applied.
-        AppliedMetadata = 22,
+        AppliedMetadata = 24,
         /// At least one error occurred while applying metadata
-        ErrorWhileApplyingMetadata = 23,
+        ErrorWhileApplyingMetadata = 25,
         /// Rehash verified the payload against the catalog `sha1` (digest matched).
         /// Verdict flags are mutually exclusive on elected rows: exactly one of
         /// `RehashMismatch` / `ErrorWhileRehashing` / `RehashVerified`.
-        RehashVerified = 24,
+        RehashVerified = 26,
     }
     /// Bitset stored in `files.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
