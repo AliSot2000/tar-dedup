@@ -1,19 +1,20 @@
+use crate::common::files::TimesChanged;
 use crate::db::SqlFileRow;
 use crate::db::common::{generate_archive_filter, set_file_phase};
-use crate::db::flags::{FileFlag, set_file_flag};
+use crate::db::flags::{FileFlag, or_file_flags, set_file_flag};
 use crate::db::types::{FileId, FilePhase};
 use crate::error::{Error, Result, ToPanic};
 use rusqlite::{Connection, named_params};
 
 
 pub struct HashError {
-    pub modified: bool,
+    pub times: TimesChanged,
     pub id: FileId,
     pub err: Error,
 }
 
 pub struct HashSuccess {
-    pub modified: bool,
+    pub times: TimesChanged,
     pub id: FileId,
     pub zero_pages: u64,
     pub hash: [u8; 20],
@@ -251,17 +252,13 @@ pub fn ingest_hash_outcome(
     for outcome in results.iter() {
         match outcome {
             Ok(hs ) => {
-                if hs.modified {
-                    set_file_flag(&tx, hs.id, FileFlag::Modified, true)?;
-                }
+                or_file_flags(&tx, hs.id, hs.times.to_file_flags())?;
                 update_file_inspection_per_id(
                     &tx, hs.id, hs.hash, hs.zero_pages, update_hardlinks
                 )?;
             }
             Err(he ) => {
-                if he.modified {
-                    set_file_flag(&tx, he.id, FileFlag::Modified, true)?;
-                }
+                or_file_flags(&tx, he.id, he.times.to_file_flags())?;
                 match &he.err {
                     Error::Interrupted => (),
                     Error::FileStat(_) => {
