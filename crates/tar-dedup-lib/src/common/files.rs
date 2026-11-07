@@ -184,20 +184,13 @@ pub fn warn_if_times_changed(
     false
 }
 
-/// Add the `name` to the `out` iff expected != live and both destruct correctly to Ok/Some.
-fn push_if_changed(
-    out: &mut Vec<&'static str>,
-    name: &'static str,
-    expected: Option<DateTime<Utc>>,
-    live: io::Result<DateTime<Utc>>,
-) {
+/// True iff `expected` and `live` both destruct to values and differ at second resolution.
+fn times_differ(expected: Option<DateTime<Utc>>, live: io::Result<DateTime<Utc>>) -> bool {
     let (Some(expected), Ok(live)) = (expected, live) else {
-        return;
+        return false;
     };
     // Second resolution: avoids false positives from FS vs RFC3339 subsecond noise.
-    if expected.timestamp() != live.timestamp() {
-        out.push(name);
-    }
+    expected.timestamp() != live.timestamp()
 }
 
 /// Get all times associated with the file. Result is `(mtime, atime, ctime)`.
