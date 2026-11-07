@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 
+use crate::db::flags::{FileFlag, FileFlags};
 use crate::db::types::{FileType, LinkType};
 use crate::error::{Error, Result};
 use path_clean::PathClean;
@@ -109,6 +110,35 @@ where
     I: ExactSizeIterator,
     F: FnMut(&I::Item),
 {
+}
+
+/// Which timestamps changed from their inventory snapshots — one channel per stamp.
+///
+/// `Default` = nothing changed. `to_file_flags` maps each channel to the matching
+/// `FileFlag::*Changed` bit. Carried (by value) through worker→ingest so the DB
+/// records each stamp independently, with no cross-propagation between channels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TimesChanged {
+    pub mtime: bool,
+    pub atime: bool,
+    pub ctime: bool,
+}
+
+impl TimesChanged {
+    /// The flags to OR into a file row: `MtimeChanged`/`AtimeChanged`/`CtimeChanged`.
+    pub fn to_file_flags(self) -> FileFlags {
+        let mut f = FileFlags::default();
+        if self.mtime {
+            f.set(FileFlag::MtimeChanged, true);
+        }
+        if self.atime {
+            f.set(FileFlag::AtimeChanged, true);
+        }
+        if self.ctime {
+            f.set(FileFlag::CtimeChanged, true);
+        }
+        f
+    }
 }
 
 /// Heuristic check: compare live timestamps to values captured at inventory.
