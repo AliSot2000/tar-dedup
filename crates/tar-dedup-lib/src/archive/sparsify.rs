@@ -249,7 +249,7 @@ fn sparsify_worker(
                 bar.reset();
                 bar.set_length(row.size);
                 bar.set_message(format!("Sparsifying {}", row.abs_path.display()));
-                let modified = warn_if_times_changed(
+                let times = warn_if_times_changed(
                     row.fs_path(), row.mtime, row.atime, row.ctime,
                 );
                 let name = row
@@ -262,9 +262,9 @@ fn sparsify_worker(
                     Ok(_) => {
                         tracing::debug!("sparsified {}", row.abs_path.display());
                         tmp.keep();
-                        SparseOutcome { id: row.id, modified, err: None }
+                        SparseOutcome { id: row.id, times, err: None }
                     }
-                    Err(err) => SparseOutcome { id: row.id, modified, err: Some(err) },
+                    Err(err) => SparseOutcome { id: row.id, times, err: Some(err) },
                 };
                 out.send(Some(outcome)).expect("sparsify worker: result channel closed");
             }
