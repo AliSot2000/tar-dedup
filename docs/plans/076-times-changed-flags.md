@@ -30,7 +30,7 @@ quiet stdout.
 **1. `db/flags.rs`**
 - Replace `FileFlag::Modified` with `MtimeChanged`, `AtimeChanged`, `CtimeChanged`;
   renumber the enum densely (pre-1.0.0 / `--fresh`; no display mapping exists).
-- Add `add_file_flags` union helper (facade in `db.rs`).
+- Add `or_file_flags` union helper (facade in `db.rs`).
 - Fix the flags round-trip test if it references `Modified`.
 
 **2. `common/files.rs`**
@@ -48,7 +48,7 @@ quiet stdout.
 - `archive/stage.rs`: result tuple `(id, times)`; ingest :119/:124.
 - `archive/tar_builder.rs:159`: `add_file_flags(id, times.to_file_flags())` on append success.
 - Workers: `let t = warn_if_times_changed(path, m, a, c);` → `times: t`; guard a
-  no-op `add_file_flags` when the flags are empty.
+  no-op `or_file_flags` when the flags are empty.
 
 **4. Tests**
 - Update ≈30 `modified: true/false` constructors + `get(FileFlag::Modified)`
