@@ -228,7 +228,7 @@ fn enter_phase(progress: &ProgressBarSet, phase: &PipelinePhase) {
         PipelinePhase::Dedup => ("dedup", BarKind::Count),
         PipelinePhase::Sparsify => ("sparsify", BarKind::Count),
         PipelinePhase::Stage => ("stage", BarKind::Counter),
-        PipelinePhase::Archive => ("archive", BarKind::Bytes),
+        PipelinePhase::Archive => ("archive", BarKind::BytesRate),
         PipelinePhase::Done => ("done", BarKind::Counter),
     };
     progress.begin_phase(phase.index(), name, kind);
