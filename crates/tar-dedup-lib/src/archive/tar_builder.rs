@@ -145,7 +145,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                         continue;
                     }
                 };
-                let modified = warn_if_times_changed(
+                let times = warn_if_times_changed(
                     &target, record.mtime, record.atime, record.ctime
                 );
 
@@ -155,9 +155,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                     Ok(()) => {
                         tracing::debug!("appended {} ({} bytes)", tar_name, record.size);
                         rt.db.mark_archive_session_pending(record.id, session_id)?;
-                        if modified {
-                            rt.db.set_file_flag(record.id, FileFlag::Modified, true)?;
-                        }
+                        rt.db.or_file_flags(record.id, times.to_file_flags())?;
                         progress.inc_global(1);
                     }
                     Err(e @ Error::FileStat(_)) => {
