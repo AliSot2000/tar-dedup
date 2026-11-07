@@ -9,7 +9,7 @@ use std::mem::take;
 
 use crate::archive::ArchiveRTArgs;
 use crate::cli::DedupMode;
-use crate::common::files::warn_if_times_changed;
+use crate::common::files::{TimesChanged, warn_if_times_changed};
 use crate::common::{io_buffer, send_receive_loop};
 use crate::db::ErrorPhase;
 use crate::db::dedup::{CompareOutcome, ComparePair, compare_pair};
@@ -359,7 +359,7 @@ fn sanity_check_flags(db: &Database, prev_phase: FilePhase) -> Result<()> {
 }
 
 /// Run when a worker pulls a pair — just before compare, not in bulk upfront.
-fn warn_compare_pair_times(pair: &ComparePair) -> (bool, bool) {
+fn warn_compare_pair_times(pair: &ComparePair) -> (TimesChanged, TimesChanged) {
     let canonical = warn_if_times_changed(
         &pair.canonical_path,
         pair.canonical_mtime,
@@ -417,8 +417,8 @@ fn compare_one(
         canonical_id: pair.canonical_id,
         candidate_id: pair.candidate_id,
         equal,
-        canonical_modified: cano,
-        candidate_modified: cand,
+        canonical_times: cano,
+        candidate_times: cand,
     })
 }
 
