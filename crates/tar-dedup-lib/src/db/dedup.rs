@@ -2,8 +2,9 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, named_params};
 use std::path::PathBuf;
 
+use crate::common::files::TimesChanged;
 use crate::db::common::{SqlFileRow, generate_archive_filter};
-use crate::db::flags::{FileFlag, set_file_flag};
+use crate::db::flags::{FileFlag, or_file_flags, set_file_flag};
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::error::{FileStatError, Result, ToPanic};
 
@@ -14,8 +15,8 @@ pub struct CompareOutcome {
     pub canonical_id: FileId,
     pub candidate_id: FileId,
     pub equal: std::result::Result<bool, (FileId, FileStatError)>,
-    pub canonical_modified: bool,
-    pub candidate_modified: bool,
+    pub canonical_times: TimesChanged,
+    pub candidate_times: TimesChanged,
 }
 
 #[derive(Clone)]
@@ -787,13 +788,9 @@ pub fn ingest_compare_outcome(
     let tx = conn.transaction().to_panic()?;
 
     for outcome in results.iter() {
-        // Update the modified flag on the files.
-        if outcome.canonical_modified {
-            set_file_flag(&tx, outcome.canonical_id, FileFlag::Modified, true)?;
-        }
-        if outcome.candidate_modified {
-            set_file_flag(&tx, outcome.candidate_id, FileFlag::Modified, true)?;
-        }
+        // OR-union each side's per-timestamp change flags into the file rows.
+        or_file_flags(&tx, outcome.canonical_id, outcome.canonical_times.to_file_flags())?;
+        or_file_flags(&tx, outcome.candidate_id, outcome.candidate_times.to_file_flags())?;
         match &outcome.equal {
             Ok(true) => {
                 set_canonical(&tx, outcome.candidate_id, outcome.canonical_id)?;
