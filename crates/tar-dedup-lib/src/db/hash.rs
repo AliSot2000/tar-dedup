@@ -285,9 +285,9 @@ mod tests {
     use std::panic::catch_unwind;
     use std::path::PathBuf;
 
-    // FileFlag bit masks (bits 5/6) — literals keep constants const-callable.
-    const FLAG_MODIFIED: i64 = 1i64 << 5;
-    const FLAG_SHA_ERROR: i64 = 1i64 << 6;
+    // FileFlag bit masks — literals keep constants const-callable.
+    const FLAG_MTIME: i64 = 1i64 << 5;
+    const FLAG_SHA_ERROR: i64 = 1i64 << 8;
 
     fn open_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -313,6 +313,10 @@ mod tests {
     fn insert_default_row(conn: &Connection, id: i64) {
         let abs_path = format!("/tmp/file{id}.bin");
         insert_row(conn, id, abs_path.as_str(), 777, id * 1000);
+    }
+
+    fn mtime_changed() -> TimesChanged {
+        TimesChanged { mtime: true, ..Default::default() }
     }
 
     fn row_flags(conn: &Connection, id: i64) -> i64 {
@@ -347,7 +351,7 @@ mod tests {
         let mut outcomes = Vec::<HashingOutcome>::new();
         outcomes.push(Ok(HashSuccess {
             id: FileId(1),
-            modified: false,
+            times: TimesChanged::default(),
             zero_pages: 7,
             hash: digest,
         }));
@@ -355,7 +359,7 @@ mod tests {
         let applied = ingest_hash_outcome(&mut conn, &outcomes, false).expect("ingest");
 
         assert_eq!(applied, 0);
-        assert_eq!(row_flags(&conn, 1) & FLAG_MODIFIED, 0);
+        assert_eq!(row_flags(&conn, 1) & FLAG_MTIME, 0);
         assert_eq!(row_sha1(&conn, 1), Some(digest.as_slice().to_vec()));
         assert_eq!(
             conn.query_row(
@@ -374,11 +378,11 @@ mod tests {
         let digest: [u8; 20] = [9u8; 20];
         let mut outcomes = Vec::<HashingOutcome>::new();
         outcomes.push(Ok(HashSuccess {
-            id: FileId(1), modified: true, zero_pages: 0, hash: digest,
+            id: FileId(1), times: mtime_changed(), zero_pages: 0, hash: digest,
         }));
         outcomes.push(Err(HashError {
             id: FileId(2),
-            modified: true,
+            times: mtime_changed(),
             err: Error::FileStat(FileStatError::General {
                 path: None,
                 message: "boom".to_string(),
@@ -387,8 +391,8 @@ mod tests {
 
         ingest_hash_outcome(&mut conn, &outcomes, false).expect("ingest");
 
-        assert_ne!(row_flags(&conn, 1) & FLAG_MODIFIED, 0);
-        assert_ne!(row_flags(&conn, 2) & FLAG_MODIFIED, 0);
+        assert_ne!(row_flags(&conn, 1) & FLAG_MTIME, 0);
+        assert_ne!(row_flags(&conn, 2) & FLAG_MTIME, 0);
     }
 
     #[test]
@@ -398,7 +402,7 @@ mod tests {
         let mut outcomes = Vec::<HashingOutcome>::new();
         outcomes.push(Err(HashError {
             id: FileId(1),
-            modified: false,
+            times: TimesChanged::default(),
             err: Error::FileStat(FileStatError::Io {
                 path: PathBuf::from("/tmp/nope.bin"),
                 source: std::io::Error::new(
@@ -410,7 +414,7 @@ mod tests {
         ingest_hash_outcome(&mut conn, &outcomes, false).expect("ingest");
 
         assert_ne!(row_flags(&conn, 1) & FLAG_SHA_ERROR, 0);
-        assert_eq!(row_flags(&conn, 1) & FLAG_MODIFIED, 0);
+        assert_eq!(row_flags(&conn, 1) & FLAG_MTIME, 0);
         if let Some(_) = row_sha1(&conn, 1) {
             panic!("FileStat error must not store a digest");
         }
@@ -426,7 +430,7 @@ mod tests {
         let mut outcomes = Vec::<HashingOutcome>::new();
         outcomes.push(Err(HashError {
             id: FileId(1),
-            modified: false,
+            times: TimesChanged::default(),
             err: Error::Interrupted,
         }));
 
@@ -452,7 +456,7 @@ mod tests {
             let mut outcomes = Vec::<HashingOutcome>::new();
             outcomes.push(Err(HashError {
                 id: FileId(1),
-                modified: false,
+                times: TimesChanged::default(),
                 err: variant,
             }));
             let res = catch_unwind(AssertUnwindSafe(|| -> Result<()> {
