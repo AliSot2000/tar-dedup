@@ -1,6 +1,6 @@
 use crate::archive::ArchiveRTArgs;
 use crate::common::batched_stepped_loop;
-use crate::common::files::warn_if_times_changed;
+use crate::common::files::{TimesChanged, warn_if_times_changed};
 use crate::config::PipelinePhase;
 use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
@@ -59,7 +59,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         |lid: &FileId, batch_size| rt.db.list_files_to_stage_after(lid, batch_size),
         |r: &StrippedRecord| r.id,
         |entries: Vec<StrippedRecord> | {
-            let results: Mutex<Vec<std::result::Result<(FileId, bool), (FileId, bool, Error)>>> =
+            let results: Mutex<Vec<std::result::Result<(FileId, TimesChanged), (FileId, TimesChanged, Error)>>> =
                 Mutex::new(Vec::new());
 
             let parallel = pool.install(|| {
@@ -74,7 +74,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                     };
 
                     let tar_name = record.tar_member_name().expect(EXPECTED_CANONICAL);
-                    let modified = warn_if_times_changed(
+                    let times = warn_if_times_changed(
                         &source,
                         record.mtime,
                         record.atime,
@@ -87,7 +87,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                             Ok(()) => (),
                             Err(e) => {
                                 results.lock().expect("stage results lock").push(
-                                    Err((record.id, modified, Error::copy_io(&target, &e))));
+                                    Err((record.id, times, Error::copy_io(&target, &e))));
                                 return Err(Error::io(&target, e));
                             }
                         }
@@ -95,14 +95,14 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                     match symlink(&source, &target) {
                         Ok(()) => {
                             results.lock().expect("stage results lock").push(
-                                Ok((record.id, modified))
+                                Ok((record.id, times))
                             );
                             tracing::debug!("staged {}", target.display());
                             Ok(())
                         }
                         Err(e) => {
                             results.lock().expect("stage results lock").push(
-                                Err((record.id, modified, Error::copy_io(&target, &e))));
+                                Err((record.id, times, Error::copy_io(&target, &e))));
                             // Short-circuit the batch: bounds wasted syscalls on a
                             // structural failure (perm / disk full / read-only FS).
                             Err(Error::io(&target, e))
@@ -114,14 +114,14 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
             // Main-thread apply only; workers never touch the Database.
             for outcome in take(&mut *results.lock().expect("stage results lock")) {
                 match outcome {
-                    Ok((id, modified)) => {
+                    Ok((id, times)) => {
                         rt.db.set_file_phase(id, FilePhase::Staged)?;
-                        if modified { rt.db.set_file_flag(id, FileFlag::Modified, true)?; }
+                        rt.db.or_file_flags(id, times.to_file_flags())?;
                         staged += 1;
                         rt.progress.inc_both(1);
                     }
-                    Err((id, modified, err)) => {
-                        if modified { rt.db.set_file_flag(id, FileFlag::Modified, true)?; }
+                    Err((id, times, err)) => {
+                        rt.db.or_file_flags(id, times.to_file_flags())?;
                         match err {
                             Error::Interrupted => (),
                             Error::FileStat(fse) => {
