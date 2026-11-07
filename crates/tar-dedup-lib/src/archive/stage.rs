@@ -296,7 +296,7 @@ mod tests {
         run(&world.rt()).expect("run ok");
 
         assert_eq!(world.phase(id), FilePhase::Staged);
-        assert!(world.flag(id, FileFlag::Modified));
+        assert!(world.flag(id, FileFlag::MtimeChanged));
         assert!(world.target_path(id).is_symlink());
     }
 
@@ -369,7 +369,7 @@ mod tests {
 
         assert!(matches!(res, Err(Error::FileStat(_))));
         assert_eq!(world.phase(id), FilePhase::Sparsified);
-        assert!(!world.flag(id, FileFlag::Modified));
+        assert!(!world.flag(id, FileFlag::MtimeChanged));
         let records = world.errors_for(id);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].phase, ErrorPhase::Pipeline(PipelinePhase::Stage));
