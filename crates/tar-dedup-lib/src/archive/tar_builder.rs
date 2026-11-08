@@ -67,7 +67,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         &rt.config.compression,
         rt.config.process.jobs,
         rt.shutdown.clone(),
-        true, // sparse
+        rt.config.sparse.sparsify,
     )?;
 
     // Fresh start into archiving.
