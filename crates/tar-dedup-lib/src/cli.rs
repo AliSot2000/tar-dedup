@@ -303,6 +303,11 @@ pub struct ArchiveArgs {
     // --- Sparse Files ---
 
     /// Run the sparsify phase (copy with seeks using `--page-size` increments).
+    ///
+    /// WARNING: sparse tar packing will break if any source directory or the
+    /// work-dir is located on an NTFS partition (SEEK_DATA/SEEK_HOLE hole
+    /// detection mis-reads normal files as all-hole, so member content is written
+    /// as zeros).
     #[arg(long = "sparsify", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Sparse Files")]
     pub sparsify: bool,
 
