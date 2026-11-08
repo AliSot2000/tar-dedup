@@ -4,6 +4,7 @@ pub mod cleanup;
 pub mod defaults;
 pub mod files;
 pub mod filter;
+pub mod formatting;
 pub mod hash;
 pub mod perms;
 pub mod start;
