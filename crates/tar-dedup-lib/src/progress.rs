@@ -58,7 +58,7 @@ fn style_for(kind: BarKind) -> ProgressStyle {
             "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} @ {bytes_per_sec}"
         }
         BarKind::BytesRate => {
-            "{spinner} {prefix} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes}"
+            "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {prefix}"
         }
     };
     ProgressStyle::with_template(template)
