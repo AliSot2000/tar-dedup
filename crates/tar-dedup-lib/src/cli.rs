@@ -577,9 +577,13 @@ pub struct ExtractArgs {
     )]
     pub work_dir_location: WorkDirLocation,
 
-    /// Restore using absolute catalog paths (`-P`). Extraction join abs paths under
-    /// the extraction root (leading `/` stripped). To extract to file system root,
+    /// Restore using absolute catalog paths (`-P`). Join abs paths under the
+    /// extraction root (leading `/` stripped). To extract to the file system root,
     /// pass `/` as `-C`.
+    ///
+    /// Note: sources given as **absolute** paths archive absolutely, so their
+    /// members are mirrored (root + abs path) on extract *regardless* of `-P`;
+    /// `-P` only changes the mapping for sources archived from **relative** paths.
     #[arg(
         short = 'P',
         long = "absolute",
