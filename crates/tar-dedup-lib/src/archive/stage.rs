@@ -60,28 +60,41 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         |lid: &FileId, batch_size| rt.db.list_files_to_stage_after(lid, batch_size),
         |r: &StrippedRecord| r.id,
         |entries: Vec<StrippedRecord> | {
-            let results: Mutex<Vec<std::result::Result<(FileId, TimesChanged), (FileId, TimesChanged, Error)>>> =
+            let results: Mutex<Vec<std::result::Result<(FileId, Option<TimesChanged>), (FileId, Option<TimesChanged>, Error)>>> =
                 Mutex::new(Vec::new());
 
             let parallel = pool.install(|| {
                 entries.par_iter().try_for_each(|record| -> Result<()> {
                     shutdown.check_between_files()?;
 
-                    let source = if record.flags.get(FileFlag::HasSparse) {
-                        let sparse_name = record.sparse_member_name().expect(EXPECTED_CANONICAL);
-                        rt.config.paths.stage_dir().join(sparse_name).clean()
-                    } else {
-                        record.fs_path().to_path_buf()
-                    };
+                    // Sparse was copied by us, thus has the right rights and is expected to be
+                    // present, ...
+                    if record.flags.get(FileFlag::HasSparse) {
+                        let sparse_name = record.tar_member_name().expect(EXPECTED_CANONICAL);
+                        let sparse_path = rt.config.paths.stage_dir().join(sparse_name);
+                        debug_assert_check_clean(&sparse_path);
+                        // TODO read probe toos?
+                        if sparse_path.exists() {
+                            results.lock().expect("stage results lock").push(Ok((record.id, None)));
+                        } else {
+                            results.lock().expect("stage results lock").push(
+                                Err((record.id, None, Error::FileStat(FileStatError::Io {
+                                    source: io::Error::new(
+                                        io::ErrorKind::NotFound, "Path does not exist."),
+                                    path: sparse_path}))));
+                        }
+                        return Ok(())
+                    }
 
+                    let source = record.fs_path().to_path_buf();
                     let tar_name = record.tar_member_name().expect(EXPECTED_CANONICAL);
-                    let times = warn_if_times_changed(
+                    let times = Some(warn_if_times_changed(
                         &source,
                         record.mtime,
                         record.atime,
                         record.ctime,
-                    );
-                    debug_assert_eq!(source, source.clean(), "Source Paths must be normalized");
+                    ));
+                    debug_assert_check_clean(&source);
                     let target = rt.config.paths.stage_dir().join(tar_name);
                     if target.exists() {
                         match fs::remove_file(&target) {
@@ -117,12 +130,16 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                 match outcome {
                     Ok((id, times)) => {
                         rt.db.set_file_phase(id, FilePhase::Staged)?;
-                        rt.db.or_file_flags(id, times.to_file_flags())?;
+                        if let Some(times) = times {
+                            rt.db.or_file_flags(id, times.to_file_flags())?;
+                        }
                         staged += 1;
                         rt.progress.inc_both(1);
                     }
                     Err((id, times, err)) => {
-                        rt.db.or_file_flags(id, times.to_file_flags())?;
+                        if let Some(times) = times {
+                            rt.db.or_file_flags(id, times.to_file_flags())?;
+                        }
                         match err {
                             Error::Interrupted => (),
                             Error::FileStat(fse) => {
