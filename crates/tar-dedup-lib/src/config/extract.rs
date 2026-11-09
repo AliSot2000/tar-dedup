@@ -1097,6 +1097,44 @@ mod tests {
     }
 
     #[test]
+    fn bypass_archive_mode_resolves_work_dir_to_product_and_validates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // `-f DIR` + `--bypass-archive`: the product dir becomes the work dir.
+        let product = dir.path().join("product");
+        std::fs::create_dir_all(&product).expect("mk product");
+        let cfg = build(&product, &["--bypass-archive"]).expect("build bypass");
+        assert!(cfg.bypass_archive, "bypass flag set");
+        assert_eq!(cfg.paths.work_dir, product, "product dir doubles as work dir");
+        assert_eq!(cfg.paths.db_path(), product.join("tar-dedup.sqlite"));
+
+        // `-f DIR` without the flag is a hard error (not a tar file).
+        let err = build(&product, &[]).unwrap_err();
+        assert!(err.to_string().contains("not a file"), "{err}");
+
+        // `-f <file>` + `--bypass-archive` is a hard error (product must be a dir).
+        let arc = archive_file(dir.path(), "x.tar");
+        let err = build(&arc, &["--bypass-archive"]).unwrap_err();
+        assert!(err.to_string().contains("not a directory"), "{err}");
+        // `-f <file>` without the flag remains valid (normal tar extract).
+        assert!(build(&arc, &[]).is_ok());
+    }
+
+    #[test]
+    fn no_rehash_with_bypass_requires_force() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let product = dir.path().join("product");
+        std::fs::create_dir_all(&product).expect("mk product");
+        // `--no-rehash` on a bypass product is rejected unless --force.
+        let err = build(&product, &["--bypass-archive", "--no-rehash"]).unwrap_err();
+        assert!(
+            err.to_string().contains("--no-rehash") && err.to_string().contains("--force"),
+            "{err}"
+        );
+        // With --force it is accepted.
+        assert!(build(&product, &["--bypass-archive", "--no-rehash", "--force"]).is_ok());
+    }
+
+    #[test]
     fn db_retention_flag_builds_config() {
         let dir = tempfile::tempdir().expect("tempdir");
         let archive = archive_file(dir.path(), "backup.tar");
