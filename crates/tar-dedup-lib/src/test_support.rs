@@ -559,7 +559,7 @@ pub fn build_footer_archive(dir: &Path) -> (ExtractConfig, String) {
 /// Mint a tar member name for a canonical row (not necessarily present in any
 /// catalog) — used to plant a *stray* file in the extract cache dir.
 pub fn content_id_name(fid: FileId, sha: [u8; 20], size: u64) -> String {
-    content_id_from_digest(Some(&sha), size, fid, Path::new("f.txt")).0
+    content_id_from_digest(&sha, size, fid, Path::new("f.txt")).0
 }
 
 /// Flip a single byte in `path` at `offset` — the archive-corruption primitive for
