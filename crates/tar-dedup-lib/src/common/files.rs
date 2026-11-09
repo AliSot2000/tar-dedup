@@ -41,6 +41,28 @@ where
     Ok(())
 }
 
+/// Probe a bypass payload by reading its full content through the io buffer.
+/// Requires the parsed digest (a sha-less name is not a valid payload). Returns
+/// `Ok(true)` when the file reads cleanly to EOF and its length matches the
+/// size from the name.
+pub fn read_probe(path: &Path, _digest: &[u8; 20], expected_len: u64, buf: &mut Vec<u8>)
+              -> io::Result<bool> {
+    use std::io::Read;
+    let mut f = fs::File::open(path)?;
+    let mut total = 0u64;
+    loop {
+        let n = f.read(buf)?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        if total > expected_len {
+            return Ok(false);
+        }
+    }
+    Ok(total == expected_len)
+}
+
 /// True when two directory roots collide for inventory.
 ///
 /// Same path (including trailing `/`) always overlaps. Nested paths (`/a` vs
