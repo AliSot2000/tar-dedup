@@ -330,8 +330,74 @@ mod tests {
         assert!(!config.paths.work_dir.exists(), "work dir cleaned after success");
     }
 
-    #[test]
-    fn extract_run_exit_after_stage_then_resume_to_done() {
+    /// Round-trip: archive-bypass produces a product dir, then extract-bypass
+/// validates it and materializes the output tree. The product dir doubles as the
+/// extract work dir and must survive the run (it is the "archive", not a stage).
+#[test]
+fn bypass_archive_extract_round_trip() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).expect("mk src");
+    std::fs::write(src.join("hello.txt"), b"hello bypass\n").expect("write");
+    std::fs::write(src.join("dup.txt"), b"hello bypass\n").expect("write dup");
+
+    // 1. Archive side: -f <product dir> with bypass_archive.
+    let mut acfg = crate::test_support::test_archive_config();
+    acfg.paths.directory = dir.path().to_path_buf();
+    acfg.paths.archive_path = dir.path().join("product");
+    acfg.paths.output_dir = dir.path().to_path_buf();
+    acfg.paths.work_dir = dir.path().join("astage");
+    acfg.inputs.input_dirs = vec![crate::config::PathSource {
+        original_path: src.clone(),
+        absolute_path: src,
+    }];
+    acfg.pipeline.write_archive_footer = false;
+    acfg.pipeline.bypass_archive = true;
+    acfg.process.start_policy = crate::common::start::StartPolicy::Create;
+    crate::archive::run(acfg, Shutdown::detached()).expect("bypass archive");
+
+    let product = dir.path().join("product");
+    assert!(product.join("tar-dedup.sqlite").is_file(), "baked catalog present");
+
+    // 2. Extract side: -f <same product> with bypass_archive, work-dir = product.
+    let mut xcfg = ExtractConfig::default();
+    xcfg.paths.archive_path = product.clone();
+    xcfg.paths.directory = dir.path().to_path_buf();
+    xcfg.paths.output_dir = dir.path().join("out");
+    xcfg.paths.work_dir = product.clone();
+    xcfg.bypass_archive = true;
+    xcfg.rehash = true; // content verification runs over the product payloads in place
+    xcfg.process.start_policy = crate::common::start::StartPolicy::Create;
+    std::fs::create_dir_all(dir.path().join("out")).expect("mk out root");
+    run(xcfg, Shutdown::detached()).expect("bypass extract");
+
+    // The source dir was archived by absolute path, so members mirror the absolute
+    // path under the extraction root (leading / stripped). Locate them by name.
+    fn find(p: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for e in std::fs::read_dir(p).ok()?.flatten() {
+            let ep = e.path();
+            if ep.is_dir() {
+                if let Some(f) = find(&ep, name) {
+                    return Some(f);
+                }
+            } else if ep.file_name().map(|f| f == name).unwrap_or(false) {
+                return Some(ep);
+            }
+        }
+        None
+    }
+    let hello = find(&dir.path().join("out"), "hello.txt")
+        .expect("hello.txt materialized under the output tree");
+    let dup = find(&dir.path().join("out"), "dup.txt")
+        .expect("dup.txt materialized under the output tree");
+    assert_eq!(std::fs::read(&hello).expect("hello"), b"hello bypass\n");
+    assert_eq!(std::fs::read(&dup).expect("dup"), b"hello bypass\n");
+    // The product dir (the "archive") survives the extract run.
+    assert!(product.join("tar-dedup.sqlite").is_file(), "product dir kept after extract");
+}
+
+#[test]
+fn extract_run_exit_after_stage_then_resume_to_done() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = footer_extract_config(dir.path());
 
@@ -352,11 +418,37 @@ mod tests {
     }
 
     #[test]
-    fn load_extract_state_defaults_when_db_absent() {
+    fn resolve_extract_work_covers_all_presence_states() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let state = load_extract_state(&dir.path().join("missing.sqlite")).expect("default");
+        // No db -> Absent / fresh state.
+        let (work, state) = resolve_extract_work(&dir.path().join("missing.sqlite"))
+            .expect("absent defaults");
+        assert_eq!(work, WorkPresence::Absent);
         assert_eq!(state.phase, ExtractPipelinePhase::ScanTar);
         assert_eq!(state.snapshots_ingested, 0);
+
+        // Present db with no extract-phase meta (fresh bypass catalog) -> Absent.
+        let db_path = dir.path().join("tar-dedup.sqlite");
+        let db = Database::open(&db_path).expect("open");
+        let (work, _) = resolve_extract_work(&db_path).expect("no-meta");
+        assert_eq!(work, WorkPresence::Absent);
+
+        // Present db with incomplete (non-Done) state -> Incomplete.
+        db.save_extract_runtime_state(&ExtractRuntimeState {
+            phase: ExtractPipelinePhase::Permissions,
+            snapshots_ingested: 2,
+        }).expect("save incomplete");
+        let (work, state) = resolve_extract_work(&db_path).expect("incomplete");
+        assert_eq!(work, WorkPresence::Incomplete);
+        assert_eq!(state.phase, ExtractPipelinePhase::Permissions);
+
+        // Present db with Done state -> Done.
+        db.save_extract_runtime_state(&ExtractRuntimeState {
+            phase: ExtractPipelinePhase::Done,
+            snapshots_ingested: 3,
+        }).expect("save done");
+        let (work, _) = resolve_extract_work(&db_path).expect("done");
+        assert_eq!(work, WorkPresence::Done);
     }
 
     #[test]
