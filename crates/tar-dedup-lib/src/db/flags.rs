@@ -235,6 +235,10 @@ define_flags! {
         /// Verdict flags are mutually exclusive on elected rows: exactly one of
         /// `RehashMismatch` / `ErrorWhileRehashing` / `RehashVerified`.
         RehashVerified = 26,
+        /// Canonical cache payload was deleted after a successful (or terminal-failed)
+        /// placement. Guarded by the canonical's own out_tree row being terminal
+        /// (`Placed | Conflict | ErrorWhilePlace`). Set on `delete_canonical_payload`.
+        PayloadRemoved = 27,
     }
     /// Bitset stored in `files.flags`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
