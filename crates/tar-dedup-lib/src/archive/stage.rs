@@ -5,14 +5,15 @@ use crate::config::PipelinePhase;
 use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::db::{ErrorPhase, Recorder};
-use crate::error::{Error, Result};
+use crate::error::{Error, FileStatError, Result};
 use path_clean::PathClean;
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
-use std::fs;
 use std::mem::take;
 use std::os::unix::fs::symlink;
+use std::path::Path;
 use std::sync::Mutex;
+use std::{fs, io};
 
 const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(PipelinePhase::Stage);
 
