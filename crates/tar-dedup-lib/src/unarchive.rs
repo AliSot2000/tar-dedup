@@ -46,10 +46,11 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     std::fs::create_dir_all(&config.paths.work_dir)
         .map_err(|e| Error::io(&config.paths.work_dir, e))?;
 
-    let db_path = config.paths.db_path();
-    let mut state = load_extract_state(&db_path)?;
+    let mut state = load_extract_state(&config.paths.db_path())?;
 
-    let work = if db_path.is_file() && state.phase != ExtractPipelinePhase::Done {
+    let work = if config.paths.db_path().is_file() 
+        && state.phase != ExtractPipelinePhase::Done {
+        
         WorkPresence::Incomplete
     } else {
         WorkPresence::Absent
@@ -71,7 +72,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         }
         StartAction::Resume => {
             tracing::info!("resuming extract from phase `{}`", state.phase.as_str());
-            db = Some(Database::open(&db_path)?);
+            db = Some(Database::open(&config.paths.db_path())?);
             filter_buffer = Some(ParseFilterBuffer::default());
             config_written = true; // stored by the original run
             progress.set_table_size(db
@@ -89,7 +90,7 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 
         match state.phase {
             ExtractPipelinePhase::ScanTar => {
-                db = Some(scan::run(&config, &db_path, &shutdown,
+                db = Some(scan::run(&config, &shutdown,
                                     &mut pre_db_recorder, &mut filter_buffer, &progress)?);
                 if !config_written {
                     let ldb = db.as_ref().expect(OPT_DB_ERROR);
