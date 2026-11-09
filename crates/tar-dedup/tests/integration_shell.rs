@@ -65,6 +65,8 @@ fn run_scenario(name: &str) {
 #[test]
 fn scenario_dedup_roundtrip() { run_scenario("dedup_roundtrip") }
 #[test]
+fn scenario_bypass_archive_roundtrip() { run_scenario("bypass_archive_roundtrip") }
+#[test]
 fn scenario_path_clamp() { run_scenario("path_clamp") }
 #[test]
 fn scenario_resume_archive() { run_scenario("resume_archive") }
