@@ -168,8 +168,8 @@ fn run_enqueue_dequeue_loop_sparsify(
     rt: &ArchiveRTArgs,
     send: Sender<StrippedRecord>,
     recv: Receiver<Option<SparseOutcome>>,
-    thread_handles: Vec<thread::JoinHandle<()>>,
-) -> Result<(u64, u64)> {
+    thread_handles: Vec<thread::JoinHandle<()>>)
+    -> Result<(u64, u64)> {
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     let mut errored = 0u64;
 
