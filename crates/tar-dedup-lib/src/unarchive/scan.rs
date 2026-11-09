@@ -167,7 +167,6 @@ fn store_filter_buffer(
 ///  buffer to None, to save memory.
 pub fn run(
     config: &ExtractConfig,
-    db_path: &Path,
     shutdown: &Shutdown,
     recorder: &mut Recorder,
     filter_buffer: &mut Option<ParseFilterBuffer>,
@@ -181,13 +180,12 @@ pub fn run(
         progress,
         pb: progress.push_sub_bar("extracting", BarKind::Bytes),
     };
-    run_inner(rt, db_path, recorder, filter_buffer)
+    run_inner(rt, recorder, filter_buffer)
 }
 
 
 fn run_inner(
     outer_rt: ScanRTState,
-    db_path: &Path,
     recorder: &mut Recorder,
     filter_buffer: &mut Option<ParseFilterBuffer>) -> Result<Database>  {
 
@@ -203,7 +201,7 @@ fn run_inner(
     fs::create_dir_all(rt.config.paths.extract_cache_dir())
         .map_err(|e| Error::io(&rt.config.paths.extract_cache_dir(), e))?;
 
-    let resume_db = db_path.is_file();
+    let resume_db = rt.config.paths.db_path().is_file();
     // Only a first pass installs the footer catalog; later passes inherit the fact
     // that it came from a footer through `ExtractScanState::from_footer`.
     // INFO: read into a temp file first; installed below via rename to `db_path`.
@@ -256,9 +254,9 @@ fn run_inner(
     }
 
     rt.db = if resume_db {
-        open_resume_database(&db_path)?
+        open_resume_database(&rt.config.paths.db_path())?
     } else if footer_this_pass {
-        Some(open_initial_database(&rt, db_path, filter_buffer)?)
+        Some(open_initial_database(&rt, filter_buffer)?)
     } else {
         None
     };
@@ -336,7 +334,6 @@ fn run_inner(
         tracing::debug!("Index: {} Path: {}", member_index, path.display());
         process_entry(
             &mut rt,
-            db_path,
             &name,
             &mut entry,
             &mut force_buffer,
@@ -485,7 +482,6 @@ fn run_inner(
 /// Precondition: Index is valid (i.e. not extracted yet)
 fn process_entry(
     rt: &mut ScanRTState,
-    db_path: &Path,
     name: &str,
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
     force_buffer: &mut Option<(Vec<FileId>, Vec<FileId>)>,
@@ -499,7 +495,7 @@ fn process_entry(
         // archives: with a footer the catalog was already installed up-front and
         // is the *final* db — overlaying the older in-tar manifest would regress it.
         if !scan.from_footer {
-            install_database(rts, db_path, entry, recorder, fb)
+            install_database(rts, entry, recorder, fb)
         } else {
             Ok(())
         }
@@ -798,14 +794,14 @@ fn install_database(
     -> Result<()> {
 
     captured_extract_database(&rt.config.paths.temp_db(), entry, recorder)?;
-    match open_initial_database(rt, db_path, fb) {
+    match open_initial_database(rt, fb) {
         Ok(db) => {
             rt.db = Some(db);
             attach_db_progress(rt.db.as_ref().expect(OPT_DB_ERROR), rt.progress, None)?;
             Ok(())
         },
         Err(e) => {
-            record_session_error(recorder, e.to_file_stat(Some(db_path)));
+            record_session_error(recorder, e.to_file_stat(Some(&rt.config.paths.db_path())));
             Err(e)
         }
     }
@@ -814,15 +810,14 @@ fn install_database(
 /// Install catalog from `temp` into `target`, normalize, and init extract runtime state.
 fn open_initial_database(
     rt: &ScanRTState,
-    target: &Path,
     fb: &mut Option<ParseFilterBuffer>)
     -> Result<Database> {
 
     // INFO: Will move the database into the correct place.
-    Database::install_initial_manifest(&rt.config.paths.temp_db(), target)?;
-    let opened = Database::open(target)?;
+    Database::install_initial_manifest(&rt.config.paths.temp_db(), &rt.config.paths.db_path())?;
+    let opened = Database::open(&rt.config.paths.db_path())?;
     opened.init_extract_runtime_state()?;
-    opened.normalize_installed_catalog()?;
+    opened.normalize_installed_catalog()?; // TODO should not be needed.
     let irt = ExtractRTArgs {
         config: rt.config, db: &opened, shutdown: rt.shutdown, progress: rt.progress
     };
