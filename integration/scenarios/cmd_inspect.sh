@@ -8,11 +8,11 @@ scenario_cmd_inspect() {
     ar -i "$src"
 
     local text
-    text="$(bin inspect -f "$RUN/out.astar" 2>/dev/null)"
+    text="$(bin inspect -f "$RUN/out.tdd.tar" 2>/dev/null)"
     [ -n "$text" ] || fail "inspect text produced no output"
 
     local json
-    json="$(bin inspect -f "$RUN/out.astar" --json 2>/dev/null)"
+    json="$(bin inspect -f "$RUN/out.tdd.tar" --json 2>/dev/null)"
     printf '%s' "$json" | grep -q '"archive_size"' \
         || fail "inspect --json lacks archive_size"
     printf '%s' "$json" | grep -q '"tool_version"' \

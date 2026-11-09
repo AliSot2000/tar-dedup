@@ -24,6 +24,6 @@ scenario_path_clamp() {
     rogue="$(find "$RUN" \
         -path "$RUN/ext" -prune -o \
         -path "$RUN/src" -prune -o \
-        -type f -print | grep -v '/out.astar$' || true)"
+        -type f -print | grep -v '/out.tdd.tar$' || true)"
     [ -z "$rogue" ] || fail "file escaped extraction root: $rogue"
 }

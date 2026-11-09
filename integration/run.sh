@@ -117,23 +117,23 @@ begin() {
 # manual mode (each tool call is approved); automatic mode calls through as before.
 ar() {
     if [ "$IT_MODE" = manual ]; then
-        it_prompt tool "tar-dedup archive -f $RUN/out.astar $*"
+        it_prompt tool "tar-dedup archive -f $RUN/out.tdd.tar $*"
         case "$?" in
             3) return 0;;
             2) it_abort;;
         esac
     fi
-    "$BIN" archive -f "$RUN/out.astar" "$@"
+    "$BIN" archive -f "$RUN/out.tdd.tar" "$@"
 }
 ex() {
     if [ "$IT_MODE" = manual ]; then
-        it_prompt tool "tar-dedup extract -f $RUN/out.astar -C $RUN/ext $*"
+        it_prompt tool "tar-dedup extract -f $RUN/out.tdd.tar -C $RUN/ext $*"
         case "$?" in
             3) return 0;;
             2) it_abort;;
         esac
     fi
-    "$BIN" extract -f "$RUN/out.astar" -C "$RUN/ext" "$@"
+    "$BIN" extract -f "$RUN/out.tdd.tar" -C "$RUN/ext" "$@"
 }
 bin() {
     if [ "$IT_MODE" = manual ]; then

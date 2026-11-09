@@ -5,8 +5,8 @@ scenario_paths_relative_input() {
     mkdir -p "$cwd" "$src"
     write_file "$src/r.txt" 'relative payload\n'
 
-    bin archive -f "$RUN/out.astar" -C "$cwd" -i ../src >/dev/null 2>&1
-    bin extract -f "$RUN/out.astar" -C "$RUN/ext" >/dev/null 2>&1
+    bin archive -f "$RUN/out.tdd.tar" -C "$cwd" -i ../src >/dev/null 2>&1
+    bin extract -f "$RUN/out.tdd.tar" -C "$RUN/ext" >/dev/null 2>&1
 
     # `../src` is clamped to `src` under the extraction root.
     assert_file_eq "$RUN/ext/src/r.txt" "$src/r.txt"
@@ -14,6 +14,6 @@ scenario_paths_relative_input() {
     local rogue
     rogue="$(find "$RUN" -path "$RUN/ext" -prune -o \
         -path "$RUN/src" -prune -o -path "$RUN/cwd" -prune -o \
-        -type f -print | grep -v '/out.astar$' || true)"
+        -type f -print | grep -v '/out.tdd.tar$' || true)"
     [ -z "$rogue" ] || fail "file escaped extraction root: $rogue"
 }

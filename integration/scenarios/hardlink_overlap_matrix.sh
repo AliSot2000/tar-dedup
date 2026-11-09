@@ -16,9 +16,9 @@ scenario_hardlink_overlap_matrix() {
 
     # M1 — the covering source groups everything.
     mkdir -p "$RUN/ext1"
-    bin archive -f "$RUN/m1.astar" -i "$b" -i "$b/c" --no-strict-separation \
+    bin archive -f "$RUN/m1.tdd.tar" -i "$b" -i "$b/c" --no-strict-separation \
         >/dev/null 2>&1 || fail "M1 archive failed"
-    bin extract -f "$RUN/m1.astar" -C "$RUN/ext1" --hard-link-grouping source >/dev/null 2>&1 || fail "M1 extract failed"
+    bin extract -f "$RUN/m1.tdd.tar" -C "$RUN/ext1" --hard-link-grouping source >/dev/null 2>&1 || fail "M1 extract failed"
     [ "$(stat -c %i "$(tgt "$RUN/ext1" "$b/h.txt")")" = \
        "$(stat -c %i "$(tgt "$RUN/ext1" "$b/c/h.txt")")" ] \
         || fail "M1: b/h and c/h not grouped"
@@ -28,9 +28,9 @@ scenario_hardlink_overlap_matrix() {
 
     # M2 — b/c processed first claims its subtree's side; b's b/h stays separate.
     mkdir -p "$RUN/ext2"
-    bin archive -f "$RUN/m2.astar" -i "$b/c" -i "$b" --no-strict-separation \
+    bin archive -f "$RUN/m2.tdd.tar" -i "$b/c" -i "$b" --no-strict-separation \
         >/dev/null 2>&1 || fail "M2 archive failed"
-    bin extract -f "$RUN/m2.astar" -C "$RUN/ext2" --hard-link-grouping source >/dev/null 2>&1 || fail "M2 extract failed"
+    bin extract -f "$RUN/m2.tdd.tar" -C "$RUN/ext2" --hard-link-grouping source >/dev/null 2>&1 || fail "M2 extract failed"
     [ "$(stat -c %i "$(tgt "$RUN/ext2" "$b/h.txt")")" != \
        "$(stat -c %i "$(tgt "$RUN/ext2" "$b/c/h.txt")")" ] \
         || fail "M2: b/h and c/h unexpectedly grouped (order effect)"
@@ -40,9 +40,9 @@ scenario_hardlink_overlap_matrix() {
 
     # M3 — no-recursion: b sees depth-1 only, b/c/d only d's contents.
     mkdir -p "$RUN/ext3"
-    bin archive -f "$RUN/m3.astar" -i "$b/c/d" -i "$b" \
+    bin archive -f "$RUN/m3.tdd.tar" -i "$b/c/d" -i "$b" \
         --no-strict-separation --no-recursion >/dev/null 2>&1 || fail "M3 archive failed"
-    bin extract -f "$RUN/m3.astar" -C "$RUN/ext3" --hard-link-grouping source >/dev/null 2>&1 || fail "M3 extract failed"
+    bin extract -f "$RUN/m3.tdd.tar" -C "$RUN/ext3" --hard-link-grouping source >/dev/null 2>&1 || fail "M3 extract failed"
     [ -f "$(tgt "$RUN/ext3" "$b/h.txt")" ] || fail "M3: b/h missing"
     [ -f "$(tgt "$RUN/ext3" "$b/c/d/e.txt")" ] || fail "M3: c/d/e should be present"
     [ ! -e "$(tgt "$RUN/ext3" "$b/c/h.txt")" ] || fail "M3: c/h should be absent (no-recursion)"

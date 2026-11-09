@@ -26,7 +26,7 @@ scenario_path_collision_transform() {
 
     # --no-errors parity: same disk outcome, still exit 0.
     mkdir -p "$RUN/ext2"
-    bin extract -f "$RUN/out.astar" -C "$RUN/ext2" --no-errors --transform "$transform" \
+    bin extract -f "$RUN/out.tdd.tar" -C "$RUN/ext2" --no-errors --transform "$transform" \
         >/dev/null 2>&1 || fail "extract with --no-errors failed"
     local got2
     got2="$(cat "$RUN/ext2/merged.txt" 2>/dev/null || true)"

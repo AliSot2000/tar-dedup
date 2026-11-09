@@ -8,10 +8,10 @@ scenario_resume_archive() {
 
     ar -i "$src" --exit-after-stage inventory > "$RUN/step1.log" 2>&1
     [ -d "$RUN/out.astage" ] || fail "work dir missing after exit-after-stage"
-    [ ! -e "$RUN/out.astar" ] || fail "archive written before it should be"
+    [ ! -e "$RUN/out.tdd.tar" ] || fail "archive written before it should be"
 
     bin resume --work-dir "$RUN/out.astage" > "$RUN/step2.log" 2>&1
-    [ -f "$RUN/out.astar" ] || fail "archive not completed after resume"
+    [ -f "$RUN/out.tdd.tar" ] || fail "archive not completed after resume"
 
     ex --xattrs
     assert_file_eq "$(target "$src/f1.txt")" "$src/f1.txt"
