@@ -1,3 +1,6 @@
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
+
 use crate::common::utf8::require_utf8;
 use crate::db::common::SqlFileRow;
 use crate::db::common::generate_archive_and_extract_filter;
@@ -209,6 +212,84 @@ pub fn insert_out_tree_rows(
     Ok(ids)
 }
 
+/// Longest common path prefix (component-wise) across all `out_tree.abs_path`
+/// values, relative to `root`. Returns the shared prefix as a `PathBuf` (the
+/// components between `root` and the common ancestor of every entry); `None`
+/// when nothing below `root` is shared (all entries live directly at the root,
+/// or the tree is empty) — the `--strip-common-prefix` no-op case.
+///
+/// SQL-first: the whole-table scan is pushed into SQLite, which returns only the
+/// lexicographic `MIN`/`MAX` `abs_path`. The component-wise common prefix of a
+/// set equals the common prefix of its min and max (every other row sorts
+/// between them, so it agrees with both on their shared leading segments), so
+/// only those two rows are compared in Rust.
+pub fn out_tree_common_prefix(conn: &Connection, root: &Path) -> Result<Option<PathBuf>> {
+    let (min, max): (Option<String>, Option<String>) = conn.query_row(
+        "SELECT MIN(abs_path), MAX(abs_path) FROM out_tree WHERE id > 0",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).to_panic()?;
+    let (Some(min), Some(max)) = (min, max) else {
+        return Ok(None);
+    };
+    let root_str = root.to_string_lossy();
+
+    let rel_of = |p: &str| -> Option<Vec<OsString>> {
+        let rel = p.strip_prefix(&*root_str)?;
+        Some(Path::new(rel).components().filter_map(|c| match c {
+            Component::Normal(n) => Some(n.to_os_string()),
+            _ => None,
+        }).collect())
+    };
+    let (Some(lo), Some(hi)) = (rel_of(&min), rel_of(&max)) else {
+        return Ok(None);
+    };
+
+    let n = lo.len().min(hi.len());
+    let mut i = 0;
+    while i < n && lo[i] == hi[i] {
+        i += 1;
+    }
+    if i == 0 {
+        return Ok(None);
+    }
+    let mut out = PathBuf::new();
+    for name in &lo[..i] {
+        out.push(name);
+    }
+    Ok(Some(out))
+}
+
+/// Re-root every `out_tree` row that lives under `root / shared` back to `root`
+/// and drop the row that collapses to the root itself (the source's top
+/// directory). One transaction: the `UPDATE` rewrites `abs_path = root + (rel
+/// remainder after `shared`)` for rows under the prefix; the `DELETE` removes
+/// the entry that now equals `root`. Returns the number of re-rooted rows.
+pub fn strip_common_prefix(conn: &mut Connection, root: &Path, shared: &Path) -> Result<u64> {
+    let root_str = root.to_string_lossy().into_owned();
+    // `lcp` = root + "/" + shared, the exact prefix of every affected row.
+    let lcp = format!("{root_str}/{}", shared.to_string_lossy());
+    let tx = conn.transaction().to_panic()?;
+    let updated = tx.execute(
+        "UPDATE out_tree
+         SET abs_path = :root || substr(abs_path, length(:lcp) + 1)
+         WHERE abs_path != :root
+           AND substr(abs_path, 1, length(:lcp)) = :lcp
+           AND (length(abs_path) = length(:lcp)
+                OR substr(abs_path, length(:lcp) + 1, 1) = '/')",
+        named_params! {
+            ":root": &root_str,
+            ":lcp": &lcp,
+        },
+    ).to_panic()?;
+    tx.execute(
+        "DELETE FROM out_tree WHERE abs_path = :root",
+        named_params! { ":root": &root_str },
+    ).to_panic()?;
+    tx.commit().to_panic()?;
+    Ok(updated as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +455,145 @@ mod tests {
         let err_rows: i64 = conn.query_row(
             "SELECT COUNT(*) FROM errors", [], |r| r.get(0)).unwrap();
         assert_eq!(err_rows, 0, "same-file fanout is benign even with recording enabled");
+    }
+
+    // ---- out_tree_common_prefix / strip_common_prefix ------------------------
+
+    fn insert_out(db: &Connection, abs_path: &str) {
+        db.execute(
+            "INSERT INTO out_tree (abs_path, file_id) VALUES (:abs, NULL)",
+            named_params! { ":abs": abs_path },
+        ).unwrap();
+    }
+
+    fn out_paths(db: &Connection) -> Vec<String> {
+        // `id > 0` skips the reserved id=0 "missing link target" marker row.
+        db.prepare("SELECT abs_path FROM out_tree WHERE id > 0 ORDER BY abs_path").unwrap()
+            .query_map([], |r| r.get(0)).unwrap()
+            .collect::<rusqlite::Result<Vec<String>>>().unwrap()
+    }
+
+    #[test]
+    fn common_prefix_with_shared_subdir() {
+        let db = conn();
+        insert_out(&db, "/ed/var/cache/one.txt");
+        insert_out(&db, "/ed/var/cache/sub/two.txt");
+        insert_out(&db, "/ed/var/cache/sub/deep/three.txt");
+        let shared = out_tree_common_prefix(&db, Path::new("/ed")).expect("ok")
+            .expect("some shared prefix");
+        assert_eq!(shared, PathBuf::from("var/cache"));
+    }
+
+    #[test]
+    fn common_prefix_none_when_divergent_or_empty() {
+        let db = conn();
+        insert_out(&db, "/ed/a.txt");
+        insert_out(&db, "/ed/b.txt");
+        assert_eq!(out_tree_common_prefix(&db, Path::new("/ed")).expect("ok"), None,
+                   "no shared component below root -> no-op");
+
+        let db = conn();
+        assert_eq!(out_tree_common_prefix(&db, Path::new("/ed")).expect("ok"), None,
+                   "empty out_tree -> no-op");
+    }
+
+    /// Brute-force component-wise LCP over the whole table — the reference that
+    /// `out_tree_common_prefix`'s MIN/MAX shortcut must agree with.
+    fn true_common_prefix(db: &Connection, root: &Path) -> Option<PathBuf> {
+        let paths: Vec<String> = db.prepare("SELECT abs_path FROM out_tree WHERE id > 0")
+            .unwrap().query_map([], |r| r.get(0)).unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        let root_str = root.to_string_lossy();
+        let comps = |p: &str| -> Vec<String> {
+            Path::new(p.strip_prefix(&*root_str).expect("under root")).components()
+                .filter_map(|c| match c {
+                    Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+                    _ => None,
+                }).collect()
+        };
+        let mut shared: Option<Vec<String>> = None;
+        for p in paths {
+            let c = comps(&p);
+            shared = Some(match shared {
+                None => c,
+                Some(cur) => {
+                    let n = cur.len().min(c.len());
+                    let mut i = 0;
+                    while i < n && cur[i] == c[i] { i += 1; }
+                    cur[..i].to_vec()
+                }
+            });
+        }
+        let shared = shared?;
+        if shared.is_empty() { return None; }
+        let mut out = PathBuf::new();
+        for s in shared { out.push(s); }
+        Some(out)
+    }
+
+    /// Cross-check the MIN/MAX shortcut against a brute-force full scan on sets
+    /// whose min/max share a *longer* prefix than some middle element (the worry
+    /// "could a whole subtree be skipped?").
+    #[test]
+    fn common_prefix_min_max_agrees_with_full_scan() {
+        let cases: Vec<(&[&str], Option<&str>)> = vec![
+            // user's example: all share `a`; min/max diverge at the 2nd comp.
+            (&["/ed/a/b/c", "/ed/a/u/d"], Some("a")),
+            // `net/...` breaks the `mnt` prefix entirely -> no-op.
+            (&["/ed/mnt/drive/a", "/ed/mnt/hdd/b", "/ed/net/c"], None),
+            // `y` sibling breaks `x` only if present.
+            (&["/ed/x/q", "/ed/x/r/f", "/ed/x/t"], Some("x")),
+            (&["/ed/x/q", "/ed/x/r/f", "/ed/y/z"], None),
+            // deep leaves all under one subtree -> the whole subtree is kept.
+            (&["/ed/mnt/drive/a", "/ed/mnt/drive/sub/b", "/ed/mnt/drive/c"], Some("mnt/drive")),
+            // a single component shared.
+            (&["/ed/only/deep/leaf", "/ed/only/other"], Some("only")),
+        ];
+        for (paths, expect) in cases {
+            let mut db = conn();
+            for p in paths { insert_out(&db, p); }
+            let via_minmax = out_tree_common_prefix(&db, Path::new("/ed")).expect("ok");
+            let brute = true_common_prefix(&db, Path::new("/ed"));
+            assert_eq!(via_minmax, brute, "MIN/MAX must equal full-scan LCP for {paths:?}");
+            assert_eq!(via_minmax.as_deref().map(|p| p.to_string_lossy().into_owned()),
+                       expect.map(str::to_string),
+                       "expected prefix for {paths:?}");
+        }
+    }
+
+    #[test]
+    fn common_prefix_single_component_shared() {
+        let db = conn();
+        insert_out(&db, "/ed/mnt/drive/a.pdf");
+        insert_out(&db, "/ed/mnt/hdd/b.pdf");
+        let shared = out_tree_common_prefix(&db, Path::new("/ed")).expect("ok")
+            .expect("some shared prefix");
+        assert_eq!(shared, PathBuf::from("mnt"));
+    }
+
+    #[test]
+    fn strip_common_prefix_reroots_and_drops_top() {
+        let mut db = conn();
+        insert_out(&db, "/ed/var/cache/one.txt");
+        insert_out(&db, "/ed/var/cache/two.txt");
+        insert_out(&db, "/ed/var/cache/foo/three.txt");
+        insert_out(&db, "/ed/var/cache"); // the collapsed top dir row -> root
+        let n = strip_common_prefix(&mut db, Path::new("/ed"), Path::new("var/cache")).expect("ok");
+        assert_eq!(n, 4, "all four rows re-rooted");
+        let mut paths = out_paths(&db);
+        paths.sort();
+        assert_eq!(paths, vec!["/ed/foo/three.txt", "/ed/one.txt", "/ed/two.txt"]);
+    }
+
+    #[test]
+    fn strip_common_prefix_only_touches_rows_under_prefix() {
+        let mut db = conn();
+        insert_out(&db, "/ed/mnt/drive/a.pdf");
+        insert_out(&db, "/ed/other/b.pdf"); // outside the shared prefix -> untouched
+        let n = strip_common_prefix(&mut db, Path::new("/ed"), Path::new("mnt/drive")).expect("ok");
+        assert_eq!(n, 1);
+        let mut paths = out_paths(&db);
+        paths.sort();
+        assert_eq!(paths, vec!["/ed/a.pdf", "/ed/other/b.pdf"]);
     }
 }
