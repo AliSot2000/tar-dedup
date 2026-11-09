@@ -563,19 +563,6 @@ mod tests {
     }
 
     #[test]
-    fn delete_out_tree_root_drops_only_root_rows() {
-        let db = conn();
-        insert_out(&db, "/ed");              // the root row ensure_parent re-notions
-        insert_out(&db, "/ed/one.txt");
-        insert_out(&db, "/ed/sub/two.txt");
-        let n = delete_out_tree_root(&db, Path::new("/ed")).expect("ok");
-        assert_eq!(n, 1);
-        let mut paths = out_paths(&db);
-        paths.sort();
-        assert_eq!(paths, vec!["/ed/one.txt", "/ed/sub/two.txt"]);
-    }
-
-    #[test]
     fn common_prefix_single_component_shared() {
         let db = conn();
         insert_out(&db, "/ed/mnt/drive/a.pdf");
@@ -597,6 +584,67 @@ mod tests {
         let mut paths = out_paths(&db);
         paths.sort();
         assert_eq!(paths, vec!["/ed/foo/three.txt", "/ed/one.txt", "/ed/two.txt"]);
+    }
+
+    #[test]
+    fn strip_common_prefix_nested_tree_collapses_only_exact_lcp_row() {
+        // Tree a/, a/b/, a/b/c/: LCP is `a`; only the row *exactly* at
+        // root/a is stripped to the root; a/b and a/b/c keep their remainders.
+        let mut db = conn();
+        insert_out(&db, "/ed/a");
+        insert_out(&db, "/ed/a/b");
+        insert_out(&db, "/ed/a/b/c");
+        let n = strip_common_prefix(&mut db, Path::new("/ed"), Path::new("a")).expect("ok");
+        assert_eq!(n, 3, "all three rows re-rooted");
+        let mut paths = out_paths(&db);
+        paths.sort();
+        assert_eq!(paths, vec!["/ed/b", "/ed/b/c"],
+                   "only /ed/a collapses to root (then dropped); b, b/c stay nested");
+    }
+
+    #[test]
+    fn strip_common_prefix_dir_sibling_shrinks_prefix_and_is_safe() {
+        // Rows: /ed/mnt, /ed/mnt/drive, /ed/mnt/drive/{a,b}.pdf (all clean, no
+        // trailing slash, as real out_tree rows are). Because `/ed/mnt` is
+        // present (a real dir row), MIN=/ed/mnt and the component LCP is only
+        // `/mnt`, NOT `/mnt/drive`. Stripping `/mnt` is injective over all rows,
+        // so no two rows collide and only the exact `/ed/mnt` row collapses to
+        // the root.
+        let mut db = conn();
+        insert_out(&db, "/ed/mnt");
+        insert_out(&db, "/ed/mnt/drive");
+        insert_out(&db, "/ed/mnt/drive/a.pdf");
+        insert_out(&db, "/ed/mnt/drive/b.pdf");
+        let shared = out_tree_common_prefix(&db, Path::new("/ed")).expect("ok")
+            .expect("prefix");
+        assert_eq!(shared, PathBuf::from("mnt"),
+                   "/ed/mnt sibling shortens the LCP to one component");
+        let n = strip_common_prefix(&mut db, Path::new("/ed"), &shared).expect("ok");
+        assert_eq!(n, 4);
+        let mut paths = out_paths(&db);
+        paths.sort();
+        assert_eq!(paths, vec!["/ed/drive", "/ed/drive/a.pdf", "/ed/drive/b.pdf"],
+                   "only the exact /ed/mnt row collapses to root (dropped)");
+    }
+
+    #[test]
+    fn strip_common_prefix_no_dir_sibling_prefix_is_drive_and_safe() {
+        // Without the `/ed/mnt` dir row, LCP is `/mnt/drive` (MIN=/ed/mnt/drive).
+        // Stripping it yields exactly one root collapse from the `/ed/mnt/drive`
+        // row itself; files map distinct remainders. No UNIQUE conflict.
+        let mut db = conn();
+        insert_out(&db, "/ed/mnt/drive");
+        insert_out(&db, "/ed/mnt/drive/a.pdf");
+        insert_out(&db, "/ed/mnt/drive/b.pdf");
+        let shared = out_tree_common_prefix(&db, Path::new("/ed")).expect("ok")
+            .expect("prefix");
+        assert_eq!(shared, PathBuf::from("mnt/drive"));
+        let n = strip_common_prefix(&mut db, Path::new("/ed"), &shared).expect("ok");
+        assert_eq!(n, 3);
+        let mut paths = out_paths(&db);
+        paths.sort();
+        assert_eq!(paths, vec!["/ed/a.pdf", "/ed/b.pdf"],
+                   "the /ed/mnt/drive row collapses to root (dropped)");
     }
 
     #[test]
