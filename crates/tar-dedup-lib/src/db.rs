@@ -1007,6 +1007,16 @@ impl Database {
         place::drop_materialize_queue(&self.conn())
     }
 
+    /// See [`place::deletable_canonical_payload`].
+    pub fn deletable_canonical_payload(&self, out_id: OutTreeId) -> Result<Option<FileId>> {
+        place::deletable_canonical_payload(&self.conn(), out_id)
+    }
+
+    /// See [`place::list_deletable_canonicals`].
+    pub fn list_deletable_canonicals(&self, out_ids: &[OutTreeId]) -> Result<Vec<FileId>> {
+        place::list_deletable_canonicals(&self.conn(), out_ids)
+    }
+
     pub fn list_canonical_files_for_move<R: SqlFileRow>(
         &self,
         filter: bool,
