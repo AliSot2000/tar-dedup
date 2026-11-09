@@ -373,6 +373,72 @@ pub fn pull_extracted_cache_files<R: SqlFileRow>(
     rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
+/// The dedup-canonical file (`files.canonical_id = files.id`) whose cache
+/// payload the just-materialized `out_tree` row served, iff that payload may now
+/// be deleted: every self-canonical out-tree row serving the canonical has
+/// settled on a terminal flag (`OUT_TERMINAL`) and the payload is not yet marked
+/// removed (idempotent). `None` when the row is not a file, or a pending serving
+/// row still needs the cache. The caller performs the actual `remove_file`.
+pub fn deletable_canonical_payload(conn: &Connection, out_id: OutTreeId)
+    -> Result<Option<FileId>> {
+    let canonical_id: Option<i64> = conn
+        .query_row(
+            "SELECT f.canonical_id
+             FROM out_tree AS o JOIN files AS f ON o.file_id = f.id
+             WHERE o.id = :out_id
+               AND f.canonical_id IS NOT NULL
+               AND f.ftype = 'file'",
+            named_params! { ":out_id": out_id.0 },
+            |row| row.get(0),
+        ).optional().to_panic()?;
+    let Some(canonical_id) = canonical_id else { return Ok(None) };
+    let removed: i64 = conn.query_row(
+        "SELECT (flags & :removed) != 0 FROM files WHERE id = :canonical_id",
+        named_params! {
+            ":removed": FileFlag::PayloadRemoved.mask_i64(),
+            ":canonical_id": canonical_id,
+        },
+        |row| row.get(0),
+    ).to_panic()?;
+    if removed != 0 {
+        return Ok(None);
+    }
+    // Any pending self-canonical out row serving this canonical still needs its cache.
+    let pending: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM out_tree AS r
+         JOIN files AS rf ON r.file_id = rf.id
+         WHERE rf.canonical_id = :canonical_id
+           AND r.canonical_id = r.id
+           AND (r.flags & :terminal) = 0",
+        named_params! {
+            ":canonical_id": canonical_id,
+            ":terminal": out_terminal() as i64,
+        },
+        |row| row.get(0),
+    ).to_panic()?;
+    if pending > 0 {
+        return Ok(None);
+    }
+    Ok(Some(FileId(canonical_id)))
+}
+
+/// For a whole batch of just-materialized canonical `out_tree` rows, the file
+/// ids whose cache payloads may now be deleted (i.e. every self-canonical
+/// serving row of that canonical is terminal and the payload is still present).
+pub fn list_deletable_canonicals(conn: &Connection, out_ids: &[OutTreeId])
+    -> Result<Vec<FileId>> {
+    let mut result: Vec<FileId> = Vec::new();
+    let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    for out_id in out_ids {
+        if let Some(canonical_id) = deletable_canonical_payload(conn, *out_id)? {
+            if seen.insert(canonical_id.0) {
+                result.push(canonical_id);
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Create the `materialize_queue` ordering table. Idempotent.
 pub fn create_materialize_queue(conn: &Connection) -> Result<()> {
     conn.execute(
