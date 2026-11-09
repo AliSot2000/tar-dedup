@@ -976,7 +976,7 @@ fn copy_single_file<ID>(
     match spc_res {
         Ok(_) => Ok((fid, true)),
         Err(e) => {
-            let _ = fs::remove_file(dst);
+            let _ = fs::remove_file(dst); // INFO: Swallow error. Remove is not essential.
             Err((fid, annotate_path(e, dst)))
         }
     }
