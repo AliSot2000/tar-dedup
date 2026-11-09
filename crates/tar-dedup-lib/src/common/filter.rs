@@ -473,6 +473,7 @@ mod tests {
             ftype: FileType::File,
             device_id: None, inode_id: None,
             canonical_id: None,
+            link_dst_id: None,
             flags: FileFlags::from_i64(0),
             phase: FilePhase::Inventoried,
             new_name: None,
