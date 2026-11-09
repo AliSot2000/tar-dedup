@@ -806,6 +806,16 @@ pub struct ExtractArgs {
     )]
     pub no_reflink: bool,
 
+    /// Do not delete extract-cache payloads during placement; only the end-of-run
+    /// cleanup may remove them. Off by default so the stage frees space eagerly.
+    #[arg(
+        long = "lazy-delete-stage",
+        default_value_t = false,
+        action = ArgAction::SetTrue,
+        help_heading = "Placement"
+    )]
+    pub lazy_delete_stage: bool,
+
     /// Recreate non-regular entries (symlink, fifo, char/block device, socket).
     /// Off by default: those entries require `mknod` privileges or `root`.
     #[arg(

@@ -67,8 +67,11 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         materialize_link_tree(rt, &mut recorder)?;
     } else {
         materialize_files(rt, &mut recorder)?;
-        // INFO: Eager cleaning of canonical files to free up space.
-        cleanup_stage(&rt, &mut recorder)?; // Free space!
+        // INFO: Eager cleaning of canonical files to free up space; deferred to
+        // the end-of-run cleanup when `--lazy-delete-stage` is set.
+        if !rt.config.placement.lazy_delete_stage {
+            cleanup_stage(&rt, &mut recorder)?; // Free space!
+        }
 
         materialize_hardlinks(rt, &mut recorder)?;
         materialize_others(rt, &mut recorder)?;

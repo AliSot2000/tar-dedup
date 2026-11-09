@@ -52,6 +52,7 @@ pub struct PlacementOptions {
     pub no_reflink: bool,
     pub hard_link_grouping: HardLinkGrouping,
     pub recreate_none_file_entries: bool,
+    pub lazy_delete_stage: bool,
 }
 
 impl Default for PlacementOptions {
@@ -73,6 +74,7 @@ impl Default for PlacementOptions {
             no_reflink: false,
             hard_link_grouping: HardLinkGrouping::Global,
             recreate_none_file_entries: false,
+            lazy_delete_stage: false,
         }
     }
 }
@@ -531,6 +533,7 @@ impl ExtractConfig {
                 no_reflink: args.no_reflink,
                 hard_link_grouping: args.hard_link_grouping,
                 recreate_none_file_entries: args.create_other_entries,
+                lazy_delete_stage: args.lazy_delete_stage,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: same_owner,
@@ -629,6 +632,7 @@ impl ExtractConfig {
                 no_reflink: false,
                 hard_link_grouping: HardLinkGrouping::Global,
                 recreate_none_file_entries: true,
+                lazy_delete_stage: false,
             },
             attributes: ExtractAttributeOptions::default(),
             scan: ScanOptions::default(),
@@ -673,6 +677,7 @@ impl ExtractConfig {
                 no_reflink: false,
                 hard_link_grouping: HardLinkGrouping::Global,
                 recreate_none_file_entries: true,
+                lazy_delete_stage: false,
             },
             attributes: ExtractAttributeOptions::default(),
             scan: ScanOptions::default(),
