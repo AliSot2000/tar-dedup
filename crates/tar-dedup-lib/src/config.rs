@@ -105,14 +105,36 @@ pub(crate) fn resolve_cwd(directory: Option<&Path>) -> Result<PathBuf> {
     Ok(resolved)
 }
 
-/// Archive basename with compound compression / `.tar` suffixes stripped.
+/// Archive basename with the full `.tdd` (and legacy compound `.tar*`) suffixes
+/// stripped, so derived work-dir names (`{stem}.astage` / `{stem}.estage`) and
+/// the `--one-top-level` default stay the archive stem.
 pub fn archive_stem(archive_path: &Path) -> String {
     let name = archive_path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "archive".into());
     let lower = name.to_ascii_lowercase();
-    let strip_len = if lower.ends_with(".tar.xz") {
+    let strip_len = if lower.ends_with(".tdd.tar.xz") {
+        ".tdd.tar.xz".len()
+    } else if lower.ends_with(".tdd.txz") {
+        ".tdd.txz".len()
+    } else if lower.ends_with(".tdd.tar.gz") {
+        ".tdd.tar.gz".len()
+    } else if lower.ends_with(".tdd.tgz") {
+        ".tdd.tgz".len()
+    } else if lower.ends_with(".tdd.tar.bz2") {
+        ".tdd.tar.bz2".len()
+    } else if lower.ends_with(".tdd.tbz2") {
+        ".tdd.tbz2".len()
+    } else if lower.ends_with(".tdd.tbz") {
+        ".tdd.tbz".len()
+    } else if lower.ends_with(".tdd.tar.zst") {
+        ".tdd.tar.zst".len()
+    } else if lower.ends_with(".tdd.tzst") {
+        ".tdd.tzst".len()
+    } else if lower.ends_with(".tdd.tar") {
+        ".tdd.tar".len()
+    } else if lower.ends_with(".tar.xz") {
         ".tar.xz".len()
     } else if lower.ends_with(".tar.gz") {
         ".tar.gz".len()
