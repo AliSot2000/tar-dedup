@@ -53,6 +53,7 @@ pub struct PlacementOptions {
     pub hard_link_grouping: HardLinkGrouping,
     pub recreate_none_file_entries: bool,
     pub lazy_delete_stage: bool,
+    pub strip_common_prefix: bool,
 }
 
 impl Default for PlacementOptions {
@@ -75,6 +76,7 @@ impl Default for PlacementOptions {
             hard_link_grouping: HardLinkGrouping::Global,
             recreate_none_file_entries: false,
             lazy_delete_stage: false,
+            strip_common_prefix: false,
         }
     }
 }
@@ -534,6 +536,7 @@ impl ExtractConfig {
                 hard_link_grouping: args.hard_link_grouping,
                 recreate_none_file_entries: args.create_other_entries,
                 lazy_delete_stage: args.lazy_delete_stage,
+                strip_common_prefix: args.strip_common_prefix,
             },
             attributes: ExtractAttributeOptions {
                 restore_owner: same_owner,
@@ -633,6 +636,7 @@ impl ExtractConfig {
                 hard_link_grouping: HardLinkGrouping::Global,
                 recreate_none_file_entries: true,
                 lazy_delete_stage: false,
+                strip_common_prefix: false,
             },
             attributes: ExtractAttributeOptions::default(),
             scan: ScanOptions::default(),
@@ -678,6 +682,7 @@ impl ExtractConfig {
                 hard_link_grouping: HardLinkGrouping::Global,
                 recreate_none_file_entries: true,
                 lazy_delete_stage: false,
+                strip_common_prefix: false,
             },
             attributes: ExtractAttributeOptions::default(),
             scan: ScanOptions::default(),

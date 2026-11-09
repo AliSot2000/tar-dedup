@@ -816,6 +816,16 @@ pub struct ExtractArgs {
     )]
     pub lazy_delete_stage: bool,
 
+    /// Re-root extracted files under the extraction root by stripping the longest
+    /// common path prefix (component-wise) shared across the out-tree.
+    #[arg(
+        long = "strip-common-prefix",
+        default_value_t = false,
+        action = ArgAction::SetTrue,
+        help_heading = "Placement"
+    )]
+    pub strip_common_prefix: bool,
+
     /// Recreate non-regular entries (symlink, fifo, char/block device, socket).
     /// Off by default: those entries require `mknod` privileges or `root`.
     #[arg(
