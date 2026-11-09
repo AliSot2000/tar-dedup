@@ -183,6 +183,9 @@ pub struct ArchivePipelineOptions {
     /// Maximum shard size for content-defined chunking.
     pub max_shard_size: u64,
     pub write_archive_footer: bool,
+    /// Write a directory product (canonical payloads + `tar-dedup.sqlite`)
+    /// instead of a tar archive; another tool compresses/stores it.
+    pub bypass_archive: bool,
 }
 
 impl Default for ArchivePipelineOptions {
@@ -192,7 +195,8 @@ impl Default for ArchivePipelineOptions {
             order: ArchiveOrdering::ExtSizeId,
             use_shards: false,
             max_shard_size: 1024 * 1024 * 5,
-            write_archive_footer: true
+            write_archive_footer: true,
+            bypass_archive: false,
         }
     }
 }
@@ -207,6 +211,13 @@ impl Validate for ArchivePipelineOptions {
         if self.max_shard_size > 0 && !self.use_shards {
             return Err(Error::Config(
                 "--max-shard-size requires --use-shards".into(),
+            ));
+        }
+        if self.bypass_archive && self.write_archive_footer {
+            return Err(Error::Config(
+                "`--bypass-archive` writes a directory product; the tar footer is not written. \
+                 Use it alone (no footer inference)."
+                    .into(),
             ));
         }
         Ok(())
@@ -288,6 +299,23 @@ impl ArchiveConfig {
 
         // Resolve archive path and create parents.
         let c_archive_path = resolve_path_to_abs_path(&args.archive, &c_directory);
+        // Mode resolution: `--bypass-archive` requires a directory, its absence a
+        // file. No silent inference: a `-f` pointing at the wrong kind is an error.
+        if args.bypass_archive {
+            if c_archive_path.is_file() {
+                return Err(Error::Config(format!(
+                    "`--bypass-archive` writes a directory product, but {} is a file; \
+                     pass a directory (or a non-existent path) with the flag",
+                    c_archive_path.display()
+                )));
+            }
+        } else if c_archive_path.is_dir() {
+            return Err(Error::Config(format!(
+                "`{}` is a directory; pass `--bypass-archive` to write a directory product \
+                 (or point `-f` at a file)",
+                c_archive_path.display()
+            )));
+        }
         if let Some(parent) = c_archive_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
@@ -444,7 +472,10 @@ impl ArchiveConfig {
                 force: false,
                 relax_utf8: args.relax_utf8,
                 progress_mode: args.progress_mode,
-                cleanup: CleanupSettings { db_retention: args.db_retention, keep_stage: args.keep_stage },
+                cleanup: CleanupSettings {
+                    db_retention: args.db_retention,
+                    keep_stage: args.keep_stage,
+                },
                 exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             },
             pipeline: ArchivePipelineOptions {
@@ -452,7 +483,8 @@ impl ArchiveConfig {
                 order: args.ordering,
                 use_shards: args.use_shards,
                 max_shard_size: args.max_shard_size,
-                write_archive_footer: true,
+                write_archive_footer: !args.bypass_archive,
+                bypass_archive: args.bypass_archive,
             },
         })
     }
