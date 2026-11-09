@@ -521,12 +521,10 @@ mod tests {
         let in_file = dir.path().join("payload.bin");
         std::fs::write(&in_file, &payload).expect("write payload");
         let archive_path = dir.path().join("archive.tar.xz");
-        let settings = CompressionSettings {
-            format: CompressionFormat::Xz,
-            level: 9,
-            xz_extreme: true,
-            memlimit_compress: None,
-        };
+        let mut settings = CompressionSettings::default();
+        settings.format = CompressionFormat::Xz;
+        settings.level = 9;
+        settings.xz_advanced.extreme = Some(true);
         let mut writer = TarWriter::open(
             archive_path.clone(),
             &settings,
