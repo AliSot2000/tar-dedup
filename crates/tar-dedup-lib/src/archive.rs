@@ -32,7 +32,15 @@ pub struct ArchiveRTArgs<'a> {
 }
 
 pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
-    let product = if archive_footer::has_valid_footer(&config.paths.archive_path) {
+    // A finished product: a tar with a valid footer, or — in bypass mode — a
+    // product directory holding a baked `tar-dedup.sqlite`.
+    let product = if config.pipeline.bypass_archive {
+        if config.paths.archive_path.join(crate::common::defaults::DB_NAME).is_file() {
+            ProductPresence::Finished
+        } else {
+            ProductPresence::Absent
+        }
+    } else if archive_footer::has_valid_footer(&config.paths.archive_path) {
         ProductPresence::Finished
     } else {
         ProductPresence::Absent
@@ -57,7 +65,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         WorkPresence::Absent
     };
 
-    let action = resolve_start(config.process.start_policy, work, product)?;
+    let action = resolve_start(config.process.start_policy, work, Some(product))?;
 
     let db = Database::open(&db_path)?;
     let saved = db.load_runtime_state()?;
@@ -173,13 +181,20 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
     drop(db);
     drop(lock);
 
-    tracing::info!(
-        "archive written to {}",
-        config.paths.archive_path.display()
-    );
+    if config.pipeline.bypass_archive {
+        tracing::info!(
+            "bypass-archive product written to {}",
+            config.paths.archive_path.display()
+        );
+    } else {
+        tracing::info!(
+            "archive written to {}",
+            config.paths.archive_path.display()
+        );
+    }
 
     cleanup::cleanup_workdir(&config, CleanupMode::Archive)?;
-    if config.process.cleanup.keep_stage {
+    if config.process.cleanup.keep_stage.always() {
         tracing::info!(
             "keeping stage (--keep-stage): {}",
             config.paths.work_dir.display()
