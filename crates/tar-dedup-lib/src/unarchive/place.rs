@@ -1508,6 +1508,7 @@ mod tests {
             ftype,
             device_id: None, inode_id: None,
             canonical_id: Some(FileId(id)),
+            link_dst_id: None,
             flags: FileFlags::default(),
             phase: FilePhase::Rehashed,
             new_name: None,
@@ -1534,6 +1535,7 @@ mod tests {
             include_reason_archive: None, exclude_reason_archive: None,
             include_reason_extract: None, exclude_reason_extract: None,
             canonical_id: Some(FileId(id)),
+            link_dst_id: None,
             flags: FileFlags::default(),
             phase: FilePhase::Rehashed,
             new_name: None,
@@ -1547,6 +1549,7 @@ mod tests {
             file_id: Some(FileId(id)),
             flags: OutTreeFlags::default(),
             canonical_id: Some(OutTreeId(id)),
+            link_dst_id: None,
         }
     }
 
