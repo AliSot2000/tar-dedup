@@ -2,10 +2,11 @@ use std::io::{self, Read, Write};
 
 use lzma_sys;
 use xz2::read::XzDecoder;
-use xz2::stream::{Action, Check, MtStreamBuilder, Status, Stream};
+use xz2::stream::{Action, Check, Filters, LzmaOptions, MatchFinder, Mode, MtStreamBuilder, Status, Stream};
 use xz2::write::XzEncoder;
 
 use crate::common::formatting::format_mib;
+use crate::config::{XzAdvancedOptions, XzCheck, XzMatchFinder, XzMode};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
 
@@ -129,6 +130,67 @@ pub fn decompress_footer_bytes(compressed: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Map a JSON `check` value to the xz2 `Check` enum.
+fn check_of(check: XzCheck) -> Check {
+    match check {
+        XzCheck::None => Check::None,
+        XzCheck::Crc32 => Check::Crc32,
+        XzCheck::Crc64 => Check::Crc64,
+        XzCheck::Sha256 => Check::Sha256,
+    }
+}
+
+/// Map a JSON `mf` value to the xz2 `MatchFinder` enum.
+fn mf_of(mf: XzMatchFinder) -> MatchFinder {
+    match mf {
+        XzMatchFinder::Hc3 => MatchFinder::HashChain3,
+        XzMatchFinder::Hc4 => MatchFinder::HashChain4,
+        XzMatchFinder::Bt2 => MatchFinder::BinaryTree2,
+        XzMatchFinder::Bt3 => MatchFinder::BinaryTree3,
+        XzMatchFinder::Bt4 => MatchFinder::BinaryTree4,
+    }
+}
+
+/// Map a JSON `mode` value to the xz2 `Mode` enum.
+fn mode_of(mode: XzMode) -> Mode {
+    match mode {
+        XzMode::Fast => Mode::Fast,
+        XzMode::Normal => Mode::Normal,
+    }
+}
+
+/// Build an `LzmaOptions` from the `--level` preset plus the `--xz-advanced`
+/// overrides. Applied to the LZMA2 filter so a custom dict × threads is possible.
+fn build_lzma_options(preset: u32, advanced: &XzAdvancedOptions) -> Result<LzmaOptions> {
+    let mut opts = LzmaOptions::new_preset(preset)
+        .map_err(|e| Error::Other(anyhow::anyhow!("xz lzma2 options: {e}")))?;
+    if let Some(d) = advanced.dict {
+        opts.dict_size(d as u32);
+    }
+    if let Some(lc) = advanced.lc {
+        opts.literal_context_bits(lc);
+    }
+    if let Some(lp) = advanced.lp {
+        opts.literal_position_bits(lp);
+    }
+    if let Some(pb) = advanced.pb {
+        opts.position_bits(pb);
+    }
+    if let Some(mode) = advanced.mode {
+        opts.mode(mode_of(mode));
+    }
+    if let Some(nice) = advanced.nice {
+        opts.nice_len(nice);
+    }
+    if let Some(mf) = advanced.mf {
+        opts.match_finder(mf_of(mf));
+    }
+    if let Some(depth) = advanced.depth {
+        opts.depth(depth);
+    }
+    Ok(opts)
+}
+
 pub struct InterruptibleXzEncoder<W: Write> {
     stream: Stream,
     obj: Option<W>,
@@ -140,19 +202,50 @@ impl<W: Write> InterruptibleXzEncoder<W> {
     pub fn new(
         file: W,
         jobs: usize,
-        memlimit: Option<u64>,
+        advanced: &XzAdvancedOptions,
         preset: u32,
-        shutdown: Shutdown,
-    ) -> Result<(Self, u32)> {
-        let threads = resolve_xz_threads(jobs, memlimit, preset)?;
+        shutdown: Shutdown)
+        -> Result<(Self, u32)> {
+
+        // Any LZMA2 filter-level knob routes through the MT builder's `filters()`
+        // (which accepts a custom `LzmaOptions`, so a large dict × `--jobs` works),
+        // matching `xz --lzma2=dict=… -T…`. That supersedes the old single-stream
+        // `--xz-dict-size` path.
+        let has_filters = advanced.dict.is_some()
+            || advanced.lc.is_some()
+            || advanced.lp.is_some()
+            || advanced.pb.is_some()
+            || advanced.mode.is_some()
+            || advanced.nice.is_some()
+            || advanced.mf.is_some()
+            || advanced.depth.is_some();
+
+        let threads = resolve_xz_threads(
+            advanced.threads.map(|t| t as usize).unwrap_or(jobs),
+            advanced.memlimit,
+            preset,
+        )?;
+
+        let check = advanced.check.map(check_of).unwrap_or(Check::Crc64);
+        let block_size = advanced.block_size.unwrap_or(BLOCK_SIZE);
 
         let mut builder = MtStreamBuilder::new();
         builder
             .threads(threads)
-            .preset(preset)
             .timeout_ms(TIMEOUT_MS)
-            .block_size(BLOCK_SIZE)
-            .check(Check::Crc64);
+            .block_size(block_size)
+            .check(check);
+
+        if has_filters {
+            let opts = build_lzma_options(preset, advanced)?;
+            let mut filters = Filters::new();
+            filters.lzma2(&opts);
+            builder.filters(filters);
+            tracing::info!("xz multithreaded encoder with custom LZMA2 filters");
+        } else {
+            builder.preset(preset);
+            tracing::info!(block_size, "xz multithreaded encoder (preset)");
+        }
 
         let stream = builder.encoder().map_err(|e| {
             Error::Other(anyhow::anyhow!(
@@ -376,13 +469,12 @@ mod tests {
     // InterruptibleXzEncoder
     // #####################################################################
 
-    #[test]
+#[test]
     fn encoder_write_finish_roundtrips() {
         let shutdown = Shutdown::detached();
         let (enc, threads) = InterruptibleXzEncoder::new(
-            Vec::new(), 1, None, 6, shutdown).expect("open encoder");
+            Vec::new(), 1, &XzAdvancedOptions::default(), 6, shutdown).expect("open encoder");
         assert_eq!(threads, 1);
-
         let mut enc = enc;
         let payload = crate::test_support::pseudo_random(64 * 1024);
         enc.write_all(&payload).expect("write all");
@@ -397,7 +489,8 @@ mod tests {
     #[test]
     fn encoder_empty_input_roundtrips() {
         let shutdown = Shutdown::detached();
-        let (enc, _) = InterruptibleXzEncoder::new(Vec::new(), 1, None, 6, shutdown)
+        let (enc, _) = InterruptibleXzEncoder::new(
+            Vec::new(), 1, &XzAdvancedOptions::default(), 6, shutdown)
             .expect("open encoder");
         let out = enc.finish().expect("finish empty");
         let mut dec = XzDecoder::new(&out[..]);
@@ -424,7 +517,7 @@ mod tests {
         let flushed = Rc::new(std::cell::Cell::new(false));
         let shutdown = Shutdown::detached();
         let (mut enc, _) = InterruptibleXzEncoder::new(
-            FlushProbe { flushed: flushed.clone() }, 1, None, 6, shutdown)
+            FlushProbe { flushed: flushed.clone() }, 1, &XzAdvancedOptions::default(), 6, shutdown)
             .expect("open encoder");
         enc.flush().expect("flush");
         assert!(flushed.get(), "flush must reach the underlying writer");
@@ -434,7 +527,8 @@ mod tests {
     #[test]
     fn encoder_write_aborts_on_force() {
         let shutdown = Shutdown::detached();
-        let (mut enc, _) = InterruptibleXzEncoder::new(Vec::new(), 1, None, 6, shutdown.clone())
+        let (mut enc, _) = InterruptibleXzEncoder::new(
+            Vec::new(), 1, &XzAdvancedOptions::default(), 6, shutdown.clone())
             .expect("open encoder");
         shutdown.request_force();
         // NB: `write_all` retries on ErrorKind::Interrupted; observe a single
@@ -447,7 +541,8 @@ mod tests {
     #[test]
     fn encoder_try_finish_aborts_on_force() {
         let shutdown = Shutdown::detached();
-        let (mut enc, _) = InterruptibleXzEncoder::new(Vec::new(), 1, None, 6, shutdown.clone())
+        let (mut enc, _) = InterruptibleXzEncoder::new(
+            Vec::new(), 1, &XzAdvancedOptions::default(), 6, shutdown.clone())
             .expect("open encoder");
         enc.write_all(b"payload").expect("write");
         shutdown.request_force();
@@ -458,7 +553,8 @@ mod tests {
     #[test]
     fn encoder_abandon_skips_stream_footer() {
         let shutdown = Shutdown::detached();
-        let (mut enc, _) = InterruptibleXzEncoder::new(Vec::new(), 1, None, 6, shutdown)
+        let (mut enc, _) = InterruptibleXzEncoder::new(
+            Vec::new(), 1, &XzAdvancedOptions::default(), 6, shutdown)
             .expect("open encoder");
         let payload = crate::test_support::pseudo_random(64 * 1024);
         enc.write_all(&payload).expect("write");
@@ -481,7 +577,8 @@ mod tests {
             }
         }
         let shutdown = Shutdown::detached();
-        let (mut enc, _) = InterruptibleXzEncoder::new(Stalling, 1, None, 6, shutdown)
+        let (mut enc, _) = InterruptibleXzEncoder::new(
+            Stalling, 1, &XzAdvancedOptions::default(), 6, shutdown)
             .expect("open encoder");
         // Incompressible input large enough to force the MT encoder to emit output,
         // then complete the stream so every compressed byte reaches the stall.
