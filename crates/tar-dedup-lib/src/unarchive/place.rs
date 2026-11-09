@@ -2441,7 +2441,7 @@ mod tests {
         let base = root.join(".sources");
         fs::create_dir_all(&base).expect("base");
         let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
-        let cid = content_id_from_digest(Some(&[1; 20]), 3, id, Path::new("f.bin")).0;
+        let cid = content_id_from_digest(&[1; 20], 3, id, Path::new("f.bin")).0;
         fs::write(base.join(&cid), b"abc").expect("write payload");
         let out_id = world.add_out(&root.join("a.bin").to_string_lossy(), id, None);
         world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
@@ -2458,7 +2458,7 @@ mod tests {
         let base = root.join(".sources");
         fs::create_dir_all(&base).expect("base");
         let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
-        let cid = content_id_from_digest(Some(&[1; 20]), 3, id, Path::new("f.bin")).0;
+        let cid = content_id_from_digest(&[1; 20], 3, id, Path::new("f.bin")).0;
         fs::write(base.join(&cid), b"abc").expect("write payload");
         // out at root/sub/a.bin -> relative target resolves to root/.sources/cid
         let sub = root.join("sub");
@@ -2483,7 +2483,7 @@ mod tests {
         let base = root.join(".sources");
         fs::create_dir_all(&base).expect("base");
         let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
-        let cid = content_id_from_digest(Some(&[1; 20]), 3, id, Path::new("f.bin")).0;
+        let cid = content_id_from_digest(&[1; 20], 3, id, Path::new("f.bin")).0;
         fs::write(base.join(&cid), b"abc").expect("write payload");
         let out_id = world.add_out(&root.join("a.bin").to_string_lossy(), id, None);
         world.db.set_file_flag(id, FileFlag::AtLinkSource, true).expect("at link source");
@@ -2501,7 +2501,7 @@ mod tests {
         let base = root.join(".sources");
         fs::create_dir_all(&base).expect("base");
         let id = world.add_place_file("/src/a.bin", 3, 1, FileType::File);
-        let cid = content_id_from_digest(Some(&[1; 20]), 3, id, Path::new("f.bin")).0;
+        let cid = content_id_from_digest(&[1; 20], 3, id, Path::new("f.bin")).0;
         fs::write(base.join(&cid), b"abc").expect("write payload");
         let dst = root.join("a.bin");
         fs::write(&dst, b"pre-existing").expect("write dst");
