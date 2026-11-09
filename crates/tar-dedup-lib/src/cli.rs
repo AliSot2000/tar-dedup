@@ -178,9 +178,8 @@ pub struct ArchiveArgs {
 
     /// Advanced xz LZMA2 tuning over `--level`, as JSON or `@/path/to/blob`
     /// (a JSON file). Every key is optional and overrides the preset when present.
-    /// Keys: level, extreme, dict, block_size, threads, lc, lp, pb,
-    /// mode (fast|normal), nice, mf (hc3|hc4|bt2|bt3|bt4), depth, check
-    /// (none|crc32|crc64|sha256), memlimit. Only valid with xz compression.
+    /// A `help:true` key prints the accepted key list and exits. Only valid with
+    /// xz compression.
     #[arg(long = "xz-advanced", value_name = "JSON|@FILE", help_heading = "Compression")]
     pub xz_advanced: Option<String>,
 
