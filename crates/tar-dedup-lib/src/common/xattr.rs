@@ -281,8 +281,8 @@ pub fn set_file_acl(path: &Path, raw_acl: &str) -> FileStatResult<()> {
 
     // Rebuild ACL
     for (key, value) in parsed_json {
-        // To deal with possible duplicate 'undefined' values, we append a -int suffix to
-        // distinguish them to prevent key collisions in the json subject that stores the acl
+        // To deal with possible duplicate 'undefined' values, we append an -int suffix to
+        // distinguish them to prevent key collisions in the Json subject that stores the acl
         let qual_str = if let Some(_suffix) = key.strip_prefix("undefined-") {
             "undefined"
         } else {
@@ -344,7 +344,7 @@ pub(crate) mod tests {
 
     // ---- environment / support probes ------------------------------------------
 
-    /// Per-test scratch dir. Honors `TAR_DEDUP_TEST_DIR` (a labelled filesystem on the
+    /// Per-test scratch dir. Honors `TAR_DEDUP_TEST_DIR` (a labeled filesystem on the
     /// VM — SELinux cannot be stored on tmpfs); otherwise a tempdir. The returned
     /// `TempDir` (when present) is kept alive by the caller.
     fn ctx(name: &str) -> (Option<tempfile::TempDir>, PathBuf) {
@@ -379,7 +379,7 @@ pub(crate) mod tests {
     pub(crate) fn probe_acl(dir: &Path) -> Result<(), String> {
         let probe = dir.join("probe_acl");
         std::fs::write(&probe, b"x").expect("write probe");
-        let mut acl = posix_acl::PosixACL::empty();
+        let mut acl = PosixACL::empty();
         acl.set(Qualifier::UserObj, 7);
         acl.set(Qualifier::GroupObj, 5);
         acl.set(Qualifier::Mask, 5);
@@ -413,7 +413,7 @@ pub(crate) mod tests {
     }
 
     fn write_acl(path: &Path, entries: &[(Qualifier, u32)]) {
-        let mut acl = posix_acl::PosixACL::empty();
+        let mut acl = PosixACL::empty();
         for (q, p) in entries {
             acl.set(*q, *p);
         }
