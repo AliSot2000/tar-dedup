@@ -57,14 +57,16 @@ fn content_id_if_canonical(
     sha1: Option<&[u8; 20]>,
     size: u64,
     abs_path: &Path,
-    ftype: FileType,
-) -> Option<ContentId> {
+    ftype: FileType)
+    -> Option<ContentId> {
     if canonical_id != Some(id) {
         return None;
     }
     if ftype != FileType::File {
         return None;
     }
+    // A digest is mandatory for a payload id; a missing one is not a payload.
+    let sha1 = sha1?;
     Some(content_id_from_digest(sha1, size, id, abs_path))
 }
 
@@ -141,11 +143,6 @@ impl StrippedRecord {
     /// Tar/stage member basename (`{hash}.{size}.{fid}.ext`).
     pub fn tar_member_name(&self) -> Option<String> {
         self.content_id().map(|c| c.0)
-    }
-
-    /// Sparse rewrite basename (`sp.{content_id}`).
-    pub fn sparse_member_name(&self) -> Option<String> {
-        self.content_id().as_ref().map(sparse_member_name)
     }
 }
 
