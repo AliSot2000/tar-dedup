@@ -4,9 +4,9 @@ use std::{fs, io};
 
 use crate::archive::ArchiveRTArgs;
 use crate::archive_footer;
-use crate::common::batched_stepped_loop;
 use crate::common::defaults::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
-use crate::common::files::warn_if_times_changed;
+use crate::common::files::{read_probe, warn_if_times_changed};
+use crate::common::{batched_stepped_loop, io_buffer};
 use crate::db::ErrorPhase;
 use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FilePhase, StrippedRecord};
@@ -29,6 +29,13 @@ const ERROR_PHASE: ErrorPhase = ErrorPhase::Pipeline(crate::config::PipelinePhas
 //  (??? Files with ErrorWhileArchive need to be promoted to 'archived')
 
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
+    // Bypass archive: finalize a directory product (canonical payload files +
+    // `tar-dedup.sqlite`) instead of a compressed tar stream. No stream, no
+    // footer, no sha1 — see `run_bypass_archive`.
+    if rt.config.pipeline.bypass_archive {
+        return run_bypass_archive(rt);
+    }
+
     let mut recorder = Recorder::new(rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
     // Crash / force leftover: truncate incomplete stream C, keep finished A.B.
     recover_incomplete_session(rt, &mut recorder)?;
@@ -220,6 +227,165 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         rt.db.count_errors(Some("archive"))?,
     );
     Ok(())
+}
+
+/// Record a per-file archive-phase failure against the persistent error log.
+fn record_file_error(recorder: &mut Recorder, fid: crate::db::types::FileId, path: &Path, e: &io::Error) {
+    recorder.record_file(
+        fid, ERROR_PHASE, FileStatError::copy_io(path, e), ErrorFlags::default(),
+    );
+}
+
+/// Finalize the bypass-archive directory product: run the canonical payloads
+/// (resolving the stage symlinks) into the product dir — `-f DIR` — then bake a
+/// checkpointed `tar-dedup.sqlite` beside them. Uses the same session machinery
+/// as the tar path (begin session, queue pull, `mark_archive_session_pending`,
+/// promote, `finalize_archive_session`), so a resume/--force behaves identically
+/// and the A7 append invariant still holds. There is no compression stream, no
+/// footer and no stream sha1: content rehash is the integrity guarantee on the
+/// extract side (`--force` opts out).
+fn run_bypass_archive(rt: &ArchiveRTArgs) -> Result<()> {
+    // Mark the product provenance before baking the catalog so the copy carries it.
+    rt.db.set_bypass_archive(true)?;
+    let mut recorder = Recorder::new(
+        rt.db, !rt.config.process.no_errors, Some(rt.config.process.auto_flush_limit));
+    let mut buf = io_buffer();
+
+    // A leftover open session means a prior bypass finalize was interrupted:
+    // the work-db still holds the truth, the product dir is partial. Truncating a
+    // stream is meaningless here, so just drop the stale session state and retry.
+    if let Some(open) = rt.db.open_archive_session()? {
+        rt.db.abort_incomplete_archive_session(&open)?;
+        tracing::warn!(
+            "recovered incomplete bypass-archive session ({})",
+            rt.config.paths.stage_dir().display()
+        );
+    }
+
+    let session_id = rt.db.begin_archive_session(0)?;
+
+    rt.db.promote_ineligible_to_archived()?;
+    let promoted = rt.db.count_files_in_phase(FilePhase::Archived)?;
+    rt.progress.inc_global(promoted);
+
+    let total_bytes = rt.db.sum_canonical_bytes_to_archive()?;
+    let already_archived = rt.db.sum_archived_canonical_bytes()?;
+    rt.progress.set_phase_total(total_bytes);
+    rt.progress.set_phase_position(already_archived);
+
+    rt.db.create_archive_queue()?;
+    rt.db.populate_archive_queue(rt.config.pipeline.order)?;
+    let to_archive = rt.db.count_files_in_phase(FilePhase::Staged)?;
+    if to_archive == 0 && already_archived == 0 {
+        tracing::warn!("no staged files to archive");
+    }
+    tracing::info!(
+        "starting bypass-archive: total {}, processing {}, pending {} bytes",
+        rt.db.count_entries()?,
+        to_archive,
+        total_bytes.saturating_sub(already_archived),
+    );
+
+    match batched_stepped_loop(
+        rt.config.process.batch_size,
+        || 0u64,
+        |index: &u64, batch_size| {
+            rt.db.pull_pending_archive_rows::<StrippedRecord>(*index, batch_size)
+        },
+        |(pos, _rec): &(u64, StrippedRecord)| *pos,
+        |batch: Vec<(u64, StrippedRecord)>| {
+            for (_pos, record) in batch {
+                if rt.shutdown.is_interrupted() {
+                    return Err(Error::Interrupted);
+                }
+
+                let cid_name = record.tar_member_name().expect(
+                    "INVARIANT ERROR: Members to be encoded must have a symlink in the \
+                    staging directory.",
+                );
+                let stage_src = rt.config.paths.stage_dir().join(&cid_name);
+                // Stage path is a symlink; resolve for the times warning and the
+                // underlying bytes are what the product needs.
+                let target = match fs::canonicalize(&stage_src) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        record_file_error(&mut recorder, record.id, &stage_src, &e);
+                        rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
+                        if rt.config.process.fail_fast {
+                            return Err(Error::io(&stage_src, e));
+                        }
+                        continue;
+                    }
+                };
+                let times = match !record.flags.get(FileFlag::HasSparse) {
+                    true => None,
+                    false => Some(warn_if_times_changed(
+                        &target, record.mtime, record.atime, record.ctime,
+                    ))
+                };
+
+                rt.progress.set_phase_file("archive", &record.abs_path); // TODO check this.
+                match read_probe(&target, record.size, &mut buf) {
+                    Ok(_) => {
+                        rt.db.mark_archive_session_pending(record.id, session_id)?;
+                        if let Some(times) = times {
+                            rt.db.or_file_flags(record.id, times.to_file_flags())?;
+                        }
+                        rt.progress.inc_global(1);
+                    }
+                    Err(e) => {
+                        record_file_error(&mut recorder, record.id, &target, &e);
+                        rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
+                    }
+                }
+            }
+            Ok(())
+        }) {
+        Ok(()) => (),
+        Err(Error::Interrupted) => {
+            // Graceful/force interrupt: leave the session open (recovery handles
+            // it next run) and report the interrupt.
+            progress_abort_report(rt);
+            return Err(Error::Interrupted);
+        }
+        Err(e) => return Err(e),
+    }
+
+    // Promote the session's appended rows to `archived`, then finalize.
+    let n_pending = rt.db.promote_pending_archived()?;
+    rt.progress.inc_global(n_pending);
+    assert_eq!(
+        0,
+        rt.db.count_files_in_phase(FilePhase::Staged)?,
+        "INVARIANT ERROR: Files remaining while attempting to finalize the bypass-archive session."
+    );
+    rt.db.stamp_archive_session_finished_at(session_id)?;
+    rt.db.finalize_archive_session(session_id)?;
+
+    // Bake the finalized work-db into the product dir as `tar-dedup.sqlite`.
+    rt.db.drop_archive_queue()?;
+    recorder.flush()?;
+    rt.db.checkpoint()?;
+
+    let done_bytes = rt.db.sum_archived_canonical_bytes()?;
+    tracing::info!(
+        "bypass-archive done: processed {} of {} bytes, {} error(s); product in {}",
+        done_bytes,
+        total_bytes,
+        rt.db.count_errors(Some("archive"))?,
+        rt.config.paths.stage_dir().display(),
+    );
+    Ok(())
+}
+
+/// Report an interrupted bypass finalize and ensure the in-flight state is durable.
+#[cold]
+fn progress_abort_report(rt: &ArchiveRTArgs) {
+    rt.db.checkpoint().ok();
+    rt.progress.abandon();
+    tracing::warn!(
+        "bypass-archive interrupted during finalize; rerun to resume (staged rows re-copied)"
+    );
 }
 
 /// Look for incomplete session. If found -> Archive was not closed properly and cannot be extended.
