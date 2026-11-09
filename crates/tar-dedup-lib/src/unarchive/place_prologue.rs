@@ -40,6 +40,10 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         tracing::info!("Populating out tree");
         populate_out_tree(rt, use_new_name)?;
     }
+    if rt.config.placement.strip_common_prefix {
+        tracing::info!("Stripping common prefix");
+        strip_common_prefix(rt)?;
+    }
     rt.progress.set_phase_total(rt.db.count_out_tree_rows()?);
     // Canonical election is DB-only. It is meaningless `--link-tree` mode
     // (same branch as the pre-refactor `place::run`).
