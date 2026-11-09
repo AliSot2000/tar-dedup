@@ -802,6 +802,8 @@ fn process_results(
     //  I.e. no Error::Interrupted handling
     db.ingest_materialize_results(&results, is_hardlink, set_reflink)?;
     for outcome in results {
+        debug_assert!(outcome.result.placed || outcome.result.conflict || outcome.error.is_some(),
+            "Error, Conflict or Placed expected after every operation");
         if let Some(Error::FileStat(e)) = outcome.error {
             let e_temp = e.recreate();
             recorder.record_out_tree(outcome.result.id, ERROR_PHASE, e, ErrorFlags::default());
