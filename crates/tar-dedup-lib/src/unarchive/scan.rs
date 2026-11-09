@@ -787,7 +787,6 @@ fn open_resume_database(db_path: &Path)
 /// Function deals with initial installation of the database (being aware of the footer)
 fn install_database(
     rt: &mut ScanRTState,
-    db_path: &Path,
     entry: &mut Entry<BufReader<Box<dyn Read>>>,
     recorder: &mut Recorder,
     fb: &mut Option<ParseFilterBuffer>)
