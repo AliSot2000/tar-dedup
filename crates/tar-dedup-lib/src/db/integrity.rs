@@ -350,7 +350,8 @@ fn count_out_tree_missing_parent(conn: &Connection) -> Result<u64> {
     let dir = OutTreeFlag::IsDirectory.mask_i64();
     let sql = format!(
         "SELECT COUNT(*) AS count FROM out_tree o
-         WHERE (o.flags & :dir) = 0
+         WHERE o.id > 0
+           AND (o.flags & :dir) = 0
            AND NOT EXISTS (
                SELECT 1 FROM out_tree p
                WHERE (p.flags & :dir) != 0
@@ -380,7 +381,8 @@ fn count_out_tree_missing_file_id(conn: &Connection) -> Result<u64> {
     let dir = OutTreeFlag::IsDirectory.mask_i64();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) AS count FROM out_tree
-         WHERE (flags & :dir) = 0
+         WHERE id > 0
+           AND (flags & :dir) = 0
            AND file_id IS NULL",
         named_params! { ":dir": dir },
         |r| r.get("count")).to_panic()?;
