@@ -563,7 +563,7 @@ mod tests {
             (&["/ed/only/deep/leaf", "/ed/only/other"], Some("only")),
         ];
         for (paths, expect) in cases {
-            let mut db = conn();
+            let db = conn();
             for p in paths { insert_out(&db, p); }
             let via_minmax = out_tree_common_prefix(&db, Path::new("/ed")).expect("ok");
             let brute = true_common_prefix(&db, Path::new("/ed"));
@@ -572,6 +572,19 @@ mod tests {
                        expect.map(str::to_string),
                        "expected prefix for {paths:?}");
         }
+    }
+
+    #[test]
+    fn delete_out_tree_root_drops_only_root_rows() {
+        let db = conn();
+        insert_out(&db, "/ed");              // the root row ensure_parent re-notions
+        insert_out(&db, "/ed/one.txt");
+        insert_out(&db, "/ed/sub/two.txt");
+        let n = delete_out_tree_root(&db, Path::new("/ed")).expect("ok");
+        assert_eq!(n, 1);
+        let mut paths = out_paths(&db);
+        paths.sort();
+        assert_eq!(paths, vec!["/ed/one.txt", "/ed/sub/two.txt"]);
     }
 
     #[test]
