@@ -321,9 +321,17 @@ impl ArchiveConfig {
         }
 
         // Resolve work dir and create it and parents
-        let c_work_dir = match &args.work_dir {
-            Some(path) => resolve_path_to_abs_path(path, &c_directory),
-            None => default_archive_work_dir(&c_archive_path),
+        let c_work_dir = if args.bypass_archive {
+            if args.work_dir.is_some() {
+                return Err(Error::Config(String::from(
+                    "--work-dir has no effect when using --bypass-archive")))
+            }
+            c_archive_path.clone()
+        } else {
+            match &args.work_dir {
+                Some(path) => resolve_path_to_abs_path(path, &c_directory),
+                None => default_archive_work_dir(&c_archive_path),
+            }
         };
         std::fs::create_dir_all(&c_work_dir).map_err(|e| Error::io(&c_work_dir, e))?;
 
