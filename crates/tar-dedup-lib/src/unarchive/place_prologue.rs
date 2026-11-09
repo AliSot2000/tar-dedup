@@ -586,6 +586,7 @@ mod tests {
             ftype,
             device_id: None, inode_id: None,
             canonical_id: None,
+            link_dst_id: None,
             flags: FileFlags::default(),
             phase: FilePhase::Unarchived,
             new_name: new_name.map(str::to_string),
