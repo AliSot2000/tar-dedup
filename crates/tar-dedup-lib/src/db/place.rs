@@ -1,4 +1,4 @@
-use rusqlite::{Connection, named_params};
+use rusqlite::{Connection, OptionalExtension, named_params};
 
 use crate::db::common::{SqlFileRow, with_transaction};
 use crate::db::flags::{FileFlag, OutTreeFlag, set_file_flag, set_out_tree_flag};
@@ -468,11 +468,21 @@ pub fn populate_materialize_queue(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+/// Terminal flags that permanently settle an out_tree row's placement outcome:
+/// placed, errored, or conflict-skipped. A row carrying any of these must not be
+/// re-pulled on resume; nothing else marks it done.
+fn out_terminal() -> u64 {
+    OutTreeFlag::Placed.mask()
+        | OutTreeFlag::ErrorWhilePlace.mask()
+        | OutTreeFlag::Conflict.mask()
+}
+
 /// Next slice of still-pending canonical file rows, in `materialize_queue`
 /// (size-DESC) order. `R` reads the dedup canonical (`f.canonical_id = c.id`).
-/// Rejects rows already `Placed` or `ErrorWhilePlace` (done on a previous
-/// session); the queue only supplies the ordering. Returns
-/// `(queue_position, canonical_record, out_tree_record)` triples.
+/// Rejects rows already settled by a terminal flag (`OUT_TERMINAL`: Placed,
+/// ErrorWhilePlace, or Conflict) from a previous session; the queue only
+/// supplies the ordering. Returns `(queue_position, canonical_record,
+/// out_tree_record)` triples.
 pub fn pull_materialize_queue<R: SqlFileRow>(
     conn: &Connection, index: u64, limit: u64)
     -> Result<Vec<(u64, R, OutTreeRecord)>> {
@@ -485,8 +495,7 @@ pub fn pull_materialize_queue<R: SqlFileRow>(
          JOIN files AS f ON o.file_id = f.id
          JOIN files AS c ON f.canonical_id = c.id
          WHERE materialize_queue.id > :index
-           AND (o.flags & :placed) = 0
-           AND (o.flags & :err) = 0
+           AND (o.flags & :terminal) = 0
          ORDER BY materialize_queue.id
          LIMIT :limit"
     );
@@ -494,8 +503,7 @@ pub fn pull_materialize_queue<R: SqlFileRow>(
     let rows = stmt.query_map(
         named_params! {
             ":index": index as i64,
-            ":placed": OutTreeFlag::Placed.mask_i64(),
-            ":err": OutTreeFlag::ErrorWhilePlace.mask_i64(),
+            ":terminal": out_terminal() as i64,
             ":limit": limit,
         },
         |row| {
@@ -544,6 +552,9 @@ pub fn list_out_tree_for_materialization<R: SqlFileRow>(
     rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
+/// List unplaced hardlink rows — outputs aliasing an already-placed canonical.
+/// Rows settled by a terminal flag (`OUT_TERMINAL`) from a previous session are
+/// skipped, so a resumed run does not re-link them.
 pub fn list_out_tree_for_hardlinks<R: SqlFileRow>(
     conn: &Connection, last_id: &OutTreeId, batch_size: u64)
     -> Result<Vec<(R, OutTreeRecord, OutTreeRecord)>> {
@@ -559,12 +570,14 @@ pub fn list_out_tree_for_hardlinks<R: SqlFileRow>(
             AND f.ftype = 'file'
             AND o.canonical_id != o.id
             AND o.canonical_id IS NOT NULL
+            AND (o.flags & :terminal) = 0
         ORDER BY o.id
         LIMIT :batch_size
     ")).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":last_id": last_id.0,
+            ":terminal": out_terminal() as i64,
             ":batch_size": batch_size},
         |row| {
             let fr = R::from_row(row, Some("f"))?;
@@ -576,6 +589,8 @@ pub fn list_out_tree_for_hardlinks<R: SqlFileRow>(
     rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
 }
 
+/// List unplaced "other"-type rows (symlink, fifo, device, socket). Rows settled
+/// by a terminal flag (`OUT_TERMINAL`) from a previous session are skipped.
 pub fn list_out_tree_others<R: SqlFileRow>(conn: &Connection, last_id: &OutTreeId, batch_size: u64)
     -> Result<Vec<(R, OutTreeRecord)>> {
     let tgt_cols = R::sql_columns(Some("e"));
@@ -587,12 +602,14 @@ pub fn list_out_tree_others<R: SqlFileRow>(conn: &Connection, last_id: &OutTreeI
         WHERE o.id > :last_id
             AND e.ftype NOT IN ('file', 'dir', 'unknown')
             AND o.canonical_id IS NULL
+            AND (o.flags & :terminal) = 0
         ORDER BY o.id
         LIMIT :batch_size
     ")).to_panic()?;
     let rows = stmt.query_map(
         named_params! {
             ":last_id": last_id.0,
+            ":terminal": out_terminal() as i64,
             ":batch_size": batch_size},
         |row| {
             let sr = R::from_row(row, Some("e"))?;
