@@ -27,7 +27,7 @@
   (Attempt on on FileExtracted and ErrorWhileExtracting.)
 - [ ] .tdd file suffix s.t. tdd.tar.xz is produced
 - [X] Eager Delete of stage
-- [ ] Delete files on incomplete move 
+- [X] Delete files on incomplete move 
 
 ## Refactor:
 - [X] Drop unused db functions
