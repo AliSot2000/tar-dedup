@@ -568,8 +568,8 @@ mod tests {
             .expect("xz defaults");
         assert_eq!(s.format, CompressionFormat::Xz);
         assert_eq!(s.level, 9);
-        assert!(!s.xz_extreme);
-        assert_eq!(s.memlimit_compress, None);
+        assert_eq!(s.xz_advanced, XzAdvancedOptions::default());
+        assert_eq!(s.zstd_advanced, ZstdAdvancedOptions::default());
 
         // Boundary levels accepted per format.
         for (format, level) in [
@@ -585,12 +585,29 @@ mod tests {
                 .expect("boundary level accepted");
             assert_eq!(s.level, level);
         }
+    }
 
-        // xz extreme is only meaningful with xz — allowed and sticky.
-        let args = archive_args("a.tar", &["--xz-extreme"]);
+    #[test]
+    fn from_archive_args_parses_advanced_json() {
+        // xz advanced inline JSON overrides the preset.
+        let args = archive_args(
+            "a.tar",
+            &["--xz-advanced", r#"{"level":9,"extreme":true,"dict":134217728,"threads":4}"#]);
         let s = CompressionSettings::from_archive_args(CompressionFormat::Xz, &args)
-            .expect("xz extreme accepted");
-        assert!(s.xz_extreme);
+            .expect("xz advanced accepted");
+        assert_eq!(s.xz_preset(), 9 | (1u32 << 31));
+        assert_eq!(s.xz_threads(2), 4);
+        assert_eq!(s.xz_advanced.dict, Some(134217728));
+
+        // zstd advanced inline JSON.
+        let args = archive_args(
+            "a.tar",
+            &["--zstd-advanced", r#"{"level":19,"threads":8,"checksum":true,"long_window_log":27}"#]);
+        let s = CompressionSettings::from_archive_args(CompressionFormat::Zstd, &args)
+            .expect("zstd advanced accepted");
+        assert_eq!(s.zstd_advanced.threads, Some(8));
+        assert_eq!(s.zstd_advanced.checksum, Some(true));
+        assert_eq!(s.zstd_advanced.long_window_log, Some(27));
     }
 
     #[test]
@@ -619,22 +636,127 @@ mod tests {
             Err(Error::Config(_))
         ));
 
-        // --xz-extreme / --xz-memlimit-compress on a non-xz filter.
-        for extra in [vec!["--xz-extreme"], vec!["--xz-memlimit-compress", "64MiB"]] {
+        // Advanced JSON only valid for its own filter.
+        for extra in [
+            vec!["--xz-advanced", r#"{"dict":65536}"#],
+            vec!["--zstd-advanced", r#"{"threads":4}"#],
+        ] {
             let args = archive_args("a.tar", &extra);
             assert!(
                 matches!(
                     CompressionSettings::from_archive_args(CompressionFormat::Gz, &args),
                     Err(Error::Config(_))
                 ),
-                "non-xz must reject {extra:?}"
+                "non-xz/zstd must reject {extra:?}"
             );
         }
 
-        // memlimit parses to bytes on xz.
-        let args = archive_args("a.tar", &["--xz-memlimit-compress", "64MiB"]);
+        // Malformed advanced JSON rejected.
+        let args = archive_args("a.tar", &["--xz-advanced", "{not json"]);
+        assert!(matches!(
+            CompressionSettings::from_archive_args(CompressionFormat::Xz, &args),
+            Err(Error::Config(_))
+        ));
+
+        // xz advanced level / dict bounds.
+        let args = archive_args("a.tar", &["--xz-advanced", r#"{"level":10}"#]);
+        assert!(matches!(
+            CompressionSettings::from_archive_args(CompressionFormat::Xz, &args),
+            Err(Error::Config(_))
+        ));
+        let args = archive_args("a.tar", &["--xz-advanced", r#"{"dict":4294967297}"#]);
+        assert!(matches!(
+            CompressionSettings::from_archive_args(CompressionFormat::Xz, &args),
+            Err(Error::Config(_))
+        ));
+
+        // Unknown advanced key rejected (deny_unknown_fields).
+        let args = archive_args("a.tar", &["--xz-advanced", r#"{"bogus":1}"#]);
+        assert!(matches!(
+            CompressionSettings::from_archive_args(CompressionFormat::Xz, &args),
+            Err(Error::Config(_))
+        ));
+    }
+
+    #[test]
+    fn from_archive_args_rejects_out_of_range_lzma2_knobs() {
+        // lc / lp / pb are 0-4 each.
+        for (key, val) in [
+            ("lc", 5),
+            ("lp", 5),
+            ("pb", 5),
+        ] {
+            let json = format!(r#"{{"{key}":{val}}}"#);
+            let args = archive_args("a.tar", &["--xz-advanced", &json]);
+            assert!(
+                matches!(
+                    CompressionSettings::from_archive_args(CompressionFormat::Xz, &args),
+                    Err(Error::Config(_))
+                ),
+                "{key}={val} must be rejected"
+            );
+        }
+        // lc + lp must not exceed 4.
+        let args = archive_args("a.tar", &["--xz-advanced", r#"{"lc":3,"lp":2}"#]);
+        assert!(matches!(
+            CompressionSettings::from_archive_args(CompressionFormat::Xz, &args),
+            Err(Error::Config(_))
+        ));
+        // Boundary combined lc+lp=4 is accepted.
+        let args = archive_args("a.tar", &["--xz-advanced", r#"{"lc":2,"lp":2}"#]);
+        assert!(CompressionSettings::from_archive_args(CompressionFormat::Xz, &args).is_ok());
+        // nice range 2-273; depth is unbounded (u32, 0 = auto).
+        for (key, val) in [("nice", 1u32), ("nice", 274)] {
+            let json = format!(r#"{{"{key}":{val}}}"#);
+            let args = archive_args("a.tar", &["--xz-advanced", &json]);
+            assert!(
+                matches!(
+                    CompressionSettings::from_archive_args(CompressionFormat::Xz, &args),
+                    Err(Error::Config(_))
+                ),
+                "{key}={val} must be rejected"
+            );
+        }
+        let args = archive_args("a.tar", &["--xz-advanced", r#"{"nice":2}"#]);
+        assert!(CompressionSettings::from_archive_args(CompressionFormat::Xz, &args).is_ok());
+        let args = archive_args("a.tar", &["--xz-advanced", r#"{"depth":1000000}"#]);
+        assert!(CompressionSettings::from_archive_args(CompressionFormat::Xz, &args).is_ok());
+    }
+
+    #[test]
+    fn from_archive_args_partial_advanced_defaults_to_none() {
+        // A one-key JSON object leaves every unset field None.
+        let args = archive_args("a.tar", &["--xz-advanced", r#"{"extreme":true}"#]);
         let s = CompressionSettings::from_archive_args(CompressionFormat::Xz, &args)
-            .expect("xz memlimit accepted");
-        assert_eq!(s.memlimit_compress, Some(64 * 1024 * 1024));
+            .expect("one-key xz advanced accepted");
+        assert_eq!(s.xz_advanced.extreme, Some(true));
+        assert_eq!(s.xz_advanced.level, None);
+        assert_eq!(s.xz_advanced.dict, None);
+        assert_eq!(s.xz_advanced.threads, None);
+        assert_eq!(s.xz_advanced.memlimit, None);
+        assert_eq!(s.xz_advanced.check, None);
+        // The extreme bit is ORed into the preset.
+        assert_eq!(s.xz_preset() as u64, 9 | (1u32 << 31) as u64);
+
+        let args = archive_args("a.tar", &["--zstd-advanced", r#"{"checksum":false}"#]);
+        let s = CompressionSettings::from_archive_args(CompressionFormat::Zstd, &args)
+            .expect("one-key zstd advanced accepted");
+        assert_eq!(s.zstd_advanced.checksum, Some(false));
+        assert_eq!(s.zstd_advanced.level, None);
+        assert_eq!(s.zstd_advanced.long_window_log, None);
+        assert_eq!(s.zstd_advanced.dict, None);
+    }
+
+    #[test]
+    fn from_archive_args_reads_advanced_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blob = dir.path().join("xz.json");
+        std::fs::write(&blob, r#"{"dict":67108864,"check":"sha256"}"#).expect("write blob");
+        let flag = format!("@{}", blob.display());
+        let args = archive_args("a.tar", &["--xz-advanced", &flag]);
+        let s = CompressionSettings::from_archive_args(CompressionFormat::Xz, &args)
+            .expect("xz advanced from file");
+        assert_eq!(s.xz_advanced.dict, Some(67108864));
+        assert_eq!(s.xz_advanced.check, Some(XzCheck::Sha256));
     }
 }
