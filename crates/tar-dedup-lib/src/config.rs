@@ -242,6 +242,14 @@ mod tests {
 
     #[test]
     fn archive_stem_strips_compound_suffixes() {
+        assert_eq!(archive_stem(Path::new("backup.tdd.tar.xz")), "backup");
+        assert_eq!(archive_stem(Path::new("backup.tdd.tar.gz")), "backup");
+        assert_eq!(archive_stem(Path::new("backup.tdd.tar.bz2")), "backup");
+        assert_eq!(archive_stem(Path::new("backup.tdd.tar.zst")), "backup");
+        assert_eq!(archive_stem(Path::new("backup.tdd.tar")), "backup");
+        assert_eq!(archive_stem(Path::new("a.tdd.txz")), "a");
+        assert_eq!(archive_stem(Path::new("/tmp/x.tdd.tgz")), "x");
+        // Legacy forms still strip (pre-1.0 archives).
         assert_eq!(archive_stem(Path::new("backup.tar.gz")), "backup");
         assert_eq!(archive_stem(Path::new("/tmp/x.tar.xz")), "x");
         assert_eq!(archive_stem(Path::new("a.tgz")), "a");
