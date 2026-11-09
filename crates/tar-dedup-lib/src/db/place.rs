@@ -326,15 +326,15 @@ pub fn drop_canonical_move_queue(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Next slice of extracted canonical payload files, ordered by `files.id` (the
-/// file id doubles as the read cursor — `WHERE id > :last_id`). Unlike
-/// `pull_canonical_move_queue`, this reads the `files` table directly and needs
-/// no `canonical_move_queue` companion table, so it works in the non-link-tree
-/// placement path (and any other place that walks the extract cache). Each
-/// returned `(id, record)` pairs the page index with a self-canonical regular
-/// file whose digest is known (`content_id()` = `Some`), i.e. exactly the rows
-/// materializing a payload into the extract cache / out tree — the records
-/// `cleanup_stage` deletes after their copies are in place.
+/// Next slice of extracted canonical payload files eligible for removal, ordered
+/// by `files.id` (the file id doubles as the read cursor — `WHERE id >
+/// :last_id`). Unlike `pull_canonical_move_queue`, this reads the `files` table
+/// directly and needs no `canonical_move_queue` companion table. Each returned
+/// `(id, record)` pairs the page index with a self-canonical regular file whose
+/// digest is known (`content_id()` = `Some`) and whose own self-canonical
+/// out-tree row(s) have all settled on a terminal flag (`OUT_TERMINAL`) — i.e.
+/// exactly the rows `cleanup_stage` may delete. Rows already marked
+/// `FileFlag::PayloadRemoved` are excluded (idempotent sweep).
 pub fn pull_extracted_cache_files<R: SqlFileRow>(
     conn: &Connection, last_id: u64, limit: u64)
     -> Result<Vec<(u64, R)>> {
@@ -346,6 +346,13 @@ pub fn pull_extracted_cache_files<R: SqlFileRow>(
            AND files.canonical_id = files.id
            AND files.sha1 IS NOT NULL
            AND files.ftype = 'file'
+           AND (files.flags & :removed) = 0
+           AND NOT EXISTS (
+               SELECT 1 FROM out_tree AS r
+               JOIN files AS rf ON r.file_id = rf.id
+               WHERE rf.canonical_id = files.id
+                 AND r.canonical_id = r.id
+                 AND (r.flags & :terminal) = 0)
          ORDER BY files.id
          LIMIT :limit"
     );
@@ -354,6 +361,8 @@ pub fn pull_extracted_cache_files<R: SqlFileRow>(
         named_params! {
             ":last_id": last_id as i64,
             ":limit": limit,
+            ":removed": FileFlag::PayloadRemoved.mask_i64(),
+            ":terminal": out_terminal() as i64,
         },
         |r: &rusqlite::Row<'_>| {
             let pos = r.get::<_, i64>("pos")? as u64;
