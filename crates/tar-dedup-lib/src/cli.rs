@@ -504,19 +504,19 @@ pub struct ArchiveArgs {
 
 #[derive(Debug, Args, Default)]
 pub struct CompressionFlags {
-    /// Filter the archive through gzip (overrides extension inference).
+    /// Filter the archive through gzip (overrides the suffix inference).
     #[arg(short = 'z', long = "gzip", group = "compress_filter")]
     pub gzip: bool,
 
-    /// Filter the archive through bzip2 (overrides extension inference).
+    /// Filter the archive through bzip2 (overrides the suffix inference).
     #[arg(short = 'j', long = "bzip2", group = "compress_filter")]
     pub bzip2: bool,
 
-    /// Filter the archive through xz (overrides extension inference).
+    /// Filter the archive through xz (overrides the suffix inference).
     #[arg(short = 'J', long = "xz", group = "compress_filter")]
     pub xz: bool,
 
-    /// Filter the archive through zstd (overrides extension inference).
+    /// Filter the archive through zstd (overrides the suffix inference).
     #[arg(long = "zstd", group = "compress_filter")]
     pub zstd: bool,
 }
@@ -639,7 +639,7 @@ pub struct ExtractArgs {
     // --- Compression ---
 
     /// Compression filter override. By default the archive suffix decides
-    /// (extension inference / no compression); an explicit flag overrides it.
+    /// (e.g. `.tdd.tar.xz` / extension inference); an explicit flag overrides it.
     #[command(flatten, next_help_heading = "Compression")]
     pub compression: CompressionFlags,
 
