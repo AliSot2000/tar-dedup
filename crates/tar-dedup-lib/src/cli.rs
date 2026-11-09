@@ -174,15 +174,22 @@ pub struct ArchiveArgs {
     #[arg(long = "level", value_name = "N", help_heading = "Compression")]
     pub level: Option<u32>,
 
-    /// xz `--extreme` / `-e` (OR into LZMA preset). Only valid with xz.
-    #[arg(long = "xz-extreme", help_heading = "Compression")]
-    pub xz_extreme: bool,
-
     // INFO: Rust does not expose bzip-small option. We ignore it.
 
-    /// Cap xz encoder RAM (bytes, MiB, GiB, or % of RAM). Like `xz --memlimit-compress`.
-    #[arg(long = "xz-memlimit-compress", value_name = "LIMIT", help_heading = "Compression")]
-    pub memlimit_compress: Option<String>,
+    /// Advanced xz LZMA2 tuning over `--level`, as JSON or `@/path/to/blob`
+    /// (a JSON file). Every key is optional and overrides the preset when present.
+    /// Keys: level, extreme, dict, block_size, threads, lc, lp, pb,
+    /// mode (fast|normal), nice, mf (hc3|hc4|bt2|bt3|bt4), depth, check
+    /// (none|crc32|crc64|sha256), memlimit. Only valid with xz compression.
+    #[arg(long = "xz-advanced", value_name = "JSON|@FILE", help_heading = "Compression")]
+    pub xz_advanced: Option<String>,
+
+    /// Advanced zstd tuning over `--level`, as JSON or `@/path/to/blob`.
+    /// Every key is optional and overrides the preset when present. Keys: level,
+    /// threads, long_window_log, checksum, content_size, dict (path). Only valid
+    /// with zstd compression.
+    #[arg(long = "zstd-advanced", value_name = "JSON|@FILE", help_heading = "Compression")]
+    pub zstd_advanced: Option<String>,
 
     // --- Indexing ---
 

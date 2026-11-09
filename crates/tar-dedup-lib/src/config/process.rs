@@ -25,6 +25,40 @@ pub enum DbRetention {
     Never,
 }
 
+/// Whether the stage directory (`.astage` / `.estage`) is kept after a run.
+///
+/// `--keep-stage` selects `Always`, `--no-keep-stage` selects `Never`, and the
+/// default is `OnOther` (keep the stage only when something that sits beside
+/// the regular products makes it worth inspecting — currently: the bypass
+/// product dir containing unexpected files).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum StageKeep {
+    /// Never keep the stage directory.
+    Never,
+    /// Keep only when there is a reason to (e.g. bypass product had unexpected files).
+    #[default]
+    OnOther,
+    /// Always keep the stage directory.
+    Always,
+}
+
+impl StageKeep {
+    /// Whether the stage must be retained in all cases.
+    pub fn always(self) -> bool {
+        self == Self::Always
+    }
+
+    /// Whether the stage is kept given a `some_other_reason` flag (`OnOther`).
+    pub fn keep_with(self, some_other_reason: bool) -> bool {
+        match self {
+            Self::Never => false,
+            Self::OnOther => some_other_reason,
+            Self::Always => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CleanupSettings {
     /// When to keep a timestamped copy of the work database (`--db-retention`).
