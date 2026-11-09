@@ -2687,6 +2687,15 @@ mod tests {
         let root = world.ensure_root();
         let (out_f, out_d, out_l) = seed_run_files(&world);
         run(&world.rt()).expect("run");
+        let canonical = world.db.file_id_by_abs_path(Path::new("/src/canon.bin"))
+            .expect("lookup").expect("row");
+        let cid = world.db.get_file_by_id::<FileRecord>(canonical)
+            .expect("get").expect("row").content_id().expect("cid");
+        // The payload file was copied to the output tree; the work-dir copy is
+        // gone, but the work-dir itself (holding the DB) is retained.
+        assert!(!world.config.paths.extract_cache_dir().join(cid.0).exists(),
+                "work-dir payload removed after copy");
+        assert!(world.config.paths.extract_cache_dir().is_dir(), "cache dir kept (holds DB)");
 
         assert_eq!(fs::read(root.join("canon.bin")).expect("read"), b"abc");
         assert_eq!(fs::read(root.join("dup.bin")).expect("read"), b"abc");
@@ -2694,8 +2703,6 @@ mod tests {
                    fs::metadata(root.join("dup.bin")).expect("meta").ino(),
                    "dup must be a hardlink of the canonical");
         assert_eq!(fs::read_link(root.join("link")).expect("readlink"), PathBuf::from("/tgt"));
-        assert!(!world.config.paths.extract_cache_dir().exists(),
-                "cache removed by cleanup_stage");
         assert!(world.out_flag(out_f, OutTreeFlag::Placed));
         assert!(world.out_flag(out_d, OutTreeFlag::Placed));
         assert!(world.out_flag(out_d, OutTreeFlag::IsHardlink));
@@ -2765,7 +2772,7 @@ mod tests {
         let world = ExtractWorld::place_test(|c| c.placement.link_tree = true);
         let root = world.ensure_root();
         let cid_f = world.add_place_file("/src/canon.bin", 3, 1, FileType::File);
-        world.put_payload(cid_f, b"abc");
+        let payload = world.put_payload(cid_f, b"abc");
         let out_f = world.add_out(&root.join("canon.bin").to_string_lossy(), cid_f, None);
         world.db.set_placement_prologue_done().expect("prologue done");
         run(&world.rt()).expect("run");
@@ -2777,24 +2784,46 @@ mod tests {
         assert_eq!(fs::canonicalize(root.join("canon.bin")).expect("resolve"),
                    fs::canonicalize(&source).expect("source exists"));
         assert!(world.out_flag(out_f, OutTreeFlag::Placed));
-        assert!(!world.config.paths.extract_cache_dir().exists(), "cache removed");
+        // The work-dir payload went into the link source: the cache copy is gone,
+        // but the work-dir (holding the DB) is retained for the later phases.
+        assert!(!payload.exists(), "work-dir payload removed after copy");
+        assert!(world.config.paths.extract_cache_dir().is_dir(), "cache dir kept (holds DB)");
     }
 
     // ---------------------------------------------------------------------
     // cleanup_stage
     // ---------------------------------------------------------------------
 
-    fn cache_as_file(world: &ExtractWorld) -> PathBuf {
+    /// Seed a canonical extracted payload into the work-dir and return its path.
+    fn cache_payload(world: &ExtractWorld) -> PathBuf {
+        let id = world.add_place_file("/src/clean.bin", 3, 1, FileType::File);
         let cache = world.config.paths.extract_cache_dir();
-        fs::remove_dir_all(&cache).expect("remove cache dir");
-        fs::write(&cache, b"not a dir").expect("write file");
-        cache
+        fs::create_dir_all(&cache).expect("cache dir");
+        world.put_payload(id, b"abc")
+    }
+
+    #[test]
+    fn cleanup_stage_removes_payload_files() {
+        let world = ExtractWorld::place_test(|_| {});
+        let payload = cache_payload(&world);
+        assert!(payload.exists(), "payload seeded");
+        let mut recorder = Recorder::new(&world.db, true, Some(0));
+        cleanup_stage(&world.rt(), &mut recorder).expect("cleanup");
+        assert!(!payload.exists(), "work-dir payload removed");
+        // The work-dir (holding the DB) survives the per-file purge.
+        assert!(world.config.paths.extract_cache_dir().is_dir(), "cache dir kept (holds DB)");
     }
 
     #[test]
     fn cleanup_stage_fail_fast_errors_on_undir() {
+        // Fail-fast: an un-deletable payload must surface as a hard error
+        // instead of a warning. Sabotage the payload with a non-empty directory
+        // in its place so `remove_dir_all` fails.
         let world = ExtractWorld::place_test(|c| c.process.fail_fast = true);
-        cache_as_file(&world);
+        let payload = cache_payload(&world);
+        fs::remove_file(&payload).expect("remove payload file");
+        fs::create_dir_all(&payload).expect("dir in place of payload");
+        fs::write(payload.join("blocker"), b"x").expect("write blocker");
         let mut recorder = Recorder::new(&world.db, true, Some(0));
         let res = cleanup_stage(&world.rt(), &mut recorder);
         assert!(matches!(res, Err(Error::Config(_))));
@@ -2803,19 +2832,24 @@ mod tests {
     #[test]
     fn cleanup_stage_non_fatal_warns_on_undir() {
         let world = ExtractWorld::place_test(|_| {});
-        cache_as_file(&world);
+        let payload = cache_payload(&world);
+        fs::remove_file(&payload).expect("remove payload file");
+        fs::create_dir_all(&payload).expect("dir in place of payload");
+        fs::write(payload.join("blocker"), b"x").expect("write blocker");
         let mut recorder = Recorder::new(&world.db, true, Some(0));
         cleanup_stage(&world.rt(), &mut recorder).expect("ok");
+        // The deletion failure was tolerated (warn, not abort) and the blocker
+        // survived.
+        assert!(payload.join("blocker").is_file(), "blocker kept under non-fatal policy");
     }
 
     #[test]
     fn cleanup_stage_keeps_cache_when_keeping_stage() {
-        let world = ExtractWorld::place_test(|c| c.process.cleanup.keep_stage = true);
-        let cache = world.config.paths.extract_cache_dir();
-        fs::write(cache.join("x"), b"x").expect("write");
+        let world = ExtractWorld::place_test(|c| c.process.cleanup.keep_stage = crate::config::StageKeep::Always);
+        let payload = cache_payload(&world);
         let mut recorder = Recorder::new(&world.db, true, Some(0));
         cleanup_stage(&world.rt(), &mut recorder).expect("ok");
-        assert!(cache.is_dir(), "cache kept");
+        assert!(payload.exists(), "payload kept when stage is kept");
     }
 
     // ---------------------------------------------------------------------
