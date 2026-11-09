@@ -180,9 +180,156 @@ pub fn run(
         progress,
         pb: progress.push_sub_bar("extracting", BarKind::Bytes),
     };
-    run_inner(rt, recorder, filter_buffer)
+
+    // A work server is bypass when its baked catalog says so (the set
+    // `bypass_archive` meta is the source of truth, written by the archive
+    // side); the extract `--bypass-archive` flag is only a fallback when the
+    // work-db does not yet exist (fresh tar pass).
+    let mut bypass = config.bypass_archive;
+    if config.paths.db_path().is_file() {
+        let probe = Database::open(&config.paths.db_path())?;
+        bypass = probe.get_bypass_archive()?.unwrap_or(bypass);
+    }
+    if bypass {
+        run_bypass(rt, recorder, filter_buffer)
+    } else {
+        run_inner(rt, recorder, filter_buffer)
+    }
 }
 
+
+/// Scan a `--bypass-archive` directory product (`-f DIR`): the work dir IS the
+/// product dir, so the baked `tar-dedup.sqlite` is already at `db_path()`.
+///
+/// Flow:
+/// 1. open the baked catalog, confirm `bypass_archive` meta,
+/// 2. index the product dir: each `content_id` payload is read-probed (4 MiB
+///    buffer) and its `files` row marked `FileExtracted`; a read failure marks
+///    `ErrorWhileExtracting` and is recorded,
+/// 3. unknown (non-content-id) files: `--fail-fast` aborts, else warn + the
+///    `StageKeep::OnOther` policy keeps the product dir,
+/// 4. promote every extracted row to `unarchived` and log an archived/missing/
+///    errored scan-status summary, mirroring the tar scan's accounting.
+///
+/// The downstream `rehash` / `place` / `permissions` phases then run unchanged
+/// against the product dir's payloads (reused in place — no re-copy to a stage).
+pub fn run_bypass(
+    rt: ScanRTState,
+    recorder: &mut Recorder,
+    filter_buffer: &mut Option<ParseFilterBuffer>)
+    -> Result<Database>  {
+
+    let opened = Database::open(&rt.config.paths.db_path())?;
+    opened.init_extract_runtime_state()?;
+
+    reject_sharded_archive(&opened, &rt.config.paths.archive_path)?;
+    // The baked catalog must be a bypass product.
+    match opened.get_bypass_archive()? {
+        Some(true) => (),
+        Some(false) | None => {
+            return Err(Error::Config(format!(
+                "{} is not a `--bypass-archive` product (no bypass_archive meta)",
+                rt.config.paths.db_path().display()
+            )));
+        }
+    }
+
+    let src_dir = &rt.config.paths.archive_path;
+    if !src_dir.is_dir() {
+        return Err(Error::Config(format!(
+            "bypass product dir {} does not exist or is not a directory",
+            src_dir.display()
+        )));
+    }
+
+    // Persist the extract config into the baked catalog before mutating it further.
+    opened.set_extract_config(rt.config)?;
+    store_filter_buffer(filter_buffer, &ExtractRTArgs {
+        config: rt.config, db: &opened, shutdown: rt.shutdown, progress: rt.progress,
+    })?;
+
+    let encoded = opened.count_encoded_payloads()?;
+    rt.progress.set_phase_total(encoded);
+    rt.progress.set_phase_kind(BarKind::Count);
+
+    let mut errored = 0u64;
+    let mut extracted = 0u64;
+    let mut unknown = 0u64;
+    let mut probe = crate::common::io_buffer();
+
+    for entry in fs::read_dir(src_dir).map_err(|e| Error::io(src_dir, e))? {
+        let entry = entry.map_err(|e| Error::io(src_dir, e))?; // TODO capture error
+        if rt.shutdown.is_interrupted() {
+            return Err(Error::Interrupted);
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // The catalog + its sqlite WAL/SHM companions are not payloads.
+        if name.starts_with("tar-dedup.sqlite") {
+            continue;
+        }
+        let path = entry.path();
+
+        match parse_content_id(&name) {
+            Ok((digest, size, fid, _ext)) => {
+                // Read-probe the payload; failure marks the row errored.
+                match read_probe(&path, &digest, size, &mut probe) {
+                    Ok(true) => {
+                        opened.set_file_flag(fid, FileFlag::FileExtracted, true)?;
+                        extracted += 1;
+                    }
+                    Ok(false) => {
+                        opened.set_file_flag(fid, FileFlag::ErrorWhileExtracting, true)?;
+                        let err = Error::io(&path, io::Error::new(
+                            io::ErrorKind::InvalidData, "bypass payload read-probe mismatch"));
+                        record_file_scan_error(recorder, fid, err.to_file_stat(Some(&path)));
+                        errored += 1;
+                    },
+                    Err(e) => {
+                        record_file_scan_error(recorder, fid, FileStatError::io(&path, e));
+                        errored += 1;
+                    }
+                }
+            }
+            Err(_) => {
+                unknown += 1;
+                // TODO if config is on-other -> update the db to keep.
+                let msg = format!(
+                    "unexpected file in bypass product {} is not a content-id payload; \
+                     it will not be extracted",
+                    path.display()
+                );
+                record_session_error(recorder, FileStatError::general(None, msg.clone()));
+                if rt.config.process.fail_fast {
+                    return Err(Error::Config(msg));
+                }
+                tracing::warn!("{msg}");
+            }
+        }
+    }
+
+    // Promote extracted rows to `unarchived` (the place/rehash precondition).
+    opened.promote_cascade_extracted_to_unarchived()?;
+    // Intentional filter exclusions are not extracted by design.
+    opened.promote_filter_excluded_remainders()?;
+    // Any still-`archived` row had no payload found in the product dir → missing
+    // (forced to `unarchived` so extraction proceeds; rehash/place will skip it).
+    let missing = opened.promote_scan_remainders()?;
+    tracing::info!(
+        "bypass scan done: extracted {}, missing {}, errored {}, {} unknown",
+        extracted, missing, errored, unknown,
+    );
+
+    let all = opened.count_entries()?;
+    let unarchived = opened.count_files_in_phase(crate::db::types::FilePhase::Unarchived)?;
+    debug_assert_eq!(
+        all, unarchived,
+        "INVARIANT ERROR: after the bypass scan gate every row must be 'unarchived'"
+    );
+
+    flush_scan_recorder(recorder, Some(&opened))?;
+
+    Ok(opened)
+}
 
 fn run_inner(
     outer_rt: ScanRTState,
@@ -429,7 +576,7 @@ fn run_inner(
         let msg = format!(
             "INVARIANT VIOLATION after scan: {} row(s) not in 'unarchived':\n\
              \x20 - {} file(s) never confirmed by a final snapshot/footer (still 'staged'; \
-             last tar member was {last_member}, from_footer={})\n\
+             last tar member was {last_member}, from_foorefactor: Removed old --xz-extreme ... optionster={})\n\
              \x20 - {} file(s) failed to extract their payload (ErrorWhileExtracting)\n\
              \x20 - {} file(s) were marked as archived/added but their payload was not \
              found in the archive stream",
