@@ -164,7 +164,7 @@ builder from the rust tar crate cannot create sparse files inflight, the tool fi
 | -     | --io-jobs          | n        | 1    | Maximum concurrent io-bound workers                                                                                                                      |       |
 | -     | --fresh            | n        | 0    | Wipe existing work and archive, then start from inventory                                                                                                |       |
 | -     | --db-retention     | n        | 1    | When to keep a timestamped copy of the work database next to the archive. `always`: always; `on-error`: only if the run recorded errors; `never`: delete |       |
-| -     | --keep-stage       | n        | 0    | After success, keep the `{stem}.astage` work directory                                                                                                   |       |
+| -     | --keep-stage       | n        | 1    | When to keep the `{stem}.astage` work directory. `always`: always; `never`: delete; `on-other`: keep only when there is a reason to (default)           |       |
 | -     | --exit-after-stage | n        | 1    | Run through STAGE then exit gracefully                                                                                                                   |       |
 | -     | --fail-fast        | n        | 0    | Abort the run on the first hard failure instead of continuing according to the best-effort principle where possible                                      |       |
 | -     | --no-errors        | n        | 0    | Do not record errors encountered while processing the entries in the database. Downgrades a db-retention of `on-error` to `never`                        |       |
@@ -351,7 +351,7 @@ selected attributes.
 | -     | --fail-fast        | n        | 0    | Abort the run on the first hard failure instead of continuing according to the best-effort principle where possible                                              |       |
 | -     | --no-errors        | n        | 0    | Do not record errors encountered while processing the entries in the database. Downgrades a db-retention of `on-error` to `never`                                |       |
 | -     | --db-retention     | n        | 1    | When to keep a timestamped copy of the work database (under the extraction root). `always`: always; `on-error`: only if the run recorded errors; `never`: delete |       |
-| -     | --keep-stage       | n        | 0    | After success, keep the `{stem}.estage` work directory                                                                                                           |       |
+| -     | --keep-stage       | n        | 1    | When to keep the `{stem}.estage` work directory. `always`: always; `never`: delete; `on-other`: keep only when there is a reason to (default)                    |       |
 | -     | --exit-after-stage | n        | 1    | Run through STAGE then exit gracefully                                                                                                                           |       |
 
 #### Logging
