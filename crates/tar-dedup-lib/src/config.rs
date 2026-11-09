@@ -15,7 +15,8 @@ pub use archive::{
 };
 pub use filter::FilterOptions;
 pub use compression::{
-    CompressionFormat, CompressionSettings, infer_compression_from_suffix, resolve_compression,
+    CompressionFormat, CompressionSettings, XzAdvancedOptions, XzCheck, XzMatchFinder, XzMode,
+    ZstdAdvancedOptions, infer_compression_from_suffix, resolve_compression,
 };
 pub use extract::{
     ExtractAttributeOptions, ExtractConfig, OwnerGroupOptions, PlacementOptions, ScanOptions,
@@ -23,7 +24,7 @@ pub use extract::{
 };
 pub use paths::{PathLayout, PathSource};
 pub use phases::{ExtractPipelinePhase, ExtractRuntimeState, PipelinePhase, ArchiveRuntimeState};
-pub use process::{CleanupSettings, DbRetention, ExitAfterStage, ProcessOptions, ResumeOverrides};
+pub use process::{CleanupSettings, DbRetention, ExitAfterStage, ProcessOptions, ResumeOverrides, StageKeep};
 pub use resume::ResumeConfig;
 pub use logging::resolve_log_flags;
 
