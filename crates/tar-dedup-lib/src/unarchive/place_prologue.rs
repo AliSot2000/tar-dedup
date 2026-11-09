@@ -143,6 +143,26 @@ fn populate_out_tree(
     Ok(())
 }
 
+/// `--strip-common-prefix` post-pass: re-root the out_tree so the collapsed top
+/// (source) directory disappears. Computes the longest common path prefix of all
+/// `out_tree.abs_path` values relative to the extraction root (component-wise),
+/// rewrites every row under it back to the root, drops the row that collapses to
+/// the root, then re-runs `ensure_parent` for the re-rooted paths. No-op when
+/// nothing below the root is shared.
+fn strip_common_prefix(rt: &ExtractRTArgs) -> Result<()> {
+    let root = rt.config.effective_extraction_root();
+    let Some(shared) = rt.db.out_tree_common_prefix(&root)? else {
+        tracing::info!("no common prefix below {}, nothing to strip", root.display());
+        return Ok(());
+    };
+    tracing::info!("stripping common prefix '{}'", shared.display());
+    // INFO: Internally deletes all rows
+    let n = rt.db.strip_common_prefix(&root, &shared)?;
+    tracing::info!("re-rooted {n} out_tree rows");
+    ensure_parent(rt.db, rt.progress, rt.config.process.batch_size)?;
+    Ok(())
+}
+
 /// Elect hard-link canonicals in the out_tree (mark_canonical family of updates).
 fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
     let _updates: u64 = match rt.config.placement.hard_link_grouping {
