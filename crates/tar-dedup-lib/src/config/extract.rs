@@ -1180,4 +1180,14 @@ mod tests {
             "link-tree folds on-error sidecars to never"
         );
     }
+
+    #[test]
+    fn strip_common_prefix_flag_builds_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let archive = archive_file(dir.path(), "backup.tar");
+        let cfg = build(&archive, &["--strip-common-prefix"]).expect("flag");
+        assert!(cfg.placement.strip_common_prefix, "--strip-common-prefix maps into placement");
+        let cfg = build(&archive, &[]).expect("default");
+        assert!(!cfg.placement.strip_common_prefix, "defaults to off");
+    }
 }
