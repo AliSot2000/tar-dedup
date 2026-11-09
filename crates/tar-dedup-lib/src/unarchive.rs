@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
-    ProductPresence, StartAction, StartPolicy, WorkPresence, resolve_start,
+    StartAction, StartPolicy, WorkPresence, resolve_start,
 };
 use crate::config::{ExitAfterStage, ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState};
 use crate::db::{Database, Recorder};
