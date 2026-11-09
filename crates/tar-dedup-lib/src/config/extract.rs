@@ -237,6 +237,9 @@ pub struct ExtractConfig {
     pub sidecar: SidecarMode,
     /// Prefix sidecar names with a leading dot (`{name}.json` → `.{name}.json`).
     pub hidden_sidecar: bool,
+    /// Product is a `--bypass-archive` directory (`-f DIR`): `tar-dedup.sqlite`
+    /// + canonical payloads, extracted by validating the pre-extracted directory.
+    pub bypass_archive: bool,
 }
 
 impl Default for ExtractConfig {
@@ -260,6 +263,7 @@ impl Default for ExtractConfig {
             filter: FilterOptions::default(),
             sidecar: SidecarMode::OnError,
             hidden_sidecar: false,
+            bypass_archive: false,
         }
     }
 }
@@ -306,6 +310,17 @@ impl Validate for ExtractConfig {
             );
         }
 
+        // A bypass product has no tar stream / footer sha1: content verification
+        // is the only integrity guarantee, so `--no-rehash` cannot be honoured.
+        // `--force` is the explicit "data may be invalid" escape hatch.
+        if self.bypass_archive && !self.rehash && !self.process.force {
+            return Err(Error::Config(
+                "`--no-rehash` cannot be used with `--bypass-archive`: a bypass product has no \
+                 tar stream sha1, so content rehash is the only integrity guarantee. \
+                 Use --force to extract without it."
+                    .into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -366,6 +381,7 @@ impl ExtractConfig {
             filter: merge_pick_clone(&self.filter, &base.filter, &default.filter),
             sidecar: self.sidecar,
             hidden_sidecar: self.hidden_sidecar,
+            bypass_archive: merge_pick_copy(self.bypass_archive, base.bypass_archive, default.bypass_archive),
         }
     }
 
@@ -373,21 +389,43 @@ impl ExtractConfig {
         // INFO: c_* suffix in variables indicates that the paths were sanitized.
         let c_directory = resolve_cwd(args.directory.as_deref())?;
         let c_archive_path = resolve_path_to_abs_path(&args.archive, &c_directory);
-        if !c_archive_path.is_file() {
+        // Mode resolution: `--bypass-archive` extracts a directory product
+        // (`-f DIR`), otherwise `-f` must be a tar archive file. No silent
+        // inference — a `-f` pointing at the wrong kind is a hard error.
+        if args.bypass_archive {
+            if !c_archive_path.is_dir() {
+                return Err(Error::Config(format!(
+                    "`--bypass-archive` extracts a directory product, but {} is not a directory",
+                    c_archive_path.display()
+                )));
+            }
+        } else if !c_archive_path.is_file() {
             return Err(Error::Config(format!(
                 "archive does not exist or is not a file: {}",
                 c_archive_path.display()
             )));
         }
-        
+
         let work_dir_location = args.work_dir_location;
         let c_output_dir = match &args.extract_to {
             Some(path) => resolve_path_to_abs_path(path, &c_directory),
             None => c_directory.clone(),
         };
         std::fs::create_dir_all(&c_output_dir).map_err(|e| Error::io(&c_output_dir, e))?;
+        // In bypass mode the product dir IS the work dir: `db_path()` resolves to
+        // `{product}/tar-dedup.sqlite` (the baked catalog) and `extract_cache_dir()`
+        // to the product payloads, so the place/rehash/cleanup stages reuse them in
+        // place.
         let c_work_dir = match &args.work_dir {
-            Some(path) => resolve_path_to_abs_path(path, &c_directory),
+            Some(path) => {
+                if args.bypass_archive {
+                    return Err(Error::Config(String::from(
+                        "--work-dir may not be passed with --bypass-archive"
+                    )));
+                }
+                resolve_path_to_abs_path(path, &c_directory)
+            },
+            None if args.bypass_archive => c_archive_path.clone(),
             None => default_extract_work_dir(&c_archive_path, &c_output_dir, work_dir_location),
         };
         std::fs::create_dir_all(&c_work_dir).map_err(|e| Error::io(&c_work_dir, e))?;
@@ -548,6 +586,7 @@ impl ExtractConfig {
             filter: FilterOptions::build(&args.filter, &c_directory, !args.lazy_filter),
             sidecar: sidecar_mode,
             hidden_sidecar: args.hidden_sidecar,
+            bypass_archive: args.bypass_archive,
         })
     }
 
@@ -603,6 +642,7 @@ impl ExtractConfig {
             filter: FilterOptions::default(),
             sidecar: SidecarMode::Never,
             hidden_sidecar: false,
+            bypass_archive: false,
         }
     }
 
@@ -646,6 +686,7 @@ impl ExtractConfig {
             filter: FilterOptions::default(),
             sidecar: SidecarMode::Never,
             hidden_sidecar: false,
+            bypass_archive: false,
         }
     }
 
