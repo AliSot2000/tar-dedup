@@ -270,9 +270,9 @@ pub fn run_bypass(
         let path = entry.path();
 
         match parse_content_id(&name) {
-            Ok((digest, size, fid, _ext)) => {
+            Ok((_digest, size, fid, _ext)) => {
                 // Read-probe the payload; failure marks the row errored.
-                match read_probe(&path, &digest, size, &mut probe) {
+                match read_probe(&path, size, &mut probe) {
                     Ok(true) => {
                         opened.set_file_flag(fid, FileFlag::FileExtracted, true)?;
                         extracted += 1;

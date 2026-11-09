@@ -45,7 +45,7 @@ where
 /// Requires the parsed digest (a sha-less name is not a valid payload). Returns
 /// `Ok(true)` when the file reads cleanly to EOF and its length matches the
 /// size from the name.
-pub fn read_probe(path: &Path, _digest: &[u8; 20], expected_len: u64, buf: &mut Vec<u8>)
+pub fn read_probe(path: &Path, expected_len: u64, buf: &mut Vec<u8>)
               -> io::Result<bool> {
     use std::io::Read;
     let mut f = fs::File::open(path)?;
