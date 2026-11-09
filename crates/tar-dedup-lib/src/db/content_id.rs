@@ -13,18 +13,15 @@ const U64_B64_LEN: usize = 11;
 
 /// Staged/tar member name: `{hash_b64}.{fsize_b64}.{fid_b64}{ext}` — the
 /// extension (which already carries its leading dot) is appended verbatim, so a
-/// file with no extension ends the name at the `fid`. If no digest is present,
-/// the 27 characters for the hash are filled with 27 `;` characters.
+/// file with no extension ends the name at the `fid`. A digest is mandatory;
+/// every screened content id is produced only once the row holds one.
 pub fn content_id_from_digest(
-    digest: Option<&[u8; 20]>,
+    digest: &[u8; 20],
     size: u64,
     file_id: FileId,
     rel_path: &Path,
 ) -> ContentId {
-    let hash_part = match digest {
-        Some(dg) => URL_SAFE_NO_PAD.encode(dg),
-        None => ";".repeat(HASH_B64_LEN),
-    };
+    let hash_part = URL_SAFE_NO_PAD.encode(digest);
     let size_part = URL_SAFE_NO_PAD.encode(size.to_le_bytes());
     let fid_part = URL_SAFE_NO_PAD.encode(file_id.0.to_le_bytes());
     let ext = original_extension(rel_path);
@@ -41,7 +38,8 @@ pub fn sparse_member_name(content_id: &ContentId) -> String {
 /// base64url lengths (27 + 1 + 11 + 1 + 11 = 51 chars), so the extension is
 /// simply everything past byte 51 — it already carries its leading dot (or is
 /// empty), so a no-extension id never gets its `fid` misread as an extension.
-pub fn parse_content_id(content_id: &str) -> Result<(Option<[u8; 20]>, u64, FileId, String)> {
+/// A digest is mandatory; a missing/invalid hash part is a hard error.
+pub fn parse_content_id(content_id: &str) -> Result<([u8; 20], u64, FileId, String)> {
     // Fixed layout: base64 URL-safe alphabet includes `_`, so do not split on `_`.
     let stem_end = HASH_B64_LEN + 1 + U64_B64_LEN + 1 + U64_B64_LEN;
     if content_id.len() < stem_end
@@ -56,16 +54,11 @@ pub fn parse_content_id(content_id: &str) -> Result<(Option<[u8; 20]>, u64, File
     let fid_part = &content_id[HASH_B64_LEN + 1 + U64_B64_LEN + 1..stem_end];
     let ext = content_id[stem_end..].to_string();
 
-    let digest: Option<[u8; 20]> = if hash_part == ";".repeat(HASH_B64_LEN) {
-        None
-    } else {
-        let res: [u8; 20] = URL_SAFE_NO_PAD
-            .decode(hash_part)
-            .ok()
-            .and_then(|b| b.try_into().ok())
-            .ok_or_else(|| Error::Config(format!("digest invalid - invalid content id: {content_id}")))?;
-        Some(res)
-    };
+    let digest: [u8; 20] = URL_SAFE_NO_PAD
+        .decode(hash_part)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| Error::Config(format!("digest invalid - invalid content id: {content_id}")))?;
     let size = u64::from_le_bytes(
         URL_SAFE_NO_PAD
             .decode(size_part)
@@ -92,16 +85,16 @@ pub fn parse_content_id(content_id: &str) -> Result<(Option<[u8; 20]>, u64, File
 mod tests {
     use super::*;
 
-    fn roundtrip(path: &str) -> (Option<[u8; 20]>, u64, FileId, String) {
-        let digest = Some([7u8; 20]);
-        let cid = content_id_from_digest(digest.as_ref(), 1234, FileId(42), Path::new(path));
+    fn roundtrip(path: &str) -> ([u8; 20], u64, FileId, String) {
+        let digest = [7u8; 20];
+        let cid = content_id_from_digest(&digest, 1234, FileId(42), Path::new(path));
         parse_content_id(&cid.0).expect("round-trip parse")
     }
 
     #[test]
     fn roundtrip_with_extension() {
         let (digest, size, fid, ext) = roundtrip("data.txt");
-        assert_eq!(digest, Some([7u8; 20]));
+        assert_eq!(digest, [7u8; 20]);
         assert_eq!(size, 1234);
         assert_eq!(fid, FileId(42));
         assert_eq!(ext, ".txt");
@@ -113,7 +106,7 @@ mod tests {
         // `original_extension`-based parser grabbed the final `fid` as the
         // extension and then failed the length check.
         let (digest, size, fid, ext) = roundtrip("noext");
-        assert_eq!(digest, Some([7u8; 20]));
+        assert_eq!(digest, [7u8; 20]);
         assert_eq!(size, 1234);
         assert_eq!(fid, FileId(42));
         assert_eq!(ext, "");
@@ -126,13 +119,13 @@ mod tests {
     }
 
     #[test]
-    fn absent_digest_parses_to_none() {
-        let cid = content_id_from_digest(None, 0, FileId(1), Path::new("x.txt"));
-        let (digest, size, fid, ext) = parse_content_id(&cid.0).expect("parse");
-        assert_eq!(digest, None);
-        assert_eq!(size, 0);
-        assert_eq!(fid, FileId(1));
-        assert_eq!(ext, ".txt");
+    fn sha_less_content_id_rejected() {
+        // A `;`-filled (or otherwise invalid) hash means no digest was recorded;
+        // content ids are only produced with a digest, so such a name is invalid.
+        let cid = format!("{}.{}.{}", ";".repeat(HASH_B64_LEN),
+            URL_SAFE_NO_PAD.encode(0u64.to_le_bytes()),
+            URL_SAFE_NO_PAD.encode(1i64.to_le_bytes()));
+        assert!(parse_content_id(&cid).is_err(), "must reject sha-less id");
     }
 
     #[test]
