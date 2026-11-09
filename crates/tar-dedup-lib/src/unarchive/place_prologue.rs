@@ -1039,6 +1039,56 @@ mod tests {
     }
 
     #[test]
+    fn strip_common_prefix_run_reroots_and_drops_top() {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |c| {
+            c.placement.strip_common_prefix = true;
+        });
+        world.add_file(None, "/var/cache/one.txt", 1, FileType::File);
+        world.add_file(None, "/var/cache/sub/two.txt", 2, FileType::File);
+        run(&world.rt()).expect("prologue");
+        let ot = world.raw_out_tree();
+        assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/one.txt"));
+        assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/sub/two.txt"));
+        assert!(!ot.iter().any(|(p, _, _, _)| p == "/ed/var/cache"),
+                "collapsed top dir row dropped");
+        // Even though `ensure_parent` sees `/ed` as the parent of `/ed/one.txt`,
+        // the effective-root row must be dropped so metadata is never applied there.
+        assert!(!ot.iter().any(|(p, _, _, _)| p == "/ed"),
+                "effective-extraction-root row must be dropped");
+    }
+
+    #[test]
+    fn strip_common_prefix_applies_in_link_tree_mode() {
+        // The out_tree is built (and stripped) regardless of the materialization
+        // mode; link_tree only skips hardlink-canonical election, which reads
+        // `files.canonical_id`, never `out_tree.abs_path`.
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |c| {
+            c.placement.link_tree = true;
+            c.placement.strip_common_prefix = true;
+        });
+        world.add_file(None, "/var/cache/one.txt", 1, FileType::File);
+        world.add_file(None, "/var/cache/sub/two.txt", 2, FileType::File);
+        run(&world.rt()).expect("prologue");
+        let ot = world.raw_out_tree();
+        assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/one.txt"),
+                "link-tree out_tree must be re-rooted too");
+        assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/sub/two.txt"));
+    }
+
+    #[test]
+    fn strip_common_prefix_divergent_roots_is_noop() {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |c| {
+            c.placement.strip_common_prefix = true;
+        });
+        world.add_file(None, "/a/one.txt", 1, FileType::File);
+        world.add_file(None, "/b/two.txt", 2, FileType::File);
+        run(&world.rt()).expect("prologue");
+        let ot = world.raw_out_tree();
+        assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/a/one.txt"));
+        assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/b/two.txt"));
+    }
+
+    #[test]
     fn one_top_level_run_maps_under_subdir() {
         let world = ExtractWorld::place_prologue(Path::new("/ed"), false, |c| {
             c.placement.one_top_level = Some(PathBuf::from("otl"));
