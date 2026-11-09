@@ -5,7 +5,7 @@ use crate::common::files;
 use crate::common::{batched_loop, batched_stepped_loop, send_receive_loop};
 use crate::config::{ExtractConfig, ExtractPipelinePhase};
 use crate::db::Database;
-use crate::db::flags::ErrorFlags;
+use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::place::{CopyOutcome, MaterializeOutcome, MaterializeResult};
 use crate::db::types::FilePhase;
 #[warn(unused_imports)] // LinkType needed for linking back on windows.
@@ -482,6 +482,7 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
         if items.is_empty() {
             return Ok(());
         }
+        let out_ids: Vec<OutTreeId> = items.iter().map(|o| o.result.id).collect();
         process_results(
             items,
             recorder,
@@ -490,6 +491,13 @@ fn materialize_loop(rt: &ExtractRTArgs, recorder: &mut Recorder, kind: Materiali
             matches!(kind, MaterializeKind::Files),
             rt.config.process.fail_fast,
         )?;
+        // Eager space reclamation: once a canonical's payload has been fully
+        // materialized, drop its cache copy right after the batch settles
+        // (unless `--lazy-delete-stage` defers every deletion to end-of-run).
+        if matches!(kind, MaterializeKind::Files)
+            && !rt.config.placement.lazy_delete_stage {
+            eager_delete_canonical_payloads(rt, recorder, &out_ids)?;
+        }
         Ok(())
     };
     // Count each drained outcome early so the bar never stalls a whole batch.
@@ -1219,7 +1227,36 @@ fn capture_error(rec: &mut Recorder, path: &PathBuf, iof: fn(&Path) -> io::Resul
     }
 }
 
-// FEATURE: Materialize by canonical file, s.t. it can be deleted, once all copies are done.
+/// Delete the extract-cache payloads of canonicals that a just-materialized
+/// batch fully settled. Runs inside the Files-pass drain so space is reclaimed
+/// as copying proceeds. Only canonicals whose **every** self-canonical out-tree
+/// row is terminal are deleted (`deletable_canonical_payload` guards that), so
+/// a payload still needed by a later batch survives. Idempotent via
+/// `FileFlag::PayloadRemoved`.
+fn eager_delete_canonical_payloads(
+    rt: &ExtractRTArgs,
+    recorder: &mut Recorder,
+    out_ids: &[OutTreeId])
+    -> Result<()> {
+
+    let cache_dir = rt.config.paths.extract_cache_dir();
+    for canonical_id in rt.db.list_deletable_canonicals(out_ids)? {
+        let Some(record) = rt.db.get_file_by_id::<StrippedRecord>(canonical_id)? else {
+            continue;
+        };
+        let Some(cid) = record.content_id() else {
+            continue;
+        };
+        let target = cache_dir.join(cid.0);
+        // Missing/already-removed payload is fine; flag it done either way.
+        let _ = fs::remove_file(&target);
+        rt.db.set_file_flag(canonical_id, FileFlag::PayloadRemoved, true)?;
+        tracing::debug!("removed extract-cache payload {}", target.display());
+    }
+    recorder.flush()?;
+    Ok(())
+}
+
 /// Attempt to clean up the stage if it is not requested to be kept and handle any errors
 /// accordingly.
 ///
@@ -1229,7 +1266,10 @@ fn capture_error(rec: &mut Recorder, path: &PathBuf, iof: fn(&Path) -> io::Resul
 /// `files` table ordered by `id` (file id as the cursor), so the pass is
 /// resumable and does not depend on the link-tree-only `canonical_move_queue`.
 fn cleanup_stage(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
-    if !rt.config.process.cleanup.keep_stage.always() {
+    // `--lazy-delete-stage` defers every payload deletion to the end-of-run
+    // cleanup, so this explicit sweep is skipped entirely.
+    if !rt.config.placement.lazy_delete_stage
+        && !rt.config.process.cleanup.keep_stage.always() {
         let cache_dir = rt.config.paths.extract_cache_dir();
         let mut last_id = 0u64;
         loop {
@@ -1247,7 +1287,9 @@ fn cleanup_stage(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
                 match capture_error(
                     recorder,
                     &target, |p| fs::remove_file(p)) {
-                    Ok(()) => (),
+                    Ok(()) => {
+                        rt.db.set_file_flag(file.id, FileFlag::PayloadRemoved, true)?;
+                    }
                     Err(e) => {
                         if rt.config.process.fail_fast {
                             return Err(Error::Config(format!(
