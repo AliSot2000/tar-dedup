@@ -32,13 +32,31 @@ pub struct ExtractRTArgs<'a> {
     pub progress: &'a ProgressBarSet,
 }
 
+
+/// Resolve the extract work presence + runtime state from the work db.
+///
+/// Keyed purely on the work db: if it is absent, or carries no extract-phase
+/// meta (a fresh bypass product's baked catalog is exactly that — not yet an
+/// extract work-db), the work is `Absent`. A present db whose state is not
+/// `Done` is `Incomplete`; a present db whose state is `Done` is `Done`.
+fn resolve_extract_work(db_path: &Path) -> Result<(WorkPresence, ExtractRuntimeState)> {
+    if db_path.is_file() {
+        let db = Database::open(db_path)?;
+        Ok(match db.load_extract_runtime_state()? {
+            None => (WorkPresence::Absent, ExtractRuntimeState::new()),
+            Some(ert) if ert.phase == ExtractPipelinePhase::Done => (WorkPresence::Done, ert),
+            Some(ert) => (WorkPresence::Incomplete, ert),
+        })
+    } else {
+        Ok((WorkPresence::Absent, ExtractRuntimeState::new()))
+    }
+}
+
 pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     validate_exit_after_stage(&config)?;
     let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
     register_mpb(progress.mp_handle());
     let mut bars = BarScope::new(&progress);
-
-    let product = ProductPresence::Absent;
 
     if config.process.start_policy == StartPolicy::Fresh {
         let _ = cleanup::reset_workdir(&config);
@@ -46,19 +64,15 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     std::fs::create_dir_all(&config.paths.work_dir)
         .map_err(|e| Error::io(&config.paths.work_dir, e))?;
 
-    let mut state = load_extract_state(&config.paths.db_path())?;
-
-    let work = if config.paths.db_path().is_file() 
-        && state.phase != ExtractPipelinePhase::Done {
-        
-        WorkPresence::Incomplete
-    } else {
-        WorkPresence::Absent
-    };
+    let (work, mut state) = resolve_extract_work(
+        &config.paths.db_path()
+    )?;
 
     let mut pre_db_recorder = Recorder::speculative(
         !config.process.no_errors, Some(config.process.auto_flush_limit));
-    let action = resolve_start(config.process.start_policy, work, product)?;
+    // Extract has no concrete "finished product" artifact to probe (a completed
+    // run is signaled through `WorkPresence::Done`), so product = None.
+    let action = resolve_start(config.process.start_policy, work, None)?;
 
     let mut db: Option<Database>;
     let mut filter_buffer: Option<ParseFilterBuffer>;
@@ -236,16 +250,7 @@ fn enter_phase(progress: &ProgressBarSet, phase: ExtractPipelinePhase) {
     progress.begin_phase(phase.index(), name, kind);
 }
 
-fn load_extract_state(db_path: &Path) -> Result<ExtractRuntimeState> {
-    if db_path.is_file() {
-        let db = Database::open(db_path)?;
-        Ok(db
-            .load_extract_runtime_state()?
-            .unwrap_or_else(ExtractRuntimeState::new))
-    } else {
-        Ok(ExtractRuntimeState::new())
-    }
-}
+
 
 // ---------------------------------------------------------------------------------------------------------------------
 // TEST
