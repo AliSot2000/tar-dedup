@@ -718,6 +718,14 @@ impl Database {
         meta::get_extract_config(&*self.conn())
     }
 
+    pub fn get_bypass_archive(&self) -> Result<Option<bool>> {
+        meta::get_bypass_archive(&*self.conn())
+    }
+
+    pub fn set_bypass_archive(&self, value: bool) -> Result<()> {
+        meta::set_bypass_archive(&*self.conn(), value)
+    }
+
     pub fn sum_canonical_bytes_to_archive(&self) -> Result<u64> {
         tar_writer::sum_canonical_bytes_to_archive(&*self.conn())
     }

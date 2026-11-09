@@ -38,6 +38,7 @@ pub enum MetaKey {
     ArchiveTransform,
     ArchiveConfig,
     ExtractConfig,
+    BypassArchive,
     TarDedupVersion,
     TarDedupOs,
     DbVersion,
@@ -66,6 +67,7 @@ impl MetaKey {
             Self::ArchiveTransform => "archive_transform",
             Self::ArchiveConfig => "archive_config",
             Self::ExtractConfig => "extract_config",
+            Self::BypassArchive => "bypass_archive",
             Self::TarDedupVersion => "tar_dedup_version",
             Self::TarDedupOs => "tar_dedup_os",
             Self::DbVersion => "db_version",
@@ -94,6 +96,7 @@ impl MetaKey {
             "archive_transform" => Self::ArchiveTransform,
             "archive_config" => Self::ArchiveConfig,
             "extract_config" => Self::ExtractConfig,
+            "bypass_archive" => Self::BypassArchive,
             "tar_dedup_version" => Self::TarDedupVersion,
             "tar_dedup_os" => Self::TarDedupOs,
             "db_version" => Self::DbVersion,
@@ -123,6 +126,7 @@ impl MetaKey {
             Self::ArchiveTransform,
             Self::ArchiveConfig,
             Self::ExtractConfig,
+            Self::BypassArchive,
             Self::TarDedupVersion,
             Self::TarDedupOs,
             Self::DbVersion,
@@ -153,6 +157,7 @@ pub enum MetaEntry {
     ArchiveTransform(String),
     ArchiveConfig(ArchiveConfig),
     ExtractConfig(ExtractConfig),
+    BypassArchive(bool),
     TarDedupVersion(String),
     TarDedupOs(String),
     DbVersion(String),
@@ -181,6 +186,7 @@ impl MetaEntry {
             Self::ArchiveTransform(_) => MetaKey::ArchiveTransform,
             Self::ArchiveConfig(_) => MetaKey::ArchiveConfig,
             Self::ExtractConfig(_) => MetaKey::ExtractConfig,
+            Self::BypassArchive(_) => MetaKey::BypassArchive,
             Self::TarDedupVersion(_) => MetaKey::TarDedupVersion,
             Self::TarDedupOs(_) => MetaKey::TarDedupOs,
             Self::DbVersion(_) => MetaKey::DbVersion,
@@ -203,7 +209,8 @@ impl MetaEntry {
             | Self::ExtractFiltersApplied(v)
             | Self::OutTreeBuilt(v)
             | Self::DirTreeBuilt(v)
-            | Self::PlacementPrologueDone(v) => if *v { "1" } else { "0" }.to_string(),
+            | Self::PlacementPrologueDone(v)
+            | Self::BypassArchive(v) => if *v { "1" } else { "0" }.to_string(),
             Self::ArchiveOwnerPolicy(v) => {
                 serde_json::to_string(v).expect("owner/group policy serializable")
             }
@@ -250,6 +257,7 @@ impl MetaEntry {
             MetaKey::PlacementPrologueDone => {
                 Ok(Self::PlacementPrologueDone(parse_bool(key, raw)?))
             }
+            MetaKey::BypassArchive => Ok(Self::BypassArchive(parse_bool(key, raw)?)),
             MetaKey::ArchiveOwnerPolicy => serde_json::from_str(raw)
                 .map(Self::ArchiveOwnerPolicy)
                 .map_err(|_| Error::Config(format!("invalid archive_owner_policy meta: {raw}"))),
@@ -468,6 +476,17 @@ pub fn set_dir_tree_built(conn: &Connection, value: bool) -> Result<()> {
     set_entry(conn, &MetaEntry::DirTreeBuilt(value))
 }
 
+pub fn get_bypass_archive(conn: &Connection) -> Result<Option<bool>> {
+    get_typed(conn, MetaKey::BypassArchive, |e| match e {
+        MetaEntry::BypassArchive(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn set_bypass_archive(conn: &Connection, value: bool) -> Result<()> {
+    set_entry(conn, &MetaEntry::BypassArchive(value))
+}
+
 pub fn get_placement_prologue_done(conn: &Connection) -> Result<Option<bool>> {
     get_typed(conn, MetaKey::PlacementPrologueDone, |e| match e {
         MetaEntry::PlacementPrologueDone(v) => Some(v),
@@ -607,13 +626,24 @@ mod tests {
         (dir, conn)
     }
 
-    #[test]
+#[test]
     fn meta_key_round_trips() {
         for key in MetaKey::all() {
             assert_eq!(MetaKey::parse(key.as_str()), Some(*key));
         }
         assert_eq!(MetaKey::parse("phase"), None);
         assert_eq!(MetaKey::parse("archive_bytes_in"), None);
+    }
+
+    #[test]
+    fn bypass_archive_meta_round_trips_and_defaults_absent() {
+        let (_dir, conn) = open_conn();
+        // Absent before any write.
+        assert_eq!(get_bypass_archive(&conn).unwrap(), None, "absent defaults to None");
+        set_bypass_archive(&conn, true).expect("set bypass");
+        assert_eq!(get_bypass_archive(&conn).unwrap(), Some(true));
+        set_bypass_archive(&conn, false).expect("clear bypass");
+        assert_eq!(get_bypass_archive(&conn).unwrap(), Some(false));
     }
 
     #[test]
