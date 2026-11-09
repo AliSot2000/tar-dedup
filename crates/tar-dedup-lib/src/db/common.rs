@@ -107,6 +107,7 @@ impl FileRecord {
             ftype: self.ftype,
             device_id: self.device_id, inode_id: self.inode_id,
             canonical_id: self.canonical_id,
+            link_dst_id: self.link_dst_id,
             flags: self.flags, phase: self.phase,
             new_name: self.new_name.clone(),
         }
@@ -153,7 +154,7 @@ impl SqlFileRow for FileRecord {
                 uid, gid, username, groupname, mode, ftype, xattr, acl, selinux, win_perm, link_dst, \
                 include_reason_archive, exclude_reason_archive, \
                 include_reason_extract, exclude_reason_extract, \
-                canonical_id, flags, phase, \
+                canonical_id, link_dst_id, flags, phase, \
                 new_name, inode, dev, major, minor".to_string(),
             Some(p) => format!("\
                 {p}.id AS \"{p}.id\",
@@ -180,6 +181,7 @@ impl SqlFileRow for FileRecord {
                 {p}.include_reason_extract AS \"{p}.include_reason_extract\",
                 {p}.exclude_reason_extract AS \"{p}.exclude_reason_extract\",
                 {p}.canonical_id AS \"{p}.canonical_id\",
+                {p}.link_dst_id AS \"{p}.link_dst_id\",
                 {p}.flags AS \"{p}.flags\",
                 {p}.phase AS \"{p}.phase\",
                 {p}.new_name AS \"{p}.new_name\",
@@ -230,6 +232,9 @@ impl SqlFileRow for FileRecord {
                 .map(ExclusionId),
             canonical_id: row
                 .get::<_, Option<i64>>(format!("{upx}canonical_id").as_str())?
+                .map(FileId),
+            link_dst_id: row
+                .get::<_, Option<i64>>(format!("{upx}link_dst_id").as_str())?
                 .map(FileId),
             flags: FileFlags::from_i64(row.get::<_, i64>(format!("{upx}flags").as_str())?),
             phase: parse_phase(row, upx)?,
@@ -290,7 +295,7 @@ impl SqlFileRow for StrippedRecord {
     fn sql_columns(prefix: Option<&str>) -> String {
         match prefix {
             None => "id, abs_path, abs_path_raw, ext, size, sha1, mtime, atime, ctime, ftype, canonical_id, \
-                flags, phase, inode, dev, new_name"
+                link_dst_id, flags, phase, inode, dev, new_name"
                 .to_string(),
             Some(p) => format!(
                 "
@@ -305,6 +310,7 @@ impl SqlFileRow for StrippedRecord {
                 {p}.ctime AS \"{p}.ctime\",
                 {p}.ftype AS \"{p}.ftype\",
                 {p}.canonical_id AS \"{p}.canonical_id\",
+                {p}.link_dst_id AS \"{p}.link_dst_id\",
                 {p}.flags AS \"{p}.flags\",
                 {p}.phase AS \"{p}.phase\",
                 {p}.inode AS \"{p}.inode\",
@@ -331,6 +337,8 @@ impl SqlFileRow for StrippedRecord {
             ctime: optional_rfc3339(row, format!("{upx}ctime").as_str())?,
             ftype: parse_ftype(row, format!("{upx}ftype").as_str())?,
             canonical_id: row.get::<_, Option<i64>>(format!("{upx}canonical_id").as_str())?
+                .map(FileId),
+            link_dst_id: row.get::<_, Option<i64>>(format!("{upx}link_dst_id").as_str())?
                 .map(FileId),
             flags: FileFlags::from_i64(row.get::<_, i64>(format!("{upx}flags").as_str())?),
             phase: parse_phase(row, upx)?,
@@ -360,25 +368,28 @@ impl OutTreeRecord {
         };
         let file_id: Option<i64> = row.get(format!("{upx}file_id").as_str())?;
         let canonical_id: Option<i64> = row.get(format!("{upx}canonical_id").as_str())?;
+        let link_dst_id: Option<i64> = row.get(format!("{upx}link_dst_id").as_str())?;
         Ok(OutTreeRecord {
             id: OutTreeId(row.get(format!("{upx}id").as_str())?),
             abs_path: row.get::<_, String>(format!("{upx}abs_path").as_str())?.into(),
             file_id: file_id.map(FileId),
             flags: OutTreeFlags::from_i64(row.get(format!("{upx}flags").as_str())?),
             canonical_id: canonical_id.map(OutTreeId),
+            link_dst_id: link_dst_id.map(OutTreeId),
         })
     }
 
     pub fn sql_columns(prefix: Option<&str>) -> String {
         match prefix {
-            None => "id, abs_path, file_id, flags, canonical_id".to_string(),
+            None => "id, abs_path, file_id, flags, canonical_id, link_dst_id".to_string(),
             Some(p) => format!(
             "
             {p}.id AS \"{p}.id\",
             {p}.abs_path AS \"{p}.abs_path\",
             {p}.file_id AS \"{p}.file_id\",
             {p}.flags AS \"{p}.flags\",
-            {p}.canonical_id AS \"{p}.canonical_id\"
+            {p}.canonical_id AS \"{p}.canonical_id\",
+            {p}.link_dst_id AS \"{p}.link_dst_id\"
             "
             ),
         }
@@ -453,8 +464,9 @@ pub fn get_file_by_id<R: SqlFileRow>(conn: &Connection, file_id: FileId) -> Resu
 }
 
 pub fn count_entries(conn: &Connection) -> Result<u64> {
+    // Exclude the reserved id=0 "missing link target" marker row.
     let count: i64 = conn.query_row(
-        "SELECT COUNT(*) AS count FROM files", [], |row| row.get("count")
+        "SELECT COUNT(*) AS count FROM files WHERE id > 0", [], |row| row.get("count")
     ).to_panic()?;
     Ok(count as u64)
 }
