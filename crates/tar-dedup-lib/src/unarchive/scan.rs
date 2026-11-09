@@ -940,9 +940,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // buffered and gets `FileExtracted` once the snapshot installs a DB.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = archive_head_truncated(dir.path(), false);
-        let db_path = config.paths.db_path();
 
-        let db = run(&config, &db_path, &Shutdown::detached(),
+        let db = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -965,9 +964,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // ingested instead of being dropped.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = archive_head_truncated(dir.path(), true);
-        let db_path = config.paths.db_path();
 
-        let db = run(&config, &db_path, &Shutdown::detached(),
+        let db = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1034,9 +1032,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
     fn scan_caches_payloads_and_promotes_on_snapshot() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, member) = build_archive(dir.path());
-        let db_path = config.paths.db_path();
 
-        let db = run(&config, &db_path, &Shutdown::detached(),
+        let db = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1066,7 +1063,6 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // leftover `archived` rows and records a session error.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, member) = build_archive(dir.path());
-        let db_path = config.paths.db_path();
 
         // Sabotage the payload destination: a directory at the member path makes
         // the cache copy fail (File::create on an existing dir).
@@ -1074,7 +1070,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         fs::create_dir_all(&cache).expect("cache dir");
         fs::create_dir(cache.join(&member)).expect("sabotage member dst");
 
-        let db = run(&config, &db_path, &Shutdown::detached(),
+        let db = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1100,9 +1096,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // "payload not found" bucket and is swept to `unarchived` under --force.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = archive_with_missing_member(dir.path());
-        let db_path = config.paths.db_path();
 
-        let db = run(&config, &db_path, &Shutdown::detached(),
+        let db = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1125,9 +1120,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // Under --force the gate warns and sweeps it to `unarchived`.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = archive_without_snapshot(dir.path());
-        let db_path = config.paths.db_path();
 
-        let db = run(&config, &db_path, &Shutdown::detached(),
+        let db = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(EXTRACT_MULTIPLIER))
@@ -1145,10 +1139,9 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let dir = tempfile::tempdir().expect("tempdir");
         let (mut config, _member) = archive_without_snapshot(dir.path());
         config.process.force = false;
-        let db_path = config.paths.db_path();
 
         let res = catch_unwind(AssertUnwindSafe(|| {
-            run(&config, &db_path, &Shutdown::detached(),
+            run(&config, &Shutdown::detached(),
                 &mut Recorder::speculative(false, None),
                 &mut Some(ParseFilterBuffer::default()),
                 &ProgressBarSet::new(
@@ -1180,10 +1173,9 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let dir = tempfile::tempdir().expect("tempdir");
         let (mut config, _member) = archive_with_partial_snapshot(dir.path());
         config.process.force = false;
-        let db_path = config.paths.db_path();
 
         let res = catch_unwind(AssertUnwindSafe(|| {
-            run(&config, &db_path, &Shutdown::detached(),
+            run(&config, &Shutdown::detached(),
                 &mut Recorder::speculative(false, None),
                 &mut Some(ParseFilterBuffer::default()),
                 &ProgressBarSet::new(
@@ -1202,10 +1194,9 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
     fn scan_interrupt_persists_state_and_resume_skips_processed_members() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = build_archive(dir.path());
-        let db_path = config.paths.db_path();
 
         // First pass installs the catalog so later passes take the resume path.
-        run(&config, &db_path, &Shutdown::detached(),
+        run(&config, &Shutdown::detached(),
             &mut Recorder::speculative(false, None),
             &mut Some(ParseFilterBuffer::default()),
             &ProgressBarSet::new(EXTRACT_MULTIPLIER))
@@ -1215,7 +1206,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let shutdown = Shutdown::detached();
         shutdown.request_graceful();
         let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
-        match run(&config, &db_path, &shutdown,
+        match run(&config, &shutdown,
                   &mut Recorder::speculative(false, None),
                   &mut Some(ParseFilterBuffer::default()), &progress) {
             Err(Error::Interrupted) => {}
@@ -1223,7 +1214,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
             Ok(_) => panic!("expected Interrupted, scan returned Ok"),
         }
 
-        let db = Database::open(&db_path).expect("open");
+        let db = Database::open(&config.paths.db_path()).expect("open");
         let mut state = db.load_extract_scan_state().expect("state");
         assert_eq!(state.last_member_index, 2);
 
@@ -1236,7 +1227,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         drop(db);
 
         // Resuming must skip the manifest member; re-reading it would be an error.
-        let db = run(&config, &db_path, &Shutdown::detached(),
+        let db = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1256,8 +1247,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
     // Resume: rewind the saved scan state and re-run.
     // ---------------------------------------------------------------------
 
-    fn run_scan(config: &ExtractConfig, db_path: &Path) -> Database {
-        run(config, db_path, &Shutdown::detached(),
+    fn run_scan(config: &ExtractConfig) -> Database {
+        run(config, &Shutdown::detached(),
             &mut Recorder::speculative(false, None),
             &mut Some(ParseFilterBuffer::default()),
             &ProgressBarSet::new(EXTRACT_MULTIPLIER))
@@ -1287,14 +1278,13 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // pass must re-extract every payload member.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _members) = build_multi_catalog(dir.path(), 3);
-        let db_path = config.paths.db_path();
 
-        let db = run_scan(&config, &db_path);
+        let db = run_scan(&config);
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 4);
         drop(db);
 
-        rewind_scan_to(&db_path, 0, false);
-        let db = run_scan(&config, &db_path);
+        rewind_scan_to(&config.paths.db_path(),0, false);
+        let db = run_scan(&config);
         assert_eq!(db.count_extracted_canonical().expect("extracted"), 3);
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 4);
         let state = db.load_extract_scan_state().expect("state");
@@ -1309,11 +1299,10 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // resumed pass only has to reprocess the trailing snapshot.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = build_archive(dir.path());
-        let db_path = config.paths.db_path();
 
-        run_scan(&config, &db_path);
-        rewind_scan_to(&db_path, 1, true);
-        let db = run_scan(&config, &db_path);
+        run_scan(&config);
+        rewind_scan_to(&config.paths.db_path(), 1, true);
+        let db = run_scan(&config);
         assert_eq!(db.count_extracted_canonical().expect("extracted"), 1);
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
         let state = db.load_extract_scan_state().expect("state");
@@ -1327,12 +1316,11 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // extracted ones. The resumed pass re-processes only the tail members.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _members) = build_multi_catalog(dir.path(), 12);
-        let db_path = config.paths.db_path();
 
-        run_scan(&config, &db_path);
+        run_scan(&config);
         // manifest(0) + payloads 1..=6 processed → 6 extracted, tail = 7..=13.
-        rewind_scan_to(&db_path, 6, true);
-        let db = run_scan(&config, &db_path);
+        rewind_scan_to(&config.paths.db_path(), 6, true);
+        let db = run_scan(&config);
         assert_eq!(db.count_extracted_canonical().expect("extracted"), 12);
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 13);
         let state = db.load_extract_scan_state().expect("state");
@@ -1360,9 +1348,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
     fn scan_footer_archive_succeeds_and_records_provenance() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, member) = build_footer_archive(dir.path());
-        let db_path = config.paths.db_path();
 
-        let db = run_scan(&config, &db_path);
+        let db = run_scan(&config);
         assert!(config.paths.extract_cache_dir().join(&member).is_file());
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
         let state = db.load_extract_scan_state().expect("state");
@@ -1404,8 +1391,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
             dir.path().join("work"),
             dir.path().join("out"),
         );
-        let db_path = config.paths.db_path();
-        let err = match run(&config, &db_path, &Shutdown::detached(),
+        let err = match run(&config, &Shutdown::detached(),
                             &mut Recorder::speculative(false, None),
                             &mut Some(ParseFilterBuffer::default()),
                             &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
@@ -1425,12 +1411,11 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // stream itself stays readable.
         let dir = tempfile::tempdir().expect("tempdir");
         let (mut config, _member) = build_footer_archive(dir.path());
-        let db_path = config.paths.db_path();
         config.process.force = false;
         corrupt_byte(&config.paths.archive_path, 1024);
 
         let mut rec = Recorder::speculative(true, None);
-        let err = match run(&config, &db_path, &Shutdown::detached(), &mut rec,
+        let err = match run(&config, &Shutdown::detached(), &mut rec,
                             &mut Some(ParseFilterBuffer::default()),
                             &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
             Ok(_) => panic!("content corruption must abort without --force"),
@@ -1444,11 +1429,10 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
     fn scan_footer_content_corruption_warns_under_force() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, member) = build_footer_archive(dir.path());
-        let db_path = config.paths.db_path();
         corrupt_byte(&config.paths.archive_path, 1024);
 
         // for_scan_test defaults force=true → warn + continue.
-        let db = run_scan(&config, &db_path);
+        let db = run_scan(&config);
         assert!(config.paths.extract_cache_dir().join(&member).is_file());
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
     }
@@ -1459,18 +1443,17 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // Interrupted stop (not a Config error), before any catalog install.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = build_footer_archive(dir.path());
-        let db_path = config.paths.db_path();
         let shutdown = Shutdown::detached();
         shutdown.request_force();
 
-        let res = run(&config, &db_path, &shutdown,
+        let res = run(&config, &shutdown,
                       &mut Recorder::speculative(false, None),
                       &mut Some(ParseFilterBuffer::default()),
                       &ProgressBarSet::new(EXTRACT_MULTIPLIER));
         assert!(res.is_err(), "force during verify must abort the scan");
         assert!(matches!(res, Err(Error::Interrupted)), "expected Interrupted");
         // The verify precedes the catalog install; an abort leaves no work DB.
-        assert!(!db_path.exists());
+        assert!(!&config.paths.db_path().exists());
     }
 
     #[test]
@@ -1482,10 +1465,9 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // to footer-less handling at load time).
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = build_footer_archive(dir.path());
-        let db_path = config.paths.db_path();
         corrupt_byte(&config.paths.archive_path, footer_offset(&config.paths.archive_path));
 
-        let err = match run(&config, &db_path, &Shutdown::detached(),
+        let err = match run(&config, &Shutdown::detached(),
                             &mut Recorder::speculative(false, None),
                             &mut Some(ParseFilterBuffer::default()),
                             &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
@@ -1507,9 +1489,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         builder.finish().expect("finish empty tar");
         let config = ExtractConfig::for_scan_test(
             archive_path, dir.path().join("work"), dir.path().join("out"));
-        let db_path = config.paths.db_path();
 
-        let err = match run(&config, &db_path, &Shutdown::detached(),
+        let err = match run(&config, &Shutdown::detached(),
                             &mut Recorder::speculative(false, None),
                             &mut Some(ParseFilterBuffer::default()),
                             &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
@@ -1533,10 +1514,9 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         builder.finish().expect("finish tar");
         let config = ExtractConfig::for_scan_test(
             archive_path, dir.path().join("work"), dir.path().join("out"));
-        let db_path = config.paths.db_path();
 
         let cache = config.paths.extract_cache_dir();
-        let err = match run(&config, &db_path, &Shutdown::detached(),
+        let err = match run(&config, &Shutdown::detached(),
                             &mut Recorder::speculative(false, None),
                             &mut Some(ParseFilterBuffer::default()),
                             &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
@@ -1565,9 +1545,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let mut config = ExtractConfig::for_scan_test(
             archive_path, dir.path().join("work"), dir.path().join("out"));
         config.process.force = false;
-        let db_path = config.paths.db_path();
 
-        let err = match run(&config, &db_path, &Shutdown::detached(),
+        let err = match run(&config, &Shutdown::detached(),
                             &mut Recorder::speculative(false, None),
                             &mut Some(ParseFilterBuffer::default()),
                             &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
@@ -1587,7 +1566,6 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let dir = tempfile::tempdir().expect("tempdir");
         let (mut config, _member) = build_archive(dir.path());
         config.process.force = false;
-        let db_path = config.paths.db_path();
         let cache = config.paths.extract_cache_dir();
         fs::create_dir_all(&cache).expect("cache dir");
         fs::write(
@@ -1596,7 +1574,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         ).expect("plant stray");
 
         let res = catch_unwind(AssertUnwindSafe(|| {
-            run(&config, &db_path, &Shutdown::detached(),
+            run(&config, &Shutdown::detached(),
                 &mut Recorder::speculative(false, None),
                 &mut Some(ParseFilterBuffer::default()),
                 &ProgressBarSet::new(EXTRACT_MULTIPLIER))
@@ -1610,7 +1588,6 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
     fn scan_stray_cached_payload_warns_under_force() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = build_archive(dir.path());
-        let db_path = config.paths.db_path();
         let cache = config.paths.extract_cache_dir();
         fs::create_dir_all(&cache).expect("cache dir");
         fs::write(
@@ -1618,7 +1595,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
             b"stray",
         ).expect("plant stray");
 
-        let db = run_scan(&config, &db_path);
+        let db = run_scan(&config);
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
     }
 
@@ -1630,11 +1607,10 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
     /// buffer (matching the real pipeline: `ingest_filters` → `scan::run`).
     fn run_scan_filtered(
         config: &ExtractConfig,
-        db_path: &Path,
         recorder: &mut Recorder,
     ) -> Database {
         let fb = ingest_filters(config, recorder).expect("ingest filters");
-        run(config, db_path, &Shutdown::detached(), recorder,
+        run(config, &Shutdown::detached(), recorder,
             &mut Some(fb), &ProgressBarSet::new(EXTRACT_MULTIPLIER))
             .expect("scan")
     }
@@ -1648,10 +1624,9 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let (mut config, members) = build_multi_catalog(dir.path(), 2);
         config.filter.eager_filter = true;
         config.filter.exclude_patterns = vec!["/f_0\\.txt".into()];
-        let db_path = config.paths.db_path();
 
         let mut rec = Recorder::speculative(true, None);
-        let db = run_scan_filtered(&config, &db_path, &mut rec);
+        let db = run_scan_filtered(&config, &mut rec);
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 3);
         assert_eq!(db.count_extracted_canonical().expect("extracted"), 1);
 
@@ -1675,9 +1650,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let dir = tempfile::tempdir().expect("tempdir");
         let (mut config, members) = build_multi_catalog(dir.path(), 2);
         config.filter.eager_filter = true;
-        let db_path = config.paths.db_path();
 
-        let db = run_scan(&config, &db_path);
+        let db = run_scan(&config);
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 3);
         assert_eq!(db.count_extracted_canonical().expect("extracted"), 2);
         assert!(config.paths.extract_cache_dir().join(&members[0]).is_file());
@@ -1694,10 +1668,9 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let (mut config, members) = build_multi_catalog(dir.path(), 2);
         config.filter.eager_filter = false;
         config.filter.exclude_patterns = vec!["/f_0\\.txt".into()];
-        let db_path = config.paths.db_path();
 
         let mut rec = Recorder::speculative(true, None);
-        let db = run_scan_filtered(&config, &db_path, &mut rec);
+        let db = run_scan_filtered(&config, &mut rec);
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 3);
         assert_eq!(db.count_extracted_canonical().expect("extracted"), 2);
         assert!(config.paths.extract_cache_dir().join(&members[0]).is_file());
@@ -1723,9 +1696,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         builder.finish().expect("finish tar");
         let config = ExtractConfig::for_scan_test(
             archive_path, dir.path().join("work"), dir.path().join("out"));
-        let db_path = config.paths.db_path();
 
-        let err = match run(&config, &db_path, &Shutdown::detached(),
+        let err = match run(&config, &Shutdown::detached(),
                             &mut Recorder::speculative(false, None),
                             &mut Some(ParseFilterBuffer::default()),
                             &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
@@ -1750,9 +1722,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let mut config = ExtractConfig::for_scan_test(
             archive_path, dir.path().join("work"), dir.path().join("out"));
         config.process.force = false;
-        let db_path = config.paths.db_path();
 
-        let err = match run(&config, &db_path, &Shutdown::detached(),
+        let err = match run(&config, &Shutdown::detached(),
                             &mut Recorder::speculative(false, None),
                             &mut Some(ParseFilterBuffer::default()),
                             &ProgressBarSet::new(EXTRACT_MULTIPLIER)) {
@@ -1779,9 +1750,8 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         builder.finish().expect("finish tar");
         let config = ExtractConfig::for_scan_test(
             archive_path, dir.path().join("work"), dir.path().join("out"));
-        let db_path = config.paths.db_path();
 
-        let db = run_scan(&config, &db_path);
+        let db = run_scan(&config);
         assert_eq!(db.count_files_in_phase(FilePhase::Unarchived).expect("c"), 2);
         assert!(config.paths.extract_cache_dir().join(&member).is_file());
     }
@@ -1830,8 +1800,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // Regular copy (default: sparsify off).
         let mut config = config0.clone();
         config.scan.sparsify = false;
-        let db_path = config.paths.db_path();
-        let db = run_scan(&config, &db_path);
+        let db = run_scan(&config);
         drop(db);
         let regular = config.paths.extract_cache_dir().join(&member);
         assert_eq!(fs::metadata(&regular).expect("meta").len(), 8 * 1024 * 1024);
@@ -1840,8 +1809,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let mut config = config0;
         config.paths.work_dir = dir.path().join("work_sparse");
         config.scan.sparsify = true;
-        let db_path = config.paths.db_path();
-        let db = run_scan(&config, &db_path);
+        let db = run_scan(&config);
         drop(db);
         let sparse = config.paths.extract_cache_dir().join(&member);
         assert_eq!(fs::metadata(&sparse).expect("meta").len(), 8 * 1024 * 1024);
@@ -1876,7 +1844,6 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         // force path is the one that exercises the mid-copy abort.
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = archive_with_large_payload(dir.path(), 64 * 1024 * 1024);
-        let db_path = config.paths.db_path();
 
         let shutdown = Shutdown::detached();
         let armed = shutdown.clone();
@@ -1886,7 +1853,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         });
 
         let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
-        match run(&config, &db_path, &shutdown,
+        match run(&config, &shutdown,
                   &mut Recorder::speculative(false, None),
                   &mut Some(ParseFilterBuffer::default()), &progress) {
             Err(Error::Interrupted) => {}
