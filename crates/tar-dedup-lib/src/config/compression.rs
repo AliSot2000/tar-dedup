@@ -100,19 +100,14 @@ impl CompressionSettings {
         })
     }
 
-    fn resolve_compress_options(format: CompressionFormat, args: &ArchiveArgs) -> Result<(u32, bool)> {
-        if args.xz_extreme && format != CompressionFormat::Xz {
-            return Err(Error::Config(
-                "--xz-extreme is only valid with xz compression (-J / .tar.xz)".into(),
-            ));
-        }
+    fn resolve_compress_options(format: CompressionFormat, args: &ArchiveArgs) -> Result<u32> {
         if format == CompressionFormat::None {
             if args.level.is_some() {
                 return Err(Error::Config(
                     "--level requires a compression filter (archive is uncompressed)".into(),
                 ));
             }
-            return Ok((0, false));
+            return Ok(0);
         }
 
         let (min, max) = format
@@ -125,7 +120,7 @@ impl CompressionSettings {
                 format.as_str()
             )));
         }
-        Ok((level, args.xz_extreme))
+        Ok(level)
     }
 }
 
