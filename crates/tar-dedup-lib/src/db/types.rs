@@ -14,6 +14,9 @@ pub struct OutTreeRecord {
     pub file_id: Option<FileId>,
     pub flags: OutTreeFlags,
     pub canonical_id: Option<OutTreeId>,
+    /// The `out_tree.id` this symlink resolves to (`None` for non-symlinks; the
+    /// reserved id=0 marker row when the target does not exist in the tree).
+    pub link_dst_id: Option<OutTreeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +65,9 @@ pub struct FileRecord {
     pub include_reason_extract: Option<ExclusionId>,
     pub exclude_reason_extract: Option<ExclusionId>,
     pub canonical_id: Option<FileId>,
+    /// The `files.id` this symlink resolves to (`None` for non-symlinks; the
+    /// reserved id=0 marker row when the target does not exist in the tree).
+    pub link_dst_id: Option<FileId>,
     pub flags: FileFlags,
     pub phase: FilePhase,
     pub new_name: Option<String>,
@@ -85,6 +91,7 @@ pub struct StrippedRecord {
     pub inode_id: Option<u64>,
 
     pub canonical_id: Option<FileId>,
+    pub link_dst_id: Option<FileId>,
     pub flags: FileFlags,
     pub phase: FilePhase,
     pub new_name: Option<String>,
@@ -503,6 +510,7 @@ fn sidecar_from_file_record_maps_all_fields() {
         include_reason_extract: None,
         exclude_reason_extract: None,
         canonical_id: Some(FileId(7)),
+        link_dst_id: None,
         flags: FileFlags::default(),
         phase: FilePhase::Rehashed,
         new_name: Some("renamed".into()),
@@ -568,6 +576,7 @@ fn sidecar_symlink_renders_type_and_target() {
         include_reason_extract: None,
         exclude_reason_extract: None,
         canonical_id: Some(FileId(3)),
+        link_dst_id: Some(FileId(0)),
         flags: FileFlags::default(),
         phase: FilePhase::Rehashed,
         new_name: None,
@@ -609,6 +618,7 @@ fn sidecar_attach_out_tree_overrides_placeholder() {
         include_reason_extract: None,
         exclude_reason_extract: None,
         canonical_id: Some(FileId(11)),
+        link_dst_id: None,
         flags: FileFlags::default(),
         phase: FilePhase::Rehashed,
         new_name: None,

@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS source (
 CREATE INDEX IF NOT EXISTS idx_source_dirs ON source(abs_path) WHERE (flags & 1) != 0;
 
 CREATE TABLE IF NOT EXISTS files (
-    id            INTEGER PRIMARY KEY CHECK (id > 0),
+    -- id = 0 is the reserved marker for a symlink target that does not exist
+    -- (see its INSERT below); real rows are id > 0.
+    id            INTEGER PRIMARY KEY CHECK (id >= 0),
     abs_path      TEXT NOT NULL,
     abs_path_raw  BLOB NOT NULL UNIQUE,
     ext           TEXT NOT NULL,
@@ -84,6 +86,9 @@ CREATE TABLE IF NOT EXISTS files (
     -- Internal Stuff
     sparse_count   INTEGER DEFAULT 0,
     canonical_id   INTEGER REFERENCES files(id),
+    -- The `files.id` this symlink resolves to (NULL for non-symlinks); when the
+    -- target does not exist in the tree it points at the reserved id=0 marker.
+    link_dst_id    INTEGER REFERENCES files(id),
     phase          TEXT NOT NULL DEFAULT 'inventoried',
     -- The archive session this row's payload was appended in (NULL = not yet
     -- appended in a finalized/non-truncated session). Replaces `AppendedPath`.
@@ -104,8 +109,13 @@ CREATE TABLE IF NOT EXISTS ref (
 CREATE INDEX IF NOT EXISTS idx_ref_file ON ref(file_id);
 
 CREATE TABLE IF NOT EXISTS out_tree (
-    id       INTEGER PRIMARY KEY CHECK (id > 0),
+    -- id = 0 is the reserved marker for a symlink target that does not exist
+    -- (see its INSERT below); real rows are id > 0.
+    id       INTEGER PRIMARY KEY CHECK (id >= 0),
     canonical_id INTEGER REFERENCES out_tree(id),
+    -- The `out_tree.id` this symlink resolves to (NULL for non-symlinks); when
+    -- the target does not exist in the tree it points at the reserved id=0 marker.
+    link_dst_id INTEGER REFERENCES out_tree(id),
     abs_path TEXT NOT NULL UNIQUE,
     file_id  INTEGER REFERENCES files(id), --first row that resolved to this out_tree_row
     flags    INTEGER NOT NULL DEFAULT 0
@@ -177,4 +187,14 @@ CREATE TABLE IF NOT EXISTS archive_sessions (
 -- Add dummy rows
 INSERT OR IGNORE INTO filter_reason_archive (id, source, line, expression) VALUES (0, 'internal', NULL, '.*');
 INSERT OR IGNORE INTO filter_reason_extract (id, source, line, expression) VALUES (0, 'internal', NULL, '.*');
+
+-- Reserved id=0 files row: the target of a symlink that does not exist in the
+-- tree. link_dst_id = 0 means no resolvable target, distinct from NULL (not a
+-- symlink). Not a file; filtered out of count_entries (id > 0).
+INSERT OR IGNORE INTO files (id, abs_path, abs_path_raw, ext, size, ftype, phase) VALUES (0, '', X'', '', 0, 'unknown', 'inventoried');
+
+-- Reserved id=0 out_tree row: an output-tree symlink target that does not exist
+-- in the tree. link_dst_id = 0 means no resolvable target, distinct from NULL
+-- (not a symlink). Not a file; excluded from the content projections.
+INSERT OR IGNORE INTO out_tree (id, abs_path, file_id, flags) VALUES (0, '', NULL, 0);
 ";
