@@ -1038,6 +1038,16 @@ impl Database {
         place_prologue::set_out_tree_built(&self.conn())
     }
 
+    /// See [`place_prologue::out_tree_common_prefix`].
+    pub fn out_tree_common_prefix(&self, root: &Path) -> Result<Option<PathBuf>> {
+        place_prologue::out_tree_common_prefix(&self.conn(), root)
+    }
+
+    /// See [`place_prologue::strip_common_prefix`].
+    pub fn strip_common_prefix(&self, root: &Path, shared: &Path) -> Result<u64> {
+        place_prologue::strip_common_prefix(&mut self.conn_mut(), root, shared)
+    }
+
     pub fn placement_prologue_done(&self) -> Result<bool> {
         place_prologue::placement_prologue_done(&self.conn())
     }
