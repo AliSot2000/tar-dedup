@@ -643,20 +643,9 @@ mod tests {
             id
         }
 
-        /// `files.username` / `files.groupname` (not carried by `NewFileRecord`).
-        fn set_names(&self, id: FileId, username: Option<&str>, groupname: Option<&str>) {
-            self.db.with_transaction(|conn| {
-                conn.execute(
-                    "UPDATE files SET username = :u, groupname = :g WHERE id = :id",
-                    named_params! { ":u": username, ":g": groupname, ":id": id.0 },
-                ).expect("set names");
-                Ok(())
-            }).expect("names tx");
-        }
-
         /// Un-eject the row so `content_id` resolution fails (the link-sources
-        /// precondition panic): `content_id` fills `;` for a missing digest but
-        /// returns `None` for a non-self-canonical row.
+        /// precondition panic): `content_id` returns `None` for a
+        /// non-self-canonical row (and for a row without a digest).
         fn un_canonicalize(&self, id: FileId) {
             self.db.with_transaction(|conn| {
                 conn.execute("UPDATE files SET canonical_id = NULL WHERE id = :id",
