@@ -1,3 +1,4 @@
+use crate::common::defaults::DB_NAME;
 use crate::config::Validate;
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
@@ -46,7 +47,7 @@ impl Validate for PathLayout {
 
 impl PathLayout {
     pub fn db_path(&self) -> PathBuf {
-        self.work_dir.join("tar-dedup.sqlite")
+        self.work_dir.join(DB_NAME)
     }
 
     pub fn temp_db(&self) -> PathBuf {
