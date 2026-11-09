@@ -1,6 +1,6 @@
 # 082 — Advanced compression (JSON) + `--bypass-archive`
 
-Status: **approved — implementing.**
+Status: **implemented and verified.**
 
 ## Scope
 
