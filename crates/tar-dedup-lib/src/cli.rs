@@ -430,7 +430,10 @@ pub struct ArchiveArgs {
     /// `tar-dedup.sqlite` catalog — instead of a tar archive. The directory is
     /// `-f DIR`; another tool compresses/stores it (tar-dedup stays out of the
     /// loop). No tar stream, no footer, no stream sha1: on extract, content
-    /// rehash (or `--force`) is the integrity guarantee.
+    /// rehash is the integrity guarantee.
+    ///
+    /// If the product directory should contain exclusively payloads rather than symlinks,
+    /// use the sparsify function to populate the directory: --sparsify --min-pages 0
     #[arg(long = "bypass-archive", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Archive")]
     pub bypass_archive: bool,
 
