@@ -167,6 +167,13 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     Ok(())
 }
 
+// TODO: Move to comon and replace other callers.
+/// Util function that checks that a path is in fact clean.
+fn debug_assert_check_clean(path: &Path) {
+    let p_dist = path.display();
+    debug_assert_eq!(path.to_path_buf(), path.clean(), "INVARIANT ERROR: {p_dist} is not clean.");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
