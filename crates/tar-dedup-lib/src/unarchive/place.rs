@@ -67,6 +67,7 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         materialize_link_tree(rt, &mut recorder)?;
     } else {
         materialize_files(rt, &mut recorder)?;
+        // INFO: Eager cleaning of canonical files to free up space.
         cleanup_stage(&rt, &mut recorder)?; // Free space!
 
         materialize_hardlinks(rt, &mut recorder)?;
@@ -80,8 +81,6 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         corpus,
         rt.db.count_errors(Some("place"))?,
     );
-
-    cleanup_stage(&rt, &mut recorder)?;
 
     // INFO: Since all relevant things are stored in out_tree, we cna blanket promote here.
     if !rt.shutdown.is_interrupted() {
@@ -231,13 +230,6 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
 
     if rt.shutdown.is_interrupted() {
         return Err(Error::Interrupted);
-    }
-
-    if let Err(e) = capture_error(
-        recorder, &rt.config.paths.extract_cache_dir(), |p| fs::remove_dir_all(p)) {
-        tracing::warn!("Failed to delete extract cache at: {} with error {e}",
-            rt.config.paths.extract_cache_dir().display()
-        );
     }
 
     rt.db.drop_canonical_move_queue()?;
@@ -1222,31 +1214,51 @@ fn capture_error(rec: &mut Recorder, path: &PathBuf, iof: fn(&Path) -> io::Resul
     }
 }
 
+// FEATURE: Materialize by canonical file, s.t. it can be deleted, once all copies are done.
 /// Attempt to clean up the stage if it is not requested to be kept and handle any errors
 /// accordingly.
+///
+/// The extract cache (work-dir) holds one payload per canonical file. Once every
+/// out-tree entry has materialized its copy, the cache payload is no longer
+/// needed and is deleted, freeing the work-dir. Iteration is stepped over the
+/// `files` table ordered by `id` (file id as the cursor), so the pass is
+/// resumable and does not depend on the link-tree-only `canonical_move_queue`.
 fn cleanup_stage(rt: &ExtractRTArgs, recorder: &mut Recorder) -> Result<()> {
-    if !rt.config.process.cleanup.keep_stage {
+    if !rt.config.process.cleanup.keep_stage.always() {
         let cache_dir = rt.config.paths.extract_cache_dir();
-        match capture_error(
-            recorder,
-            &cache_dir.to_path_buf(), |p| fs::remove_dir_all(p)) {
-
-            Ok(()) => Ok(()),
-            Err(e) => {
-                if rt.config.process.fail_fast {
-                    Err(Error::Config(format!(
-                        "Failed to clean up stage directors '{}' with error {}",
-                        cache_dir.display(), e)))
-                } else {
-                    tracing::warn!("Failed to clean up stage directors '{}' with error {}",
-                        cache_dir.display(), e);
-                    Ok(())
+        let mut last_id = 0u64;
+        loop {
+            let rows = rt.db.pull_extracted_cache_files::<StrippedRecord>(
+                last_id, rt.config.process.feed_chunk as u64)?;
+            if rows.is_empty() {
+                break
+            }
+            last_id = rows[rows.len() - 1].0;
+            for (_, file) in rows {
+                let content_id = file
+                    .content_id()
+                    .expect("Content Id expected for an extracted canonical file.");
+                let target = cache_dir.join(content_id.0);
+                match capture_error(
+                    recorder,
+                    &target, |p| fs::remove_file(p)) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        if rt.config.process.fail_fast {
+                            return Err(Error::Config(format!(
+                                "Failed to clean up stage member '{}' with error {}",
+                                target.display(), e)))
+                        } else {
+                            tracing::warn!(
+                                "Failed to clean up stage member '{}' with error {}",
+                                target.display(), e);
+                        }
+                    }
                 }
             }
         }
-    } else {
-        Ok(())
     }
+    Ok(())
 }
 
 
