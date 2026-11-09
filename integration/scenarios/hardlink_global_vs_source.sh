@@ -13,14 +13,14 @@ scenario_hardlink_global_vs_source() {
     tgt() { printf '%s' "$1/$(printf '%s' "$2" | sed 's|^/||')"; }
 
     mkdir -p "$RUN/extg"
-    bin extract -f "$RUN/out.astar" -C "$RUN/extg" --hard-link-grouping global \
+    bin extract -f "$RUN/out.tdd.tar" -C "$RUN/extg" --hard-link-grouping global \
         >/dev/null 2>&1 || fail "global extract failed"
     [ "$(stat -c %i "$(tgt "$RUN/extg" "$s1/cross.txt")")" = \
        "$(stat -c %i "$(tgt "$RUN/extg" "$s2/cross2.txt")")" ] \
         || fail "global did not group the cross-source pair"
 
     mkdir -p "$RUN/exts"
-    bin extract -f "$RUN/out.astar" -C "$RUN/exts" --hard-link-grouping source \
+    bin extract -f "$RUN/out.tdd.tar" -C "$RUN/exts" --hard-link-grouping source \
         >/dev/null 2>&1 || fail "source extract failed"
     [ "$(stat -c %i "$(tgt "$RUN/exts" "$s1/cross.txt")")" != \
        "$(stat -c %i "$(tgt "$RUN/exts" "$s2/cross2.txt")")" ] \
