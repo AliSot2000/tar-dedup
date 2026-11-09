@@ -325,6 +325,44 @@ pub fn drop_canonical_move_queue(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Next slice of extracted canonical payload files, ordered by `files.id` (the
+/// file id doubles as the read cursor — `WHERE id > :last_id`). Unlike
+/// `pull_canonical_move_queue`, this reads the `files` table directly and needs
+/// no `canonical_move_queue` companion table, so it works in the non-link-tree
+/// placement path (and any other place that walks the extract cache). Each
+/// returned `(id, record)` pairs the page index with a self-canonical regular
+/// file whose digest is known (`content_id()` = `Some`), i.e. exactly the rows
+/// materializing a payload into the extract cache / out tree — the records
+/// `cleanup_stage` deletes after their copies are in place.
+pub fn pull_extracted_cache_files<R: SqlFileRow>(
+    conn: &Connection, last_id: u64, limit: u64)
+    -> Result<Vec<(u64, R)>> {
+    let cols = R::sql_columns(Some("files"));
+    let sql = format!(
+        "SELECT files.id AS pos, {cols}
+         FROM files
+         WHERE files.id > :last_id
+           AND files.canonical_id = files.id
+           AND files.sha1 IS NOT NULL
+           AND files.ftype = 'file'
+         ORDER BY files.id
+         LIMIT :limit"
+    );
+    let mut stmt = conn.prepare(&sql).to_panic()?;
+    let rows = stmt.query_map(
+        named_params! {
+            ":last_id": last_id as i64,
+            ":limit": limit,
+        },
+        |r: &rusqlite::Row<'_>| {
+            let pos = r.get::<_, i64>("pos")? as u64;
+            let record = R::from_row(r, Some("files"))?;
+            Ok((pos, record))
+        },
+    ).to_panic()?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().to_panic().map_err(Into::into)
+}
+
 /// Create the `materialize_queue` ordering table. Idempotent.
 pub fn create_materialize_queue(conn: &Connection) -> Result<()> {
     conn.execute(

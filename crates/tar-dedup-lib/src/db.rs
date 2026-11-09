@@ -972,6 +972,12 @@ impl Database {
         place::drop_canonical_move_queue(&self.conn())
     }
 
+    /// See [`place::pull_extracted_cache_files`].
+    pub fn pull_extracted_cache_files<R: SqlFileRow>(&self, last_id: u64, limit: u64)
+        -> Result<Vec<(u64, R)>> {
+        place::pull_extracted_cache_files(&self.conn(), last_id, limit)
+    }
+
     /// See [`place::create_materialize_queue`].
     pub fn create_materialize_queue(&self) -> Result<()> {
         place::create_materialize_queue(&self.conn())
