@@ -1057,7 +1057,7 @@ mod tests {
     #[test]
     fn compression_inferred_from_suffix_and_overridden() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let xz = archive_file(dir.path(), "backup.tar.xz");
+        let xz = archive_file(dir.path(), "backup.tdd.tar.xz");
         let cfg = build(&xz, &[]).expect("suffix inference");
         assert_eq!(cfg.decompression, CompressionFormat::Xz);
 
