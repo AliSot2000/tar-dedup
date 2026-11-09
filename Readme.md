@@ -12,13 +12,13 @@ with `tar`.
 cargo build -p tar-dedup --release
 
 # Snapshot a tree (dedup + xz compression, resumable)
-tar-dedup archive -f backup.tar.xz -i ~/Documents
+tar-dedup archive -f backup.tdd.tar.xz -i ~/Documents
 
 # Restore it
-tar-dedup extract -f backup.tar.xz
+tar-dedup extract -f backup.tdd.tar.xz
 
 # Verify an archive's integrity (footer catalog + content hashes)
-tar-dedup check -f backup.tar.xz
+tar-dedup check -f backup.tdd.tar.xz
 ```
 
 ## Documentation

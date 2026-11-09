@@ -70,7 +70,7 @@ Scenarios are functions `scenario_<name>()` in `scenarios/<name>.sh`, sourced by
 `run.sh`. Available helpers:
 
 - `begin` — fresh sandbox `$RUN` with a pre-existing `$RUN/ext` extraction root.
-- `ar` / `ex` — `tar-dedup archive` / `extract` against `$RUN/out.astar`.
+- `ar` / `ex` — `tar-dedup archive` / `extract` against `$RUN/out.tdd.tar`.
 - `bin <args…>` — any other `tar-dedup` invocation.
 - `write_file <path> <fmt> [args…]` — create a file (gateable, `printf`-formatted).
 - `target <abs-path>` — where extract maps an absolute source path (`$RUN/ext/<abs>`).
