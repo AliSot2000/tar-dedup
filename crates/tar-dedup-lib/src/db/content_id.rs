@@ -19,8 +19,7 @@ pub fn content_id_from_digest(
     digest: &[u8; 20],
     size: u64,
     file_id: FileId,
-    rel_path: &Path,
-) -> ContentId {
+    rel_path: &Path) -> ContentId {
     let hash_part = URL_SAFE_NO_PAD.encode(digest);
     let size_part = URL_SAFE_NO_PAD.encode(size.to_le_bytes());
     let fid_part = URL_SAFE_NO_PAD.encode(file_id.0.to_le_bytes());
