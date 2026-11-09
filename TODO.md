@@ -20,7 +20,12 @@
 ## Pre 1.0 Release fixes
 - [X] Bug for files with 0 bytes size
 - [X] Continuous progress during send_recv_loop
-- [ ] Freeze progress while no archive is consumed. 
+- [X] Freeze progress while no archive is consumed. 
+- [ ] Strip Common Prefix
+- [X] Unthread db_path out of the intro.
+- [X] Fix eager cleanup of stage. Iterate through files like in copy canonicals and remove all of them in the stage. 
+  (Attempt on on FileExtracted and ErrorWhileExtracting.)
+- [ ] .tdd file suffix s.t. tdd.tar.xz is produced
 
 ## Refactor:
 - [X] Drop unused db functions
