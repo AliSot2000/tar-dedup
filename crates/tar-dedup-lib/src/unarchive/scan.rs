@@ -2,7 +2,7 @@
 
 use crate::archive_footer::{read_footer, verify_archive_integrity};
 use crate::common::defaults::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
-use crate::common::files::copy_reader_batched;
+use crate::common::files::{copy_reader_batched, read_probe};
 use crate::config::ExtractConfig;
 use crate::db::content_id::parse_content_id;
 use crate::db::flags::{ErrorFlags, FileFlag};
