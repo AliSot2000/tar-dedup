@@ -724,6 +724,7 @@ mod tests {
             include_reason_archive: None, exclude_reason_archive: None,
             include_reason_extract: None, exclude_reason_extract: None,
             canonical_id: Some(FileId(1)),
+            link_dst_id: None,
             flags: FileFlags::default(),
             phase: FilePhase::Rehashed,
             new_name: None,
@@ -1226,6 +1227,7 @@ mod tests {
             file_id,
             flags,
             canonical_id: if is_dir { None } else { Some(OutTreeId(id)) },
+            link_dst_id: None,
         }
     }
 
