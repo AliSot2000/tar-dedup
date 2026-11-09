@@ -1,6 +1,18 @@
 # 083 — `.tdd` canonical suffix + `--strip-common-prefix`
 
-Status: **approved — implementing.**
+Status: part 2 (`--strip-common-prefix`) **implemented**; part 1 (`.tdd`) **implemented**.
+
+Part-2 notes (SQL-first, per review):
+- LCP computed from a single SQL aggregate `SELECT MIN(abs_path), MAX(abs_path)
+  FROM out_tree WHERE id > 0` (the component-wise LCP of a set equals that of its
+  lexicographic min/max), then compared in Rust over only those two rows.
+- Re-root via one `UPDATE out_tree SET abs_path = :root || substr(abs_path,
+  length(:lcp)+1) WHERE …` guarded to rows under the prefix; one `DELETE … =
+  :root`. Both in one transaction (`db/place_prologue.rs::strip_common_prefix`).
+- Wired in `unarchive/place_prologue::run` after `populate_out_tree`, before
+  canonical election; re-runs `ensure_parent` afterwards.
+- `id > 0` excludes the reserved `link_dst` sentinel row (abs_path `''`), which
+  would otherwise become the MIN and nullify the prefix.
 
 ## Scope
 
@@ -64,23 +76,39 @@ the permission pass already skips). No-op when only `/` is shared; never strips 
 `PlacementOptions.strip_common_prefix: bool` (default `false`) + Default + `Validate`.
 
 ### SQL-first implementation (`db/place_prologue.rs` + `unarchive/place_prologue.rs`)
-- **LCP in Rust**: scalar component-wise pass over one `SELECT abs_path` (relative part);
-  early return when only `/` is shared. (Component-wise LCP is scalar logic SQLite has no
-  clean primitive for; the heavy N-row rewrite stays in one SQL statement, so the two don't
-  duplicate each other.)
+- **LCP by SQL aggregate**: `out_tree_common_prefix` runs `SELECT MIN(abs_path),
+  MAX(abs_path) FROM out_tree WHERE id > 0`; the component-wise LCP of a set equals that
+  of its lexicographic min/max, so Rust compares only those two rows (no full-scan into
+  RAM). No-op when only `/` is shared; never strips above the root.
+  Verified by `common_prefix_min_max_agrees_with_full_scan` (brute-force cross-check).
 - **Single `UPDATE`** (one transaction):
   `UPDATE out_tree SET abs_path = :root || substr(abs_path, length(:root) + :lcp_len)`
-  for rows under the common prefix.
-- **`DELETE FROM out_tree WHERE abs_path = :root`**.
-- **Re-run `ensure_parent`** (component-aligned; `canonical_id`/flags/refs untouched —
-  elected later by `prepare_hardlink_canonicals`).
+  for rows under the common prefix, then **`DELETE FROM out_tree WHERE abs_path = :root`**
+  (the row that collapses to the extraction root — the source's top directory — so archived
+  metadata is never applied to the root). Both wrapped in
+  `strip_common_prefix(conn, root, shared)`.
+- **`DELETE` removes exactly 0-or-1 rows**: `out_tree.abs_path TEXT NOT NULL UNIQUE` makes
+  duplicate collapsed rows impossible, and the strip is injective (distinct remainders)→
+  no two rows can collide at the root, so no `UNIQUE` violation can arise.
+- **Re-run `ensure_parent`**, then `delete_out_tree_root` drops the re-notioned root row so
+  metadata/owners never apply to `effective_extraction_root()`
+  (`canonical_id`/flags/refs untouched — elected later by `prepare_hardlink_canonicals`).
+- **Real rows are clean paths** (no trailing slash, via `root.join(*).clean()`), so a
+  collapsed dir maps exactly to `:root` and matches the DELETE; a hypothetical trailing
+  slash would yield `:root || '/'` and survive (tested via clean-path fixtures only).
 
-### Tests
-- `place_prologue` unit: deep abs `-i` → rows re-rooted, top row deleted (absent),
-  `ensure_parent` holds, no-op with divergent roots.
+### Tests (all green)
+- `db::place_prologue`: shared-subdir re-root + top drop; divergent/empty no-op;
+  single-component prefix; min/max aggregate agrees with full-scan brute force
+  (covers sibling rows that shorten or nullify the prefix); nested-tree
+  `a/,a/b/,a/b/c/` collapses only the exact LCP row; dir-sibling `/ed/mnt` shrinks the
+  LCP to `mnt` and deletes only the `/ed/mnt` row; no-dir-sibling collapses `/ed/mnt/drive`
+  → root; `delete_out_tree_root` drops the re-notioned root.
+- `unarchive::place_prologue`: `run` re-roots + drops top; divergent roots no-op;
+  works in `link_tree` mode.
 - Config test: flag → `PlacementOptions.strip_common_prefix`.
-- Integration `strip_common_prefix.sh`: archive nested absolute source, extract with the
-  flag, assert files land directly under the extract root.
+- Integration `strip_common_prefix.sh` (part 1 only): archive nested absolute source,
+  extract with the flag, assert files land directly under the extract root.
 
 ## 3. Verification
 - `cargo test -p tar-dedup-lib --lib` (+ `--features test-compression`).
