@@ -21,12 +21,13 @@
 - [X] Bug for files with 0 bytes size
 - [X] Continuous progress during send_recv_loop
 - [X] Freeze progress while no archive is consumed. 
-- [ ] Strip Common Prefix
+- [X] Strip Common Prefix
 - [X] Unthread db_path out of the intro.
 - [X] Fix eager cleanup of stage. Iterate through files like in copy canonicals and remove all of them in the stage. 
   (Attempt on on FileExtracted and ErrorWhileExtracting.)
 - [ ] .tdd file suffix s.t. tdd.tar.xz is produced
-- [ ] Eager Delete of stage
+- [X] Eager Delete of stage
+- [ ] Delete files on incomplete move 
 
 ## Refactor:
 - [X] Drop unused db functions
