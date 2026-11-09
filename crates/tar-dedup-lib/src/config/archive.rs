@@ -677,6 +677,18 @@ mod tests {
     }
 
     #[test]
+    fn keep_stage_modes_resolved() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        use crate::config::StageKeep;
+        let cfg = build(&[&input_dir_cli(dir.path()), "--keep-stage", "always"]).expect("keep");
+        assert_eq!(cfg.process.cleanup.keep_stage, StageKeep::Always);
+        let cfg = build(&[&input_dir_cli(dir.path()), "--keep-stage", "never"]).expect("no-keep");
+        assert_eq!(cfg.process.cleanup.keep_stage, StageKeep::Never);
+        let cfg = build(&[&input_dir_cli(dir.path())]).expect("default");
+        assert_eq!(cfg.process.cleanup.keep_stage, StageKeep::OnOther);
+    }
+
+    #[test]
     fn files_from_reads_from_stdin_convention_and_valid_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let list = dir.path().join("list.txt");

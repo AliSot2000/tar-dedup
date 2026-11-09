@@ -101,6 +101,7 @@ fn retained_db_path(config: &impl WorkLayout, mode: CleanupMode) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::StageKeep;
     use crate::test_support::{ExtractWorld, TestWorld};
 
     const TEMP_NAMES: [&str; 3] = [".snapshot-ingest.tmp", ".snapshot-for-tar.sqlite", ".lock"];
@@ -128,7 +129,11 @@ mod tests {
             } else {
                 DbRetention::Never
             };
-            c.process.cleanup.keep_stage = keep_stage;
+            c.process.cleanup.keep_stage = if keep_stage {
+                StageKeep::Always
+            } else {
+                StageKeep::Never
+            };
         });
         if materialize_db {
             seed_work_dir_files(&world.config);

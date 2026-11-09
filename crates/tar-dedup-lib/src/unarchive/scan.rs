@@ -365,7 +365,7 @@ fn run_inner(
     // Abort case, we have members but we don't want to keep them
     if rt.db.is_none() {
         // Remove stage if necesssary
-        if !rt.config.process.cleanup.keep_stage {
+        if !rt.config.process.cleanup.keep_stage.always() {
             if let Err(e) = fs::remove_dir_all(rt.config.paths.extract_cache_dir()) {
                 io_error_with_session_scan_error(&rt.config.paths.extract_cache_dir(), recorder, e);
             };

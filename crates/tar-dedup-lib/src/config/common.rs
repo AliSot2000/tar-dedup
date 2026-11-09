@@ -59,4 +59,16 @@ mod tests {
         assert!(resolve_bool_flag(false, false, true), "--no-x absent, --x absent -> base");
         assert!(!resolve_bool_flag(false, false, false));
     }
+
+    #[test]
+    fn stage_keep_always_and_keep_with() {
+        use crate::config::StageKeep;
+        assert!(StageKeep::Always.always());
+        assert!(!StageKeep::Never.always());
+        assert!(!StageKeep::OnOther.always());
+        assert!(!StageKeep::Never.keep_with(true));
+        assert!(!StageKeep::OnOther.keep_with(false));
+        assert!(StageKeep::OnOther.keep_with(true));
+        assert!(StageKeep::Always.keep_with(false));
+    }
 }

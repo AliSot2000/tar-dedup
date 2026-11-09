@@ -528,7 +528,10 @@ impl ExtractConfig {
                 force: args.force,
                 relax_utf8: args.relax_utf8,
                 progress_mode: args.progress_mode,
-                cleanup: CleanupSettings { db_retention: args.db_retention, keep_stage: args.keep_stage },
+                cleanup: CleanupSettings {
+                    db_retention: args.db_retention,
+                    keep_stage: args.keep_stage,
+                },
                 exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             },
             owner_policy,
