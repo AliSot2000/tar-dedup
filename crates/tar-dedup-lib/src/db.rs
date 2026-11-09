@@ -1048,11 +1048,6 @@ impl Database {
         place_prologue::strip_common_prefix(&mut self.conn_mut(), root, shared)
     }
 
-    /// See [`place_prologue::delete_out_tree_root`].
-    pub fn delete_out_tree_root(&self, root: &Path) -> Result<u64> {
-        place_prologue::delete_out_tree_root(&self.conn(), root)
-    }
-
     pub fn placement_prologue_done(&self) -> Result<bool> {
         place_prologue::placement_prologue_done(&self.conn())
     }

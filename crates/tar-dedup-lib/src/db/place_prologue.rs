@@ -282,25 +282,13 @@ pub fn strip_common_prefix(conn: &mut Connection, root: &Path, shared: &Path) ->
             ":lcp": &lcp,
         },
     ).to_panic()?;
+    // Delete all rows which are a root.
     tx.execute(
         "DELETE FROM out_tree WHERE abs_path = :root",
         named_params! { ":root": &root_str },
     ).to_panic()?;
     tx.commit().to_panic()?;
     Ok(updated as u64)
-}
-
-/// Drop every `out_tree` row whose `abs_path` equals the extraction root. Used
-/// after `ensure_parent` to make sure the re-rooted tree never carries a row for
-/// the effective root itself — `ensure_parent` can re-notion it (a re-rooted file
-/// lands directly under the root, so the root is the parent), and we must not
-/// apply archived metadata / owners to the extraction root. Returns rows dropped.
-pub fn delete_out_tree_root(conn: &Connection, root: &Path) -> Result<u64> {
-    let n = conn.execute(
-        "DELETE FROM out_tree WHERE abs_path = :root",
-        named_params! { ":root": root.to_string_lossy().into_owned() },
-    ).to_panic()?;
-    Ok(n as u64)
 }
 
 #[cfg(test)]
