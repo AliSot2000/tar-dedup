@@ -47,8 +47,9 @@ pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Res
 }
 
 pub fn count_out_tree_rows(conn: &Connection) -> Result<u64> {
+    // Exclude the reserved id=0 "missing link target" marker row.
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM out_tree",
+        "SELECT COUNT(*) FROM out_tree WHERE id > 0",
         [],
         |row| row.get(0)
     ).to_panic()?;
@@ -107,7 +108,7 @@ pub fn count_out_tree_others(conn: &Connection, materialized: Option<bool>) -> R
     let (mat_filter, mat_masks) = out_tree_materialized_filter(materialized);
     let sql = format!(
         "SELECT COUNT(*) FROM out_tree \
-         WHERE canonical_id IS NULL {mat_filter}"
+         WHERE canonical_id IS NULL AND id > 0 {mat_filter}"
     );
     let n: i64 = match mat_masks {
         None => conn.query_row(
