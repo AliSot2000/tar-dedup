@@ -253,7 +253,7 @@ fn sparsify_worker(
                     row.fs_path(), row.mtime, row.atime, row.ctime,
                 );
                 let name = row
-                    .sparse_member_name()
+                    .tar_member_name()
                     .expect("Invariant: sparsify candidates must be self-canonical files");
                 let dst = stage_dir.join(name).clean();
                 let tmp = TempSparseFile::new(dst);
@@ -369,7 +369,7 @@ mod tests {
         /// The canonical row's candidate so its `sp.{content_id}` stage file
         /// target can be checked on disk.
         fn stage_path(&self, id: FileId) -> Option<PathBuf> {
-            let name = self.record(id).sparse_member_name();
+            let name = self.record(id).tar_member_name();
             name.map(|n| self.config.paths.work_dir.clone().join(n))
         }
     }
