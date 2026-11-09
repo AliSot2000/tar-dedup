@@ -26,6 +26,7 @@
 - [X] Fix eager cleanup of stage. Iterate through files like in copy canonicals and remove all of them in the stage. 
   (Attempt on on FileExtracted and ErrorWhileExtracting.)
 - [ ] .tdd file suffix s.t. tdd.tar.xz is produced
+- [ ] Eager Delete of stage
 
 ## Refactor:
 - [X] Drop unused db functions
