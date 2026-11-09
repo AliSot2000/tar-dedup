@@ -372,6 +372,49 @@ mod tests {
             enter_phase(&progress, &phase);
         }
     }
+
+    /// Bypass-archive config: `-f DIR` product with `bypass_archive` on.
+    fn bypass_archive_config(dir: &std::path::Path) -> ArchiveConfig {
+        let mut cfg = full_archive_config(dir);
+        cfg.paths.archive_path = dir.join("product");
+        cfg.pipeline.write_archive_footer = false;
+        cfg.pipeline.bypass_archive = true;
+        cfg
+    }
+
+    #[test]
+    fn bypass_archive_writes_dir_product_and_sets_meta() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = bypass_archive_config(dir.path());
+        run(cfg, Shutdown::detached()).expect("bypass-archive run");
+
+        let product = dir.path().join("product");
+        assert!(product.is_dir(), "product dir exists");
+        // A baked catalog sqlite sits beside the payload files.
+        assert!(product.join("tar-dedup.sqlite").is_file(), "baked catalog present");
+        let db = Database::open(&product.join("tar-dedup.sqlite")).expect("open product db");
+        assert_eq!(db.get_bypass_archive().unwrap(), Some(true), "bypass meta set");
+        assert_eq!(db.count_entries().unwrap(), 6, "6 entries (2 dirs + 3 files + symlink)");
+        // The number of appended payload files must match the encoded-canonical
+        // count, and each is materialized as a self-named content-id regular file.
+        let encoded = db.count_encoded_payloads().unwrap();
+        assert!(encoded >= 1, "at least one payload encoded");
+        let mut payloads = 0;
+        for entry in std::fs::read_dir(&product).expect("read product") {
+            let entry = entry.expect("entry");
+            let name = entry.file_name();
+            // The catalog + its sqlite WAL/SHM companions aren't payloads.
+            if name.to_string_lossy().starts_with("tar-dedup.sqlite") {
+                continue;
+            }
+            assert!(entry.path().is_file(), "payload is a regular file");
+            payloads += 1;
+        }
+        assert_eq!(payloads, encoded as usize, "payload files match encoded canonicals");
+        drop(db);
+        // Work dir cleaned after success.
+        assert!(!dir.path().join("astage").exists(), "work dir cleaned");
+    }
 }
 
 /// Run the cross-phase integrity battery against the archive invariants after
