@@ -29,7 +29,7 @@ pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode) -> Result<()
 
     remove_temp_files(config);
 
-    if !keep.keep_stage {
+    if !keep.keep_stage.always() {
         let work = &config.paths().work_dir;
         if work.is_dir() {
             match fs::remove_dir_all(work) {

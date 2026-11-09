@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common;
 use crate::common::perms::MapResolutionTarget;
-use crate::config::{DbRetention, SidecarMode, WorkDirLocation};
+use crate::config::{DbRetention, SidecarMode, StageKeep, WorkDirLocation};
 
 #[derive(Debug, Parser)]
 #[command(name = "tar-dedup", about = "Deduplicating archival pipeline")]
@@ -362,9 +362,17 @@ pub struct ArchiveArgs {
     )]
     pub db_retention: DbRetention,
 
-    /// After success, keep the `{stem}.astage` work directory.
-    #[arg(long = "keep-stage", help_heading = "Process Options")]
-    pub keep_stage: bool,
+    /// When to keep the `{stem}.astage` work directory (`{stem}.estage` on extract):
+    /// `always`: always; `never`: delete; `on-other`: keep only when there is a
+    /// reason to (e.g. a bypass product with unexpected files).
+    #[arg(
+        long = "keep-stage",
+        value_enum,
+        value_name = "MODE",
+        default_value_t = StageKeep::OnOther,
+        help_heading = "Process Options"
+    )]
+    pub keep_stage: StageKeep,
 
     /// Run through STAGE then exit gracefully.
     #[arg(
@@ -1106,9 +1114,17 @@ pub struct ExtractArgs {
     )]
     pub db_retention: DbRetention,
 
-    /// After success, keep the `{stem}.estage` work directory.
-    #[arg(long = "keep-stage", help_heading = "Process Options")]
-    pub keep_stage: bool,
+    /// When to keep the `{stem}.estage` work directory after the run.
+    /// `always`: always; `never`: delete; `on-other`: keep only when there is a
+    /// reason to (e.g. a bypass product with unexpected files).
+    #[arg(
+        long = "keep-stage",
+        value_enum,
+        value_name = "MODE",
+        default_value_t = StageKeep::OnOther,
+        help_heading = "Process Options"
+    )]
+    pub keep_stage: StageKeep,
 
     // --- Sidecar ---
 

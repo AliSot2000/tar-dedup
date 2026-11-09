@@ -27,10 +27,10 @@ pub enum DbRetention {
 
 /// Whether the stage directory (`.astage` / `.estage`) is kept after a run.
 ///
-/// `--keep-stage` selects `Always`, `--no-keep-stage` selects `Never`, and the
-/// default is `OnOther` (keep the stage only when something that sits beside
-/// the regular products makes it worth inspecting — currently: the bypass
-/// product dir containing unexpected files).
+/// `--keep-stage always|never|on-other` selects directly; the default is
+/// `OnOther` (keep the stage only when something that sits beside the regular
+/// products makes it worth inspecting — currently: the bypass product dir
+/// containing unexpected files).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum StageKeep {
@@ -63,8 +63,8 @@ impl StageKeep {
 pub struct CleanupSettings {
     /// When to keep a timestamped copy of the work database (`--db-retention`).
     pub db_retention: DbRetention,
-    /// if true, keep the stage directory (.astage / .estage)
-    pub keep_stage: bool,
+    /// Whether to keep the stage directory (`.astage` / `.estage`).
+    pub keep_stage: StageKeep,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,7 +178,7 @@ impl Default for ProcessOptions {
             force: false,
             relax_utf8: false,
             progress_mode: crate::cli::ProgressMode::PerThread,
-            cleanup: CleanupSettings { db_retention: DbRetention::OnError, keep_stage: false },
+            cleanup: CleanupSettings { db_retention: DbRetention::OnError, keep_stage: StageKeep::OnOther },
             exit_after_stage: None,
         }
     }

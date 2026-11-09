@@ -166,7 +166,7 @@ fn copy_canonicals_to_source(rt: &ExtractRTArgs, recorder: &mut Recorder)
     let mut thread_handles = Vec::with_capacity(rt.config.process.io_jobs);
 
     let cache_dir = rt.config.paths.extract_cache_dir();
-    let keep_stage = rt.config.process.cleanup.keep_stage;
+    let keep_stage = rt.config.process.cleanup.keep_stage.always();
     let no_reflink = rt.config.placement.no_reflink;
 
     for i in 0..rt.config.process.io_jobs {
