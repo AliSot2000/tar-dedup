@@ -427,6 +427,14 @@ pub struct ArchiveArgs {
     )]
     pub max_shard_size: u64,
 
+    /// Write a directory product — self-contained canonical payloads plus a
+    /// `tar-dedup.sqlite` catalog — instead of a tar archive. The directory is
+    /// `-f DIR`; another tool compresses/stores it (tar-dedup stays out of the
+    /// loop). No tar stream, no footer, no stream sha1: on extract, content
+    /// rehash (or `--force`) is the integrity guarantee.
+    #[arg(long = "bypass-archive", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Archive")]
+    pub bypass_archive: bool,
+
     /// Relax utf-8 policy to also process entries without a valid utf-8 path.
     #[arg(long = "relax-utf8", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub relax_utf8: bool,
@@ -641,6 +649,13 @@ pub struct ExtractArgs {
     /// Do not run the rehash (content verification) phase. Default: on.
     #[arg(long = "no-rehash", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Rehash")]
     pub no_rehash: bool,
+
+    /// Extract a `--bypass-archive` directory product: `-f DIR` holds the
+    /// canonical payloads plus a baked `tar-dedup.sqlite` catalog, and each file
+    /// is validated in place (content rehash is the integrity guarantee — there
+    /// is no tar stream / sha1 to verify).
+    #[arg(long = "bypass-archive", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Rehash")]
+    pub bypass_archive: bool,
 
     // --- Scan ---
 
