@@ -1,5 +1,12 @@
 # Keeping track of design decisions that are not properly written down otherwise
 
+## Strip common prefix not per source + delete rows
+Due to the logic how it is implemented, we don't do it per source to avoid any unnoticed clobbering of files during the 
+place phase.    
+We delete the rows, to avoid any "escape" of the permissions pass. We are allowed to work inside --extract-to 
+(+ --one-top-level) but we don't want to modify the directory itself. So having a file_id attached to a row point now 
+effective_extraction_root() would actually violate this notion.
+
 ## Governor for IO Ops
 A Governor for IO ops was added as a suggestion by the LLM to improve the performance of massively parallel reads on 
 hard drives. After preliminary testing and also preliminary impression, it changed the performance in a barely 
