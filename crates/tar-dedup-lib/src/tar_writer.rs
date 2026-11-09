@@ -14,6 +14,45 @@ use crate::shutdown::Shutdown;
 /// Two 512-byte zero blocks — ustar end-of-archive marker.
 const TAR_EOF_LEN: usize = 1024;
 
+/// Build a zstd streaming encoder honoring `--level` and `--zstd-advanced`.
+fn build_zstd_encoder(
+    file: File, settings: &CompressionSettings, jobs: usize) -> Result<zstd::stream::write::Encoder<'static, File>> {
+    let adv = &settings.zstd_advanced;
+    let level = adv.level.unwrap_or(settings.level) as i32;
+
+    // A trained dictionary must be passed to the constructor (`with_dictionary`),
+    // so decide the encoder's construction here.
+    let mut enc = match adv.dict.as_deref() {
+        Some(dict) => {
+            let bytes = std::fs::read(dict).map_err(|e| Error::io(Path::new(dict), e))?;
+            zstd::stream::write::Encoder::with_dictionary(file, level, &bytes)
+                .map_err(|e| Error::Other(anyhow::anyhow!("zstd encoder + dictionary: {e}")))?
+        }
+        None => zstd::stream::write::Encoder::new(file, level)
+            .map_err(|e| Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
+    };
+    let threads = adv.threads.unwrap_or(jobs as u32);
+    if threads > 1 {
+        enc.multithread(threads.min(256))
+            .map_err(|e| Error::Other(anyhow::anyhow!("zstd multithread: {e}")))?;
+    }
+    if let Some(log) = adv.long_window_log {
+        enc.long_distance_matching(true)
+            .map_err(|e| Error::Other(anyhow::anyhow!("zstd long-distance matching: {e}")))?;
+        enc.window_log(log)
+            .map_err(|e| Error::Other(anyhow::anyhow!("zstd window log: {e}")))?;
+    }
+    if let Some(cs) = adv.checksum {
+        enc.include_checksum(cs)
+            .map_err(|e| Error::Other(anyhow::anyhow!("zstd checksum: {e}")))?;
+    }
+    if let Some(csz) = adv.content_size {
+        enc.include_contentsize(csz)
+            .map_err(|e| Error::Other(anyhow::anyhow!("zstd content size: {e}")))?;
+    }
+    Ok(enc)
+}
+
 pub struct TarWriter {
     archive_path: PathBuf,
     /// Needed to have option for solid tear-down ownership.
@@ -40,8 +79,6 @@ impl TarWriter {
         -> Result<Self> {
         let format = settings.format;
         let compress_level = settings.level;
-        let xz_extreme = settings.xz_extreme;
-        let memlimit_compress = settings.memlimit_compress;
 
         // CLI already validated level / format-specific flags.
         debug_assert!(
@@ -50,10 +87,6 @@ impl TarWriter {
                 Some((min, max)) => compress_level >= min && compress_level <= max,
             },
             "compress_level {compress_level} out of range for {format:?}"
-        );
-        debug_assert!(
-            !xz_extreme || matches!(format, CompressionFormat::Xz),
-            "xz_extreme set for non-xz format"
         );
 
         crate::compression::warn_on_start(format);
@@ -66,14 +99,12 @@ impl TarWriter {
 
         let layer = match format {
             CompressionFormat::Xz => {
-                let mut preset = compress_level;
-                if xz_extreme {
-                    preset |= 1u32 << 31; // LZMA_PRESET_EXTREME
-                }
+                let preset = settings.xz_preset();
+                let xz_jobs = settings.xz_threads(jobs);
                 let (encoder, threads) = InterruptibleXzEncoder::new(
                     file,
-                    jobs,
-                    memlimit_compress,
+                    xz_jobs,
+                    &settings.xz_advanced,
                     preset,
                     shutdown.clone(),
                 )?;
@@ -90,10 +121,9 @@ impl TarWriter {
                 file,
                 bzip2::Compression::new(compress_level),
             )),
-            CompressionFormat::Zstd => CompressLayer::Zstd(
-                zstd::stream::write::Encoder::new(file, compress_level as i32)
-                    .map_err(|e| Error::Other(anyhow::anyhow!("zstd encoder: {e}")))?,
-            ),
+            CompressionFormat::Zstd => {
+                CompressLayer::Zstd(build_zstd_encoder(file, settings, jobs)?)
+            }
             CompressionFormat::None => CompressLayer::Plain(file),
         };
 
@@ -404,12 +434,13 @@ mod compression_tests {
     use crate::test_support::{TEST_PAYLOAD_SIZE_BYTES, all_levels, encode_bytes, pseudo_random};
 
     fn settings(format: CompressionFormat, level: u32, xz_extreme: bool) -> CompressionSettings {
-        CompressionSettings {
-            format,
-            level,
-            xz_extreme,
-            memlimit_compress: None,
+        let mut s = CompressionSettings::default();
+        s.format = format;
+        s.level = level;
+        if xz_extreme && format == CompressionFormat::Xz {
+            s.xz_advanced.extreme = Some(true);
         }
+        s
     }
 
     fn read_decompressed(path: &Path, format: &CompressionFormat) -> Vec<u8> {
@@ -547,5 +578,49 @@ mod compression_tests {
             tested += 1;
         }
         assert_eq!(tested, all_levels().len(), "matrix combo count drift");
+    }
+
+    /// xz with a custom dictionary (`--xz-advanced dict`) must round-trip and,
+    /// unlike the old single-thread path, honor `--jobs` (filtered MT builder).
+    #[test]
+    fn xz_advanced_dict_roundtrips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let members = sample_files(dir.path());
+
+        let mut s = settings(CompressionFormat::Xz, 9, false);
+        s.xz_advanced.dict = Some(1024 * 1024);
+        s.xz_advanced.threads = Some(2);
+
+        let a = dir.path().join("xz-adv.bin");
+        write_archive(&a, &s, &members);
+        let got = read_members(&a, &CompressionFormat::Xz);
+        assert_eq!(got.len(), members.len(), "member count");
+        for ((name, path), (gname, gbytes)) in members.iter().zip(&got) {
+            assert_eq!(gname, name);
+            assert_eq!(gbytes, &fs::read(path).expect("read source"), "member {name}");
+        }
+    }
+
+    /// zstd with advanced knobs (threads, long-distance window, checksum,
+    /// content-size) must round-trip through the production decoder.
+    #[test]
+    fn zstd_advanced_roundtrips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let members = sample_files(dir.path());
+
+        let mut s = settings(CompressionFormat::Zstd, 9, false);
+        s.zstd_advanced.threads = Some(2);
+        s.zstd_advanced.long_window_log = Some(20);
+        s.zstd_advanced.checksum = Some(true);
+        s.zstd_advanced.content_size = Some(true);
+
+        let a = dir.path().join("zstd-adv.bin");
+        write_archive(&a, &s, &members);
+        let got = read_members(&a, &CompressionFormat::Zstd);
+        assert_eq!(got.len(), members.len(), "member count");
+        for ((name, path), (gname, gbytes)) in members.iter().zip(&got) {
+            assert_eq!(gname, name);
+            assert_eq!(gbytes, &fs::read(path).expect("read source"), "member {name}");
+        }
     }
 }
