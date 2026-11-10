@@ -376,7 +376,10 @@ mod tests {
     /// Bypass-archive config: `-f DIR` product with `bypass_archive` on.
     fn bypass_archive_config(dir: &std::path::Path) -> ArchiveConfig {
         let mut cfg = full_archive_config(dir);
-        cfg.paths.archive_path = dir.join("product");
+        let product = dir.join("product");
+        cfg.paths.archive_path = product.clone();
+        // Bypass rule: work dir IS the product dir.
+        cfg.paths.work_dir = product;
         cfg.pipeline.write_archive_footer = false;
         cfg.pipeline.bypass_archive = true;
         cfg
