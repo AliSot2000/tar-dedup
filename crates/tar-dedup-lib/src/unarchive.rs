@@ -374,7 +374,7 @@ fn bypass_archive_extract_round_trip() {
 
     // The source dir was archived by absolute path, so members mirror the absolute
     // path under the extraction root (leading / stripped). Locate them by name.
-    fn find(p: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    fn find(p: &Path, name: &str) -> Option<std::path::PathBuf> {
         for e in std::fs::read_dir(p).ok()?.flatten() {
             let ep = e.path();
             if ep.is_dir() {
