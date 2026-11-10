@@ -3,7 +3,7 @@ use rusqlite::{Connection, named_params};
 use std::path::PathBuf;
 
 use crate::common::files::TimesChanged;
-use crate::db::common::{SqlFileRow, generate_archive_filter};
+use crate::db::common::{SqlFileRow, generate_archive_filter, id_gt_zero};
 use crate::db::flags::{FileFlag, or_file_flags, set_file_flag};
 use crate::db::types::{FileId, FilePhase, StrippedRecord};
 use crate::error::{FileStatError, Result, ToPanic};
@@ -416,7 +416,8 @@ pub fn ready_to_searching(conn: &mut Connection, eager_filter: bool) -> Result<(
         &format!(
             "UPDATE files SET canonical_id = id
              WHERE id IN (SELECT MIN(id) FROM files
-                 WHERE phase = '{}'
+                 WHERE {guard}
+                   AND phase = '{}'
                    AND canonical_id IS NULL
                    AND (flags & :error_bit) = 0
                    AND (flags & :check_bit) = 0
@@ -425,7 +426,8 @@ pub fn ready_to_searching(conn: &mut Connection, eager_filter: bool) -> Result<(
                        FROM dedup_progress
                        WHERE state = 'ready')
                  GROUP BY sha1, size)",
-            phase
+            phase,
+            guard = id_gt_zero(),
         ),
         named_params! {
             ":error_bit": error_bit,
@@ -605,15 +607,17 @@ pub fn promote_ineligible_entries_to_dedup(conn: &Connection, eager_filter: bool
 pub fn promote_empty_files_to_dedup(conn: &Connection, eager_filter: bool) -> Result<u64> {
     let n = conn.execute(
         &format!(
-            "UPDATE files SET phase = 'deduped', canonical_id = (
+"UPDATE files SET phase = 'deduped', canonical_id = (
                  SELECT MIN(id) FROM files AS g
-                 WHERE g.ftype = 'file' AND g.sha1 IS NOT NULL AND g.size = 0
+                 WHERE g.{guard}
+                   AND g.ftype = 'file' AND g.sha1 IS NOT NULL AND g.size = 0
                    AND g.phase = '{}'
              )
              WHERE phase = '{}'
                AND ftype = 'file' AND sha1 IS NOT NULL AND size = 0",
             prev_phase(eager_filter),
-            prev_phase(eager_filter)
+            prev_phase(eager_filter),
+            guard = id_gt_zero(),
         ),
         [],
     ).to_panic()?;
@@ -664,6 +668,7 @@ fn dedup_eligible_where(eager_filter: bool) -> String {
 pub fn promote_hash_mode_to_dedup(conn: &mut Connection, eager_filter: bool) -> Result<u64> {
     let tx = conn.transaction().to_panic()?;
     let candidates = dedup_eligible_where(eager_filter);
+    let guard = id_gt_zero();
     let link_eligible = format!(
         "g.ftype = 'file'
          AND g.sha1 IS NOT NULL
@@ -676,7 +681,7 @@ pub fn promote_hash_mode_to_dedup(conn: &mut Connection, eager_filter: bool) -> 
         "UPDATE files SET canonical_id = id, phase = 'deduped'
          WHERE {candidates}
            AND id IN (
-               SELECT MIN(id) FROM files WHERE {candidates} GROUP BY sha1, size
+               SELECT MIN(id) FROM files WHERE {guard} AND {candidates} GROUP BY sha1, size
            )"
     ), named_params! {
         ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
@@ -685,7 +690,8 @@ pub fn promote_hash_mode_to_dedup(conn: &mut Connection, eager_filter: bool) -> 
     let linked = tx.execute(&format!(
         "UPDATE files SET canonical_id = (
              SELECT MIN(id) FROM files AS g
-             WHERE g.sha1 = files.sha1 AND g.size = files.size
+             WHERE g.{guard}
+               AND g.sha1 = files.sha1 AND g.size = files.size
                AND {link_eligible}
          ), phase = 'deduped'
          WHERE {candidates}
@@ -726,9 +732,10 @@ pub fn promote_none_mode_to_dedup(
                AND dev IS NOT NULL AND inode IS NOT NULL
                AND id IN (
                    SELECT MIN(id) FROM files
-                   WHERE {candidates} AND dev IS NOT NULL AND inode IS NOT NULL
+                   WHERE {guard} AND {candidates} AND dev IS NOT NULL AND inode IS NOT NULL
                    GROUP BY sha1, size, dev, inode
-               )"
+               )",
+            guard = id_gt_zero(),
         ), named_params! {
             ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
         }).to_panic()?;
@@ -736,13 +743,15 @@ pub fn promote_none_mode_to_dedup(
         let linked = tx.execute(&format!(
             "UPDATE files SET canonical_id = (
                  SELECT MIN(id) FROM files AS g
-                 WHERE g.sha1 = files.sha1 AND g.size = files.size
+                 WHERE g.{guard}
+                       AND g.sha1 = files.sha1 AND g.size = files.size
                        AND g.dev = files.dev AND g.inode = files.inode
                        AND {link_eligible}
              ), phase = 'deduped'
              WHERE {candidates}
                AND dev IS NOT NULL AND inode IS NOT NULL
-               AND canonical_id IS NULL"
+               AND canonical_id IS NULL",
+            guard = id_gt_zero(),
         ), named_params! {
             ":error_hash": FileFlag::ErrorWhileHash.mask_i64(),
         }).to_panic()?;

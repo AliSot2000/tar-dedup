@@ -418,7 +418,10 @@ mod tests {
             assert_eq!(ids, vec![OutTreeId(1), OutTreeId(1)]);
 
             let out_rows: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM out_tree", [], |r| r.get(0)).unwrap();
+                &format!(
+                    "SELECT COUNT(*) FROM out_tree WHERE {}",
+                    crate::db::id_gt_zero(),
+                ), [], |r| r.get(0)).unwrap();
             assert_eq!(out_rows, 1, "single resident row");
 
             let err_rows: i64 = conn.query_row(

@@ -11,6 +11,14 @@ use crate::db::types::{
 };
 use crate::error::{Result, ToPanic};
 
+/// SELECT guard selecting only real file rows, never the reserved `id = 0`
+/// "missing link target" marker row. Every set-producing query over `files` /
+/// `out_tree` must OR this in; id-addressed lookups (`WHERE id = :id`,
+/// `link_dst_id = 0` resolution) and the marker's own INSERT are the exceptions.
+pub fn id_gt_zero() -> &'static str {
+    "id > 0"
+}
+
 /// SQL gate fragment selecting rows that passed the archive include/exclude filters.
 /// `prefix` is an optional table alias (e.g. `"f"` → `f.include_reason_archive …`).
 pub fn generate_archive_filter(prefix: Option<&str>) -> String {
@@ -473,7 +481,7 @@ pub fn count_entries(conn: &Connection) -> Result<u64> {
 
 pub fn count_files_entries_in_phase(conn: &Connection, phase: FilePhase) -> Result<u64> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(*) AS count FROM files WHERE phase = :phase",
+        &format!("SELECT COUNT(*) AS count FROM files WHERE phase = :phase AND {}", id_gt_zero()),
         named_params! { ":phase": phase.as_str() },
         |row| row.get("count"),
     ).to_panic()?;
@@ -485,7 +493,8 @@ pub fn count_files_entries_in_phase(conn: &Connection, phase: FilePhase) -> Resu
 pub fn list_files_entries_in_phase<R: SqlFileRow>(conn: &Connection, phase: FilePhase) -> Result<Vec<R>> {
     let cols = R::sql_columns(None);
     let mut stmt = conn.prepare(&format!(
-        "SELECT {cols} FROM files WHERE phase = :phase ORDER BY id"
+        "SELECT {cols} FROM files WHERE phase = :phase AND {guard} ORDER BY id",
+        guard = id_gt_zero(),
     )).to_panic()?;
 
     let rows = stmt.query_map(

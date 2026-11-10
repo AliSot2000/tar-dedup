@@ -2,17 +2,20 @@
 
 use rusqlite::Connection;
 
+use crate::db::common::id_gt_zero;
 use crate::db::flags::FileFlag;
 use crate::error::{Result, ToPanic};
 
 /// `(ftype, count)` pairs over every row in `files`.
 pub fn count_by_ftype(conn: &Connection) -> Result<Vec<(String, u64)>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT ftype AS ft, COUNT(*) AS count
          FROM files
+         WHERE {guard}
          GROUP BY ftype
          ORDER BY ft",
-    ).to_panic()?;
+        guard = id_gt_zero(),
+    )).to_panic()?;
     let rows = stmt.query_map(
         [],
         |row| {
@@ -34,15 +37,17 @@ pub fn count_by_ftype(conn: &Connection) -> Result<Vec<(String, u64)>> {
 /// by a filter pass carry a NULL include reason.
 pub fn count_filter_buckets(conn: &Connection)
     -> Result<(u64, u64, u64, u64)> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT
             SUM(CASE WHEN include_reason_archive < 0 THEN 1 ELSE 0 END) AS included,
             SUM(CASE WHEN include_reason_archive = 0 THEN 1 ELSE 0 END) AS excluded_by_include,
             SUM(CASE WHEN exclude_reason_archive > 0 AND include_reason_archive < 0
                      THEN 1 ELSE 0 END) AS excluded_by_exclude,
             SUM(CASE WHEN include_reason_archive IS NULL THEN 1 ELSE 0 END) AS unfiltered
-         FROM files",
-    ).to_panic()?;
+         FROM files
+         WHERE {guard}",
+        guard = id_gt_zero(),
+    )).to_panic()?;
     let row = stmt.query_row([], |row| {
         Ok((
             row.get::<_, i64>("included")?.max(0) as u64,
@@ -99,7 +104,7 @@ pub fn count_canonical_files(conn: &Connection) -> Result<u64> {
 /// Sum of `size` over all rows.
 pub fn sum_bytes_all(conn: &Connection) -> Result<u64> {
     let n: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(size), 0) FROM files",
+        &format!("SELECT COALESCE(SUM(size), 0) FROM files WHERE {guard}", guard = id_gt_zero()),
         [],
         |r| r.get(0),
     ).to_panic()?;

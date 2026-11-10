@@ -44,7 +44,7 @@ mod stats;
 mod tar_writer;
 mod state;
 
-pub use common::SqlFileRow;
+pub use common::{SqlFileRow, id_gt_zero};
 pub use recorder::Recorder;
 pub use scan::ScanState;
 pub use integrity::{

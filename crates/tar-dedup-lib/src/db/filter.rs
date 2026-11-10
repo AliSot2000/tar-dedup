@@ -92,8 +92,12 @@ pub fn get_filters_extract(conn: &Connection, exclude: bool) -> Result<Vec<Filte
 /// In case no filters were given, we promote all files to filters and set the blanket rows
 pub fn apply_no_filter(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
-        "UPDATE files SET phase = 'filtered', include_reason_archive = -1, \
-         exclude_reason_archive = 0",
+        &format!(
+            "UPDATE files SET phase = 'filtered', include_reason_archive = -1, \
+             exclude_reason_archive = 0
+             WHERE {guard}",
+            guard = crate::db::common::id_gt_zero(),
+        ),
         [],
     ).to_panic()?;
     Ok(n as u64)
@@ -103,7 +107,11 @@ pub fn apply_no_filter(conn: &Connection) -> Result<u64> {
 /// include, so we hand out a constant negative `-1`. Extract rows keep their phase.
 pub fn apply_no_filter_extract(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
-        "UPDATE files SET include_reason_extract = -1, exclude_reason_extract = 0",
+        &format!(
+            "UPDATE files SET include_reason_extract = -1, exclude_reason_extract = 0 \
+             WHERE {guard}",
+            guard = crate::db::common::id_gt_zero(),
+        ),
         [],
     ).to_panic()?;
     Ok(n as u64)

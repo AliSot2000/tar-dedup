@@ -1,6 +1,6 @@
 use crate::common::files::TimesChanged;
 use crate::db::SqlFileRow;
-use crate::db::common::{generate_archive_filter, set_file_phase};
+use crate::db::common::{generate_archive_filter, id_gt_zero, set_file_phase};
 use crate::db::flags::{FileFlag, or_file_flags, set_file_flag};
 use crate::db::types::{FileId, FilePhase};
 use crate::error::{Error, Result, ToPanic};
@@ -151,9 +151,11 @@ pub fn promote_unhasheable_files(conn: &Connection, eager_filter: bool, detect_h
     };
     let sql = format!(
         "UPDATE files SET phase = 'hashed' WHERE phase = {phase}
+             AND {guard}
              AND (ftype != 'file'
                    {filtered_selection}
-                   {filter_hardlink_canonical}) "
+                   {filter_hardlink_canonical}) ",
+        guard = id_gt_zero(),
     );
     let params = if detect_hardlinks {
         named_params! {

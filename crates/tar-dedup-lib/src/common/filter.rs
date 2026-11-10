@@ -776,9 +776,11 @@ mod tests {
 
     fn reason_pairs(world: &TestWorld) -> Vec<(i64, i64)> {
         world.db.with_transaction(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT include_reason_archive, exclude_reason_archive FROM files ORDER BY id",
-            ).expect("stmt");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT include_reason_archive, exclude_reason_archive FROM files
+                 WHERE {} ORDER BY id",
+                crate::db::id_gt_zero(),
+            )).expect("stmt");
             let rows = stmt.query_map([], |r| {
                 Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
             }).expect("query").collect::<rusqlite::Result<Vec<_>>>().expect("collect");
