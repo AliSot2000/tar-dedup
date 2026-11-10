@@ -488,6 +488,15 @@ pub fn count_files_entries_in_phase(conn: &Connection, phase: FilePhase) -> Resu
     Ok(count as u64)
 }
 
+pub fn temp_count_links(conn: &Connection) -> Result<u64> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) AS count FROM files WHERE id > 0 AND link_dst_id IS NOT NULL",
+        [],
+        |row| row.get("count")
+    ).to_panic()?;
+    Ok(count as u64)
+}
+
 /// Test-only: list file rows in a phase (backing `Database::t_files_in_phase`).
 #[cfg(test)]
 pub fn list_files_entries_in_phase<R: SqlFileRow>(conn: &Connection, phase: FilePhase) -> Result<Vec<R>> {
