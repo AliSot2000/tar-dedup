@@ -1057,7 +1057,10 @@ mod tests {
     }
 
     fn canonical_ids(conn: &Connection) -> Vec<(i64, Option<i64>)> {
-        let mut stmt = conn.prepare("SELECT id, canonical_id FROM out_tree ORDER BY id").unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, canonical_id FROM out_tree WHERE {} ORDER BY id",
+            crate::db::common::id_gt_zero(),
+        )).unwrap();
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
             .collect::<rusqlite::Result<Vec<_>>>().unwrap()
     }
