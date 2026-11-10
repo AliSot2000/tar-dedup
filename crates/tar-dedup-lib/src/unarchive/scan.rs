@@ -85,15 +85,21 @@ fn flush_scan_recorder(recorder: &mut Recorder, db: Option<&Database>) -> Result
 /// the schemas exist but the pipeline is not wired yet). This version cannot
 /// scan such an archive, so refuse up-front with an upgrade hint instead of
 /// letting the stream walk produce corrupt results.
-fn reject_sharded_archive(db: &Database, archive_path: &Path) -> Result<()> {
+fn reject_future_features(db: &Database, archive_path: &Path) -> Result<()> {
     match db.get_archive_config()? {
-        Some(cfg) if cfg.pipeline.use_shards => Err(Error::Config(format!(
+        Some(cfg) if cfg.pipeline.use_shards => return Err(Error::Config(format!(
             "archive {} was created with sharded payloads (`--use-shards`), which this \
              version of tar-dedup cannot extract; please upgrade tar-dedup",
             archive_path.display()
         ))),
-        _ => Ok(()),
+        _ => (),
     }
+    if db.temp_count_links()? > 0 {
+        return Err(Error::Config(String::from("Archive uses new symlink representation. \
+        This tool version does not have the capability to extract this archive. Please update \
+        your binary.")))
+    }
+    Ok(())
 }
 
 /// Account a freshly loaded scan DB against the progress bars. Called after every
@@ -228,7 +234,7 @@ fn run_bypass(
     let opened = Database::open(&rt.config.paths.db_path())?;
     opened.init_extract_runtime_state()?;
 
-    reject_sharded_archive(&opened, &rt.config.paths.archive_path)?;
+    reject_future_features(&opened, &rt.config.paths.archive_path)?;
     // The baked catalog must be a bypass product.
     match opened.get_bypass_archive()? {
         Some(true) => (),
@@ -426,7 +432,7 @@ fn run_inner(
         None
     };
     if let Some(edb) = rt.db.as_ref() {
-        reject_sharded_archive(edb, &rt.config.paths.archive_path)?;
+        reject_future_features(edb, &rt.config.paths.archive_path)?;
     }
 
     let mut scan = if let Some(edb) = rt.db.as_ref() {
