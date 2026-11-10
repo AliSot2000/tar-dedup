@@ -9,11 +9,11 @@ use crate::common::start::StartPolicy;
 use crate::config::filter::FilterOptions;
 use crate::error::{Error, Result};
 
-use super::Validate;
 use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
 use super::compression::{CompressionSettings, resolve_compression};
 use super::paths::{PathLayout, PathSource};
 use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
+use super::{StageKeep, Validate};
 use super::{
     default_archive_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_dir, validate_file,
 };
@@ -417,6 +417,14 @@ impl ArchiveConfig {
         // whole group off; per-bit `--x`/`--no-x` override on top (explicit wins).
         let capture_all = !args.no_capture_all_metadata;
 
+        let keep_stage = if args.keep_stage != StageKeep::OnOther && args.bypass_archive {
+            tracing::warn!(
+                "With --bypass-archiv, stage must be kept because it is the product directory");
+            StageKeep::Always
+        } else {
+            args.keep_stage
+        };
+
         Ok(Self {
             paths: PathLayout {
                 archive_path: c_archive_path,
@@ -482,7 +490,7 @@ impl ArchiveConfig {
                 progress_mode: args.progress_mode,
                 cleanup: CleanupSettings {
                     db_retention: args.db_retention,
-                    keep_stage: args.keep_stage,
+                    keep_stage,
                 },
                 exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             },
