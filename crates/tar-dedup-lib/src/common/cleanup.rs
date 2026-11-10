@@ -171,7 +171,7 @@ mod tests {
         let world = archive_world(true, false, true);
         let db_before = world.config.paths.db_path();
         let parent = crate::config::path_parent(&world.config.paths.archive_path);
-        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup");
+        cleanup_workdir(&world.config, CleanupMode::Archive, false).expect("cleanup");
         assert_kept_only(Some(db_before), &parent, "test");
         assert!(!world.config.paths.work_dir.exists(), "work dir removed");
     }
@@ -191,16 +191,30 @@ mod tests {
         seed_work_dir_files(&world.config);
         let db_before = world.config.paths.db_path();
         let root = world.config.paths.extraction_root().to_path_buf();
-        cleanup_workdir(&world.config, CleanupMode::Extract).expect("cleanup");
+        cleanup_workdir(&world.config, CleanupMode::Extract, false).expect("cleanup");
         assert_kept_only(Some(db_before), &root, "archive");
         assert!(!world.config.paths.work_dir.exists(), "work dir removed");
+    }
+
+    #[test]
+    fn cleanup_workdir_bypass_keeps_db_in_place() {
+        // Bypass product: the kept DB stays at db_path (the baked catalog) rather
+        // than being renamed to the timestamped kept location. Work dir survives
+        // too because bypass forces keep_stage=Always.
+        let world = archive_world(true, true, true);
+        let db_before = world.config.paths.db_path();
+        let parent = crate::config::path_parent(&world.config.paths.archive_path);
+        cleanup_workdir(&world.config, CleanupMode::Archive, true).expect("cleanup");
+        assert!(db_before.is_file(), "db kept at db_path (catalog in place)");
+        assert!(kept_dbs_in(&parent, "test").is_empty(), "no renamed copy for bypass");
+        assert!(world.config.paths.work_dir.is_dir(), "work dir (product) kept");
     }
 
     #[test]
     fn cleanup_workdir_without_keep_db_removes_database_and_work_dir() {
         let world = archive_world(false, false, true);
         let db_before = world.config.paths.db_path();
-        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup");
+        cleanup_workdir(&world.config, CleanupMode::Archive, false).expect("cleanup");
         assert!(!db_before.is_file(), "db removed");
         assert!(!world.config.paths.work_dir.exists(), "work dir removed");
     }
@@ -209,7 +223,7 @@ mod tests {
     fn cleanup_workdir_keep_stage_keeps_work_dir_and_temp_files() {
         let world = archive_world(false, true, true);
         let db_before = world.config.paths.db_path();
-        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup");
+        cleanup_workdir(&world.config, CleanupMode::Archive, false).expect("cleanup");
         assert!(!db_before.is_file(), "db removed");
         assert!(world.config.paths.work_dir.is_dir(), "work dir kept");
         for name in TEMP_NAMES {
@@ -224,7 +238,7 @@ mod tests {
     fn cleanup_workdir_no_db_materialized_skips_rename_and_removes_work_dir() {
         // No db file -> the keep_db rename arm is skipped, work dir still removed.
         let world = archive_world(true, false, false);
-        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup");
+        cleanup_workdir(&world.config, CleanupMode::Archive, false).expect("cleanup");
         assert!(!world.config.paths.work_dir.exists(), "work dir removed");
     }
 
@@ -232,7 +246,7 @@ mod tests {
     fn cleanup_workdir_absent_work_dir_is_ok() {
         let world = archive_world(false, false, false);
         std::fs::remove_dir_all(&world.config.paths.work_dir).expect("remove work dir");
-        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup absent work");
+        cleanup_workdir(&world.config, CleanupMode::Archive, false).expect("cleanup absent work");
     }
 
     #[test]
@@ -249,7 +263,7 @@ mod tests {
         std::fs::write(readonly.join("member.txt"), b"x").expect("write member");
         std::fs::set_permissions(&readonly, std::os::unix::fs::PermissionsExt::from_mode(0o555))
             .expect("chmod ro");
-        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup warns");
+        cleanup_workdir(&world.config, CleanupMode::Archive, false).expect("cleanup warns");
         assert!(world.config.paths.work_dir.is_dir(), "work dir left behind");
         // Restore permissions so the tempdir drop can clean up.
         std::fs::set_permissions(&readonly, std::os::unix::fs::PermissionsExt::from_mode(0o755))
@@ -320,7 +334,7 @@ mod tests {
         }
         let db_before = world.config.paths.db_path();
         let parent = crate::config::path_parent(&world.config.paths.archive_path);
-        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup");
+        cleanup_workdir(&world.config, CleanupMode::Archive, false).expect("cleanup");
         assert_kept_only(Some(db_before), &parent, "test");
         assert!(!world.config.paths.work_dir.exists(), "work dir removed");
     }
@@ -332,7 +346,7 @@ mod tests {
             crate::db::Database::open(&world.config.paths.db_path()).expect("open db");
         }
         let db_before = world.config.paths.db_path();
-        cleanup_workdir(&world.config, CleanupMode::Archive).expect("cleanup");
+        cleanup_workdir(&world.config, CleanupMode::Archive, false).expect("cleanup");
         assert!(!db_before.is_file(), "on-error with zero recorded errors drops the db");
         assert!(!world.config.paths.work_dir.exists(), "work dir removed");
     }
