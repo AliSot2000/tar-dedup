@@ -346,7 +346,8 @@ fn bypass_archive_extract_round_trip() {
     acfg.paths.directory = dir.path().to_path_buf();
     acfg.paths.archive_path = dir.path().join("product");
     acfg.paths.output_dir = dir.path().to_path_buf();
-    acfg.paths.work_dir = dir.path().join("astage");
+    // Bypass rule: work dir IS the product dir.
+    acfg.paths.work_dir = dir.path().join("product");
     acfg.inputs.input_dirs = vec![crate::config::PathSource {
         original_path: src.clone(),
         absolute_path: src,
