@@ -3,7 +3,7 @@
 use crate::archive_footer::{read_footer, verify_archive_integrity};
 use crate::common::defaults::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::common::files::{copy_reader_batched, read_probe};
-use crate::config::ExtractConfig;
+use crate::config::{ExtractConfig, StageKeep};
 use crate::db::content_id::parse_content_id;
 use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FileId, FilePhase};
@@ -171,7 +171,10 @@ pub fn run(
     recorder: &mut Recorder,
     filter_buffer: &mut Option<ParseFilterBuffer>,
     progress: &ProgressBarSet)
-    -> Result<Database> {
+    -> Result<(Database, bool)> {
+    // Returns `(db, wrote_config)`: `wrote_config` reports whether the scan
+    // phase already persisted the extract config to the catalog, so the caller
+    // must not overwrite it (a stray-file bypass may have escalated keep_stage).
 
     let rt = ScanRTState {
         config,
@@ -213,11 +216,14 @@ pub fn run(
 ///
 /// The downstream `rehash` / `place` / `permissions` phases then run unchanged
 /// against the product dir's payloads (reused in place — no re-copy to a stage).
-pub fn run_bypass(
+fn run_bypass(
     rt: ScanRTState,
     recorder: &mut Recorder,
     filter_buffer: &mut Option<ParseFilterBuffer>)
-    -> Result<Database>  {
+    -> Result<(Database, bool)>  {
+    // Bypass always persists the extract config (even when nothing escalates),
+    // so `wrote_config` is unconditionally true.
+    let mut escaled_keep = false;
 
     let opened = Database::open(&rt.config.paths.db_path())?;
     opened.init_extract_runtime_state()?;
@@ -244,6 +250,8 @@ pub fn run_bypass(
 
     // Persist the extract config into the baked catalog before mutating it further.
     opened.set_extract_config(rt.config)?;
+    // NOTE: we always persist here, so `wrote_config` (line 246) is true even
+    // before the stray-file escalation; a later escalation just overwrites this.
     store_filter_buffer(filter_buffer, &ExtractRTArgs {
         config: rt.config, db: &opened, shutdown: rt.shutdown, progress: rt.progress,
     })?;
@@ -292,7 +300,15 @@ pub fn run_bypass(
             }
             Err(_) => {
                 unknown += 1;
-                // TODO if config is on-other -> update the db to keep.
+                if !escaled_keep && rt.config.process.cleanup.keep_stage == StageKeep::OnOther {
+                    let mut escalated = rt.config.clone();
+                    escalated.process.cleanup.keep_stage = StageKeep::Always;
+                    opened.set_extract_config(&escalated)?;
+                    escaled_keep = true;
+                    tracing::info!(
+                        "stray file in bypass product {}: keep_stage escalated to Always",
+                        path.display());
+                }
                 let msg = format!(
                     "unexpected file in bypass product {} is not a content-id payload; \
                      it will not be extracted",
@@ -328,13 +344,15 @@ pub fn run_bypass(
 
     flush_scan_recorder(recorder, Some(&opened))?;
 
-    Ok(opened)
+    Ok((opened, true))
 }
 
 fn run_inner(
     outer_rt: ScanRTState,
     recorder: &mut Recorder,
-    filter_buffer: &mut Option<ParseFilterBuffer>) -> Result<Database>  {
+    filter_buffer: &mut Option<ParseFilterBuffer>) -> Result<(Database, bool)>  {
+    // The tar scan installs the catalog but does NOT persist the extract config;
+    // `unarchive::run` writes it after scan. So `wrote_config = false`.
 
     let mut rt = outer_rt;
     let mut force_buffer: Option<(Vec<FileId>, Vec<FileId>)> = if rt.config.process.force {
@@ -622,7 +640,7 @@ fn run_inner(
         }
     }
 
-    Ok(sdb)
+    Ok((sdb, false))
 }
 
 /// Fully process an entry from the tar archive.
