@@ -366,6 +366,9 @@ fn bypass_archive_extract_round_trip() {
     acfg.pipeline.write_archive_footer = false;
     acfg.pipeline.bypass_archive = true;
     acfg.process.start_policy = crate::common::start::StartPolicy::Create;
+    // The product (work dir + baked catalog) must survive the archive cleanup.
+    acfg.process.cleanup.keep_stage = crate::config::StageKeep::Always;
+    acfg.process.cleanup.db_retention = crate::config::DbRetention::Always;
     crate::archive::run(acfg, Shutdown::detached()).expect("bypass archive");
 
     let product = dir.path().join("product");
@@ -380,6 +383,9 @@ fn bypass_archive_extract_round_trip() {
     xcfg.bypass_archive = true;
     xcfg.rehash = true; // content verification runs over the product payloads in place
     xcfg.process.start_policy = crate::common::start::StartPolicy::Create;
+    // The product dir (the "archive") must survive the extract cleanup too.
+    xcfg.process.cleanup.keep_stage = crate::config::StageKeep::Always;
+    xcfg.process.cleanup.db_retention = crate::config::DbRetention::Always;
     std::fs::create_dir_all(dir.path().join("out")).expect("mk out root");
     run(xcfg, Shutdown::detached()).expect("bypass extract");
 

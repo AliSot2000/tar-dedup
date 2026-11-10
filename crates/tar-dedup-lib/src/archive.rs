@@ -382,6 +382,9 @@ mod tests {
         cfg.paths.work_dir = product;
         cfg.pipeline.write_archive_footer = false;
         cfg.pipeline.bypass_archive = true;
+        // The product (work dir + baked catalog) must survive cleanup.
+        cfg.process.cleanup.keep_stage = crate::config::StageKeep::Always;
+        cfg.process.cleanup.db_retention = crate::config::DbRetention::Always;
         cfg
     }
 
