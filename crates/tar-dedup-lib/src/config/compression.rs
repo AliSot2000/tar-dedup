@@ -539,17 +539,21 @@ mod tests {
     #[test]
     fn infer_suffix_cases() {
         use std::path::Path;
-        let cases: [(&str, CompressionFormat); 13] = [
-            ("a.tar.xz", CompressionFormat::Xz),
-            ("a.txz", CompressionFormat::Xz),
-            ("a.tar.gz", CompressionFormat::Gz),
-            ("a.tgz", CompressionFormat::Gz),
-            ("a.tar.bz2", CompressionFormat::Bz2),
-            ("a.tbz2", CompressionFormat::Bz2),
-            ("a.tbz", CompressionFormat::Bz2),
-            ("a.tar.zst", CompressionFormat::Zstd),
-            ("a.tzst", CompressionFormat::Zstd),
-            ("A.X.TAR.XZ", CompressionFormat::Xz),
+        let cases: [(&str, CompressionFormat); 16] = [
+            ("a.tdd.tar.xz", CompressionFormat::Xz),
+            ("a.tdd.txz", CompressionFormat::Xz),
+            ("a.tdd.tar.gz", CompressionFormat::Gz),
+            ("a.tdd.tgz", CompressionFormat::Gz),
+            ("a.tdd.tar.bz2", CompressionFormat::Bz2),
+            ("a.tdd.tbz2", CompressionFormat::Bz2),
+            ("a.tdd.tbz", CompressionFormat::Bz2),
+            ("a.tdd.tar.zst", CompressionFormat::Zstd),
+            ("a.tdd.tzst", CompressionFormat::Zstd),
+            ("A.TDD.TAR.XZ", CompressionFormat::Xz),
+            ("a.tdd.tar", CompressionFormat::None),
+            // Legacy / unknown suffixes are NOT recognized (Not recognized set).
+            ("a.tar.xz", CompressionFormat::None),
+            ("a.tgz", CompressionFormat::None),
             ("a.tar", CompressionFormat::None),
             ("a.txt", CompressionFormat::None),
             ("archive", CompressionFormat::None),
@@ -566,34 +570,52 @@ mod tests {
     #[test]
     fn resolve_compression_flags_and_suffix() {
         use std::path::Path;
-        // Flag beats suffix.
+        // Flag beats a matching .tdd suffix, no warn.
         assert_eq!(
-            resolve_compression(&flags_of(false, true, false, false), Path::new("a.tar.xz"))
+            resolve_compression(&flags_of(false, true, false, false), Path::new("a.tdd.tar.gz"))
                 .expect("gzip flag won"),
             CompressionFormat::Gz
         );
         assert_eq!(
-            resolve_compression(&flags_of(true, false, false, false), Path::new("a.tar.gz"))
+            resolve_compression(&flags_of(true, false, false, false), Path::new("a.tdd.tar.gz"))
                 .expect("xz flag won"),
             CompressionFormat::Xz
         );
         assert_eq!(
-            resolve_compression(&flags_of(false, false, false, true), Path::new("a.tar.bz2"))
+            resolve_compression(&flags_of(false, false, false, true), Path::new("a.tdd.tar.bz2"))
                 .expect("zstd flag won"),
             CompressionFormat::Zstd
         );
-        // No flag: suffix decides; bare suffix means None.
+        // Flag with a non-indicating suffix still wins (permissive override).
         assert_eq!(
-            resolve_compression(&CompressionFlags::default(), Path::new("a.tar.xz")).expect("xz"),
+            resolve_compression(&flags_of(true, false, false, false), Path::new("a.tdd.tar"))
+                .expect("xz flag won over bare .tdd.tar"),
             CompressionFormat::Xz
         );
         assert_eq!(
-            resolve_compression(&CompressionFlags::default(), Path::new("a.tar")).expect("none"),
+            resolve_compression(&flags_of(true, false, false, false), Path::new("a.tar.xz"))
+                .expect("xz flag won over legacy suffix"),
+            CompressionFormat::Xz
+        );
+        // No flag: .tdd suffix decides; bare / legacy suffix means None.
+        assert_eq!(
+            resolve_compression(&CompressionFlags::default(), Path::new("a.tdd.tar.xz"))
+                .expect("xz"),
+            CompressionFormat::Xz
+        );
+        assert_eq!(
+            resolve_compression(&CompressionFlags::default(), Path::new("a.tdd.tar"))
+                .expect("none"),
+            CompressionFormat::None
+        );
+        assert_eq!(
+            resolve_compression(&CompressionFlags::default(), Path::new("a.tar"))
+                .expect("legacy none"),
             CompressionFormat::None
         );
         // Conflicting filter flags.
         assert!(matches!(
-            resolve_compression(&flags_of(true, true, false, false), Path::new("a.tar")),
+            resolve_compression(&flags_of(true, true, false, false), Path::new("a.tdd.tar")),
             Err(Error::Config(_))
         ));
     }
