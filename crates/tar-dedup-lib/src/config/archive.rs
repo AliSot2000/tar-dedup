@@ -748,6 +748,31 @@ mod tests {
     }
 
     #[test]
+    fn bypass_archive_forces_keep_stage_and_db_retention() {
+        // The bypass product dir holds the payloads and the baked catalog (work
+        // dir + work DB), so both must survive cleanup no matter what the user
+        // asked for via --keep-stage / --db-retention.
+        use crate::config::{DbRetention, StageKeep};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let product = dir.path().join("product");
+        std::fs::create_dir_all(&product).expect("product dir");
+        let input = dir.path().join("src");
+        std::fs::create_dir_all(&input).expect("input dir");
+        let input_arg = input_dir_cli(&input);
+        let argv = vec![
+            "tar-dedup", "archive", "--bypass-archive",
+            "-f", product.to_str().unwrap(), input_arg.as_str(),
+        ];
+        let cli = Cli::try_parse_from(&argv).expect("clap parse");
+        let Command::Archive(a) = cli.command else {
+            panic!("expected archive, got {:?}", cli.command);
+        };
+        let cfg = ArchiveConfig::build(&a, None).expect("bypass build");
+        assert_eq!(cfg.process.cleanup.keep_stage, StageKeep::Always, "bypass keeps stage");
+        assert_eq!(cfg.process.cleanup.db_retention, DbRetention::Always, "bypass keeps db");
+    }
+
+    #[test]
     fn files_from_reads_from_stdin_convention_and_valid_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let list = dir.path().join("list.txt");
