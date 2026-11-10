@@ -417,17 +417,20 @@ impl ArchiveConfig {
         // whole group off; per-bit `--x`/`--no-x` override on top (explicit wins).
         let capture_all = !args.no_capture_all_metadata;
 
-        let keep_stage = if args.keep_stage != StageKeep::OnOther && args.bypass_archive {
-            tracing::warn!(
-                "With --bypass-archiv, stage must be kept because it is the product directory");
+        let keep_stage = if args.bypass_archive {
+            if args.keep_stage != StageKeep::OnOther {
+                tracing::warn!(
+                    "With --bypass-archive, stage must be kept because it is the product directory");
+            }
             StageKeep::Always
         } else {
             args.keep_stage
         };
-        let db_retention = if args.db_retention != DbRetention::OnError
-            && args.bypass_archive {
-            tracing::warn!(
-                "With --bypass-archiv, db must be kept because it is the manifest db");
+        let db_retention = if args.bypass_archive {
+            if args.db_retention != DbRetention::OnError {
+                tracing::warn!(
+                    "With --bypass-archive, db must be kept because it is the manifest db");
+            }
             DbRetention::Always
         } else {
             args.db_retention
