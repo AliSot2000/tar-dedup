@@ -17,6 +17,7 @@ use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
 use super::compression::{CompressionFormat, resolve_compression};
 use super::paths::PathLayout;
 use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
+use super::{DbRetention, StageKeep};
 use super::{
     archive_stem, default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_file,
 };
@@ -510,6 +511,26 @@ impl ExtractConfig {
             args.sidecar
         };
 
+        let keep_stage = if args.bypass_archive {
+            if args.keep_stage != StageKeep::OnOther {
+                tracing::warn!(
+                    "With --bypass-archive, stage must be kept because it is the source directory");
+            }
+            StageKeep::Always
+        } else {
+            args.keep_stage
+        };
+        let db_retention = if args.bypass_archive {
+            if args.db_retention != DbRetention::OnError {
+                tracing::warn!(
+                    "With --bypass-archive, db must be kept it is the source db");
+            }
+            DbRetention::Always
+        } else {
+            args.db_retention
+        };
+
+
         Ok(Self {
             paths: PathLayout {
                 archive_path: c_archive_path,
@@ -573,8 +594,8 @@ impl ExtractConfig {
                 relax_utf8: args.relax_utf8,
                 progress_mode: args.progress_mode,
                 cleanup: CleanupSettings {
-                    db_retention: args.db_retention,
-                    keep_stage: args.keep_stage,
+                    db_retention,
+                    keep_stage,
                 },
                 exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
             },
