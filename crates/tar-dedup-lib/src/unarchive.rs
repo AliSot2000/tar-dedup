@@ -52,7 +52,8 @@ fn resolve_extract_work(db_path: &Path) -> Result<(WorkPresence, ExtractRuntimeS
     }
 }
 
-pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
+pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
+    let mut config = outer_config;
     validate_exit_after_stage(&config)?;
     let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
     register_mpb(progress.mp_handle());
@@ -104,13 +105,23 @@ pub fn run(config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 
         match state.phase {
             ExtractPipelinePhase::ScanTar => {
-                db = Some(scan::run(&config, &shutdown,
-                                    &mut pre_db_recorder, &mut filter_buffer, &progress)?);
+                let (edb, scan_wrote) = scan::run(&config, &shutdown,
+                                    &mut pre_db_recorder, &mut filter_buffer, &progress)?;
+                db = Some(edb);
+                // The scan phase reports whether it persisted the extract config
+                // (a bypass stray-file may have escalated keep_stage). Only write
+                // it here if the scan did not.
+                config_written = scan_wrote;
                 if !config_written {
                     let ldb = db.as_ref().expect(OPT_DB_ERROR);
                     ldb.set_extract_config(&config)?;
                     config_written = true;
                 }
+                config = db
+                    .as_ref()
+                    .expect(OPT_DB_ERROR)
+                    .get_extract_config()?
+                    .expect("Config should have been set until now.");
                 progress.set_table_size(db
                     .as_ref()
                     .expect(OPT_DB_ERROR)
