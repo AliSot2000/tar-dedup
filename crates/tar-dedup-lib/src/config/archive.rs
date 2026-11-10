@@ -13,7 +13,7 @@ use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
 use super::compression::{CompressionSettings, resolve_compression};
 use super::paths::{PathLayout, PathSource};
 use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
-use super::{StageKeep, Validate};
+use super::{DbRetention, StageKeep, Validate};
 use super::{
     default_archive_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_dir, validate_file,
 };
@@ -424,6 +424,14 @@ impl ArchiveConfig {
         } else {
             args.keep_stage
         };
+        let db_retention = if args.db_retention != DbRetention::OnError
+            && args.bypass_archive {
+            tracing::warn!(
+                "With --bypass-archiv, db must be kept because it is the manifest db");
+            DbRetention::Always
+        } else {
+            args.db_retention
+        };
 
         Ok(Self {
             paths: PathLayout {
@@ -489,7 +497,7 @@ impl ArchiveConfig {
                 relax_utf8: args.relax_utf8,
                 progress_mode: args.progress_mode,
                 cleanup: CleanupSettings {
-                    db_retention: args.db_retention,
+                    db_retention,
                     keep_stage,
                 },
                 exit_after_stage: args.exit_after_stage.map(ExitAfterStage::from),
