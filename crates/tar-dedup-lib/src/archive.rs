@@ -17,6 +17,7 @@ use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
     ProductPresence, StartAction, StartPolicy, WorkPresence, resolve_start,
 };
+use crate::common::timed;
 use crate::config::{ArchiveConfig, ArchiveRuntimeState, ExitAfterStage, PipelinePhase};
 use crate::db::Database;
 use crate::error::{Error, Result};
@@ -121,7 +122,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         shutdown.check_between_files()?;
 
         enter_phase(&progress, &state.phase);
-        match run_phase(&state.phase, &rt) {
+        match timed(|| run_phase(&state.phase, &rt), state.phase.as_str()) {
             Ok(()) => {
                 verify_after_phase(&rt, state.phase)?;
                 exit_phase(&progress, &state.phase, &db)?

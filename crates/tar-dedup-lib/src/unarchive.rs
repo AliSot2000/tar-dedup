@@ -13,6 +13,7 @@ use crate::common::cleanup::{self, CleanupMode};
 use crate::common::start::{
     StartAction, StartPolicy, WorkPresence, resolve_start,
 };
+use crate::common::timed;
 use crate::config::{ExitAfterStage, ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState};
 use crate::db::{Database, Recorder};
 use crate::error::{Error, Result};
@@ -105,8 +106,9 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 
         match state.phase {
             ExtractPipelinePhase::ScanTar => {
-                let (edb, scan_wrote) = scan::run(&config, &shutdown,
-                                    &mut pre_db_recorder, &mut filter_buffer, &progress)?;
+                let (edb, scan_wrote) = timed(|| scan::run(&config, &shutdown,
+                    &mut pre_db_recorder, &mut filter_buffer, &progress),
+                    completed.as_str())?;
                 db = Some(edb);
                 // The scan phase reports whether it persisted the extract config
                 // (a bypass stray-file may have escalated keep_stage). Only write
@@ -131,36 +133,38 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                 let rt = ExtractRTArgs {
                     config: &config, db: edb, shutdown: &shutdown, progress: &progress
                 };
-                filter::run(&rt, false)?;
+                timed(|| filter::run(&rt, false), completed.as_str())?;
             }
             ExtractPipelinePhase::Rehash if let Some(ref edb) = db => {
                 let rt = ExtractRTArgs {
                     config: &config, db: edb, shutdown: &shutdown, progress: &progress
                 };
-                rehash::run(&rt)?;
+                timed(|| rehash::run(&rt), completed.as_str())?;
             }
             ExtractPipelinePhase::PlacementPrologue if let Some(ref edb) = db => {
                 let rt = ExtractRTArgs {
                     config: &config, db: edb, shutdown: &shutdown, progress: &progress
                 };
-                place_prologue::run(&rt)?;
+                timed(|| place_prologue::run(&rt), completed.as_str())?;
             }
             ExtractPipelinePhase::Place if let Some(ref edb) = db => {
                 let rt = ExtractRTArgs {
                     config: &config, db: edb, shutdown: &shutdown, progress: &progress
                 };
-                place::run(&rt)?;
+                timed(|| place::run(&rt), completed.as_str())?;
             }
             ExtractPipelinePhase::Permissions if let Some(ref edb) = db => {
                 let rt = ExtractRTArgs {
                     config: &config, db: edb, shutdown: &shutdown, progress: &progress
                 };
-                permissions::run(&rt)?;
+                timed(|| permissions::run(&rt), completed.as_str())?;
             }
             ExtractPipelinePhase::Cleanup if let Some(ref edb) = db => {
                 state.phase = ExtractPipelinePhase::Done;
                 edb.save_extract_runtime_state(&state)?;
-                cleanup::cleanup_workdir(&config, CleanupMode::Extract, config.bypass_archive)?;
+                timed(|| cleanup::cleanup_workdir(
+                    &config, CleanupMode::Extract, config.bypass_archive),
+                    completed.as_str())?;
                 break;
             }
             other => panic!(

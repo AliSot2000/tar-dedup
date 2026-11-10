@@ -15,7 +15,7 @@ pub mod xattr;
 use std::mem::take;
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 
@@ -28,6 +28,16 @@ pub fn io_buffer() -> Vec<u8> {
 
 pub fn archive_io_buffer() -> Vec<u8> {
     vec![0u8; defaults::ARCHIVE_IO_BUF_SIZE]
+}
+
+/// Time `func` and log how long it took at INFO level. Returns the closure's
+/// result unchanged. The label is used verbatim in the log line.
+pub fn timed<R>(func: impl FnOnce() -> R, log_info: &str) -> R {
+    let start = Instant::now();
+    let res = func();
+    let elapsed = start.elapsed();
+    tracing::info!("{log_info} took: {}", formatting::format_elapsed(elapsed));
+    res
 }
 
 /// Tool semantic version (`MAJOR.MINOR.PATCH`, kept in sync with
