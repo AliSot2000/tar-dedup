@@ -11,24 +11,29 @@ use crate::error::{Error, Result};
 pub use crate::config::CleanupMode;
 
 /// Never touches archive or extraction trees (except relocating a kept DB).
-pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode) -> Result<()> {
+pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode, bypass: bool) -> Result<()> {
     remove_temp_files(config);
     let db_path = config.paths().db_path();
-    let keep = config.cleanup();
     let keep_db = resolve_keep_db(config, mode, &db_path)?;
 
     if keep_db && db_path.is_file() {
-        let dest = retained_db_path(config, mode);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+        if bypass {
+            // Stage is kept in place: leave the DB where it is (it lives inside
+            // the work dir already). No rename, no timestamped copy.
+            tracing::info!("kept database in place: {}", db_path.display());
+        } else {
+            let dest = retained_db_path(config, mode);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+            }
+            fs::rename(&db_path, &dest).map_err(|e| Error::io(&dest, e))?;
+            tracing::info!("kept database: {}", dest.display());
         }
-        fs::rename(&db_path, &dest).map_err(|e| Error::io(&dest, e))?;
-        tracing::info!("kept database: {}", dest.display());
     } else if db_path.is_file() {
         fs::remove_file(&db_path).map_err(|e| Error::io(&db_path, e))?;
     }
 
-    if !keep.keep_stage.always() {
+    if !config.cleanup().keep_stage.always() {
         let work = &config.paths().work_dir;
         if work.is_dir() {
             match fs::remove_dir_all(work) {
