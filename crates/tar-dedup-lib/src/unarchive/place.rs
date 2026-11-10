@@ -583,7 +583,7 @@ fn materialize_one(
                 .expect("PRECONDITION FAILED: Enqueued files must have a content_id");
             let src = cache_dir.join(id.0);
 
-            let ((writable, conflict, removed), assessment) = check_path(config, &src, &stripped);
+            let ((writable, conflict, removed), assessment) = check_path(config, &target.abs_path, &stripped);
             if !writable || assessment.is_some() {
                 MaterializeOutcome {
                     result: MaterializeResult{
