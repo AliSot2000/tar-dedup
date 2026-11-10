@@ -193,7 +193,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         );
     }
 
-    cleanup::cleanup_workdir(&config, CleanupMode::Archive)?;
+    cleanup::cleanup_workdir(&config, CleanupMode::Archive, config.pipeline.bypass_archive)?;
     if config.process.cleanup.keep_stage.always() {
         tracing::info!(
             "keeping stage (--keep-stage): {}",

@@ -160,7 +160,7 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
             ExtractPipelinePhase::Cleanup if let Some(ref edb) = db => {
                 state.phase = ExtractPipelinePhase::Done;
                 edb.save_extract_runtime_state(&state)?;
-                cleanup::cleanup_workdir(&config, CleanupMode::Extract)?;
+                cleanup::cleanup_workdir(&config, CleanupMode::Extract, config.bypass_archive)?;
                 break;
             }
             other => panic!(
