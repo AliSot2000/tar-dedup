@@ -444,26 +444,52 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
     }
 
     if let Some(format) = chosen {
+        // A filter flag overrides inference, but if the suffix does not name a
+        // `.tdd` archive for that format, warn so a mis-named archive is caught
+        if detect_tdd_suffix(archive_path) != Some(format) {
+            tracing::warn!(
+                "archive extension does not indicate {}; using {}",
+                format.as_str(),
+                format.flag_name()
+            );
+        }
         return Ok(format);
     }
 
-    // No filter flag: the archive suffix decides (extension inference; unknown
-    // or bare suffix means no compression).
-    Ok(infer_compression_from_suffix(archive_path))
+    // No filter flag: the `.tdd` suffix decides.
+    match detect_tdd_suffix(archive_path) {
+        Some(format) => Ok(format),
+        None => {
+            tracing::info!(
+                "Failed to infer archive type. Attempting regular .tdd.tar archive"
+            );
+            Ok(CompressionFormat::None)
+        }
+    }
 }
 
+
 pub fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
+    detect_tdd_suffix(path).unwrap_or(CompressionFormat::None)
+}
+
+/// Match a `.tdd`-prefixed archive suffix, returning the format it names
+/// (`None` = a recognized `.tdd.tar` = uncompressed; the outer `Option` is
+/// `None` when the name carries no recognized `.tdd` marker at all).
+fn detect_tdd_suffix(path: &Path) -> Option<CompressionFormat> {
     let name = path.to_string_lossy().to_ascii_lowercase();
-    if name.ends_with(".tar.xz") || name.ends_with(".txz") {
-        CompressionFormat::Xz
-    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        CompressionFormat::Gz
-    } else if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") || name.ends_with(".tbz") {
-        CompressionFormat::Bz2
-    } else if name.ends_with(".tar.zst") || name.ends_with(".tzst") {
-        CompressionFormat::Zstd
+    if name.ends_with(".tdd.tar.xz") || name.ends_with(".tdd.txz") {
+        Some(CompressionFormat::Xz)
+    } else if name.ends_with(".tdd.tar.gz") || name.ends_with(".tdd.tgz") {
+        Some(CompressionFormat::Gz)
+    } else if name.ends_with(".tdd.tar.bz2") || name.ends_with(".tdd.tbz2") || name.ends_with(".tdd.tbz") {
+        Some(CompressionFormat::Bz2)
+    } else if name.ends_with(".tdd.tar.zst") || name.ends_with(".tdd.tzst") {
+        Some(CompressionFormat::Zstd)
+    } else if name.ends_with(".tdd.tar") {
+        Some(CompressionFormat::None)
     } else {
-        CompressionFormat::None
+        None
     }
 }
 
