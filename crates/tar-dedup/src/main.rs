@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use tar_dedup_lib::cli::{Cli, Command};
 use tar_dedup_lib::common::start::StartPolicy;
@@ -64,5 +64,11 @@ fn main() -> tar_dedup_lib::error::Result<()> {
         Command::Query(args) => tar_dedup_lib::cmd::query::run(&args),
         Command::Reset(args) => tar_dedup_lib::cmd::reset::run(&args),
         Command::Check(args) => tar_dedup_lib::cmd::check::run(&args, &shutdown),
+        Command::Completions(args) => {
+            let shell: clap_complete::Shell = args.shell.into();
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "tar-dedup", &mut std::io::stdout());
+            Ok(())
+        }
     }
 }

@@ -83,3 +83,23 @@ fn resume_help_lists_work_dir_jobs_and_exit_after_stage() {
     assert!(!out.contains("--fresh"), "resume must not expose --fresh");
     assert!(!out.contains("--input-dir"), "resume must not expose archive inputs");
 }
+
+#[test]
+fn completions_generates_for_all_shells() {
+    for shell in ["bash", "zsh", "fish", "elvish", "powershell"] {
+        let assert = Command::cargo_bin("tar-dedup")
+            .expect("binary")
+            .args(["completions", shell])
+            .assert()
+            .success();
+        let out = String::from_utf8_lossy(&assert.get_output().stdout);
+        assert!(
+            out.contains("tar-dedup"),
+            "completions for {shell} must name the binary"
+        );
+        assert!(
+            out.contains("archive") || out.contains("extract"),
+            "completions for {shell} must cover subcommands"
+        );
+    }
+}

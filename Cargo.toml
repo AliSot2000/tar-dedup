@@ -20,6 +20,7 @@ tar-dedup-lib = { version = "0.9.0", path = "crates/tar-dedup-lib" }
 sparse-cp = { version = "0.9.0", path = "crates/sparse-cp" }
 
 clap = { version = "4", features = ["derive", "wrap_help"] }
+clap_complete = "4"
 tar = "0.4"
 xz2 = { version = "0.1", features = ["static"] }
 lzma-sys = "0.1"

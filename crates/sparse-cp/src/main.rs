@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use clap::Parser;
+use anyhow::{Context, Result, bail};
+use clap::{CommandFactory, Parser};
 use indicatif::{ProgressBar, ProgressStyle};
 use sparse_cp::{
-    sparse_copy, sparse_copy_with_progress, sparse_page_count, sparse_page_count_with_progress,
     SparseCopyStats,
+    sparse_copy, sparse_copy_with_progress, sparse_page_count, sparse_page_count_with_progress,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,10 +54,11 @@ impl std::fmt::Display for Verbosity {
 )]
 struct Args {
     /// Input file path.
-    input: PathBuf,
+    #[arg(required_unless_present = "completions")]
+    input: Option<PathBuf>,
 
     /// Output file path (required unless `--list-only` / `-l`).
-    #[arg(required_unless_present = "list_only")]
+    #[arg(required_unless_present_any = ["list_only", "completions"])]
     output: Option<PathBuf>,
 
     /// Output detail: `quiet`/`0`, `plain`/`1`, `verbose`/`2`, `pretty`/`3`.
@@ -78,6 +79,10 @@ struct Args {
     /// Only scan the input; print how many full zero blocks were found.
     #[arg(short = 'l', long = "list-only")]
     list_only: bool,
+
+    /// Generate shell completions (bash, zsh, fish, elvish, powershell) and exit.
+    #[arg(long, value_enum)]
+    completions: Option<clap_complete::Shell>,
 }
 
 const VERBOSITY_LONG_HELP: &str = "\
@@ -112,6 +117,11 @@ fn main() {
 
 fn try_main() -> Result<()> {
     let args = Args::parse();
+    if let Some(shell) = args.completions {
+        let mut cmd = Args::command();
+        clap_complete::generate(shell, &mut cmd, "sparse-cp", &mut io::stdout());
+        return Ok(());
+    }
     if args.block_size == 0 {
         bail!("--block-size must be > 0");
     }
@@ -130,7 +140,7 @@ fn try_main() -> Result<()> {
 
 /// Function performs sub action of list_only. Takes care of emitting output to stdout, ...
 fn run_list_only(args: &Args, block_size: usize) -> Result<()> {
-    let input = &args.input;
+    let input = args.input.as_ref().expect("clap requires input");
     let size_in = std::fs::metadata(input)
         .with_context(|| format!("stat {}", input.display()))?
         .len();
@@ -177,7 +187,7 @@ fn run_list_only(args: &Args, block_size: usize) -> Result<()> {
 
 /// Function takes care of full sparse copy from a to b including progress reports.
 fn run_copy(args: &Args, output: &PathBuf, block_size: usize) -> Result<()> {
-    let input = &args.input;
+    let input = args.input.as_ref().expect("clap requires input");
     let size_in = std::fs::metadata(input)
         .with_context(|| format!("stat {}", input.display()))?
         .len();
@@ -330,4 +340,29 @@ fn fmt_eta(read: u64, total: u64, elapsed: Duration) -> String {
     }
     let remain = (total - read) as f64 / rate;
     fmt_duration(Duration::from_secs_f64(remain))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completions_generate_for_all_shells() {
+        for shell in [
+            clap_complete::Shell::Bash,
+            clap_complete::Shell::Zsh,
+            clap_complete::Shell::Fish,
+            clap_complete::Shell::Elvish,
+            clap_complete::Shell::PowerShell,
+        ] {
+            let mut cmd = Args::command();
+            let mut buf = Vec::new();
+            clap_complete::generate(shell, &mut cmd, "sparse-cp", &mut buf);
+            let out = String::from_utf8_lossy(&buf);
+            assert!(
+                out.contains("sparse-cp"),
+                "completions for {shell:?} must name the binary"
+            );
+        }
+    }
 }

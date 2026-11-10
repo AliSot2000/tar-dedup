@@ -29,6 +29,7 @@ test-all = ["test-compression"]
 
 [dependencies]
 clap = { workspace = true }
+clap_complete = { workspace = true }
 tar = { workspace = true }
 xz2 = { workspace = true }
 lzma-sys = { workspace = true }

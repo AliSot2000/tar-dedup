@@ -113,6 +113,8 @@ pub enum Command {
     Reset(ResetArgs),
     /// Verify the integrity of an archive via its footer (content + catalog digests).
     Check(CheckArgs),
+    /// Generate shell completions for this tool (bash, zsh, fish, elvish, powershell).
+    Completions(CompletionsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -1289,6 +1291,36 @@ pub struct CheckArgs {
     /// Suppress the verdict message and the progress bar; exit code only.
     #[arg(short = 'q', long = "quiet", default_value_t = false, action = ArgAction::SetTrue)]
     pub quiet: bool,
+}
+
+/// Shell to generate completion scripts for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CompletionsShell {
+    Bash,
+    Zsh,
+    Fish,
+    Elvish,
+    Powershell,
+}
+
+impl From<CompletionsShell> for clap_complete::Shell {
+    fn from(shell: CompletionsShell) -> Self {
+        match shell {
+            CompletionsShell::Bash => clap_complete::Shell::Bash,
+            CompletionsShell::Zsh => clap_complete::Shell::Zsh,
+            CompletionsShell::Fish => clap_complete::Shell::Fish,
+            CompletionsShell::Elvish => clap_complete::Shell::Elvish,
+            CompletionsShell::Powershell => clap_complete::Shell::PowerShell,
+        }
+    }
+}
+
+/// Generate shell completion scripts.
+#[derive(Debug, Args)]
+pub struct CompletionsArgs {
+    /// Target shell.
+    #[arg(value_enum)]
+    pub shell: CompletionsShell,
 }
 
 /// Pipeline stop point for `--exit-after-stage`.
