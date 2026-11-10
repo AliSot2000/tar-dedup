@@ -47,6 +47,17 @@ impl CompressionFormat {
             Self::None => "none",
         }
     }
+
+    /// Long `--flag` form (for the WARN message).
+    fn flag_name(&self) -> &'static str {
+        match self {
+            CompressionFormat::Xz => "--xz",
+            CompressionFormat::Gz => "--gzip",
+            CompressionFormat::Bz2 => "--bzip2",
+            CompressionFormat::Zstd => "--zstd",
+            CompressionFormat::None => "--no-compress",
+        }
+    }
 }
 
 /// Optional `xz` LZMA2 tuning, parsed from `--xz-advanced <JSON>`.
