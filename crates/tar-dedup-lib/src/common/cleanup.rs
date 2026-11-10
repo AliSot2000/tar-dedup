@@ -12,6 +12,7 @@ pub use crate::config::CleanupMode;
 
 /// Never touches archive or extraction trees (except relocating a kept DB).
 pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode) -> Result<()> {
+    remove_temp_files(config);
     let db_path = config.paths().db_path();
     let keep = config.cleanup();
     let keep_db = resolve_keep_db(config, mode, &db_path)?;
@@ -26,8 +27,6 @@ pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode) -> Result<()
     } else if db_path.is_file() {
         fs::remove_file(&db_path).map_err(|e| Error::io(&db_path, e))?;
     }
-
-    remove_temp_files(config);
 
     if !keep.keep_stage.always() {
         let work = &config.paths().work_dir;
