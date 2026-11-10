@@ -573,7 +573,7 @@ impl ExtractConfig {
                                                         apply_all),
             },
             scan: ScanOptions {
-                sparsify: args.sparsify,
+                sparsify: !args.no_sparsify,
                 page_size: args.page_size,
                 verify_archive: !args.no_verify_archive,
             },

@@ -1107,14 +1107,14 @@ pub struct ExtractArgs {
 
     // --- Sparse Files ---
 
-    /// Attempt to punch holes while extracting and copying files.
+    /// Do not attempt to punch holes while extracting and copying files.
     #[arg(
-        long = "sparsify",
+        long = "no-sparsify",
         default_value_t = false,
         action = ArgAction::SetTrue,
         help_heading = "Sparse Files"
     )]
-    pub sparsify: bool,
+    pub no_sparsify: bool,
 
     /// Page size in bytes: segment a file into pages of this size and search for
     /// completely empty pages for sparsification.
