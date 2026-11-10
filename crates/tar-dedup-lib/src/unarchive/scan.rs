@@ -1106,7 +1106,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = archive_head_truncated(dir.path(), false);
 
-        let db = run(&config, &Shutdown::detached(),
+        let (db, _) = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1130,7 +1130,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = archive_head_truncated(dir.path(), true);
 
-        let db = run(&config, &Shutdown::detached(),
+        let (db, _) = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1197,8 +1197,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
     fn scan_caches_payloads_and_promotes_on_snapshot() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, member) = build_archive(dir.path());
-
-        let db = run(&config, &Shutdown::detached(),
+        let (db, _) = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1235,7 +1234,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         fs::create_dir_all(&cache).expect("cache dir");
         fs::create_dir(cache.join(&member)).expect("sabotage member dst");
 
-        let db = run(&config, &Shutdown::detached(),
+        let (db, _) = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1262,7 +1261,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = archive_with_missing_member(dir.path());
 
-        let db = run(&config, &Shutdown::detached(),
+        let (db, _) = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1286,7 +1285,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let dir = tempfile::tempdir().expect("tempdir");
         let (config, _member) = archive_without_snapshot(dir.path());
 
-        let db = run(&config, &Shutdown::detached(),
+        let (db, _) = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(true, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(EXTRACT_MULTIPLIER))
@@ -1392,7 +1391,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         drop(db);
 
         // Resuming must skip the manifest member; re-reading it would be an error.
-        let db = run(&config, &Shutdown::detached(),
+        let (db, _) = run(&config, &Shutdown::detached(),
                      &mut Recorder::speculative(false, None),
                      &mut Some(ParseFilterBuffer::default()),
                      &ProgressBarSet::new(
@@ -1413,11 +1412,12 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
     // ---------------------------------------------------------------------
 
     fn run_scan(config: &ExtractConfig) -> Database {
-        run(config, &Shutdown::detached(),
+        let (db, _wrote) = run(config, &Shutdown::detached(),
             &mut Recorder::speculative(false, None),
             &mut Some(ParseFilterBuffer::default()),
             &ProgressBarSet::new(EXTRACT_MULTIPLIER))
-            .expect("scan")
+            .expect("scan");
+        db
     }
 
     /// Rewind the saved scan state so the next pass skips members `0..=last_index`
@@ -1775,9 +1775,10 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         recorder: &mut Recorder,
     ) -> Database {
         let fb = ingest_filters(config, recorder).expect("ingest filters");
-        run(config, &Shutdown::detached(), recorder,
+        let (db, _wrote) = run(config, &Shutdown::detached(), recorder,
             &mut Some(fb), &ProgressBarSet::new(EXTRACT_MULTIPLIER))
-            .expect("scan")
+            .expect("scan");
+        db
     }
 
     #[test]
