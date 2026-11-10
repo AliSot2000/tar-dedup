@@ -586,7 +586,11 @@ mod tests {
         fn raw_out_tree(&self) -> Vec<(String, i64, Option<i64>, Option<i64>)> {
             self.db.with_transaction(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT abs_path, flags, file_id, canonical_id FROM out_tree ORDER BY abs_path"
+                    &format!(
+                    "SELECT abs_path, flags, file_id, canonical_id FROM out_tree \
+                     WHERE {} ORDER BY abs_path",
+                    crate::db::id_gt_zero(),
+                )
                 ).expect("prepare");
                 let rows = stmt.query_map([], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?,
