@@ -186,6 +186,10 @@ impl Database {
         common::count_files_entries_in_phase(&*self.conn(), phase)
     }
 
+    pub fn temp_count_links(&self) -> Result<u64> {
+        common::temp_count_links(&*self.conn())
+    }
+
     /// Test-only: list file rows in a given phase.
     #[cfg(test)]
     pub fn t_files_in_phase<R: SqlFileRow>(&self, phase: FilePhase) -> Result<Vec<R>> {
