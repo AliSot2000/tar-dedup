@@ -468,7 +468,6 @@ pub fn resolve_compression(flags: &CompressionFlags, archive_path: &Path) -> Res
     }
 }
 
-
 pub fn infer_compression_from_suffix(path: &Path) -> CompressionFormat {
     detect_tdd_suffix(path).unwrap_or(CompressionFormat::None)
 }
