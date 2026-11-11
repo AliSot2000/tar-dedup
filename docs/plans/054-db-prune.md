@@ -9,7 +9,7 @@ dead pub API costs nothing to re-add, so remove rather than keep.
 ## Step 1 — remove the 7 truly-unused `db/` functions
 
 - `db.rs:587` `pub fn mark_archive_session_aborted` — facade; the underlying
-  `tar_writer::mark_session_aborted` is reached via `abort_incomplete_archive_session`.
+  `tar_writer::mark_session_aborted` is reached via `abort_incomplete_tar_writer_session`.
 - `db/common.rs:530` `pub(crate) fn delete_meta` — already compiler-flagged.
 - `db/recorder.rs:73` `pub fn detach`
 - `db/recorder.rs:78` `pub fn set_auto_flush` — only ref is its own doc comment.

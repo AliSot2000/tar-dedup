@@ -28,7 +28,7 @@ fn main() -> tar_dedup_lib::error::Result<()> {
         Command::Resume(args) => {
             let resume = ResumeConfig::try_from(&args)?;
             let db = Database::open(&resume.db_path)?;
-            if db.load_runtime_state()?.is_some() {
+            if db.load_archive_runtime_state()?.is_some() {
                 let mut stored = db.get_archive_config()?.ok_or_else(|| Error::Config(
                     "no stored archive configuration in work database; \
                      restart the run with `--fresh` instead".into(),

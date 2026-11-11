@@ -579,52 +579,52 @@ impl Database {
         stage::list_files_to_stage_after(&self.conn(), last_id, limit)
     }
 
-    pub fn load_runtime_state(&self) -> Result<Option<ArchiveRuntimeState>> {
+    pub fn load_archive_runtime_state(&self) -> Result<Option<ArchiveRuntimeState>> {
         state::load_archive_runtime_state(&*self.conn())
     }
 
-    pub fn save_runtime_state(&self, state: &ArchiveRuntimeState) -> Result<()> {
+    pub fn save_archive_runtime_state(&self, state: &ArchiveRuntimeState) -> Result<()> {
         state::save_archive_runtime_state(&mut *self.conn_mut(), state)
     }
 
-    pub fn begin_archive_session(&self, archive_offset: u64) -> Result<i64> {
-        tar_writer::begin_session(&*self.conn(), archive_offset)
+    pub fn begin_tar_writer_session(&self, archive_offset: u64) -> Result<i64> {
+        tar_writer::begin_tar_writer_session(&*self.conn(), archive_offset)
     }
 
-    pub fn stamp_archive_session_finished_at(&self, session_id: i64) -> Result<()> {
-        tar_writer::stamp_session_finished_at(&*self.conn(), session_id)
+    pub fn stamp_tar_writer_session_finished_at(&self, session_id: i64) -> Result<()> {
+        tar_writer::stamp_tar_writer_session_finished_at(&*self.conn(), session_id)
     }
 
-    pub fn finalize_archive_session(&self, session_id: i64) -> Result<()> {
-        tar_writer::finalize_session(&*self.conn(), session_id)
+    pub fn finalize_tar_writer_session(&self, session_id: i64) -> Result<()> {
+        tar_writer::finalize_tar_writer_session(&*self.conn(), session_id)
     }
 
-    pub fn abort_incomplete_archive_session(&self, session: &ArchiveSession) -> Result<()> {
-        tar_writer::abort_incomplete_session(&*self.conn(), session)
+    pub fn abort_incomplete_tar_writer_session(&self, session: &ArchiveSession) -> Result<()> {
+        tar_writer::abort_incomplete_tar_writer_session(&*self.conn(), session)
     }
 
-    pub fn promote_pending_archived(&self) -> Result<u64> {
-        tar_writer::promote_pending_archived(&*self.conn())
+    pub fn promote_pending_to_archived(&self) -> Result<u64> {
+        tar_writer::promote_pending_to_archived(&*self.conn())
     }
 
-    pub fn mark_archive_session_pending(&self, file_id: FileId, session_id: i64) -> Result<()> {
-        tar_writer::mark_archive_session_pending(&*self.conn(), file_id, session_id)
+    pub fn mark_tar_writer_session_pending(&self, file_id: FileId, session_id: i64) -> Result<()> {
+        tar_writer::mark_tar_writer_session_pending(&*self.conn(), file_id, session_id)
     }
 
-    pub fn clear_archive_session_pending(&self, session_id: i64) -> Result<u64> {
-        tar_writer::clear_archive_session_pending(&*self.conn(), session_id)
+    pub fn clear_tar_writer_session_pending(&self, session_id: i64) -> Result<u64> {
+        tar_writer::clear_tar_writer_session_pending(&*self.conn(), session_id)
     }
 
-    pub fn open_archive_session(&self) -> Result<Option<ArchiveSession>> {
-        tar_writer::open_session(&*self.conn())
+    pub fn open_tar_writer_session(&self) -> Result<Option<ArchiveSession>> {
+        tar_writer::open_tar_writer_session(&*self.conn())
     }
 
     pub fn has_finalized_archive_session(&self) -> Result<bool> {
         tar_writer::has_finalized_session(&*self.conn())
     }
 
-    pub fn reset_archive_state(&self) -> Result<()> {
-        tar_writer::reset_archive_state(&*self.conn())
+    pub fn reset_archived_state_to_staged(&self) -> Result<()> {
+        tar_writer::reset_archived_state_to_staged(&*self.conn())
     }
 
     pub fn dump_meta(&self) -> Result<MetaDump> {

@@ -70,12 +70,12 @@ mod tests {
     fn archive_runtime_state_roundtrip() {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = Database::open(&dir.path().join("t.sqlite")).expect("open");
-        assert!(db.load_runtime_state().expect("load").is_none(), "empty db");
+        assert!(db.load_archive_runtime_state().expect("load").is_none(), "empty db");
 
         let mut st = ArchiveRuntimeState::new();
         st.phase = PipelinePhase::Dedup;
-        db.save_runtime_state(&st).expect("save");
-        let back = db.load_runtime_state().expect("load").expect("saved");
+        db.save_archive_runtime_state(&st).expect("save");
+        let back = db.load_archive_runtime_state().expect("load").expect("saved");
         assert_eq!(back.phase, PipelinePhase::Dedup);
         // The timestamp survives the round-trip intact.
         assert_eq!(back.snapshot_taken_at, st.snapshot_taken_at);
@@ -117,6 +117,6 @@ mod tests {
             crate::db::meta::set_archive_phase(conn, PipelinePhase::Hash)?;
             Ok(())
         }).expect("set phase");
-        assert!(matches!(db.load_runtime_state(), Err(Error::Config(_))));
+        assert!(matches!(db.load_archive_runtime_state(), Err(Error::Config(_))));
     }
 }

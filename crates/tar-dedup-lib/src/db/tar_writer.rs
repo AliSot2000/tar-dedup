@@ -38,7 +38,7 @@ pub fn set_archive_bytes_out(conn: &Connection, value: u64) -> Result<()> {
 }
 
 
-pub fn begin_session(conn: &Connection, archive_offset: u64) -> Result<i64> {
+pub fn begin_tar_writer_session(conn: &Connection, archive_offset: u64) -> Result<i64> {
     conn.execute(
         "INSERT INTO archive_sessions (archive_offset, started_at, finalized)
          VALUES (:archive_offset, :started_at, :finalized)",
@@ -52,7 +52,7 @@ pub fn begin_session(conn: &Connection, archive_offset: u64) -> Result<i64> {
 }
 
 /// Tentative `finished_at` while session remains OPEN (for in-tar snapshot).
-pub fn stamp_session_finished_at(conn: &Connection, session_id: i64) -> Result<()> {
+pub fn stamp_tar_writer_session_finished_at(conn: &Connection, session_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE archive_sessions
          SET finished_at = :finished_at
@@ -67,7 +67,7 @@ pub fn stamp_session_finished_at(conn: &Connection, session_id: i64) -> Result<(
 }
 
 /// Mark session finalized after the compression stream has closed.
-pub fn finalize_session(conn: &Connection, session_id: i64) -> Result<()> {
+pub fn finalize_tar_writer_session(conn: &Connection, session_id: i64) -> Result<()> {
     conn.execute(
         "UPDATE archive_sessions
          SET finalized = :finalized, finished_at = :finished_at
@@ -82,7 +82,7 @@ pub fn finalize_session(conn: &Connection, session_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub fn open_session(conn: &Connection) -> Result<Option<ArchiveSession>> {
+pub fn open_tar_writer_session(conn: &Connection) -> Result<Option<ArchiveSession>> {
     conn.query_row(
         "SELECT id, archive_offset FROM archive_sessions
          WHERE finalized = :open
@@ -126,9 +126,9 @@ pub fn mark_session_aborted(conn: &Connection, session_id: i64) -> Result<()> {
 }
 
 /// Startup recovery: mark session aborted, revert rows appended in that session.
-pub fn abort_incomplete_session(conn: &Connection, session: &ArchiveSession) -> Result<()> {
+pub fn abort_incomplete_tar_writer_session(conn: &Connection, session: &ArchiveSession) -> Result<()> {
     mark_session_aborted(conn, session.id)?;
-    clear_archive_session_pending(conn, session.id)?;
+    clear_tar_writer_session_pending(conn, session.id)?;
     Ok(())
 }
 
@@ -137,7 +137,7 @@ pub fn abort_incomplete_session(conn: &Connection, session: &ArchiveSession) -> 
 // -------------------------------------------------------------------------------------------------
 
 /// Nuclear reset: every archived canonical → staged, wipe all sessions.
-pub fn reset_archive_state(conn: &Connection) -> Result<()> {
+pub fn reset_archived_state_to_staged(conn: &Connection) -> Result<()> {
     conn.execute(
         "UPDATE files
          SET phase = 'staged',
@@ -301,7 +301,7 @@ pub fn promote_ineligible_to_archived(conn: &Connection) -> Result<u64> {
 
 /// Promote rows whose payload is in the archive (`session_id IS NOT NULL`, i.e.
 /// the old feed `AppendedPath`) to `archived`. Leaves `session_id` set.
-pub fn promote_pending_archived(conn: &Connection) -> Result<u64> {
+pub fn promote_pending_to_archived(conn: &Connection) -> Result<u64> {
     let n = conn.execute(
         "UPDATE files
          SET phase = 'archived'
@@ -314,7 +314,7 @@ pub fn promote_pending_archived(conn: &Connection) -> Result<u64> {
 
 /// Record `file_id` as appended in the (open) session `session_id`. Durable
 /// across crash until the session finalizes or is aborted.
-pub fn mark_archive_session_pending(
+pub fn mark_tar_writer_session_pending(
     conn: &Connection, file_id: FileId, session_id: i64)
     -> Result<()> {
     conn.execute(
@@ -332,7 +332,7 @@ pub fn mark_archive_session_pending(
 /// and clear the payload marker, so their truncated-out bytes are re-appended
 /// on the next run. Rows appended in earlier, finalized sessions (below the
 /// truncation offset) are untouched because their `session_id` differs.
-pub fn clear_archive_session_pending(conn: &Connection, session_id: i64) -> Result<u64> {
+pub fn clear_tar_writer_session_pending(conn: &Connection, session_id: i64) -> Result<u64> {
     let n = conn.execute(
         "UPDATE files
          SET session_id = NULL,
@@ -451,7 +451,7 @@ mod tests {
         let (_dir, conn) = open_db();
         seed_pending_matrix(&conn);
 
-        abort_incomplete_session(&conn, &ArchiveSession { id: 1, archive_offset: 100 })
+        abort_incomplete_tar_writer_session(&conn, &ArchiveSession { id: 1, archive_offset: 100 })
             .expect("abort session");
 
         // Rows appended in the truncated session — including (b) already promoted
@@ -478,7 +478,7 @@ mod tests {
         let (_dir, conn) = open_db();
         seed_pending_matrix(&conn);
 
-        let n = clear_archive_session_pending(&conn, 1).expect("clear pending");
+        let n = clear_tar_writer_session_pending(&conn, 1).expect("clear pending");
 
         assert_eq!(n, 2);
         assert_eq!(row_phase(&conn, 1), "staged");
@@ -492,7 +492,7 @@ mod tests {
         let (_dir, conn) = open_db();
         seed_pending_matrix(&conn);
 
-        reset_archive_state(&conn).expect("reset state");
+        reset_archived_state_to_staged(&conn).expect("reset state");
 
         for id in 1..=4 {
             assert_eq!(row_phase(&conn, id), "staged");

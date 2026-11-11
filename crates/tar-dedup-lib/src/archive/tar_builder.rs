@@ -52,8 +52,8 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let archive_offset = archive_file_len(&rt.config.paths.archive_path);
     check_archive_bytes_out(rt.db, archive_offset)?;
 
-    debug_assert!(rt.db.open_archive_session()?.is_none());
-    let session_id = rt.db.begin_archive_session(archive_offset)?;
+    debug_assert!(rt.db.open_tar_writer_session()?.is_none());
+    let session_id = rt.db.begin_tar_writer_session(archive_offset)?;
 
     // Require sha1 unless retry_missing_sha asks to include unhashed files.
     rt.db.promote_ineligible_to_archived()?;
@@ -161,7 +161,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                     &source, &tar_name, |n| progress.inc_phase(n)) {
                     Ok(()) => {
                         tracing::debug!("appended {} ({} bytes)", tar_name, record.size);
-                        rt.db.mark_archive_session_pending(record.id, session_id)?;
+                        rt.db.mark_tar_writer_session_pending(record.id, session_id)?;
                         rt.db.or_file_flags(record.id, times.to_file_flags())?;
                         progress.inc_global(1);
                     }
@@ -254,15 +254,15 @@ fn run_bypass_archive(rt: &ArchiveRTArgs) -> Result<()> {
     // A leftover open session means a prior bypass finalize was interrupted:
     // the work-db still holds the truth, the product dir is partial. Truncating a
     // stream is meaningless here, so just drop the stale session state and retry.
-    if let Some(open) = rt.db.open_archive_session()? {
-        rt.db.abort_incomplete_archive_session(&open)?;
+    if let Some(open) = rt.db.open_tar_writer_session()? {
+        rt.db.abort_incomplete_tar_writer_session(&open)?;
         tracing::warn!(
             "recovered incomplete bypass-archive session ({})",
             rt.config.paths.stage_dir().display()
         );
     }
 
-    let session_id = rt.db.begin_archive_session(0)?;
+    let session_id = rt.db.begin_tar_writer_session(0)?;
 
     rt.db.promote_ineligible_to_archived()?;
     let promoted = rt.db.count_files_in_phase(FilePhase::Archived)?;
@@ -327,7 +327,7 @@ fn run_bypass_archive(rt: &ArchiveRTArgs) -> Result<()> {
                 rt.progress.set_phase_file("archive", &record.abs_path); // TODO check this.
                 match read_probe(&target, record.size, &mut buf) {
                     Ok(_) => {
-                        rt.db.mark_archive_session_pending(record.id, session_id)?;
+                        rt.db.mark_tar_writer_session_pending(record.id, session_id)?;
                         if let Some(times) = times {
                             rt.db.or_file_flags(record.id, times.to_file_flags())?;
                         }
@@ -352,15 +352,15 @@ fn run_bypass_archive(rt: &ArchiveRTArgs) -> Result<()> {
     }
 
     // Promote the session's appended rows to `archived`, then finalize.
-    let n_pending = rt.db.promote_pending_archived()?;
+    let n_pending = rt.db.promote_pending_to_archived()?;
     rt.progress.inc_global(n_pending);
     assert_eq!(
         0,
         rt.db.count_files_in_phase(FilePhase::Staged)?,
         "INVARIANT ERROR: Files remaining while attempting to finalize the bypass-archive session."
     );
-    rt.db.stamp_archive_session_finished_at(session_id)?;
-    rt.db.finalize_archive_session(session_id)?;
+    rt.db.stamp_tar_writer_session_finished_at(session_id)?;
+    rt.db.finalize_tar_writer_session(session_id)?;
 
     // Bake the finalized work-db into the product dir as `tar-dedup.sqlite`.
     rt.db.drop_archive_queue()?;
@@ -398,7 +398,7 @@ fn recover_incomplete_session(
     rt: &ArchiveRTArgs,
     recorder: &mut Recorder)
     -> Result<()> {
-    let open_session = match rt.db.open_archive_session()? {
+    let open_session = match rt.db.open_tar_writer_session()? {
         None => return Ok(()),
         Some(s) => s,
     };
@@ -416,7 +416,7 @@ fn recover_incomplete_session(
         }
     }
 
-    rt.db.abort_incomplete_archive_session(&open_session)?;
+    rt.db.abort_incomplete_tar_writer_session(&open_session)?;
 
     tracing::info!(
         "recovered incomplete archive session at offset {} ({})",
@@ -481,7 +481,7 @@ fn end_session(
     -> Result<()> {
 
     // Finish session by promoting to 'archived'
-    let n_pending = rt.db.promote_pending_archived()?;
+    let n_pending = rt.db.promote_pending_to_archived()?;
     rt.progress.inc_global(n_pending);
 
     // Full archive pass only: sanity check we have nothing left.
@@ -489,7 +489,7 @@ fn end_session(
         assert_eq!(0, rt.db.count_files_in_phase(FilePhase::Staged)?,
                    "INVARIANT ERROR: Files remaining while attempting to finalize the session.");
     }
-    rt.db.stamp_archive_session_finished_at(session_id)?;
+    rt.db.stamp_tar_writer_session_finished_at(session_id)?;
 
     rt.progress.set_phase_msg(&format!("archive writing {SNAPSHOT_TAR_NAME} (progress)"));
     // Write session / archive final snapshot.
@@ -501,7 +501,7 @@ fn end_session(
 
     match result {
         Ok((session_bytes_in, bytes_out)) => {
-            rt.db.finalize_archive_session(session_id)?;
+            rt.db.finalize_tar_writer_session(session_id)?;
             rt.db.set_archive_bytes_in(bytes_in_base.saturating_add(session_bytes_in))?;
             rt.db.set_archive_bytes_out(bytes_out)?;
 
@@ -644,7 +644,7 @@ mod tests {
 
         /// Open a session row (open = finalized 0) and return its id.
         fn begin_session(&self, offset: u64) -> i64 {
-            self.db.begin_archive_session(offset).expect("begin session")
+            self.db.begin_tar_writer_session(offset).expect("begin session")
         }
 
         fn session_finalized(&self, session_id: i64) -> i64 {
@@ -725,7 +725,7 @@ mod tests {
     fn check_bytes_out_ok_when_meta_absent() {
         let world = TestWorld::new();
         let sid = world.begin_session(0);
-        world.db.finalize_archive_session(sid).expect("finalize");
+        world.db.finalize_tar_writer_session(sid).expect("finalize");
         // bytes_out meta never recorded -> skip
         check_archive_bytes_out(&world.db, 999).expect("absent meta -> ok");
     }
@@ -734,7 +734,7 @@ mod tests {
     fn check_bytes_out_ok_when_equal() {
         let world = TestWorld::new();
         let sid = world.begin_session(0);
-        world.db.finalize_archive_session(sid).expect("finalize");
+        world.db.finalize_tar_writer_session(sid).expect("finalize");
         world.db.set_archive_bytes_out(42).expect("set bytes out");
         check_archive_bytes_out(&world.db, 42).expect("equal -> ok");
     }
@@ -743,7 +743,7 @@ mod tests {
     fn check_bytes_out_panics_on_mismatch() {
         let world = TestWorld::new();
         let sid = world.begin_session(0);
-        world.db.finalize_archive_session(sid).expect("finalize");
+        world.db.finalize_tar_writer_session(sid).expect("finalize");
         world.db.set_archive_bytes_out(42).expect("set bytes out");
         let res = catch_unwind(AssertUnwindSafe(|| {
             check_archive_bytes_out(&world.db, 43).expect("unequal -> panic")
@@ -885,7 +885,7 @@ mod tests {
         world.seed_staged_row(id);
         world.place_symlink(id);
         let sid = world.begin_session(0);
-        world.db.mark_archive_session_pending(id, sid).expect("mark appended");
+        world.db.mark_tar_writer_session_pending(id, sid).expect("mark appended");
 
         let writer = TarWriter::open(
             world.config.paths.archive_path.clone(),
@@ -933,7 +933,7 @@ mod tests {
         world.seed_staged_row(id);
         world.place_symlink(id);
         let sid = world.begin_session(0);
-        world.db.mark_archive_session_pending(id, sid).expect("mark appended");
+        world.db.mark_tar_writer_session_pending(id, sid).expect("mark appended");
 
         let writer = TarWriter::open(
             config.paths.archive_path.clone(),
@@ -1029,7 +1029,7 @@ mod tests {
         for id in &ids[..archived] { world.seed_archived_row(*id); }
         for id in &ids[archived..] { world.seed_staged_row(*id); }
         let sid = world.begin_session(0);
-        if finalize { world.db.finalize_archive_session(sid).expect("finalize session"); }
+        if finalize { world.db.finalize_tar_writer_session(sid).expect("finalize session"); }
         let rt = ArchiveRTArgs {
             config: &config, db: &world.db, shutdown: &world.shutdown, progress: &world.progress,
         };

@@ -67,7 +67,7 @@ Run the normal pipeline to `stage`, then the **real archive finalize** (reuse ma
 1. create an archive `session`,
 2. `pull_pending_archives` (same selection criteria as the tar path),
 3. `promote_*` rows → `archived`, set `FileArchived` flags,
-4. `finalize_session`,
+4. `finalize_tar_writer_session`,
 5. snapshot/finalize the work DB and write it as **`tar-dedup.sqlite`** into the product dir, next to the canonical payloads.
 No tar, no footer, no sha1. `bypass_archive = true` in meta.
 

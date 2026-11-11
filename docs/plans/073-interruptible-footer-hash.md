@@ -43,7 +43,7 @@ pub fn hash_file_range(path: &Path, start: u64, len: u64,
   `tar_builder::run` returns `Interrupted` → phase stays `archive`. Archive left
   complete-but-footerless (valid tar; extractable via leading-manifest scan).
 - New **first** branch in `tar_builder::run()` (before
-  `check_archive_bytes_out` / `begin_archive_session`):
+  `check_archive_bytes_out` / `begin_tar_writer_session`):
 
   ```rust
   if rt.config.pipeline.write_archive_footer

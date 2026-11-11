@@ -2,7 +2,7 @@
 
 Status: **agreed + implementing**. Scope settled:
 - Full replace: purge `FileFlag::AppendedPath` (single source of truth).
-- Merge `TarWriter::finalize_archive`/`finalize_session` into one `finalize(emit_tar_eof)`.
+- Merge `TarWriter::finalize_archive`/`finalize_tar_writer_session` into one `finalize(emit_tar_eof)`.
 - Drop `promote_to_archived` in favor of the common `set_file_phase`.
 - No migration (pre-1.0.0; `--fresh` wipes stale workdirs).
 
@@ -20,7 +20,7 @@ finalize_archive_session(id)    // #4 — marks the session finalized
 Between #1 and #4 a **force interrupt during finalize**, an **io error**, or a
 **process crash** leaves the affected rows `archived` + `AppendedPath` while the
 session stays open. On the next startup `recover_incomplete_session` truncates
-the archive to `open_session.archive_offset` and `clear_archive_session_pending`
+the archive to `open_session.archive_offset` and `clear_tar_writer_session_pending`
 only resets **non-`archived`** rows — so the just-promoted rows keep `archived`/
 `AppendedPath` but their payload bytes were truncated out. Extract then reports
 them missing. We never want a once-`archived` file to lose its payload.
@@ -34,7 +34,7 @@ session is truncated.
 ### Clarification: the last in-archive snapshot is always "open"
 
 `append_snapshot` does `checkpoint()` then copies the DB into the stream
-**before** `finalize_archive_session` runs. So every `snapshot.sqlite` — including
+**before** `finalize_tar_writer_session` runs. So every `snapshot.sqlite` — including
 the final one — carries the current session as `finalized = OPEN (0)`. The
 session is only marked finalized in the DB afterward, and **the footer is the only
 place that persists the finalized/closed catalog** (at a seekable offset with the
@@ -46,7 +46,7 @@ and durable via `session_id`.
 
 ## Answer to "why two finalize fns"
 
-`finalize_archive` (line 164) vs `finalize_session` (line 138) differ **only** in
+`finalize_archive` (line 164) vs `finalize_tar_writer_session` (line 138) differ **only** in
 `take_sink(emit_tar_eof)` — false for session, true for archive. Identical
 otherwise. → **Merge** into a single `finalize(self, emit_tar_eof: bool)`.
 
@@ -97,7 +97,7 @@ sticky failure persists, correctly). Consequently:
 Remove `FileFlag::AppendedPath` and migrate all consumers to `session_id`:
 
 - `db/tar_writer.rs`: `mark_archive_session_pending(file_id, session_id)`;
-  `promote_pending_archived` → `WHERE session_id IS NOT NULL`;
+  `promote_pending_to_archived` → `WHERE session_id IS NOT NULL`;
   `pull_pending_archive_rows` → `WHERE session_id IS NULL` (keep `:error_flag`);
   `clear_archive_session_pending(session)` (reverts archived rows of that session)
 - `db.rs` facade signatures; `db/stats.rs` count
@@ -115,7 +115,7 @@ Remove `FileFlag::AppendedPath` and migrate all consumers to `session_id`:
   `set_file_phase` returns `()`; since it loses the `u64`/`bool` success signal at
   each new call site, annotate it `// TODO change return type` (do NOT do it now).
 
-The **batch** `promote_pending_archived` stays (it's the mass end-of-session
+The **batch** `promote_pending_to_archived` stays (it's the mass end-of-session
 promotion, a different function).
 
 ## Migration

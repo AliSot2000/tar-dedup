@@ -43,7 +43,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
     let db_path = config.paths.db_path();
     let (work, product) = if db_path.is_file() {
         let probe = Database::open(&db_path)?;
-        let state = probe.load_runtime_state()?;
+        let state = probe.load_archive_runtime_state()?;
         // INFO: This is the check for bypass_archive; however, the regular pass also has a
         //  database until the very end, when the footer is written. So even this recovery has a
         //  db to recover from, so we don't have to infer anything by path presence.
@@ -72,18 +72,18 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
     let action = resolve_start(config.process.start_policy, work, Some(product))?;
 
     let db = Database::open(&db_path)?;
-    let saved = db.load_runtime_state()?;
+    let saved = db.load_archive_runtime_state()?;
 
     let mut state = match action {
         StartAction::Resume => {
             let state = saved.expect("incomplete work checked above");
             tracing::info!("resuming from phase `{}`", state.phase.as_str());
-            db.save_runtime_state(&state)?;
+            db.save_archive_runtime_state(&state)?;
             state
         }
         StartAction::RunFresh => {
             let state = ArchiveRuntimeState::new();
-            db.save_runtime_state(&state)?;
+            db.save_archive_runtime_state(&state)?;
             db.set_archive_config(&config)?;
             filter::ingest_filters(&db, &config)?;
             if let Some(policy) = crate::common::perms::parse_owner_group_args(
@@ -131,7 +131,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
                 exit_phase(&progress, &state.phase, &db)?
             }
             Err(Error::Interrupted) => {
-                db.save_runtime_state(&state)?;
+                db.save_archive_runtime_state(&state)?;
                 if shutdown.is_force() {
                     tracing::warn!(
                         "aborted during {}; in-flight progress discarded — rerun to resume",
@@ -151,7 +151,7 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         let completed = state.phase;
         if let Some(next) = state.phase.next(config.filter.eager_filter) {
             state.phase = next;
-            db.save_runtime_state(&state)?;
+            db.save_archive_runtime_state(&state)?;
         } else {
             // Exit loop, if we have arrived at end of pipeline.
             break;

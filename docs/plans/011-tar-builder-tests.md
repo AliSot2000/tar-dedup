@@ -170,7 +170,7 @@ Copy the `TestWorld`/`test_archive_config()` pattern from `archive/stage.rs`
   `finalized = 1` with `finished_at` set, `bytes_in`/`bytes_out` meta set and
   `bytes_out == archive_file_len`.
 - `end_session_graceful_interrupt_finalizes` — graceful stop mid-run → session
-  finalized (stream closed, `finalize_session` path), `bytes_in/out` set; run
+  finalized (stream closed, `finalize_tar_writer_session` path), `bytes_in/out` set; run
   returns `Err(Interrupted)`.
 
 ### 2.3 `run()`-level tests
@@ -208,11 +208,11 @@ Copy the `TestWorld`/`test_archive_config()` pattern from `archive/stage.rs`
 
 - `abort_incomplete_session_resets_pending_to_staged` — seed an open session row;
   rows: (a) `AppendedPath` + phase `staged`; (b) `AppendedPath` + phase `archived`;
-  (c) plain `staged`; (d) `archived` without flag. `abort_incomplete_session` →
+  (c) plain `staged`; (d) `archived` without flag. `abort_incomplete_tar_writer_session` →
   (a) reset to `staged` + flag unset; (b) untouched (already archived, flag kept);
-  (c)/(d) untouched. Also assert the session row now `finalized = 2` (ABORTED).
+  (c)/ (d) untouched. Also assert the session row now `finalized = 2` (ABORTED).
 - `clear_archive_session_pending_only_non_archived` — same matrix, call
-  `clear_archive_session_pending` directly.
+  `clear_tar_writer_session_pending` directly.
 - `create_populate_pull_archive_queue_slices` — seed staged canonicals, populate
   both `sort_by_name` variants, walk `pull_pending_archive_rows` with index/limit,
   assert full coverage, no overlap, correct order (ext, size, id vs ext, name,
@@ -242,7 +242,7 @@ Copy the `TestWorld`/`test_archive_config()` pattern from `archive/stage.rs`
   stage_archive_snapshot)` then `writer.append_path`, then removes the staging
   file. It deliberately has no `check_in_flight` — finishing the snapshot retains
   the resume point (user judgement: correct).
-- `end_session` on graceful stop uses `finalize_session` (no tar EOF); on full
+- `end_session` on graceful stop uses `finalize_tar_writer_session` (no tar EOF); on full
   archive uses `finalize_archive` (tar EOF). Footer only when
   `write_tar_eof && write_archive_footer`.
 - The `assert_eq!(0, count_files_in_phase(Staged))` in `end_session` fires only

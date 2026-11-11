@@ -372,7 +372,7 @@ pub fn write_catalog(path: &Path) -> String {
     db.set_canonical(duplicate, canonical).expect("canonical");
     // Record the canonical's payload as present in a real (synthetic) archive
     // session so the `session_id` FK holds.
-    let sid = db.begin_archive_session(0).expect("begin session");
+    let sid = db.begin_tar_writer_session(0).expect("begin session");
     db.with_transaction(|conn| {
         conn.execute("UPDATE files SET session_id = :sid WHERE id = :id",
             rusqlite::named_params! { ":sid": sid, ":id": canonical.0 }).expect("set session");
@@ -468,7 +468,7 @@ pub fn seed_filter_reasons(db: &Database, id: FileId) {
         seed_filter_reasons(db, id);
         db.update_file_inspection_per_id(id, [sha; 20], 0, false).expect("digest");
         db.mark_self_canonical(id).expect("self canonical");
-        let sid = db.begin_archive_session(0).expect("begin session");
+        let sid = db.begin_tar_writer_session(0).expect("begin session");
         db.with_transaction(|conn| {
             conn.execute("UPDATE files SET session_id = :sid WHERE id = :id",
                 rusqlite::named_params! { ":sid": sid, ":id": id.0 }).expect("set session");
