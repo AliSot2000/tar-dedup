@@ -282,6 +282,19 @@ pub fn strip_common_prefix(conn: &mut Connection, root: &Path, shared: &Path) ->
             ":lcp": &lcp,
         },
     ).to_panic()?;
+    // The re-rooted top-directory row(s) now sit at `root` and are dropped next.
+    // Clear the `ref_out`/`errors` references first, or the DELETE trips the
+    // `out_tree(id)` foreign key (real runs build `ref_out` per out_tree row).
+    tx.execute(
+        "DELETE FROM ref_out
+         WHERE out_id IN (SELECT id FROM out_tree WHERE abs_path = :root)",
+        named_params! { ":root": &root_str },
+    ).to_panic()?;
+    tx.execute(
+        "UPDATE errors SET out_tree_id = NULL
+         WHERE out_tree_id IN (SELECT id FROM out_tree WHERE abs_path = :root)",
+        named_params! { ":root": &root_str },
+    ).to_panic()?;
     // Delete all rows which are a root.
     tx.execute(
         "DELETE FROM out_tree WHERE abs_path = :root",
