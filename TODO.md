@@ -28,7 +28,7 @@
 - [X] .tdd file suffix s.t. tdd.tar.xz is produced
 - [X] Eager Delete of stage
 - [X] Delete files on incomplete move 
-- [ ] Number of placement conflicts (instances where multiple file_ids point to the same out_tree_id)
+- [X] Number of placement conflicts (instances where multiple file_ids point to the same out_tree_id)
 
 ## Refactor:
 - [X] Drop unused db functions
