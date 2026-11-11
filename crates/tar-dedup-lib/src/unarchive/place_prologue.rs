@@ -14,6 +14,7 @@ use path_clean::PathClean;
 
 use crate::cli::HardLinkGrouping;
 use crate::common::batched_stepped_loop;
+use crate::common::defaults::ABSOLUTE_ROOT_SOURCE_ID;
 use crate::common::transform::{TransformExpr, TransformSource, parse_transform_expr};
 use crate::db::Database;
 use crate::db::flags::{OutTreeFlag, OutTreeFlags};
@@ -57,6 +58,13 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
         "placement_prologue done: processed {count} of {count}, {} error(s)",
         rt.db.count_errors(Some("placement_prologue"))?,
     );
+
+    let (out_tree_entries, source_pool) = rt.db.clobber_statistics()?;
+    if out_tree_entries > 0 {
+        tracing::warn!("For {out_tree_entries} files in the extraction target, multiple files \
+            conflicted. A total of {source_pool} files attempted to be mapped.");
+    }
+
     Ok(())
 }
 
@@ -278,10 +286,18 @@ fn populate_out_tree_abs(
             entries, &root, None, use_new_name
         );
 
-        rt.db.insert_out_tree_rows(&processed, !rt.config.process.no_errors)?;
+        let out_ids = rt.db.insert_out_tree_rows(&processed, !rt.config.process.no_errors)?;
+        let ref_pairs: Vec<(OutTreeId, i64, FileId)> = out_ids
+            .iter()
+            .zip(&processed)
+            .map(|(id, row)| (
+                id.clone(),
+                ABSOLUTE_ROOT_SOURCE_ID,
+                row.file_id.expect("mapped file id"))
+            )
+            .collect();
+        rt.db.insert_ref_out_rows(&ref_pairs)?;
         rt.progress.inc_phase(processed.len() as u64);
-        // INFO ref table is left empty since we are working with abs_paths and one source row can
-        //  have at most one child
         Ok(())
     };
     stepped_dirs_then_rest(rt, None, use_new_name, &mut apply)
@@ -310,9 +326,14 @@ fn populate_out_tree_rel(
                     );
 
                     let out_ids = rt.db.insert_out_tree_rows(&processed, !rt.config.process.no_errors)?;
-                    let ref_pairs: Vec<(OutTreeId, i64)> = out_ids
+                    let ref_pairs: Vec<(OutTreeId, i64, FileId)> = out_ids
                         .iter()
-                        .map(|id| { (id.clone(), source.id) })
+                        .zip(&processed)
+                        .map(|(id, row)| (
+                            id.clone(),
+                            source.id,
+                            row.file_id.expect("mapped file id"))
+                        )
                         .collect();
                     rt.db.insert_ref_out_rows(&ref_pairs)?;
                     rt.progress.inc_phase(processed.len() as u64);

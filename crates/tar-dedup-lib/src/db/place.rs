@@ -29,21 +29,53 @@ pub struct MaterializeOutcome {
 pub type CopyOutcome = std::result::Result<(FileId, bool), (FileId, Error)>;
 
 /// Function inserts the out_tref rows into the out_ref table
-pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64)]) -> Result<()> {
+pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64, FileId)]) -> Result<()> {
     if pairs.is_empty() {
         return Ok(());
     }
     let mut stmt = conn.prepare(
-        "INSERT OR IGNORE INTO ref_out (out_id, source_id)
-         VALUES (:out_id, :source_id)",
+        "INSERT INTO ref_out (out_id, source_id, file_id)
+         VALUES (:out_id, :source_id, :file_id)",
     ).to_panic()?;
-    for (out_id, source_id) in pairs {
+    for (out_id, source_id, file_id) in pairs {
         stmt.execute(named_params! {
             ":out_id": out_id.0,
             ":source_id": source_id,
+            ":file_id": file_id.0,
         }).to_panic()?;
     }
     Ok(())
+}
+
+/// Number of out_tree rows that had more than one file mapped onto them
+/// (`entries`), and the total number of files that were part of such a clobber
+/// (`source_pool`). A clobber is a deliberate, permitted outcome of
+/// `--no-strict-separation` / transforms / stripping collapsing several members
+/// onto one extraction target; the out_tree keeps the first mapping, the rest
+/// are only observable through `ref_out`.
+pub fn clobber_statistics(conn: &Connection) -> Result<(u64, u64)> {
+    // Distinct out_tree ids with > 1 mapped file.
+    let entries: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM (
+            SELECT out_id FROM ref_out GROUP BY out_id HAVING COUNT(*) > 1
+         )",
+        [],
+        |row| row.get(0),
+    ).to_panic()?;
+    // Total mapped files minus the out_tree ids that saw exactly one mapping.
+    let single: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM (
+            SELECT out_id FROM ref_out GROUP BY out_id HAVING COUNT(*) = 1
+         )",
+        [],
+        |row| row.get(0),
+    ).to_panic()?;
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM ref_out",
+        [],
+        |row| row.get(0),
+    ).to_panic()?;
+    Ok((entries as u64, (total - single).max(0) as u64))
 }
 
 pub fn count_out_tree_rows(conn: &Connection) -> Result<u64> {
@@ -1049,10 +1081,10 @@ mod tests {
         ).unwrap();
     }
 
-    fn insert_ref_out(conn: &Connection, out_id: i64, source_id: i64) {
+    fn insert_ref_out(conn: &Connection, out_id: i64, source_id: i64, file_id: i64) {
         conn.execute(
-            "INSERT INTO ref_out (out_id, source_id) VALUES (:o, :s)",
-            named_params! { ":o": out_id, ":s": source_id },
+            "INSERT INTO ref_out (out_id, source_id, file_id) VALUES (:o, :s, :f)",
+            named_params! { ":o": out_id, ":s": source_id, ":f": file_id },
         ).unwrap();
     }
 
@@ -1091,8 +1123,8 @@ mod tests {
         insert_file(&conn, 2, "/b/y", Some(2), Some(200), 2, "file");
         insert_out(&conn, 1, "/ed/a/x", 1);
         insert_out(&conn, 2, "/ed/b/y", 2);
-        insert_ref_out(&conn, 1, 1); // out 1 under source 1
-        insert_ref_out(&conn, 2, 2); // out 2 under source 2
+        insert_ref_out(&conn, 1, 1, 1); // out 1 under source 1
+        insert_ref_out(&conn, 2, 2, 2); // out 2 under source 2
 
         let updated = mark_source_canonical(&conn, 1).unwrap();
         let ids = canonical_ids(&conn);
@@ -1125,8 +1157,8 @@ mod tests {
         insert_file(&conn, 2, "/a/y", Some(1), Some(200), 1, "file");
         insert_out(&conn, 1, "/ed/a/x", 1);
         insert_out(&conn, 2, "/ed/a/y", 2);
-        insert_ref_out(&conn, 1, 1);
-        insert_ref_out(&conn, 2, 1);
+        insert_ref_out(&conn, 1, 1, 1);
+        insert_ref_out(&conn, 2, 1, 2);
 
         let updated = mark_source_canonical(&conn, 1).unwrap();
         assert_eq!(canonical_ids(&conn), vec![(1, Some(1)), (2, Some(2))]);
@@ -1150,7 +1182,7 @@ mod tests {
         insert_out(&conn, 2, "/ed/a/b/c/link_b", 2);
         insert_out(&conn, 3, "/ed/a/b/c/link_c", 3);
         for (out, src) in [(1, 1), (2, 1), (3, 1), (2, 2), (3, 2)] {
-            insert_ref_out(&conn, out, src);
+            insert_ref_out(&conn, out, src, out);
         }
         mark_source_canonical(&conn, 1).unwrap();
         mark_source_canonical(&conn, 2).unwrap();
@@ -1173,7 +1205,7 @@ mod tests {
         insert_out(&conn, 2, "/ed/a/b/c/link_b", 2);
         insert_out(&conn, 3, "/ed/a/b/c/link_c", 3);
         for (out, src) in [(1, 2), (2, 1), (3, 1), (2, 2), (3, 2)] {
-            insert_ref_out(&conn, out, src);
+            insert_ref_out(&conn, out, src, out);
         }
         mark_source_canonical(&conn, 1).unwrap();
         mark_source_canonical(&conn, 2).unwrap();
@@ -1185,7 +1217,8 @@ mod tests {
     }
 
     /// `--no-strict-separation` fanout: one out row served to both covering
-    /// sources accumulates `ref_out` rows (with `INSERT OR IGNORE` dedupe).
+    /// sources accumulates one `ref_out` row per (source, file) mapping. There
+    /// is deliberately no PRIMARY KEY, so each mapping is a distinct row.
     #[test]
     fn no_strict_separation_fanout_accumulates_ref_out() {
         let conn = conn();
@@ -1193,11 +1226,11 @@ mod tests {
         insert_source(&conn, 2, "/a/c");
         insert_file(&conn, 1, "/a/c/f.txt", Some(1), Some(1), 1, "file");
         insert_out(&conn, 1, "/ed/a/c/f.txt", 1);
-        // Both covering sources fan out onto the single out row; the batched
-        // inserter dedupes (INSERT OR IGNORE) the repeated pair.
+        // Both covering sources fan out onto the single out row; each
+        // (source, file) mapping is its own row.
         insert_ref_out_rows(
             &conn,
-            &[(OutTreeId(1), 1), (OutTreeId(1), 2), (OutTreeId(1), 2)],
+            &[(OutTreeId(1), 1, FileId(1)), (OutTreeId(1), 2, FileId(1))],
         ).unwrap();
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM ref_out", [], |r| r.get(0)).unwrap();
@@ -1205,5 +1238,67 @@ mod tests {
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM ref_out WHERE out_id = 1", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 2);
+    }
+
+    // ---- clobber_statistics ---------------------------------------------------
+
+    #[test]
+    fn clobber_statistics_clean_single_mappings() {
+        let conn = conn();
+        insert_source(&conn, 1, "/a");
+        insert_file(&conn, 1, "/a/one.txt", Some(1), Some(1), 1, "file");
+        insert_file(&conn, 2, "/a/two.txt", Some(2), Some(2), 2, "file");
+        insert_out(&conn, 1, "/ed/one.txt", 1);
+        insert_out(&conn, 2, "/ed/two.txt", 2);
+        insert_ref_out(&conn, 1, 1, 1);
+        insert_ref_out(&conn, 2, 1, 2);
+
+        let (entries, pool) = clobber_statistics(&conn).unwrap();
+        assert_eq!((entries, pool), (0, 0), "one mapping per target");
+    }
+
+    #[test]
+    fn clobber_statistics_counts_conflicted_targets_and_pool() {
+        let conn = conn();
+        insert_source(&conn, 1, "/a");
+        // Three files map onto two out_tree rows: one row takes two files.
+        insert_file(&conn, 1, "/a/one.txt", Some(1), Some(1), 1, "file");
+        insert_file(&conn, 2, "/a/two.txt", Some(2), Some(2), 2, "file");
+        insert_file(&conn, 3, "/a/three.txt", Some(3), Some(3), 3, "file");
+        insert_out(&conn, 1, "/ed/clobbered.txt", 1);
+        insert_out(&conn, 2, "/ed/single.txt", 2);
+        insert_ref_out(&conn, 1, 1, 1);
+        insert_ref_out(&conn, 1, 1, 2); // two files -> out 1: a clobber
+        insert_ref_out(&conn, 2, 1, 3);
+
+        let (entries, pool) = clobber_statistics(&conn).unwrap();
+        assert_eq!(entries, 1, "one out_tree row saw multiple files");
+        // total rows (3) - single-mapping groups (1) = 2 files in the conflict.
+        assert_eq!(pool, 2, "two files attempted to map onto the clobbered row");
+    }
+
+    #[test]
+    fn clobber_statistics_mixed_groups() {
+        let conn = conn();
+        insert_source(&conn, 1, "/a");
+        // 1 single group + 2 clobbered groups (of sizes 2 and 3).
+        insert_file(&conn, 1, "/a/s.txt", Some(1), Some(1), 1, "file");
+        insert_file(&conn, 2, "/a/c1.txt", Some(2), Some(2), 2, "file");
+        insert_file(&conn, 3, "/a/c1b.txt", Some(3), Some(3), 3, "file");
+        insert_file(&conn, 4, "/a/c2.txt", Some(4), Some(4), 4, "file");
+        insert_file(&conn, 5, "/a/c2b.txt", Some(5), Some(5), 5, "file");
+        insert_file(&conn, 6, "/a/c2c.txt", Some(6), Some(6), 6, "file");
+        insert_out(&conn, 1, "/ed/s.txt", 1);
+        insert_out(&conn, 2, "/ed/c1.txt", 2);
+        insert_out(&conn, 3, "/ed/c2.txt", 4);
+        insert_ref_out(&conn, 1, 1, 1);
+        for (out, file) in [(2, 2), (2, 3), (3, 4), (3, 5), (3, 6)] {
+            insert_ref_out(&conn, out, 1, file);
+        }
+
+        let (entries, pool) = clobber_statistics(&conn).unwrap();
+        assert_eq!(entries, 2, "two clobbered out_tree rows");
+        // total (6) - single groups (1) = 5 files in conflicts.
+        assert_eq!(pool, 5);
     }
 }

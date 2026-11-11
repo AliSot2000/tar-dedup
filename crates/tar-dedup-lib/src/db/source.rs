@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension, named_params};
 use std::path::{Path, PathBuf};
 
 use crate::common::utf8::require_utf8;
-use crate::db::common::{path_bytes, raw_path_from_sql};
+use crate::db::common::{id_gt_zero, path_bytes, raw_path_from_sql};
 use crate::db::flags::{SourceFlag, SourceFlags};
 use crate::db::types::SourceRecord;
 use crate::error::{Result, ToPanic};
@@ -89,9 +89,11 @@ pub fn find_overlapping_source(
     conn.query_row(
         &format!(
             "SELECT id, abs_path FROM source
-             WHERE (flags & :dir_bit) != 0
+             WHERE {gtz}
+               AND (flags & :dir_bit) != 0
                AND {overlap}
-             LIMIT 1"
+             LIMIT 1",
+            gtz = id_gt_zero()
         ),
         named_params! {
             ":path": path_str,
@@ -114,6 +116,8 @@ pub fn list_sources(
     starting_id: i64,
     batch_size: u64)
     -> Result<Vec<SourceRecord>> {
+    // The batched loop seeds the cursor at 0; `id > 0` is exactly `id_gt_zero()`
+    // and gates the reserved id=0 dummy source out of every batch.
     debug_assert!(starting_id >= 0, "INVARIANT ERROR: starting_id >= 0, since ids start at 1");
     let dir_filter = match only_dirs {
         Some(true) => " AND flags & :DirFlag != 0",

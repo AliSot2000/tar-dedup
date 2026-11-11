@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS filter_reason_extract (
 );
 
 CREATE TABLE IF NOT EXISTS source (
-    id INTEGER PRIMARY KEY CHECK (id > 0),
+    -- id = 0 is the reserved dummy absolute-root source (see its INSERT
+    -- below); real rows are id > 0.
+    id INTEGER PRIMARY KEY CHECK (id >= 0),
     source TEXT NOT NULL, --from-file or --input-dir
     abs_path TEXT NOT NULL,
     original_path TEXT NOT NULL,
@@ -126,9 +128,14 @@ CREATE INDEX IF NOT EXISTS idx_out_tree_abs_path ON out_tree(abs_path);
 CREATE TABLE IF NOT EXISTS ref_out (
     out_id    INTEGER NOT NULL REFERENCES out_tree(id),
     source_id INTEGER NOT NULL REFERENCES source(id),
-    PRIMARY KEY (out_id, source_id)
+    -- The `files` row this out_tree row was materialized from. Deliberately no
+    -- PRIMARY KEY: with `--no-strict-separation` / transforms several files can
+    -- map onto one out_tree row (a clobber), and every mapped file must be
+    -- observable so `clobber_statistics` can count the conflicts.
+    file_id   INTEGER NOT NULL REFERENCES files(id)
 );
 CREATE INDEX IF NOT EXISTS idx_ref_out_source ON ref_out(source_id);
+CREATE INDEX IF NOT EXISTS idx_ref_out_out ON ref_out(out_id);
 
 CREATE TABLE IF NOT EXISTS errors (
     id INTEGER PRIMARY KEY CHECK (id > 0),
@@ -197,4 +204,12 @@ INSERT OR IGNORE INTO files (id, abs_path, abs_path_raw, ext, size, ftype, phase
 -- in the tree. link_dst_id = 0 means no resolvable target, distinct from NULL
 -- (not a symlink). Not a file; excluded from the content projections.
 INSERT OR IGNORE INTO out_tree (id, abs_path, file_id, flags) VALUES (0, '', NULL, 0);
+
+-- Reserved id=0 source row: the dummy absolute-root source under which the
+-- `--absolute` placement pass records every out_tree→files mapping in `ref_out`
+-- (absolute names carry no real input-dir source). Source reads gate on
+-- `id_gt_zero()` so this sentinel never surfaces as a real source.
+INSERT OR IGNORE INTO source
+    (id, source, abs_path, original_path, abs_path_raw, original_path_raw, line, flags)
+    VALUES (0, 'absolute-root', '/', '/', X'2F', X'2F', NULL, 0);
 ";

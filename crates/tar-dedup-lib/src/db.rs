@@ -1087,7 +1087,7 @@ impl Database {
         place_prologue::insert_out_tree_rows(&mut self.conn_mut(), rows, enabled)
     }
 
-    pub fn insert_ref_out_rows(&self, pairs: &[(OutTreeId, i64)]) -> Result<()> {
+    pub fn insert_ref_out_rows(&self, pairs: &[(OutTreeId, i64, FileId)]) -> Result<()> {
         place::insert_ref_out_rows(&self.conn(), pairs)
     }
 
@@ -1135,6 +1135,11 @@ impl Database {
 
     pub fn count_ref_out_rows(&self) -> Result<u64> {
         place::count_ref_out_rows(&self.conn())
+    }
+
+    /// See [`place::clobber_statistics`].
+    pub fn clobber_statistics(&self) -> Result<(u64, u64)> {
+        place::clobber_statistics(&self.conn())
     }
 
     pub fn list_out_tree_for_linking<R: SqlFileRow>(&self, batch_size: u64, pending: bool)

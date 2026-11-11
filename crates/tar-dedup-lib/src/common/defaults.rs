@@ -51,3 +51,10 @@ pub const DRAIN_CHUNK: usize = 1_024 * 4;
 /// Randomized sidecar-name attempts before giving up on a target (never
 /// overwrite an existing file when claiming `{name}.json`).
 pub const SIDECAR_MAX_NAME_ATTEMPTS: usize = 1_000_000;
+
+/// Reserved `source.id` of the dummy "absolute root" source. The `--absolute`
+/// placement pass maps every out_tree row without a real input-dir source, so
+/// its `ref_out` mappings are recorded under this sentinel to keep
+/// `clobber_statistics` complete. Source reads gate on `id > 0` (`id_gt_zero()`),
+/// so this row never surfaces as a real source.
+pub const ABSOLUTE_ROOT_SOURCE_ID: i64 = 0;
