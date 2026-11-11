@@ -70,8 +70,12 @@ pub fn resolve_start(
         StartPolicy::Fresh => Ok(StartAction::RunFresh),
         StartPolicy::Resume => match work {
             WorkPresence::Incomplete => Ok(StartAction::Resume),
-            WorkPresence::Absent | WorkPresence::Done => Err(Error::Config(
+            WorkPresence::Absent => Err(Error::Config(
                 "no incomplete work to resume (`resume` requires an existing work directory)"
+                    .into(),
+            )),
+            WorkPresence::Done => Err(Error::Config(
+                "no incomplete work to resume. (work exists but is already done)"
                     .into(),
             )),
         },
