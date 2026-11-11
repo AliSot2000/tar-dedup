@@ -113,7 +113,7 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                 // The scan phase reports whether it persisted the extract config
                 // (a bypass stray-file may have escalated keep_stage). Only write
                 // it here if the scan did not.
-                config_written = scan_wrote;
+                config_written |= scan_wrote;
                 if !config_written {
                     let ldb = db.as_ref().expect(OPT_DB_ERROR);
                     ldb.set_extract_config(&config)?;
