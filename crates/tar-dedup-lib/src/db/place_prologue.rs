@@ -674,4 +674,59 @@ mod tests {
         paths.sort();
         assert_eq!(paths, vec!["/ed/a.pdf", "/ed/other/b.pdf"]);
     }
+
+    #[test]
+    fn strip_common_prefix_clears_ref_out_of_dropped_root_row() {
+        // A real run links every out_tree row into `ref_out`; the top-directory
+        // row that collapses to the root and is dropped must have its `ref_out`
+        // membership removed first, or the DELETE trips the `out_tree(id)` FK.
+        let mut db = conn();
+        db.execute(
+            "INSERT INTO source (id, source, abs_path, original_path, abs_path_raw, original_path_raw, line, flags) \
+             VALUES (1, 'test', '/ed/mnt/drive', '/ed/mnt/drive', X'', X'', NULL, 0)",
+            [],
+        ).unwrap();
+        insert_out(&db, "/ed/mnt/drive"); // id 1: top dir, collapses to root, dropped
+        insert_out(&db, "/ed/mnt/drive/a.pdf"); // id 2
+        insert_out(&db, "/ed/mnt/drive/b.pdf"); // id 3
+        db.execute(
+            "INSERT INTO ref_out (out_id, source_id) VALUES (1, 1), (2, 1), (3, 1)",
+            [],
+        ).unwrap();
+        let n = strip_common_prefix(&mut db, Path::new("/ed"), Path::new("mnt/drive")).expect("ok");
+        assert_eq!(n, 3);
+        let paths = out_paths(&db);
+        assert_eq!(paths, vec!["/ed/a.pdf", "/ed/b.pdf"]);
+        // No orphaned ref_out rows may point at the dropped `/ed/mnt/drive` row.
+        let orphan: i64 = db.query_row(
+            "SELECT COUNT(*) FROM ref_out WHERE out_id NOT IN (SELECT id FROM out_tree)",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(orphan, 0, "dropped root row must leave no ref_out orphans");
+        let refs: i64 = db.query_row("SELECT COUNT(*) FROM ref_out", [], |r| r.get(0)).unwrap();
+        assert_eq!(refs, 2, "two surviving rows keep their ref_out membership");
+    }
+
+    #[test]
+    fn strip_common_prefix_detaches_errors_of_dropped_root_row() {
+        let mut db = conn();
+        insert_out(&db, "/ed/mnt/drive"); // id 1: top dir, collapses to root, dropped
+        insert_out(&db, "/ed/mnt/drive/a.pdf"); // id 2
+        insert_out(&db, "/ed/mnt/drive/b.pdf"); // id 3
+        // errors row referencing the top-directory out_tree row (id 1).
+        db.execute(
+            "INSERT INTO errors (id, out_tree_id, abs_path, error_msg, error_type, phase, error_datetime) \
+             VALUES (1, 1, '/ed/mnt/drive', 'x', 'MaterializeConflict', 'placement_prologue', '2026-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        let n = strip_common_prefix(&mut db, Path::new("/ed"), Path::new("mnt/drive")).expect("ok");
+        assert_eq!(n, 3);
+        // The error survives but is detached from the deleted row.
+        let (out_tree_id, err_type): (Option<i64>, String) = db.query_row(
+            "SELECT out_tree_id, error_type FROM errors WHERE id = 1",
+            [], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(out_tree_id, None, "error must be detached from dropped row");
+        assert_eq!(err_type, "MaterializeConflict");
+    }
 }
