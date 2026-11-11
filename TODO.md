@@ -36,6 +36,7 @@
 - [ ] Restructure db.rs
 - [ ] Batched rename / transaction
 - [ ] Visibility of functions.
+- [ ] id_gt_zero -> id_not_zero -> also for filter.
 
 ---
 
