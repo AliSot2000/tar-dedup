@@ -934,6 +934,9 @@ mod tests {
     #[test]
     fn end_session_writes_footer_when_configured() {
         let world = TestWorld::new();
+        // The archive phase loop saves the runtime state before tar_builder runs;
+        // this test calls `end_session` directly, so seed it (phase Done).
+        crate::test_support::seed_archive_done(&world.db);
         let mut config = world.config.clone();
         config.pipeline.write_archive_footer = true;
         let id = world.add_file("a.bin", &[1u8; 8][..]);

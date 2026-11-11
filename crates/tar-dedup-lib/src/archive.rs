@@ -335,10 +335,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut cfg = full_archive_config(dir.path());
         run(cfg.clone(), Shutdown::detached()).expect("first run");
-        // A second Create run against a finished product must be rejected.
+        // A second Create run against a finished product must be rejected. The
+        // finished work-db resolves to WorkPresence::Done (not Absent), so the
+        // message is the "work already finished" variant.
         let err = run(cfg, Shutdown::detached()).unwrap_err();
         assert!(
-            err.to_string().contains("output already exists"),
+            err.to_string().contains("work already finished"),
             "{err}"
         );
     }

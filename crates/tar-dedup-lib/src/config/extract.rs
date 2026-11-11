@@ -1043,7 +1043,9 @@ mod tests {
     fn sparsify_requires_nonzero_page_size() {
         let dir = tempfile::tempdir().expect("tempdir");
         let archive = archive_file(dir.path(), "backup.tar");
-        let err = build(&archive, &["--sparsify", "--page-size", "0"]).unwrap_err();
+        // Extract sparsifies by default (`--no-sparsify` opts out), so a zero
+        // page size alone is already inadmissible.
+        let err = build(&archive, &["--page-size", "0"]).unwrap_err();
         assert!(
             err.to_string().contains("--page-size"),
             "zero page size: {err}"

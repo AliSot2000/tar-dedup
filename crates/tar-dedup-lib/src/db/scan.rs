@@ -451,6 +451,7 @@ pub fn load_extract_scan_state(conn: &Connection) -> Result<ScanState> {
 mod tests {
     use super::*;
     use crate::db::schema;
+    use chrono::Utc;
     use std::path::PathBuf;
 
     fn open_db() -> (tempfile::TempDir, Connection) {
@@ -466,6 +467,10 @@ mod tests {
                 [],
             ).expect("seed filter reasons");
         }
+        // `normalize_installed_catalog` requires the archive runtime state (it
+        // coerces it to Done); mirror the finished-archive work-db it expects.
+        meta::set_archive_phase(&conn, PipelinePhase::Done).expect("archive phase");
+        meta::set_archive_snapshot_taken_at(&conn, Utc::now()).expect("archive snapshot");
         (dir, conn)
     }
 

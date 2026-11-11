@@ -1030,8 +1030,8 @@ mod tests {
     use crate::progress;
     use crate::test_support::{
         add_archived_canonical, append_member, build_archive, build_footer_archive,
-        build_multi_catalog, content_id_name, corrupt_byte, insert, seed_filter_reasons,
-        write_catalog,
+        build_multi_catalog, content_id_name, corrupt_byte, insert, seed_archive_done,
+        seed_filter_reasons, write_catalog,
     };
     use crate::unarchive::filter::ingest_filters;
     use progress::EXTRACT_MULTIPLIER;
@@ -1047,6 +1047,7 @@ mod tests {
         let db = Database::open(&catalog).expect("open catalog");
         let c1 = add_archived_canonical(&db, "/one.txt", 7, FilePhase::Staged);
         let c2 = add_archived_canonical(&db, "/two.txt", 8, FilePhase::Staged);
+        seed_archive_done(&db);
         let member = db.get_file_by_id::<FileRecord>(c1)
             .expect("get").expect("row").tar_member_name().expect("content id");
         // Both payloads ARE in the stream — only the confirmation snapshot is
@@ -1160,6 +1161,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let db = Database::open(&catalog).expect("open catalog");
         let present = add_archived_canonical(&db, "/present.txt", 7, FilePhase::Archived);
         add_archived_canonical(&db, "/absent.txt", 8, FilePhase::Archived);
+        seed_archive_done(&db);
         let member = db.get_file_by_id::<FileRecord>(present)
             .expect("get").expect("row").tar_member_name().expect("content id");
         db.checkpoint().expect("checkpoint");
@@ -1183,6 +1185,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let catalog = dir.join("catalog.sqlite");
         let db = Database::open(&catalog).expect("open catalog");
         let canonical = add_archived_canonical(&db, "/canonical.txt", 7, FilePhase::Staged);
+        seed_archive_done(&db);
         let member = db.get_file_by_id::<FileRecord>(canonical)
             .expect("get").expect("row").tar_member_name().expect("content id");
         db.checkpoint().expect("checkpoint");
@@ -1939,6 +1942,7 @@ fn archive_head_truncated(dir: &Path, sabotage: bool) -> (ExtractConfig, String)
         let catalog = dir.join("catalog.sqlite");
         let db = Database::open(&catalog).expect("open catalog");
         let id = add_archived_canonical(&db, "/big.txt", 9, FilePhase::Archived);
+        seed_archive_done(&db);
         let member = db
             .get_file_by_id::<FileRecord>(id)
             .expect("get")

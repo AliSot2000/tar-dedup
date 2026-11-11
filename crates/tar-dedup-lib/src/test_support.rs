@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::archive::ArchiveRTArgs;
 use crate::common::defaults::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::common::files::original_extension;
+use crate::config::phases::{ArchiveRuntimeState, PipelinePhase};
 use crate::config::{
     ArchiveConfig, ArchivePipelineOptions, CaptureOptions, ExtractConfig, FilterOptions,
     IndexingOptions, ProcessOptions, SparseOptions,
@@ -37,6 +38,16 @@ pub fn seed_filter_reason(db: &Database) {
         ).expect("seed internal include rule");
         Ok(())
     }).expect("seed internal include rule tx");
+}
+
+/// Persist the archive runtime state a finished archive work-db always carries
+/// (`archive.rs::run` saves it on every phase transition). Catalogs built for
+/// extract tests must mirror that, or `normalize_installed_catalog` (which
+/// requires the state to coerce it to `Done`) panics.
+pub fn seed_archive_done(db: &Database) {
+    let mut state = ArchiveRuntimeState::new();
+    state.phase = PipelinePhase::Done;
+    db.save_archive_runtime_state(&state).expect("seed archive state");
 }
 
 /// Common archive config shared by the archive phase tests: eager filter off,
@@ -389,6 +400,9 @@ pub fn write_catalog(path: &Path) -> String {
         .expect("row")
         .tar_member_name()
         .expect("content id");
+    // A finished archive's work-db carries the archive runtime state (phase
+    // Done); the scan phase requires it when normalizing the installed catalog.
+    seed_archive_done(&db);
     db.checkpoint().expect("checkpoint");
     member
 }
@@ -525,6 +539,7 @@ pub fn build_multi_catalog(dir: &Path, n: usize) -> (ExtractConfig, Vec<String>)
     db.update_file_inspection_per_id(dup, [last_id.0 as u8; 20], 0, false)
         .expect("dupe digest");
     db.set_file_phase(dup, FilePhase::Archived).expect("phase");
+    seed_archive_done(&db);
     db.checkpoint().expect("checkpoint");
     drop(db);
 
