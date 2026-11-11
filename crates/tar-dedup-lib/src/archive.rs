@@ -33,20 +33,6 @@ pub struct ArchiveRTArgs<'a> {
 }
 
 pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
-    // A finished product: a tar with a valid footer, or — in bypass mode — a
-    // product directory holding a baked `tar-dedup.sqlite`.
-    let product = if config.pipeline.bypass_archive {
-        if config.paths.archive_path.join(crate::common::defaults::DB_NAME).is_file() {
-            ProductPresence::Finished
-        } else {
-            ProductPresence::Absent
-        }
-    } else if archive_footer::has_valid_footer(&config.paths.archive_path) {
-        ProductPresence::Finished
-    } else {
-        ProductPresence::Absent
-    };
-
     if config.process.start_policy == StartPolicy::Fresh {
         let _ = cleanup::reset_workdir(&config);
         std::fs::create_dir_all(&config.paths.work_dir)
@@ -54,18 +40,35 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
     }
 
     let lock = acquire_workdir_lock(&config)?;
-
     let db_path = config.paths.db_path();
-    let work = if db_path.is_file() {
+    let (work, product) = if db_path.is_file() {
         let probe = Database::open(&db_path)?;
-        match probe.load_runtime_state()? {
-            Some(state) if state.phase != PipelinePhase::Done => WorkPresence::Incomplete,
-            _ => WorkPresence::Absent,
+        let state = probe.load_runtime_state()?;
+        // INFO: This is the check for bypass_archive; however, the regular pass also has a
+        //  database until the very end, when the footer is written. So even this recovery has a
+        //  db to recover from, so we don't have to infer anything by path presence.
+        match state {
+            None => (WorkPresence::Absent, ProductPresence::Absent),
+            Some(s) => {
+                if s.phase == PipelinePhase::Done {
+                    (WorkPresence::Done, ProductPresence::Finished)
+                } else {
+                    (WorkPresence::Incomplete, ProductPresence::Absent)
+                }
+            }
         }
     } else {
-        WorkPresence::Absent
+        // INFO: Yes that can be made smaller but, this is easier to read.
+        if config.pipeline.bypass_archive {
+            (WorkPresence::Absent, ProductPresence::Absent)
+        } else {
+            if archive_footer::has_valid_footer(&config.paths.archive_path) {
+                (WorkPresence::Done, ProductPresence::Finished)
+            } else {
+                (WorkPresence::Absent, ProductPresence::Absent)
+            }
+        }
     };
-
     let action = resolve_start(config.process.start_policy, work, Some(product))?;
 
     let db = Database::open(&db_path)?;
