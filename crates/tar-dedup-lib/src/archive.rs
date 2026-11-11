@@ -132,6 +132,10 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
             }
             Err(Error::Interrupted) => {
                 db.save_archive_runtime_state(&state)?;
+                // Durable checkpoint on interrupt: mid-phase progress (hash /
+                // dedup / sparsify / stage / tar-writer) is row-committed, so
+                // flush it before returning so a resume picks it up.
+                db.checkpoint()?;
                 if shutdown.is_force() {
                     tracing::warn!(
                         "aborted during {}; in-flight progress discarded — rerun to resume",
@@ -152,6 +156,9 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         if let Some(next) = state.phase.next(config.filter.eager_filter) {
             state.phase = next;
             db.save_archive_runtime_state(&state)?;
+            // Every phase transition is a durable boundary: the work-db file
+            // must be self-contained (WAL TRUNCATE) once the next phase begins.
+            db.checkpoint()?;
         } else {
             // Exit loop, if we have arrived at end of pipeline.
             break;

@@ -104,73 +104,99 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 
         let completed = state.phase;
 
-        match state.phase {
-            ExtractPipelinePhase::ScanTar => {
-                let (edb, scan_wrote) = timed(|| scan::run(&config, &shutdown,
-                    &mut pre_db_recorder, &mut filter_buffer, &progress),
-                    completed.as_str())?;
-                db = Some(edb);
-                // The scan phase reports whether it persisted the extract config
-                // (a bypass stray-file may have escalated keep_stage). Only write
-                // it here if the scan did not.
-                config_written |= scan_wrote;
-                if !config_written {
-                    let ldb = db.as_ref().expect(OPT_DB_ERROR);
-                    ldb.set_extract_config(&config)?;
-                    config_written = true;
+        let phase_result: Result<()> = (|| {
+            match state.phase {
+                ExtractPipelinePhase::ScanTar => {
+                    let (edb, scan_wrote) = timed(|| scan::run(&config, &shutdown,
+                        &mut pre_db_recorder, &mut filter_buffer, &progress),
+                        completed.as_str())?;
+                    db = Some(edb);
+                    // The scan phase reports whether it persisted the extract config
+                    // (a bypass stray-file may have escalated keep_stage). Only write
+                    // it here if the scan did not.
+                    config_written |= scan_wrote;
+                    if !config_written {
+                        let ldb = db.as_ref().expect(OPT_DB_ERROR);
+                        ldb.set_extract_config(&config)?;
+                        config_written = true;
+                    }
+                    config = db
+                        .as_ref()
+                        .expect(OPT_DB_ERROR)
+                        .get_extract_config()?
+                        .expect("Config should have been set until now.");
+                    progress.set_table_size(db
+                        .as_ref()
+                        .expect(OPT_DB_ERROR)
+                        .count_entries()?);
                 }
-                config = db
-                    .as_ref()
-                    .expect(OPT_DB_ERROR)
-                    .get_extract_config()?
-                    .expect("Config should have been set until now.");
-                progress.set_table_size(db
-                    .as_ref()
-                    .expect(OPT_DB_ERROR)
-                    .count_entries()?);
+                ExtractPipelinePhase::Filter if let Some(ref edb) = db => {
+                    let rt = ExtractRTArgs {
+                        config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                    };
+                    timed(|| filter::run(&rt, false), completed.as_str())?;
+                }
+                ExtractPipelinePhase::Rehash if let Some(ref edb) = db => {
+                    let rt = ExtractRTArgs {
+                        config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                    };
+                    timed(|| rehash::run(&rt), completed.as_str())?;
+                }
+                ExtractPipelinePhase::PlacementPrologue if let Some(ref edb) = db => {
+                    let rt = ExtractRTArgs {
+                        config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                    };
+                    timed(|| place_prologue::run(&rt), completed.as_str())?;
+                }
+                ExtractPipelinePhase::Place if let Some(ref edb) = db => {
+                    let rt = ExtractRTArgs {
+                        config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                    };
+                    timed(|| place::run(&rt), completed.as_str())?;
+                }
+                ExtractPipelinePhase::Permissions if let Some(ref edb) = db => {
+                    let rt = ExtractRTArgs {
+                        config: &config, db: edb, shutdown: &shutdown, progress: &progress
+                    };
+                    timed(|| permissions::run(&rt), completed.as_str())?;
+                }
+                ExtractPipelinePhase::Cleanup if let Some(ref edb) = db => {
+                    state.phase = ExtractPipelinePhase::Done;
+                    edb.save_extract_runtime_state(&state)?;
+                    timed(|| cleanup::cleanup_workdir(
+                        &config, CleanupMode::Extract, config.bypass_archive),
+                        completed.as_str())?;
+                }
+                other => panic!(
+                    "INVARIANT ERROR: reached extract phase `{}` without a database",
+                    other.as_str(),
+                ),
             }
-            ExtractPipelinePhase::Filter if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs {
-                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
-                };
-                timed(|| filter::run(&rt, false), completed.as_str())?;
+            Ok(())
+        })();
+
+        match phase_result {
+            Ok(()) => {
+                // Cleanup completed the run; exit the loop without the integrity
+                // battery / transition machinery.
+                if state.phase == ExtractPipelinePhase::Done {
+                    break;
+                }
             }
-            ExtractPipelinePhase::Rehash if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs {
-                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
-                };
-                timed(|| rehash::run(&rt), completed.as_str())?;
+            Err(Error::Interrupted) => {
+                if let Some(ref edb) = db {
+                    edb.save_extract_runtime_state(&state)?;
+                    // Only the resumable phases (scan, rehash) flush their
+                    // mid-phase progress on interrupt; prologue / place /
+                    // permissions must restart cleanly, so no checkpoint there.
+                    if matches!(completed,
+                        ExtractPipelinePhase::ScanTar | ExtractPipelinePhase::Rehash) {
+                        edb.checkpoint()?;
+                    }
+                }
+                return Ok(());
             }
-            ExtractPipelinePhase::PlacementPrologue if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs {
-                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
-                };
-                timed(|| place_prologue::run(&rt), completed.as_str())?;
-            }
-            ExtractPipelinePhase::Place if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs {
-                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
-                };
-                timed(|| place::run(&rt), completed.as_str())?;
-            }
-            ExtractPipelinePhase::Permissions if let Some(ref edb) = db => {
-                let rt = ExtractRTArgs {
-                    config: &config, db: edb, shutdown: &shutdown, progress: &progress
-                };
-                timed(|| permissions::run(&rt), completed.as_str())?;
-            }
-            ExtractPipelinePhase::Cleanup if let Some(ref edb) = db => {
-                state.phase = ExtractPipelinePhase::Done;
-                edb.save_extract_runtime_state(&state)?;
-                timed(|| cleanup::cleanup_workdir(
-                    &config, CleanupMode::Extract, config.bypass_archive),
-                    completed.as_str())?;
-                break;
-            }
-            other => panic!(
-                "INVARIANT ERROR: reached extract phase `{}` without a database",
-                other.as_str(),
-            ),
+            Err(e) => return Err(e),
         }
 
         // Cross-phase integrity battery after each completed phase (the Cleanup
@@ -192,6 +218,9 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         state.phase = next;
         if let Some(ref edb) = db {
             edb.save_extract_runtime_state(&state)?;
+            // Every phase transition is a durable boundary: the work-db file
+            // must be self-contained (WAL TRUNCATE) once the next phase begins.
+            edb.checkpoint()?;
         }
 
         // Exit after the configured stage: state is saved above, so a later
