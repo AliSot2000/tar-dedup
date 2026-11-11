@@ -2620,7 +2620,10 @@ mod tests {
                                           Path::new("/x"), Path::new("/x"), Path::new("/x"),
                                           crate::db::flags::SourceFlags::default(),
         ).expect("source");
-        world.db.insert_ref_out_rows(&[(d1, sid), (d2, sid)]).expect("ref out");
+        // ref_out now requires a files row; mint one per dir mapping.
+        let f1 = world.add_place_file("/src/a", 0, 1, FileType::Directory);
+        let f2 = world.add_place_file("/src/a/b", 0, 2, FileType::Directory);
+        world.db.insert_ref_out_rows(&[(d1, sid, f1), (d2, sid, f2)]).expect("ref out");
         let mut recorder = Recorder::new(&world.db, true, Some(0));
         prepare_extraction_dir(&world.rt(), &mut recorder).expect("prepare");
         assert!(root.join("a/b").is_dir());
@@ -2638,7 +2641,8 @@ mod tests {
                                           Path::new("/x"), Path::new("/x"), Path::new("/x"),
                                           crate::db::flags::SourceFlags::default(),
         ).expect("source");
-        world.db.insert_ref_out_rows(&[(d1, sid)]).expect("ref out");
+        let f1 = world.add_place_file("/src/a", 0, 1, FileType::Directory);
+        world.db.insert_ref_out_rows(&[(d1, sid, f1)]).expect("ref out");
         let mut recorder = Recorder::new(&world.db, true, Some(0));
         let sh = Shutdown::detached();
         sh.request_force();
@@ -2947,10 +2951,10 @@ mod tests {
                                              crate::db::flags::SourceFlags::default()
                                                  .with(crate::db::flags::SourceFlag::IsDirectory, true),
             ).expect("source");
-            let refs: &[(crate::db::types::OutTreeId, i64)] = if disjoint {
-                &[(out_a, s1), (out_b, s2)]
+            let refs: &[(OutTreeId, i64, FileId)] = if disjoint {
+                &[(out_a, s1, fa), (out_b, s2, fb)]
             } else {
-                &[(out_a, s1), (out_b, s1), (out_b, s2)]
+                &[(out_a, s1, fa), (out_b, s1, fb), (out_b, s2, fb)]
             };
             world.db.insert_ref_out_rows(refs).expect("ref out");
         }

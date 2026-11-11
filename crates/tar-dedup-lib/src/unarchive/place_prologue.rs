@@ -880,7 +880,7 @@ mod tests {
     // ---- populate_out_tree_abs / rel ----------------------------------------
 
     #[test]
-    fn populate_out_tree_abs_maps_and_leaves_ref_out_empty() {
+    fn populate_out_tree_abs_maps_and_populates_ref_out() {
         let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |_| {});
         world.add_file(None, "/var/docker/cache/one.txt", 1, FileType::File);
         world.add_file(None, "/var/docker/cache/two.txt", 2, FileType::File);
@@ -889,7 +889,11 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|(p, _, _, _)| p == "/ed/var/docker/cache/one.txt"));
         assert!(rows.iter().any(|(p, _, _, _)| p == "/ed/var/docker/cache/two.txt"));
-        assert_eq!(world.db.count_ref_out_rows().expect("count"), 0);
+        // Abs mode records every mapping under the reserved absolute-root source
+        // (id 0), so `clobber_statistics` sees conflicts in every placement mode.
+        assert_eq!(world.db.count_ref_out_rows().expect("count"), 2);
+        let (entries, pool) = world.db.clobber_statistics().expect("clobber");
+        assert_eq!((entries, pool), (0, 0), "distinct targets, no clobber");
     }
 
     #[test]
@@ -1076,10 +1080,15 @@ mod tests {
         assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/sub/two.txt"));
         assert!(!ot.iter().any(|(p, _, _, _)| p == "/ed/var/cache"),
                 "collapsed top dir row dropped");
-        // Even though `ensure_parent` sees `/ed` as the parent of `/ed/one.txt`,
-        // the effective-root row must be dropped so metadata is never applied there.
-        assert!(!ot.iter().any(|(p, _, _, _)| p == "/ed"),
-                "effective-extraction-root row must be dropped");
+        // After re-rooting, `/ed/one.txt` and `/ed/sub/two.txt` need their
+        // parents minted (`ensure_parent`): `/ed` and `/ed/sub`. The root row is
+        // a file_id-NULL scaffold so no metadata is ever applied to it.
+        assert!(ot.iter().any(|(p, flags, fid, _)| p == "/ed"
+                && fid.is_none() && (flags & OutTreeFlag::IsDirectory.mask_i64()) != 0),
+                "extraction-root parent scaffold must be minted");
+        assert!(ot.iter().any(|(p, flags, fid, _)| p == "/ed/sub"
+                && fid.is_none() && (flags & OutTreeFlag::IsDirectory.mask_i64()) != 0),
+                "sub parent scaffold must be minted");
     }
 
     #[test]

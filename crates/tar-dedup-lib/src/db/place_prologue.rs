@@ -689,8 +689,20 @@ mod tests {
         insert_out(&db, "/ed/mnt/drive"); // id 1: top dir, collapses to root, dropped
         insert_out(&db, "/ed/mnt/drive/a.pdf"); // id 2
         insert_out(&db, "/ed/mnt/drive/b.pdf"); // id 3
+        // ref_out.file_id requires real files rows; bind each out_tree row to one.
+        for (fid, abs) in [(1i64, "/ed/mnt/drive"), (2, "/ed/mnt/drive/a.pdf"), (3, "/ed/mnt/drive/b.pdf")] {
+            db.execute(
+                "INSERT INTO files (id, abs_path, abs_path_raw, ftype, ext, size) \
+                 VALUES (:id, :abs, :abs, 'dir', '', 0)",
+                named_params! { ":id": fid, ":abs": abs },
+            ).unwrap();
+            db.execute(
+                "UPDATE out_tree SET file_id = :fid WHERE id = :fid",
+                named_params! { ":fid": fid },
+            ).unwrap();
+        }
         db.execute(
-            "INSERT INTO ref_out (out_id, source_id) VALUES (1, 1), (2, 1), (3, 1)",
+            "INSERT INTO ref_out (out_id, source_id, file_id) VALUES (1, 1, 1), (2, 1, 2), (3, 1, 3)",
             [],
         ).unwrap();
         let n = strip_common_prefix(&mut db, Path::new("/ed"), Path::new("mnt/drive")).expect("ok");

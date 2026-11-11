@@ -245,4 +245,29 @@ mod tests {
             .unwrap()
             .is_none());
     }
+
+    /// The reserved id=0 absolute-root source must never surface through the
+    /// source readers: `list_sources` gates on `id > 0` and the overlap scan on
+    /// `id_gt_zero()`. It also carries no IsDirectory flag, so even an
+    /// unguarded overlap probe would not match its `/` path.
+    #[test]
+    fn sentinel_source_never_surfaces() {
+        let conn = conn();
+        let sentinel: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM source WHERE id = 0", [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(sentinel, 1, "schema reserves the id=0 absolute-root source");
+        // `list_sources` batches from id > starting_id; a 0-seeded cursor is the
+        // `id > 0` sentinel gate.
+        let all = list_sources(&conn, None, 0, 100).unwrap();
+        assert!(
+            all.iter().all(|s| s.id > 0),
+            "sentinel id must never be listed: {all:?}"
+        );
+        // The `/` absolute path must not overlap anything (no dir flag + guarded).
+        assert!(find_overlapping_source(&conn, Path::new("/x"), false)
+            .unwrap()
+            .is_none());
+    }
 }
