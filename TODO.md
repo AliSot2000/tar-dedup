@@ -25,9 +25,10 @@
 - [X] Unthread db_path out of the intro.
 - [X] Fix eager cleanup of stage. Iterate through files like in copy canonicals and remove all of them in the stage. 
   (Attempt on on FileExtracted and ErrorWhileExtracting.)
-- [ ] .tdd file suffix s.t. tdd.tar.xz is produced
+- [X] .tdd file suffix s.t. tdd.tar.xz is produced
 - [X] Eager Delete of stage
 - [X] Delete files on incomplete move 
+- [ ] Number of placement conflicts (instances where multiple file_ids point to the same out_tree_id)
 
 ## Refactor:
 - [X] Drop unused db functions
