@@ -521,7 +521,6 @@ fn run_inner(
     if let Some(d) = rt.db.as_ref() {
         d.save_extract_scan_state(&scan)?;
         flush_scan_recorder(recorder, rt.db.as_ref())?;
-        d.checkpoint()?;
     }
 
     if scan.nt_stopped {
