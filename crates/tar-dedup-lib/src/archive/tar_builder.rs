@@ -7,6 +7,7 @@ use crate::archive_footer;
 use crate::common::defaults::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::common::files::{read_probe, warn_if_times_changed};
 use crate::common::{batched_stepped_loop, io_buffer};
+use crate::config::PipelinePhase;
 use crate::db::ErrorPhase;
 use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FilePhase, StrippedRecord};
@@ -512,6 +513,12 @@ fn end_session(
                 // phase/global bars so the trailer hash is the only bar shown.
                 rt.progress.single_bar();
                 let hash_bar = rt.progress.push_sub_bar("archive integrity: ", BarKind::Bytes);
+
+                let mut eager_state = rt.db.load_archive_runtime_state()?
+                    .expect("RT State set after every phase. Must re present");
+                eager_state.phase = PipelinePhase::Done;
+                rt.db.save_archive_runtime_state(&eager_state)?;
+
                 match archive_footer::write_footer(
                     &rt.config.paths.archive_path,
                     &rt.config.paths.db_path(),

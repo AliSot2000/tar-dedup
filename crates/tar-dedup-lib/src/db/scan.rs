@@ -1,9 +1,11 @@
 use crate::common::utf8::require_utf8;
+use crate::config::PipelinePhase;
 use crate::db::common::{
     generate_archive_and_extract_filter, generate_archive_filter, with_transaction,
 };
 use crate::db::content_id::parse_content_id;
 use crate::db::flags::FileFlag;
+use crate::db::state::{load_archive_runtime_state, save_archive_runtime_state};
 use crate::db::types::FileId;
 use crate::db::{flags, meta};
 use crate::error::{Error, Result, ToPanic};
@@ -362,6 +364,7 @@ pub fn should_extract_canonical_id(conn: &Connection, id: FileId) -> Result<bool
 ///    awaiting a confirmation snapshot) or `archived` (footer provenance) — so a
 ///    payload that is present-but-unconfirmed stays visible and attributable at the
 ///    end of the scan.
+/// 4. For later resume to work, we need to ensure that the archive runtime phase is "Done""
 pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
     let bit = FileFlag::FileExtracted.mask_i64();
     conn.execute(
@@ -392,6 +395,10 @@ pub fn normalize_installed_catalog(conn: &mut Connection) -> Result<()> {
              OR NOT ({filter})
            )"
     ), []).to_panic()?;
+    let mut cfg = load_archive_runtime_state(conn).to_panic()?
+        .expect("RT State set after every phase. Must re present");
+    cfg.phase = PipelinePhase::Done;
+    save_archive_runtime_state(conn, &cfg).to_panic()?;
     Ok(())
 }
 
