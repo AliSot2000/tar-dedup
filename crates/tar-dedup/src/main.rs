@@ -1,8 +1,7 @@
 use clap::{CommandFactory, Parser};
-
 use tar_dedup_lib::cli::{Cli, Command};
 use tar_dedup_lib::common::start::StartPolicy;
-use tar_dedup_lib::config::{ArchiveConfig, ExtractConfig, ResumeConfig, resolve_log_flags};
+use tar_dedup_lib::config::{ArchiveConfig, ExtractConfig, ExtractPipelinePhase, PipelinePhase, ResumeConfig, resolve_log_flags};
 use tar_dedup_lib::db::Database;
 use tar_dedup_lib::error::Error;
 use tar_dedup_lib::shutdown::Shutdown;
@@ -28,34 +27,33 @@ fn main() -> tar_dedup_lib::error::Result<()> {
         Command::Resume(args) => {
             let resume = ResumeConfig::try_from(&args)?;
             let db = Database::open(&resume.db_path)?;
-            if db.load_archive_runtime_state()?.is_some() {
-                let mut stored = db.get_archive_config()?.ok_or_else(|| Error::Config(
-                    "no stored archive configuration in work database; \
-                     restart the run with `--fresh` instead".into(),
-                ))?;
-                stored.process.start_policy = StartPolicy::Resume;
-                stored.process.jobs = resume.overrides.jobs.unwrap_or(stored.process.jobs);
-                stored.process.io_jobs = resume.overrides.io_jobs.unwrap_or(stored.process.io_jobs);
-                if let Some(exit) = resume.overrides.exit_after_stage.as_ref() {
-                    stored.process.exit_after_stage = Some(*exit);
+            let archive_rt_state = db.load_archive_runtime_state()?;
+            let extract_rt_state = db.load_extract_runtime_state()?;
+            match (archive_rt_state, extract_rt_state) {
+                (None, None) => Err(Error::Config(
+                    "no incomplete archive or extract state in work database".into())),
+                (None, Some(_)) => panic!("INVARIANT ERROR: ExtractRTState present but no \
+                    ArchiveRTState. Bug or corrupt database."),
+                (Some(a), None) => { if a.phase == PipelinePhase::Done {
+                        println!("Provided archive is already completed. Nothing to do.");
+                        Ok(())
+                    } else {
+                        let prepped_cfg = prep_archive_config(&db, resume)?;
+                        tar_dedup_lib::archive::run(prepped_cfg, shutdown)
+                    }
+                },
+                (Some(a), Some(e)) => {
+                    // assert_eq!(a.phase, PipelinePhase::Done, "INVARIANT ERROR: Extraction may only \
+                    //     start after archive is completed.");
+                    if e.phase == ExtractPipelinePhase::Done {
+                        println!("Provided archive is already extracted. Nothing to do.");
+                        Ok(())
+                    } else {
+                        let prepped_cfg = prep_extract_config(&db, resume)?;
+                        tar_dedup_lib::unarchive::run(prepped_cfg, shutdown)
+
+                    }
                 }
-                tar_dedup_lib::archive::run(stored, shutdown)
-            } else if db.load_extract_runtime_state()?.is_some() {
-                let mut stored = db.get_extract_config()?.ok_or_else(|| Error::Config(
-                    "no stored extract configuration in work database; \
-                     restart the run with `--fresh` instead".into(),
-                ))?;
-                stored.process.start_policy = StartPolicy::Resume;
-                stored.process.jobs = resume.overrides.jobs.unwrap_or(stored.process.jobs);
-                stored.process.io_jobs = resume.overrides.io_jobs.unwrap_or(stored.process.io_jobs);
-                if let Some(exit) = resume.overrides.exit_after_stage.as_ref() {
-                    stored.process.exit_after_stage = Some(*exit);
-                }
-                tar_dedup_lib::unarchive::run(stored, shutdown)
-            } else {
-                Err(Error::Config(
-                    "no incomplete archive or extract state in work database".into(),
-                ))
             }
         }
         Command::Inspect(args) => tar_dedup_lib::cmd::inspect::run(&args),
@@ -71,4 +69,36 @@ fn main() -> tar_dedup_lib::error::Result<()> {
             Ok(())
         }
     }
+}
+
+fn prep_archive_config(db: &Database, resume: ResumeConfig) -> Result<ArchiveConfig, Error> {
+    let mut stored = db
+        .get_archive_config()?
+        .ok_or_else(|| Error::Config(
+            "no stored archive configuration in work database; \
+                                restart the run with `--fresh` instead".into(),
+        ))?;
+    stored.process.start_policy = StartPolicy::Resume;
+    stored.process.jobs = resume.overrides.jobs
+        .unwrap_or(stored.process.jobs);
+    stored.process.io_jobs = resume.overrides.io_jobs
+        .unwrap_or(stored.process.io_jobs);
+    if let Some(exit) = resume.overrides.exit_after_stage.as_ref() {
+        stored.process.exit_after_stage = Some(*exit);
+    }
+    Ok(stored)
+}
+
+fn prep_extract_config(db: &Database, resume: ResumeConfig) -> Result<ExtractConfig, Error> {
+    let mut stored = db.get_extract_config()?.ok_or_else(|| Error::Config(
+        "no stored extract configuration in work database; \
+                     restart the run with `--fresh` instead".into(),
+    ))?;
+    stored.process.start_policy = StartPolicy::Resume;
+    stored.process.jobs = resume.overrides.jobs.unwrap_or(stored.process.jobs);
+    stored.process.io_jobs = resume.overrides.io_jobs.unwrap_or(stored.process.io_jobs);
+    if let Some(exit) = resume.overrides.exit_after_stage.as_ref() {
+        stored.process.exit_after_stage = Some(*exit);
+    }
+    Ok(stored)
 }
