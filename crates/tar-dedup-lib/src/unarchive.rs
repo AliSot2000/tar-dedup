@@ -473,7 +473,8 @@ fn bypass_archive_extract_round_trip() {
     crate::archive::run(acfg, Shutdown::detached()).expect("bypass archive");
 
     let product = dir.path().join("product");
-    assert!(product.join("tar-dedup.sqlite").is_file(), "baked catalog present");
+    assert!(product.join(SNAPSHOT_INIT_TAR_NAME).is_file(), "manifest present");
+    assert!(!product.join(DB_NAME).exists(), "no work db before extract");
 
     // 2. Extract side: -f <same product> with bypass_archive, work-dir = product.
     let mut xcfg = ExtractConfig::default();
@@ -511,8 +512,18 @@ fn bypass_archive_extract_round_trip() {
         .expect("dup.txt materialized under the output tree");
     assert_eq!(std::fs::read(&hello).expect("hello"), b"hello bypass\n");
     assert_eq!(std::fs::read(&dup).expect("dup"), b"hello bypass\n");
-    // The product dir (the "archive") survives the extract run.
-    assert!(product.join("tar-dedup.sqlite").is_file(), "product dir kept after extract");
+    // The immutable catalog survived extraction untouched; with retention
+    // `Always` the disposable work DB is kept alongside it.
+    let manifest = product.join(SNAPSHOT_INIT_TAR_NAME);
+    assert!(manifest.is_file(), "manifest kept after extract");
+    assert!(product.join(DB_NAME).is_file(), "work db kept (--db-retention always)");
+    let mdb = Database::open(&manifest).expect("open manifest");
+    assert_eq!(mdb.get_bypass_archive().unwrap(), Some(true), "manifest unchanged");
+    assert!(
+        mdb.load_extract_runtime_state().expect("manifest extract state").is_none(),
+        "manifest was never mutated by extraction",
+    );
+    assert_eq!(mdb.count_errors(None).expect("manifest errors"), 0, "no stray-file errors");
 }
 
 #[test]
@@ -568,6 +579,116 @@ fn extract_run_exit_after_stage_then_resume_to_done() {
         }).expect("save done");
         let (work, _) = resolve_extract_work(&db_path).expect("done");
         assert_eq!(work, WorkPresence::Done);
+    }
+
+    fn bypass_catalog_config(dir: &Path) -> ExtractConfig {
+        let product = dir.join("product");
+        std::fs::create_dir_all(&product).expect("mk product");
+        let mut cfg = ExtractConfig::default();
+        cfg.paths.archive_path = product.clone();
+        cfg.paths.work_dir = product.clone();
+        cfg.paths.directory = dir.to_path_buf();
+        cfg.paths.output_dir = dir.join("out");
+        cfg.bypass_archive = true;
+        cfg
+    }
+
+    /// Write a catalog as a finished archive left it: bypass meta + archive phase
+    /// `Done`, no extract runtime state.
+    fn write_finished_catalog(path: &Path) {
+        let db = Database::open(path).expect("open catalog");
+        db.set_bypass_archive(true).expect("bypass meta");
+        let mut state = crate::config::ArchiveRuntimeState::new();
+        state.phase = crate::config::PipelinePhase::Done;
+        db.save_archive_runtime_state(&state).expect("archive done");
+        db.checkpoint().expect("checkpoint");
+    }
+
+    #[test]
+    fn ensure_bypass_catalog_upgrades_pristine_legacy_db() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = bypass_catalog_config(dir.path());
+        // Legacy product: only the pristine baked `tar-dedup.sqlite`.
+        write_finished_catalog(&cfg.paths.db_path());
+
+        ensure_bypass_catalog(&cfg, false).expect("upgrade");
+
+        let manifest = cfg.paths.work_dir.join(SNAPSHOT_INIT_TAR_NAME);
+        assert!(manifest.is_file(), "manifest promoted");
+        assert!(cfg.paths.db_path().is_file(), "work db re-materialized");
+        let mdb = Database::open(&manifest).expect("open manifest");
+        assert_eq!(mdb.get_bypass_archive().unwrap(), Some(true));
+        assert!(cfg.paths.db_path().exists());
+    }
+
+    #[test]
+    fn ensure_bypass_catalog_errors_without_usable_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = bypass_catalog_config(dir.path());
+
+        // Nothing at all.
+        let err = ensure_bypass_catalog(&cfg, false).unwrap_err();
+        assert!(err.to_string().contains("has no manifest.sqlite"), "{err}");
+
+        // A bypass DB whose archive never finished is not a valid catalog.
+        let db = Database::open(&cfg.paths.db_path()).expect("open");
+        db.set_bypass_archive(true).expect("bypass meta");
+        db.checkpoint().expect("checkpoint");
+        drop(db);
+        let err = ensure_bypass_catalog(&cfg, false).unwrap_err();
+        assert!(err.to_string().contains("not a pristine catalog"), "{err}");
+
+        // A finished archive DB already touched by an extraction is not pristine
+        // either (the canonical catalog was clobbered by an old run).
+        write_finished_catalog(&cfg.paths.db_path());
+        let db = Database::open(&cfg.paths.db_path()).expect("open");
+        db.init_extract_runtime_state().expect("extract state");
+        db.checkpoint().expect("checkpoint");
+        drop(db);
+        let err = ensure_bypass_catalog(&cfg, false).unwrap_err();
+        assert!(err.to_string().contains("not a pristine catalog"), "{err}");
+    }
+
+    #[test]
+    fn ensure_bypass_catalog_fresh_rebuilds_work_db_from_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = bypass_catalog_config(dir.path());
+        let manifest = cfg.paths.work_dir.join(SNAPSHOT_INIT_TAR_NAME);
+        write_finished_catalog(&manifest);
+
+        // Materialize, dirty the work DB, then reset it via `--fresh`.
+        ensure_bypass_catalog(&cfg, false).expect("materialize");
+        let wdb = Database::open(&cfg.paths.db_path()).expect("open work");
+        wdb.save_extract_runtime_state(&ExtractRuntimeState {
+            phase: ExtractPipelinePhase::Place,
+            snapshots_ingested: 42,
+        }).expect("dirty");
+        wdb.checkpoint().expect("checkpoint");
+        drop(wdb);
+
+        ensure_bypass_catalog(&cfg, true).expect("fresh reset");
+        assert!(manifest.is_file(), "manifest untouched by fresh");
+        let reset = Database::open(&cfg.paths.db_path()).expect("open reset work");
+        assert!(reset.load_extract_runtime_state().expect("state").is_none(),
+                "work db reset to the pristine manifest");
+    }
+
+    #[test]
+    fn bypass_extract_done_cleanup_removes_work_db_but_keeps_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cfg = bypass_catalog_config(dir.path());
+        let manifest = cfg.paths.work_dir.join(SNAPSHOT_INIT_TAR_NAME);
+        write_finished_catalog(&manifest);
+
+        cfg.process.cleanup.keep_stage = crate::config::StageKeep::Always;
+        cfg.process.cleanup.db_retention = crate::config::DbRetention::OnError;
+
+        ensure_bypass_catalog(&cfg, false).expect("materialize");
+        assert!(cfg.paths.db_path().is_file(), "work db materialized");
+
+        cleanup::cleanup_workdir(&cfg, CleanupMode::Extract, true).expect("cleanup");
+        assert!(manifest.is_file(), "manifest survives cleanup");
+        assert!(!cfg.paths.db_path().exists(), "clean done deletes the work db");
     }
 
     #[test]

@@ -519,6 +519,19 @@ mod tests {
     }
 
     #[test]
+    fn copy_file_reflink_copies_content_and_replaces_existing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("src.bin");
+        let dst = dir.path().join("dst.bin");
+        fs::write(&src, b"reflink-or-copy").expect("write src");
+        fs::write(&dst, b"stale").expect("write dst");
+
+        copy_file_reflink(&src, &dst).expect("copy");
+
+        assert_eq!(fs::read(&dst).expect("read dst"), b"reflink-or-copy");
+    }
+
+    #[test]
     fn copy_reader_batched_interrupt_removes_partial_dst() {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("src.bin");

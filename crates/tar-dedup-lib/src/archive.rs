@@ -14,6 +14,7 @@ use fs4::fs_std::FileExt;
 
 use crate::archive_footer;
 use crate::common::cleanup::{self, CleanupMode};
+use crate::common::defaults::SNAPSHOT_INIT_TAR_NAME;
 use crate::common::start::{
     ProductPresence, StartAction, StartPolicy, WorkPresence, resolve_start,
 };
@@ -448,9 +449,10 @@ mod tests {
 
         let product = dir.path().join("product");
         assert!(product.is_dir(), "product dir exists");
-        // A baked catalog sqlite sits beside the payload files.
-        assert!(product.join("tar-dedup.sqlite").is_file(), "baked catalog present");
-        let db = Database::open(&product.join("tar-dedup.sqlite")).expect("open product db");
+        // The baked catalog is promoted to the immutable manifest name.
+        assert!(product.join(SNAPSHOT_INIT_TAR_NAME).is_file(), "manifest present");
+        assert!(!product.join("tar-dedup.sqlite").exists(), "work db renamed away");
+        let db = Database::open(&product.join(SNAPSHOT_INIT_TAR_NAME)).expect("open manifest db");
         assert_eq!(db.get_bypass_archive().unwrap(), Some(true), "bypass meta set");
         assert_eq!(db.count_entries().unwrap(), 6, "6 entries (2 dirs + 3 files + symlink)");
         // The number of appended payload files must match the encoded-canonical
@@ -461,8 +463,8 @@ mod tests {
         for entry in std::fs::read_dir(&product).expect("read product") {
             let entry = entry.expect("entry");
             let name = entry.file_name();
-            // The catalog + its sqlite WAL/SHM companions aren't payloads.
-            if name.to_string_lossy().starts_with("tar-dedup.sqlite") {
+            // The catalog is not a payload.
+            if name.to_string_lossy().starts_with(SNAPSHOT_INIT_TAR_NAME) {
                 continue;
             }
             assert!(entry.path().is_file(), "payload is a regular file");
@@ -472,6 +474,17 @@ mod tests {
         drop(db);
         // Work dir cleaned after success.
         assert!(!dir.path().join("astage").exists(), "work dir cleaned");
+    }
+
+    #[test]
+    fn bypass_archive_rerun_after_finished_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = bypass_archive_config(dir.path());
+        run(cfg.clone(), Shutdown::detached()).expect("first run");
+        // Presence reads the finished `manifest.sqlite`, so a second Create run
+        // is rejected as already finished rather than re-archiving the product.
+        let err = run(cfg, Shutdown::detached()).unwrap_err();
+        assert!(err.to_string().contains("work already finished"), "{err}");
     }
 }
 
