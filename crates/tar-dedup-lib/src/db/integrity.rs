@@ -343,35 +343,41 @@ fn count_rehash_verdict_violations(conn: &Connection) -> Result<u64> {
 }
 
 /// E5 — every non-dir `out_tree` row's **direct** parent path exists as a dir
-/// `out_tree` row (the `ensure_parent` contract). A dir row `p` is a prefix
-/// parent of `o` when `o.abs_path == p.abs_path || '/' || …`; the direct parent
-/// is the longest such prefix.
+/// `out_tree` row (the `ensure_parent` contract). Stays entirely in SQLite: a
+/// temp table holds each non-dir row's exact parent path, then an indexed join
+/// against `out_tree(abs_path)` counts the parents that have no dir row. This
+/// keeps the work off the Rust heap and uses `idx_out_tree_abs_path`, unlike the
+/// former correlated `substr` anti-join — O(rows × dirs²) — which could not use
+/// an index and took tens of minutes on a large tree.
 fn count_out_tree_missing_parent(conn: &Connection) -> Result<u64> {
     let dir = OutTreeFlag::IsDirectory.mask_i64();
-    let sql = format!(
-        "SELECT COUNT(*) AS count FROM out_tree o
-         WHERE o.id > 0
-           AND (o.flags & :dir) = 0
-           AND NOT EXISTS (
-               SELECT 1 FROM out_tree p
-               WHERE (p.flags & :dir) != 0
-                 AND p.abs_path != o.abs_path
-                 AND substr(o.abs_path, 1, length(p.abs_path)) = p.abs_path
-                 AND substr(o.abs_path, length(p.abs_path) + 1, 1) = '/'
-                 AND NOT EXISTS (
-                     SELECT 1 FROM out_tree p2
-                     WHERE (p2.flags & :dir) != 0
-                       AND p2.abs_path != o.abs_path
-                       AND substr(o.abs_path, 1, length(p2.abs_path)) = p2.abs_path
-                       AND substr(o.abs_path, length(p2.abs_path) + 1, 1) = '/'
-                       AND length(p2.abs_path) > length(p.abs_path)
-                 )
-           )"
-    );
-    let count: i64 = conn.query_row(
-        &sql,
+    // `rtrim(p, replace(p, '/', ''))` strips the last path component (rtrim
+    // removes trailing chars from the non-slash charset, stopping at the last
+    // '/'); dropping that '/' yields the direct parent.
+    let tx = conn.unchecked_transaction().to_panic()?;
+    tx.execute_batch("DROP TABLE IF EXISTS _e5_parents").to_panic()?;
+    tx.execute(
+        "CREATE TEMP TABLE _e5_parents AS
+         SELECT CASE
+                  WHEN rtrim(abs_path, replace(abs_path, '/', '')) = '/' THEN '/'
+                  ELSE substr(rtrim(abs_path, replace(abs_path, '/', '')),
+                              1,
+                              length(rtrim(abs_path, replace(abs_path, '/', ''))) - 1)
+                END AS parent
+         FROM out_tree
+         WHERE id > 0 AND (flags & :dir) = 0",
+        named_params! { ":dir": dir },
+    ).to_panic()?;
+    let count: i64 = tx.query_row(
+        "SELECT COUNT(*) AS count FROM _e5_parents m
+         WHERE NOT EXISTS (
+             SELECT 1 FROM out_tree d
+             WHERE d.abs_path = m.parent AND (d.flags & :dir) != 0
+         )",
         named_params! { ":dir": dir },
         |r| r.get("count")).to_panic()?;
+    tx.execute_batch("DROP TABLE _e5_parents").to_panic()?;
+    tx.commit().to_panic()?;
     Ok(count as u64)
 }
 
@@ -971,6 +977,14 @@ mod tests {
         // backing dir now exists -> resolved
         out_tree_row(&conn, 4, "/ed/x", None, None, m(OutTreeFlag::IsDirectory));
         assert_eq!(count_out_tree_missing_parent(&conn).unwrap(), 0);
+
+        // A dir *grandparent* alone does not satisfy E5: the direct parent must
+        // be a dir row. `/ed/q` is a non-dir row, so `/ed/q/child.txt` is missing
+        // its direct dir parent even though `/ed` exists as a dir.
+        out_tree_row(&conn, 5, "/ed/q", None, None, 0);
+        out_tree_row(&conn, 6, "/ed/q/child.txt", None, None, 0);
+        out_tree_row(&conn, 7, "/ed", None, None, m(OutTreeFlag::IsDirectory));
+        assert_eq!(count_out_tree_missing_parent(&conn).unwrap(), 1);
     }
 
     #[test]
