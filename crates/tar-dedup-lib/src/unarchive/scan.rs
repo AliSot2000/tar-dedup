@@ -1,7 +1,7 @@
 //! Scan/untar: footer-first catalog, else leading `manifest.sqlite`; cache payloads.
 
 use crate::archive_footer::{read_footer, verify_archive_integrity};
-use crate::common::defaults::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
+use crate::common::defaults::{DB_NAME, SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::common::files::{copy_reader_batched, read_probe};
 use crate::config::{ExtractConfig, StageKeep};
 use crate::db::content_id::parse_content_id;
@@ -208,10 +208,11 @@ pub fn run(
 
 
 /// Scan a `--bypass-archive` directory product (`-f DIR`): the work dir IS the
-/// product dir, so the baked `tar-dedup.sqlite` is already at `db_path()`.
+/// product dir, so `db_path()` holds the disposable work DB materialized from
+/// the product's `manifest.sqlite` by `unarchive::ensure_bypass_catalog`.
 ///
 /// Flow:
-/// 1. open the baked catalog, confirm `bypass_archive` meta,
+/// 1. open the work DB, confirm `bypass_archive` meta,
 /// 2. index the product dir: each `content_id` payload is read-probed (4 MiB
 ///    buffer) and its `files` row marked `FileExtracted`; a read failure marks
 ///    `ErrorWhileExtracting` and is recorded,
@@ -277,8 +278,9 @@ fn run_bypass(
             return Err(Error::Interrupted);
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        // The catalog + its sqlite WAL/SHM companions are not payloads.
-        if name.starts_with("tar-dedup.sqlite") {
+        // The disposable work DB, its companions, and the immutable manifest are
+        // catalogs, not payloads.
+        if name.starts_with(DB_NAME) || name.starts_with(SNAPSHOT_INIT_TAR_NAME) {
             continue;
         }
         let path = entry.path();

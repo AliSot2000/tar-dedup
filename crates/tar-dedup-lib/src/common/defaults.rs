@@ -13,8 +13,9 @@ pub const SNAPSHOT_INIT_TAR_NAME: &str = "manifest.sqlite";
 /// the progress of appending files to the archive.
 pub const SNAPSHOT_TAR_NAME: &str = "snapshot.sqlite";
 
-/// File name of the work database (and of the baked catalog in a bypass
-/// product dir).
+/// File name of a run's disposable work database. In a bypass product the
+/// archive bakes this DB and then renames it to [`SNAPSHOT_INIT_TAR_NAME`]; an
+/// extract re-materializes it from that immutable manifest.
 pub const DB_NAME: &str = "tar-dedup.sqlite";
 
 /// To ensure the program is responsive, we need to periodically check, if the

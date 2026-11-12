@@ -10,6 +10,8 @@ mod scan;
 use std::path::Path;
 
 use crate::common::cleanup::{self, CleanupMode};
+use crate::common::defaults::{DB_NAME, SNAPSHOT_INIT_TAR_NAME};
+use crate::common::files::copy_file_reflink;
 use crate::common::start::{
     StartAction, StartPolicy, WorkPresence, resolve_start,
 };
@@ -53,6 +55,70 @@ fn resolve_extract_work(db_path: &Path) -> Result<(WorkPresence, ExtractRuntimeS
     }
 }
 
+/// Establish the immutable bypass catalog and materialize a disposable extract
+/// work DB from it.
+///
+/// A finished product carries `manifest.sqlite`. A legacy product (or a crash
+/// between the archive's Done checkpoint and its final rename) instead has only
+/// a pristine `tar-dedup.sqlite`, which is promoted. The work DB is always a
+/// reflink/copy of the manifest, so extraction never mutates the catalog.
+fn ensure_bypass_catalog(config: &ExtractConfig, reset_work_db: bool) -> Result<()> {
+    let work_db = config.paths.db_path();
+    let manifest = config.paths.extract_cache_dir().join(SNAPSHOT_INIT_TAR_NAME);
+
+    // Manifest is not present!
+    if !manifest.is_file() {
+        if !work_db.is_file() {
+            return Err(Error::Config(format!(
+                "bypass product {} has no {}; re-run the archive",
+                config.paths.archive_path.display(),
+                SNAPSHOT_INIT_TAR_NAME,
+            )));
+        }
+        let pristine = {
+            let db = Database::open(&work_db)?;
+            let archive_done = db.load_archive_runtime_state()?
+                .is_some_and(|s| s.phase == crate::config::PipelinePhase::Done);
+            archive_done
+                && db.get_bypass_archive()?.unwrap_or(false)
+                && db.load_extract_runtime_state()?.is_none()
+        };
+        if !pristine {
+            return Err(Error::Config(format!(
+                "bypass product {} has no {} and {} is not a pristine catalog; \
+                 re-run the archive",
+                config.paths.archive_path.display(),
+                SNAPSHOT_INIT_TAR_NAME,
+                DB_NAME,
+            )));
+        }
+        std::fs::rename(&work_db, &manifest).map_err(|e| Error::io(&manifest, e))?;
+    }
+
+    if reset_work_db || !work_db.is_file() {
+        remove_work_db(&work_db)?;
+        let tmp = work_db.with_file_name(format!("{DB_NAME}.tmp"));
+        copy_file_reflink(&manifest, &tmp)?;
+        std::fs::rename(&tmp, &work_db).map_err(|e| Error::io(&work_db, e))?;
+    }
+    Ok(())
+}
+
+/// Remove an extract work DB together with its SQLite companions.
+fn remove_work_db(work_db: &Path) -> Result<()> {
+    for path in [
+        work_db.to_path_buf(),
+        work_db.with_file_name(format!("{DB_NAME}-wal")),
+        work_db.with_file_name(format!("{DB_NAME}-shm")),
+        work_db.with_file_name(format!("{DB_NAME}.tmp")),
+    ] {
+        if path.is_file() {
+            std::fs::remove_file(&path).map_err(|e| Error::io(&path, e))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     let mut config = outer_config;
     validate_exit_after_stage(&config)?;
@@ -61,11 +127,18 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     register_mpb(progress.mp_handle());
     let mut bars = BarScope::new(&progress);
 
-    if config.process.start_policy == StartPolicy::Fresh {
+    if config.process.start_policy == StartPolicy::Fresh && !config.bypass_archive {
         let _ = cleanup::reset_workdir(&config);
     }
     std::fs::create_dir_all(&config.paths.work_dir)
         .map_err(|e| Error::io(&config.paths.work_dir, e))?;
+
+    // A bypass product's payloads/manifest must never be wiped by `--fresh`:
+    // only the disposable work DB is reset, then re-materialized from the
+    // immutable manifest.
+    if config.bypass_archive {
+        ensure_bypass_catalog(&config, config.process.start_policy == StartPolicy::Fresh)?;
+    }
 
     let (work, mut state) = resolve_extract_work(
         &config.paths.db_path()

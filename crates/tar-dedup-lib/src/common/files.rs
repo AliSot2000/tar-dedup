@@ -41,6 +41,20 @@ where
     Ok(())
 }
 
+/// Copy `src` to `dst`, preferring a copy-on-write reflink and falling back to
+/// a plain `fs::copy`. An existing `dst` is replaced.
+pub fn copy_file_reflink(src: &Path, dst: &Path) -> Result<()> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+    }
+    let _ = fs::remove_file(dst);
+    if reflink::reflink(src, dst).is_ok() {
+        return Ok(());
+    }
+    fs::copy(src, dst).map_err(|e| Error::io(dst, e))?;
+    Ok(())
+}
+
 /// Probe a bypass payload by reading its full content through the io buffer.
 /// Requires the parsed digest (a sha-less name is not a valid payload). Returns
 /// `Ok(true)` when the file reads cleanly to EOF and its length matches the

@@ -12,12 +12,12 @@ use crate::common::transform::{TransformSource, parse_transform_expr};
 use crate::config::filter::FilterOptions;
 use crate::error::{Error, Result};
 
+use super::StageKeep;
 use super::Validate;
 use super::common::{merge_pick_clone, merge_pick_copy, resolve_bool_flag};
 use super::compression::{CompressionFormat, resolve_compression};
 use super::paths::PathLayout;
 use super::process::{CleanupSettings, ExitAfterStage, ProcessOptions};
-use super::{DbRetention, StageKeep};
 use super::{
     archive_stem, default_extract_work_dir, resolve_cwd, resolve_path_to_abs_path, validate_file,
 };
@@ -242,7 +242,7 @@ pub struct ExtractConfig {
     pub sidecar: SidecarMode,
     /// Prefix sidecar names with a leading dot (`{name}.json` → `.{name}.json`).
     pub hidden_sidecar: bool,
-    /// Product is a `--bypass-archive` directory (`-f DIR`): `tar-dedup.sqlite`
+    /// Product is a `--bypass-archive` directory (`-f DIR`): `manifest.sqlite`
     /// + canonical payloads, extracted by validating the pre-extracted directory.
     pub bypass_archive: bool,
 }
@@ -417,10 +417,9 @@ impl ExtractConfig {
             None => c_directory.clone(),
         };
         std::fs::create_dir_all(&c_output_dir).map_err(|e| Error::io(&c_output_dir, e))?;
-        // In bypass mode the product dir IS the work dir: `db_path()` resolves to
-        // `{product}/tar-dedup.sqlite` (the baked catalog) and `extract_cache_dir()`
-        // to the product payloads, so the place/rehash/cleanup stages reuse them in
-        // place.
+        // In bypass mode the product dir IS the work dir. The immutable
+        // `manifest.sqlite` stays in place; `db_path()` is a disposable copy
+        // that extraction mutates and cleanup drops when Done.
         let c_work_dir = match &args.work_dir {
             Some(path) => {
                 if args.bypass_archive {
@@ -530,24 +529,8 @@ impl ExtractConfig {
         } else {
             args.keep_stage
         };
-        let db_retention = if args.bypass_archive {
-            match args.db_retention {
-                DbRetention::Never => {
-                    tracing::warn!(
-                        "With --bypass-archive, deleting the db results in the source being \
-                        deleted. (no retries)`");
-                    DbRetention::Never
-                },
-                DbRetention::OnError => {
-                    tracing::info!(
-                        "With --bypass-archive, db should be kept because it's the sources database.. Switching to `always`");
-                    DbRetention::Always
-                },
-                DbRetention::Always => DbRetention::Always,
-            }
-        } else {
-            args.db_retention
-        };
+        // Kept for parallel with archive!
+        let db_retention = args.db_retention;
 
 
         Ok(Self {

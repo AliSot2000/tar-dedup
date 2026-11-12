@@ -57,16 +57,28 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
                 }
             }
         }
-    } else {
-        // INFO: Yes that can be made smaller but, this is easier to read.
-        if config.pipeline.bypass_archive {
-            (WorkPresence::Absent, ProductPresence::Absent)
-        } else {
-            if archive_footer::has_valid_footer(&config.paths.archive_path) {
-                (WorkPresence::Done, ProductPresence::Finished)
-            } else {
-                (WorkPresence::Absent, ProductPresence::Absent)
+    } else if config.pipeline.bypass_archive {
+        // A finished bypass product renamed its baked work DB to
+        // `manifest.sqlite`; a valid finished catalog there is the finished
+        // product. Anything else means there is no completed bypass run.
+        let manifest = config.paths.work_dir.join(SNAPSHOT_INIT_TAR_NAME);
+        if manifest.is_file() {
+            let probe = Database::open(&manifest)?;
+            match probe.load_archive_runtime_state()? {
+                Some(s) if s.phase == PipelinePhase::Done => {
+                    (WorkPresence::Done, ProductPresence::Finished)
+                }
+                Some(_) => (WorkPresence::Incomplete, ProductPresence::Absent),
+                None => (WorkPresence::Absent, ProductPresence::Absent),
             }
+        } else {
+            (WorkPresence::Absent, ProductPresence::Absent)
+        }
+    } else {
+        if archive_footer::has_valid_footer(&config.paths.archive_path) {
+            (WorkPresence::Done, ProductPresence::Finished)
+        } else {
+            (WorkPresence::Absent, ProductPresence::Absent)
         }
     };
     let action = resolve_start(config.process.start_policy, work, Some(product))?;
@@ -205,6 +217,9 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
     }
 
     cleanup::cleanup_workdir(&config, CleanupMode::Archive, config.pipeline.bypass_archive)?;
+    if config.pipeline.bypass_archive {
+        finalize_bypass_product(&config)?;
+    }
     if config.process.cleanup.keep_stage.always() {
         tracing::info!(
             "keeping stage (--keep-stage): {}",
@@ -215,6 +230,30 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         tracing::info!("exit-after-stage `cleanup`: finished");
     }
 
+    Ok(())
+}
+
+/// Promote the baked bypass work DB to its immutable catalog name
+/// (`manifest.sqlite`) once the DB is closed and cleanup has run. Idempotent:
+/// a product already carrying a manifest is left untouched.
+fn finalize_bypass_product(config: &ArchiveConfig) -> Result<()> {
+    let db_path = config.paths.db_path();
+    let manifest = config.paths.work_dir.join(SNAPSHOT_INIT_TAR_NAME);
+    if manifest.is_file() || !db_path.is_file() {
+        return Ok(());
+    }
+    std::fs::rename(&db_path, &manifest).map_err(|e| Error::io(&manifest, e))?;
+    // A clean close checkpoints and removes these; drop any stragglers so the
+    // product has exactly one self-contained catalog.
+    for suffix in ["-wal", "-shm"] {
+        let mut side = db_path.as_os_str().to_os_string();
+        side.push(suffix);
+        let side = std::path::PathBuf::from(side);
+        if side.is_file() {
+            let _ = std::fs::remove_file(&side);
+        }
+    }
+    tracing::info!("bypass-archive manifest written: {}", manifest.display());
     Ok(())
 }
 

@@ -183,7 +183,7 @@ pub struct ArchivePipelineOptions {
     /// Maximum shard size for content-defined chunking.
     pub max_shard_size: u64,
     pub write_archive_footer: bool,
-    /// Write a directory product (canonical payloads + `tar-dedup.sqlite`)
+    /// Write a directory product (canonical payloads + `manifest.sqlite`)
     /// instead of a tar archive; another tool compresses/stores it.
     pub bypass_archive: bool,
 }

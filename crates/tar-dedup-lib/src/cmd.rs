@@ -14,9 +14,10 @@ pub mod list;
 pub mod query;
 pub mod reset;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::cli::{ArchiveInputArgs, ResetArgs};
+use crate::common::defaults::{DB_NAME, SNAPSHOT_INIT_TAR_NAME};
 use crate::config::resolve_path_to_abs_path;
 use crate::error::{Error, Result};
 
@@ -42,14 +43,7 @@ pub fn resolve_catalog_source(args: &ArchiveInputArgs) -> Result<CatalogSource> 
     }
     if let Some(dir) = args.work_dir.as_ref() {
         let dir = resolve_path_to_abs_path(dir, &cwd);
-        let db = dir.join("tar-dedup.sqlite");
-        if !db.is_file() {
-            return Err(Error::Config(format!(
-                "no work database at {}",
-                db.display()
-            )));
-        }
-        return Ok(CatalogSource::Database(db));
+        return Ok(CatalogSource::Database(resolve_work_db_path(&dir)?));
     }
     match args.archive.as_ref() {
         Some(archive) => {
@@ -66,6 +60,24 @@ pub fn resolve_catalog_source(args: &ArchiveInputArgs) -> Result<CatalogSource> 
             "one of `-f`, `--db`, or `--work-dir` is required".into(),
         )),
     }
+}
+
+/// Resolve a catalog inside a work/product dir. Prefer the disposable work DB;
+/// after a finished bypass extract that file is gone, so fall back to the
+/// immutable `manifest.sqlite`.
+fn resolve_work_db_path(dir: &Path) -> Result<PathBuf> {
+    let work_db = dir.join(DB_NAME);
+    if work_db.is_file() {
+        return Ok(work_db);
+    }
+    let manifest = dir.join(SNAPSHOT_INIT_TAR_NAME);
+    if manifest.is_file() {
+        return Ok(manifest);
+    }
+    Err(Error::Config(format!(
+        "no work database or manifest at {}",
+        dir.display()
+    )))
 }
 
 /// Resolve the `reset` target database (`--db` xor `--work-dir`) and validate it.

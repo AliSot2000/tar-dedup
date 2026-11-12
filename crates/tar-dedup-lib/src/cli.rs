@@ -429,7 +429,7 @@ pub struct ArchiveArgs {
     pub max_shard_size: u64,
 
     /// Write a directory product — self-contained canonical payloads plus a
-    /// `tar-dedup.sqlite` catalog — instead of a tar archive. The directory is
+    /// `manifest.sqlite` catalog — instead of a tar archive. The directory is
     /// `-f DIR`; another tool compresses/stores it (tar-dedup stays out of the
     /// loop). No tar stream, no footer, no stream sha1: on extract, content
     /// rehash is the integrity guarantee.
@@ -655,7 +655,7 @@ pub struct ExtractArgs {
     pub no_rehash: bool,
 
     /// Extract a `--bypass-archive` directory product: `-f DIR` holds the
-    /// canonical payloads plus a baked `tar-dedup.sqlite` catalog, and each file
+    /// canonical payloads plus a baked `manifest.sqlite` catalog, and each file
     /// is validated in place (content rehash is the integrity guarantee — there
     /// is no tar stream / sha1 to verify).
     #[arg(long = "bypass-archive", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Rehash")]
@@ -1238,7 +1238,8 @@ pub struct ArchiveInputArgs {
     #[arg(long = "db", value_name = "FILE", help_heading = "Archive Target")]
     pub db: Option<PathBuf>,
 
-    /// Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`.
+    /// Work directory (`.astage` / `.estage`) containing `tar-dedup.sqlite`, or a
+    /// bypass product holding `manifest.sqlite` once its work DB was cleaned.
     #[arg(long = "work-dir", value_name = "DIR", help_heading = "Archive Target")]
     pub work_dir: Option<PathBuf>,
 

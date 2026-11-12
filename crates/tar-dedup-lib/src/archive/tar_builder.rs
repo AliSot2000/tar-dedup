@@ -239,7 +239,9 @@ fn record_file_error(recorder: &mut Recorder, fid: crate::db::types::FileId, pat
 
 /// Finalize the bypass-archive directory product: run the canonical payloads
 /// (resolving the stage symlinks) into the product dir — `-f DIR` — then bake a
-/// checkpointed `tar-dedup.sqlite` beside them. Uses the same session machinery
+/// checkpointed `tar-dedup.sqlite` beside them. After the run closes the DB, the
+/// caller promotes that file to the immutable `manifest.sqlite`. Uses the same
+/// session machinery
 /// as the tar path (begin session, queue pull, `mark_archive_session_pending`,
 /// promote, `finalize_archive_session`), so a resume/--force behaves identically
 /// and the A7 append invariant still holds. There is no compression stream, no
@@ -363,7 +365,8 @@ fn run_bypass_archive(rt: &ArchiveRTArgs) -> Result<()> {
     rt.db.stamp_tar_writer_session_finished_at(session_id)?;
     rt.db.finalize_tar_writer_session(session_id)?;
 
-    // Bake the finalized work-db into the product dir as `tar-dedup.sqlite`.
+    // Bake the finalized work-db into the product dir; `archive::run` renames it
+    // to `manifest.sqlite` after the DB closes.
     rt.db.drop_archive_queue()?;
     recorder.flush()?;
     rt.db.checkpoint()?;
