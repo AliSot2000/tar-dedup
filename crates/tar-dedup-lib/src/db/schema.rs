@@ -102,6 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_files_sha1_size ON files(size, sha1);
 CREATE INDEX IF NOT EXISTS idx_files_canonical ON files(canonical_id);
 CREATE INDEX IF NOT EXISTS idx_files_phase ON files(phase);
 CREATE INDEX IF NOT EXISTS idx_files_abs_path ON files(abs_path);
+CREATE INDEX IF NOT EXISTS idx_files_dev_inode ON files(dev, inode);
 
 CREATE TABLE IF NOT EXISTS ref (
     source_id INTEGER NOT NULL REFERENCES source(id),

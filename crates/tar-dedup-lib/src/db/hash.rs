@@ -236,8 +236,7 @@ pub fn update_file_inspection_per_id(
         "UPDATE files SET sha1 = :sha1, sparse_count = :sparse_count, phase = 'hashed'
          WHERE id = :id"
     };
-    conn.execute(
-        sql,
+    conn.prepare_cached(sql).to_panic()?.execute(
         named_params! {
             ":sha1": digest.as_slice(),
             ":sparse_count": sparse_count as i64,

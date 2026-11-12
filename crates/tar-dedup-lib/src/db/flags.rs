@@ -327,8 +327,9 @@ pub fn or_file_flags(conn: &Connection, file_id: FileId, flags: FileFlags) -> Re
     if flags.bits() == 0 {
         return Ok(());
     }
-    conn.execute(
-        "UPDATE files SET flags = flags | :flags WHERE id = :id",
+    conn.prepare_cached(
+        "UPDATE files SET flags = flags | :flags WHERE id = :id"
+    ).to_panic()?.execute(
         named_params! {
             ":flags": flags.to_i64(),
             ":id": file_id.0,
