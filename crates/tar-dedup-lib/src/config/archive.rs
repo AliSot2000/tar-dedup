@@ -418,20 +418,34 @@ impl ArchiveConfig {
         let capture_all = !args.no_capture_all_metadata;
 
         let keep_stage = if args.bypass_archive {
-            if args.keep_stage != StageKeep::OnOther {
-                tracing::warn!(
-                    "With --bypass-archive, stage must be kept because it is the product directory");
+            match args.keep_stage {
+                StageKeep::Never => return Err(Error::Config(
+                    "Cannot select never with --bypass-archive (would delete product)".into())
+                ),
+                StageKeep::OnOther => {
+                    tracing::info!(
+                        "With --bypass-archive, stage must be kept because it is the product \
+                        directory. Switching to `always`");
+                    StageKeep::Always
+                },
+                StageKeep::Always => StageKeep::Always,               
             }
-            StageKeep::Always
         } else {
             args.keep_stage
         };
         let db_retention = if args.bypass_archive {
-            if args.db_retention != DbRetention::OnError {
-                tracing::warn!(
-                    "With --bypass-archive, db must be kept because it is the manifest db");
+            match args.db_retention {
+                DbRetention::Never => return Err(Error::Config(
+                    "Cannot select never with --bypass-archive (would delete product)".into())
+                ),
+                DbRetention::OnError => {
+                    tracing::info!(
+                        "With --bypass-archive, db must be kept because it is the product's \
+                        main and only manifest. Switching to `always`");
+                    DbRetention::Always
+                },
+                DbRetention::Always => DbRetention::Always,
             }
-            DbRetention::Always
         } else {
             args.db_retention
         };
