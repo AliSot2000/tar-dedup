@@ -80,7 +80,6 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     let mut db: Option<Database>;
     let mut filter_buffer: Option<ParseFilterBuffer>;
     // Fresh runs persist the config once the scan has installed the catalog DB.
-    let mut config_written = false;
     match action {
         StartAction::RunFresh => {
             state = ExtractRuntimeState::new();
@@ -89,13 +88,11 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         }
         StartAction::Resume => {
             tracing::info!("resuming extract from phase `{}`", state.phase.as_str());
-            db = Some(Database::open(&config.paths.db_path())?);
+            let local_db = Database::open(&config.paths.db_path())?;
             filter_buffer = Some(ParseFilterBuffer::default());
-            config_written = true; // stored by the original run
-            progress.set_table_size(db
-                .as_ref()
-                .expect(OPT_DB_ERROR)
-                .count_entries()?);
+            progress.set_table_size(local_db.count_entries()?);
+            local_db.set_extract_config(&config)?; // INFO Storing overridden job / io-job values
+            db = Some(local_db);
         }
     }
 
@@ -112,14 +109,9 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                         &mut pre_db_recorder, &mut filter_buffer, &progress),
                         completed.as_str())?;
                     db = Some(edb);
-                    // The scan phase reports whether it persisted the extract config
-                    // (a bypass stray-file may have escalated keep_stage). Only write
-                    // it here if the scan did not.
-                    config_written |= scan_wrote;
-                    if !config_written {
+                    if !scan_wrote {
                         let ldb = db.as_ref().expect(OPT_DB_ERROR);
                         ldb.set_extract_config(&config)?;
-                        config_written = true;
                     }
                     config = db
                         .as_ref()
@@ -190,8 +182,10 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                     // Only the resumable phases (scan, rehash) flush their
                     // mid-phase progress on interrupt; prologue / place /
                     // permissions must restart cleanly, so no checkpoint there.
-                    if matches!(completed,
-                        ExtractPipelinePhase::ScanTar | ExtractPipelinePhase::Rehash) {
+                    if matches!(completed, ExtractPipelinePhase::Rehash) {
+                        edb.checkpoint()?;
+                    } else if matches!(completed, ExtractPipelinePhase::ScanTar)
+                        && !config.bypass_archive{
                         edb.checkpoint()?;
                     }
                 }
