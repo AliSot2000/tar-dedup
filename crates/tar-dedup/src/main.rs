@@ -42,7 +42,7 @@ fn main() -> tar_dedup_lib::error::Result<()> {
                         tar_dedup_lib::archive::run(prepped_cfg, shutdown)
                     }
                 },
-                (Some(a), Some(e)) => {
+                (Some(_a), Some(e)) => {
                     // assert_eq!(a.phase, PipelinePhase::Done, "INVARIANT ERROR: Extraction may only \
                     //     start after archive is completed.");
                     if e.phase == ExtractPipelinePhase::Done {
