@@ -351,12 +351,13 @@ pub fn get_file_flag(conn: &Connection, file_id: FileId, flag: FileFlag) -> Resu
 }
 
 pub fn set_file_flag(conn: &Connection, file_id: FileId, flag: FileFlag, on: bool) -> Result<u64> {
-    let rows_affected = conn.execute(
+    let rows_affected = conn.prepare_cached(
         "UPDATE files SET flags = CASE
              WHEN :on != 0 THEN flags | :bit
              ELSE flags & ~:bit
            END
-         WHERE id = :id",
+         WHERE id = :id"
+    ).to_panic()?.execute(
         named_params! {
             ":on": if on { 1i64 } else { 0i64 },
             ":bit": flag.mask_i64(),
