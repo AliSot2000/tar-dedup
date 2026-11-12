@@ -342,7 +342,7 @@ fn run_bypass(
     );
 
     let all = opened.count_entries()?;
-    let unarchived = opened.count_files_in_phase(crate::db::types::FilePhase::Unarchived)?;
+    let unarchived = opened.count_files_in_phase(FilePhase::Unarchived)?;
     debug_assert_eq!(
         all, unarchived,
         "INVARIANT ERROR: after the bypass scan gate every row must be 'unarchived'"
