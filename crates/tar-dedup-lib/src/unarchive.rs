@@ -54,7 +54,7 @@ fn resolve_extract_work(db_path: &Path) -> Result<(WorkPresence, ExtractRuntimeS
         Ok((WorkPresence::Absent, ExtractRuntimeState::new()))
     }
 }
-
+// TODO Remove with patch > v1.0.0 migration no longer needed
 /// Establish the immutable bypass catalog and materialize a disposable extract
 /// work DB from it.
 ///
@@ -104,6 +104,7 @@ fn ensure_bypass_catalog(config: &ExtractConfig, reset_work_db: bool) -> Result<
     Ok(())
 }
 
+// TODO Remove with patch > v1.0.0 migration no longer needed
 /// Remove an extract work DB together with its SQLite companions.
 fn remove_work_db(work_db: &Path) -> Result<()> {
     for path in [
