@@ -1,6 +1,8 @@
 # 087 — Gate extended-attribute round-trip tests behind `test-extended-attributes`
 
-Status: **approved — not yet implemented (2026-11-12).**
+Status: **implemented (2026-11-12).** `test-all = ["test-compression",
+"test-extended-attributes"]`; feature-off `--lib` = 764 (18 gated tests absent),
+feature-on host = loud SELinux failure (no labels on NixOS), VM `test-all` green.
 
 ## Motivation
 

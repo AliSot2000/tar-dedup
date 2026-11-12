@@ -746,9 +746,11 @@ position are considered invalid and will not be processed.
   code with release builds.
 - Documentation / Docstrings are currently only placed sparsely. The docstrings (unless written by the LLM try to be
   sparse and explain the WHY. (the other Ws are visible in the code.))
-- To be able to run all unittests, a file system with SELinux, posix_acl and xattr capabilities is needed.
-- `test-all` is the feature to run all the test. There are debug features which break tests, so don't use 
-  `--all-features` when testing.
+- Extended-attribute (SELinux / posix_acl / xattr) round-trip tests live behind the `test-extended-attributes`
+  feature and need a filesystem supporting all three; on a filesystem lacking one they fail loudly with
+  `file system does not support <feature>` (never a silent skip).
+- `test-all` is the meta feature selecting `test-compression` + `test-extended-attributes`. There are debug features
+  which break tests, so don't use `--all-features` when testing.
 
 ## Trivia
 - The code was developed in conjunction with Cursor with auto-routing (100\$) and OpenCode with 

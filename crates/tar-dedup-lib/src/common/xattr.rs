@@ -365,7 +365,18 @@ pub(crate) mod tests {
         }
     }
 
+    /// Fail the test (never skip) when the filesystem lacks a capability the
+    /// `test-extended-attributes` suite asserts. These tests must run only on a
+    /// filesystem that actually supports xattr + POSIX ACL + SELinux.
+    #[cfg(feature = "test-extended-attributes")]
+    pub(crate) fn require_fs(kind: &str, probe: Result<(), String>) {
+        if let Err(e) = probe {
+            panic!("file system does not support {kind}: {e}");
+        }
+    }
+
     /// Probe: can we store a user xattr here? Any failure means the fs lacks support.
+    #[cfg(feature = "test-extended-attributes")]
     pub(crate) fn probe_xattr(dir: &Path) -> Result<(), String> {
         let probe = dir.join("probe_xattr");
         std::fs::write(&probe, b"x").expect("write probe");
@@ -376,6 +387,7 @@ pub(crate) mod tests {
     }
 
     /// Probe: can we store a POSIX ACL here? (`write_acl` fails on fs without ACLs.)
+    #[cfg(feature = "test-extended-attributes")]
     pub(crate) fn probe_acl(dir: &Path) -> Result<(), String> {
         let probe = dir.join("probe_acl");
         std::fs::write(&probe, b"x").expect("write probe");
@@ -392,6 +404,7 @@ pub(crate) mod tests {
 
     /// Probe: can we read + re-apply a security context here? Reads whatever label a
     /// fresh file got (proves labels exist) and writes it back (proves privilege).
+    #[cfg(feature = "test-extended-attributes")]
     pub(crate) fn probe_selinux(dir: &Path) -> Result<(), String> {
         let probe = dir.join("probe_selinux");
         std::fs::write(&probe, b"x").expect("write probe");
@@ -408,10 +421,12 @@ pub(crate) mod tests {
 
     // ---- small writers / decoders ----------------------------------------------
 
+    #[cfg(feature = "test-extended-attributes")]
     fn write_user_xattr(path: &Path, name: &str, value: &[u8]) {
         symlink_set_xattr(path, name, value).expect("set user xattr");
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     fn write_acl(path: &Path, entries: &[(Qualifier, u32)]) {
         let mut acl = PosixACL::empty();
         for (q, p) in entries {
@@ -420,6 +435,7 @@ pub(crate) mod tests {
         acl.write_acl(path).expect("write acl");
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     fn parse_xattr_data(s: &str) -> HashMap<String, String> {
         serdej_from_str::<XattrDump>(s).expect("parse xattr dump").data
     }
@@ -444,6 +460,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     fn parse_acl_map(s: &str) -> HashMap<String, u32> {
         serdej_from_str::<HashMap<String, u32>>(s).expect("parse acl map")
     }
@@ -451,6 +468,7 @@ pub(crate) mod tests {
     /// Variants of a security context to exhaust: base, + MLS level, + categories,
     /// + low-high range. Built from the default label so `user:role:type` are valid
     /// for the running policy.
+    #[cfg(feature = "test-extended-attributes")]
     fn selinux_context_variants(default: &[u8]) -> Vec<Vec<u8>> {
         let s = std::str::from_utf8(default).expect("selinux context is utf8");
         let base: Vec<&str> = s.split(':').take(3).collect();
@@ -467,6 +485,7 @@ pub(crate) mod tests {
     /// Returns `true` when the variant was exercised, `false` when the running
     /// policy refuses to set it (e.g. an MLS range outside the process range) —
     /// the caller skips those rather than failing on a host that cannot test them.
+    #[cfg(feature = "test-extended-attributes")]
     fn assert_selinux_round_trip(dir: &Path, ctx: &[u8], idx: usize) -> bool {
         let f1 = dir.join(format!("a{idx}.bin"));
         let f2 = dir.join(format!("b{idx}.bin"));
@@ -484,13 +503,11 @@ pub(crate) mod tests {
 
     // ---- xattr round trips ------------------------------------------------------
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn xattr_round_trip_single_utf8() {
         let (_td, dir) = ctx("xattr_round_trip_single_utf8");
-        if let Err(e) = probe_xattr(&dir) {
-            eprintln!("skipped (unsupported): xattr: {e}");
-            return;
-        }
+        require_fs("xattrs", probe_xattr(&dir));
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");
         std::fs::write(&f1, b"x").expect("write");
@@ -502,13 +519,11 @@ pub(crate) mod tests {
         assert_eq!(parse_xattr_data(&raw), parse_xattr_data(&get_file_xattr(&f2).expect("recapture")));
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn xattr_round_trip_many_keys_and_binary_values() {
         let (_td, dir) = ctx("xattr_round_trip_many_keys");
-        if let Err(e) = probe_xattr(&dir) {
-            eprintln!("skipped (unsupported): xattr: {e}");
-            return;
-        }
+        require_fs("xattrs", probe_xattr(&dir));
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");
         std::fs::write(&f1, b"x").expect("write");
@@ -523,13 +538,11 @@ pub(crate) mod tests {
         assert_eq!(parse_xattr_data(&raw), parse_xattr_data(&get_file_xattr(&f2).expect("recapture")));
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn xattr_round_trip_both_encodings() {
         let (_td, dir) = ctx("xattr_round_trip_both_encodings");
-        if let Err(e) = probe_xattr(&dir) {
-            eprintln!("skipped (unsupported): xattr: {e}");
-            return;
-        }
+        require_fs("xattrs", probe_xattr(&dir));
         let f = dir.join("a.bin");
         std::fs::write(&f, b"x").expect("write");
 
@@ -560,13 +573,11 @@ pub(crate) mod tests {
 
     // ---- ACL round trips --------------------------------------------------------
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn acl_round_trip_minimal_mode() {
         let (_td, dir) = ctx("acl_round_trip_minimal_mode");
-        if let Err(e) = probe_acl(&dir) {
-            eprintln!("skipped (unsupported): acl: {e}");
-            return;
-        }
+        require_fs("POSIX ACLs", probe_acl(&dir));
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");
         std::fs::write(&f1, b"x").expect("write");
@@ -582,13 +593,11 @@ pub(crate) mod tests {
         assert_eq!(parse_acl_map(&raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn acl_round_trip_all_entry_types() {
         let (_td, dir) = ctx("acl_round_trip_all_entry_types");
-        if let Err(e) = probe_acl(&dir) {
-            eprintln!("skipped (unsupported): acl: {e}");
-            return;
-        }
+        require_fs("POSIX ACLs", probe_acl(&dir));
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");
         std::fs::write(&f1, b"x").expect("write");
@@ -608,13 +617,11 @@ pub(crate) mod tests {
         assert_eq!(parse_acl_map(&raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn acl_round_trip_repeated_named_users() {
         let (_td, dir) = ctx("acl_round_trip_repeated_named_users");
-        if let Err(e) = probe_acl(&dir) {
-            eprintln!("skipped (unsupported): acl: {e}");
-            return;
-        }
+        require_fs("POSIX ACLs", probe_acl(&dir));
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");
         std::fs::write(&f1, b"x").expect("write");
@@ -635,13 +642,11 @@ pub(crate) mod tests {
         assert_eq!(parse_acl_map(&raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn acl_round_trip_repeated_named_groups() {
         let (_td, dir) = ctx("acl_round_trip_repeated_named_groups");
-        if let Err(e) = probe_acl(&dir) {
-            eprintln!("skipped (unsupported): acl: {e}");
-            return;
-        }
+        require_fs("POSIX ACLs", probe_acl(&dir));
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");
         std::fs::write(&f1, b"x").expect("write");
@@ -662,13 +667,11 @@ pub(crate) mod tests {
         assert_eq!(parse_acl_map(&raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn acl_round_trip_perm_combinations() {
         let (_td, dir) = ctx("acl_round_trip_perm_combinations");
-        if let Err(e) = probe_acl(&dir) {
-            eprintln!("skipped (unsupported): acl: {e}");
-            return;
-        }
+        require_fs("POSIX ACLs", probe_acl(&dir));
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");
         std::fs::write(&f1, b"x").expect("write");
@@ -696,13 +699,11 @@ pub(crate) mod tests {
 
     // ---- SELinux round trips ---------------------------------------------------
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn selinux_round_trip_all_context_shapes() {
         let (_td, dir) = ctx("selinux_round_trip_shapes");
-        if let Err(e) = probe_selinux(&dir) {
-            eprintln!("skipped (unsupported): selinux: {e}");
-            return;
-        }
+        require_fs("SELinux", probe_selinux(&dir));
         let probe = dir.join("ctx_probe");
         std::fs::write(&probe, b"x").expect("write");
         let default = get_file_selinux_data(&probe).expect("get default context");
@@ -717,17 +718,13 @@ pub(crate) mod tests {
 
     // ---- everything at once -----------------------------------------------------
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn all_attributes_round_trip_on_single_file() {
         let (_td, dir) = ctx("all_attributes_at_once");
-        if let Err(e) = probe_xattr(&dir) {
-            eprintln!("skipped (unsupported): xattr: {e}");
-            return;
-        }
-        if let Err(e) = probe_acl(&dir) {
-            eprintln!("skipped (unsupported): acl: {e}");
-            return;
-        }
+        require_fs("xattrs", probe_xattr(&dir));
+        require_fs("POSIX ACLs", probe_acl(&dir));
+        require_fs("SELinux", probe_selinux(&dir));
         let f1 = dir.join("a.bin");
         let f2 = dir.join("b.bin");
         std::fs::write(&f1, b"x").expect("write");
@@ -749,30 +746,20 @@ pub(crate) mod tests {
             (Qualifier::Group(2001), 2),
         ]);
 
-        // SELinux (best-effort; xattr + ACL must round-trip regardless).
-        let selinux_capture = match get_file_selinux_data(&f1) {
-            Ok(v) if !v.is_empty() => Some(v),
-            Ok(_) => None,
-            Err(e) => {
-                eprintln!("skipped (unsupported): selinux: {e}");
-                None
-            }
-        };
+        // SELinux is required too — the extended suite asserts all three.
+        let selinux_capture = get_file_selinux_data(&f1).expect("capture selinux");
+        assert!(!selinux_capture.is_empty(), "empty security context");
 
         let xattr_raw = get_file_xattr(&f1).expect("capture xattrs");
         let acl_raw = get_file_acl(&f1).expect("capture acl");
 
         set_file_xattrs(&f2, &xattr_raw).expect("restore xattrs");
         set_file_acl(&f2, &acl_raw).expect("restore acl");
-        if let Some(ctx) = &selinux_capture {
-            set_file_selinux_data(&f2, ctx).expect("restore selinux");
-        }
+        set_file_selinux_data(&f2, &selinux_capture).expect("restore selinux");
 
         assert_eq!(parse_xattr_data(&xattr_raw), parse_xattr_data(&get_file_xattr(&f2).expect("recapture")));
         assert_eq!(parse_acl_map(&acl_raw), parse_acl_map(&get_file_acl(&f2).expect("recapture")));
-        if let Some(ctx) = selinux_capture {
-            assert_eq!(ctx, get_file_selinux_data(&f2).expect("recapture selinux"));
-        }
+        assert_eq!(selinux_capture, get_file_selinux_data(&f2).expect("recapture selinux"));
     }
 
     // ---- malformed: SELinux -----------------------------------------------------
@@ -786,26 +773,22 @@ pub(crate) mod tests {
         assert!(matches!(res, Err(FileStatError::Io { .. })), "got {res:?}");
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn selinux_malformed_empty() {
         let (_td, dir) = ctx("selinux_malformed_empty");
-        if let Err(e) = probe_selinux(&dir) {
-            eprintln!("skipped (unsupported): selinux: {e}");
-            return;
-        }
+        require_fs("SELinux", probe_selinux(&dir));
         let f = dir.join("a.bin");
         std::fs::write(&f, b"x").expect("write");
         let res = set_file_selinux_data(&f, b"");
         assert!(res.is_err(), "got {res:?}");
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn selinux_malformed_context_loop() {
         let (_td, dir) = ctx("selinux_malformed_context_loop");
-        if let Err(e) = probe_selinux(&dir) {
-            eprintln!("skipped (unsupported): selinux: {e}");
-            return;
-        }
+        require_fs("SELinux", probe_selinux(&dir));
         let f = dir.join("a.bin");
         std::fs::write(&f, b"x").expect("write");
         for bad in [

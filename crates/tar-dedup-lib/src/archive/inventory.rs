@@ -1466,15 +1466,14 @@ mod tests {
         assert_eq!(row.ftype, FileType::Socket);
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn entry_metadata_gating_xattr() {
         let probe = TestWorld::new();
-        let pf = probe.path("probe.bin");
-        fs::write(&pf, b"x").expect("write");
-        if xattrs::symlink_set_xattr(pf.as_path(), "t", b"v").is_err() {
-            eprintln!("skipped (unsupported): user xattrs");
-            return;
-        }
+        crate::common::xattr::tests::require_fs(
+            "user xattrs",
+            crate::common::xattr::tests::probe_xattr(probe.dir.path()),
+        );
         drop(probe);
 
         // capture off (shared world default): None.
@@ -1496,16 +1495,14 @@ mod tests {
         assert!(on.db.get_file_by_id::<FileRecord>(id).expect("get").expect("row").xattrs.is_some());
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn entry_metadata_gating_acl() {
         let probe = TestWorld::new();
-        let pf = probe.path("probe.bin");
-        fs::write(&pf, b"x").expect("write");
-        let acl = crate::common::xattr::get_file_acl(&pf);
-        if acl.is_err() {
-            eprintln!("skipped (unsupported): posix acl");
-            return;
-        }
+        crate::common::xattr::tests::require_fs(
+            "POSIX ACLs",
+            crate::common::xattr::tests::probe_acl(probe.dir.path()),
+        );
         drop(probe);
 
         let off = TestWorld::new();
@@ -1523,15 +1520,14 @@ mod tests {
         assert!(on.db.get_file_by_id::<FileRecord>(id).expect("get").expect("row").posix_acl.is_some());
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn entry_metadata_gating_selinux() {
         let probe = TestWorld::new();
-        let pf = probe.path("probe.bin");
-        fs::write(&pf, b"x").expect("write");
-        if crate::common::xattr::get_file_selinux_data(&pf).is_err() {
-            eprintln!("skipped (unsupported): selinux");
-            return;
-        }
+        crate::common::xattr::tests::require_fs(
+            "SELinux",
+            crate::common::xattr::tests::probe_selinux(probe.dir.path()),
+        );
         drop(probe);
 
         let off = TestWorld::new();

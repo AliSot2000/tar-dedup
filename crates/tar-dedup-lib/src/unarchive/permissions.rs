@@ -576,7 +576,8 @@ mod tests {
     use super::*;
     use crate::common::files::original_extension;
     use crate::common::perms::{IdentityMap, IdentitySpec};
-    use crate::common::xattr::tests::{probe_acl, probe_selinux, probe_xattr};
+    #[cfg(feature = "test-extended-attributes")]
+    use crate::common::xattr::tests::{probe_acl, probe_selinux, probe_xattr, require_fs};
     use crate::db::flags::{FileFlag, FileFlags, OutTreeFlag, OutTreeFlags};
     use crate::db::types::{LinkType, NewFileRecord, NewOutTreeRow, StrippedRecord};
     use crate::test_support::{ExtractWorld, seed_filter_reasons};
@@ -1007,15 +1008,13 @@ mod tests {
     // apply_one — xattrs / ACL / SELinux
     // ---------------------------------------------------------------------
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn apply_one_xattr_applies_when_supported() {
         let world = ExtractWorld::permissions_world(|_| {});
         let scratch = world.path("probe");
         fs::create_dir_all(&scratch).expect("scratch");
-        if let Err(e) = probe_xattr(&scratch) {
-            eprintln!("skipped (unsupported): xattr: {e}");
-            return;
-        }
+        require_fs("xattrs", probe_xattr(&scratch));
         let tgt = world.write_file("paper.pdf", b"%PDF");
         let rec = mk_file("paper.pdf", FileType::File, None, None, None, None, None, None, None,
                           Some(xattr_json()), None, None);
@@ -1040,15 +1039,13 @@ mod tests {
                 "nothing applied with --no-xattrs: {raw}");
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn apply_one_acl_applies_when_supported() {
         let world = ExtractWorld::permissions_world(|_| {});
         let scratch = world.path("probe");
         fs::create_dir_all(&scratch).expect("scratch");
-        if let Err(e) = probe_acl(&scratch) {
-            eprintln!("skipped (unsupported): acl: {e}");
-            return;
-        }
+        require_fs("POSIX ACLs", probe_acl(&scratch));
         let tgt = world.write_file("book.xlsx", b"xlsx");
         let rec = mk_file("book.xlsx", FileType::File, None, None, None, None, None, None, None,
                           None, Some(empty_acl_json()), None);
@@ -1070,15 +1067,13 @@ mod tests {
         assert!(!raw.contains("user-obj\":7"), "nothing applied with --no-acls: {raw}");
     }
 
+    #[cfg(feature = "test-extended-attributes")]
     #[test]
     fn apply_one_selinux_applies_when_supported() {
         let world = ExtractWorld::permissions_world(|_| {});
         let scratch = world.path("probe");
         fs::create_dir_all(&scratch).expect("scratch");
-        if let Err(e) = probe_selinux(&scratch) {
-            eprintln!("skipped (unsupported): selinux: {e}");
-            return;
-        }
+        require_fs("SELinux", probe_selinux(&scratch));
         let tgt = world.write_file("video.mp4", b"mp4");
         let ctx = crate::common::xattr::get_file_selinux_data(&scratch.join("probe_selinux"))
             .expect("base context");

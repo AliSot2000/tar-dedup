@@ -24,8 +24,11 @@ debug-ordering = []
 debug-slow-progress = []
 # Heavy compression round-trip test suite (all formats × all levels).
 test-compression = []
+# xattr / POSIX ACL / SELinux round-trip suite. Requires a filesystem that
+# supports all three; enabled tests fail loudly on a filesystem lacking support.
+test-extended-attributes = []
 # Meta feature aggregating the on-demand test suites.
-test-all = ["test-compression"]
+test-all = ["test-compression", "test-extended-attributes"]
 
 [dependencies]
 clap = { workspace = true }
