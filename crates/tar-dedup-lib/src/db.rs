@@ -389,29 +389,9 @@ impl Database {
         dedup::count_dedup_phase_position(&*self.conn(), eager_filter)
     }
 
-    /// See [`dedup::searching_to_finished`].
-    pub fn searching_to_finished(&self, eager_filter: bool) -> Result<u64> {
-        dedup::searching_to_finished(&mut *self.conn_mut(), eager_filter)
-    }
-
-    /// See [`dedup::finish_to_error`].
-    pub fn finish_to_error(&self, eager_filter: bool) -> Result<(u64, u64)> {
-        dedup::finish_to_error(&mut *self.conn_mut(), eager_filter)
-    }
-
-    /// See [`dedup::finish_to_done`].
-    pub fn finish_to_done(&self, eager_filter: bool) -> Result<u64> {
-        dedup::finish_to_done(&mut *self.conn_mut(), eager_filter)
-    }
-
-    /// See [`dedup::finish_to_ready`].
-    pub fn finish_to_ready(&self, eager_filter: bool) -> Result<u64> {
-        dedup::finish_to_ready(&mut *self.conn_mut(), eager_filter)
-    }
-
-    /// See [`dedup::ready_to_searching`].
-    pub fn ready_to_searching(&self, eager_filter: bool) -> Result<(u64, u64)> {
-        dedup::ready_to_searching(&mut *self.conn_mut(), eager_filter)
+    /// See [`dedup::advance_dedup_fsm`].
+    pub fn advance_dedup_fsm(&self, eager_filter: bool) -> Result<dedup::DedupFsmProgress> {
+        dedup::advance_dedup_fsm(&mut *self.conn_mut(), eager_filter)
     }
 
     /// See [`dedup::list_pending_comparisons`].
