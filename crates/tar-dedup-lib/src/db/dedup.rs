@@ -287,11 +287,13 @@ fn finish_to_error(conn: &Connection, eager_filter: bool) -> Result<(u64, u64)> 
     // check flag.
     let n2 = conn.execute(
         "UPDATE files SET phase = 'deduped', flags = flags & ~:check_flag
-         WHERE (sha1, size) IN (SELECT sha1, size
+         WHERE phase = :phase
+           AND (sha1, size) IN (SELECT sha1, size
              FROM dedup_progress
              WHERE state = 'errored')",
         named_params! {
             ":check_flag": FileFlag::CheckWithCanonicalCompleted.mask_i64(),
+            ":phase": phase,
         },
     ).to_panic()?;
     Ok((n as u64, n2 as u64))
@@ -324,11 +326,13 @@ fn finish_to_done(conn: &Connection, eager_filter: bool) -> Result<u64> {
     ).to_panic()?;
     let n2 = conn.execute(
         "UPDATE files SET phase = 'deduped', flags = flags & ~:check_flag
-         WHERE (sha1, size) IN (SELECT sha1, size
+         WHERE phase = :phase
+           AND (sha1, size) IN (SELECT sha1, size
              FROM dedup_progress
              WHERE state = 'done')",
         named_params! {
             ":check_flag": FileFlag::CheckWithCanonicalCompleted.mask_i64(),
+            ":phase": phase,
         },
     ).to_panic()?;
     Ok(n2 as u64)
@@ -1100,9 +1104,8 @@ mod tests {
 
         let promoted = finish_to_done(&mut conn, false).expect("transition");
 
-        // SQLite counts rows matched by the group promote, including the two
-        // candidates already linked/promoted out.
-        assert_eq!(promoted, 3);
+        // Only the canonical is still in the pool; files 2 and 3 already left it.
+        assert_eq!(promoted, 1);
         assert_eq!(group_state(&conn, 7, 100), "done");
         assert_eq!(row_phase(&conn, 1), "deduped");
         assert_eq!(row_canonical(&conn, 1), Some(1));
@@ -1120,6 +1123,30 @@ mod tests {
 
         assert_eq!(finish_to_done(&mut conn2, false).expect("transition"), 0);
         assert_eq!(group_state(&conn2, 7, 100), "finished");
+    }
+
+    #[test]
+    fn advance_dedup_fsm_does_not_recount_terminal_groups() {
+        let (_dir, mut conn) = open_db();
+        create_temp_dedup_table(&conn).expect("create temp tables");
+
+        // Terminal groups whose members already left the pool. A tick must not
+        // count them again (the pre-fix promote re-matched every member of
+        // every terminal group on every tick).
+        seed_group(&conn, 7, 100, "done");
+        seed_file(&conn, 1, "/tmp/a.bin", 7, 100);
+        seed_file(&conn, 2, "/tmp/b.bin", 7, 100);
+        set_canonical(&conn, FileId(1), FileId(1)).expect("self");
+        set_canonical(&conn, FileId(2), FileId(1)).expect("link");
+
+        seed_group(&conn, 9, 200, "errored");
+        seed_file(&conn, 3, "/tmp/c.bin", 9, 200);
+        seed_file(&conn, 4, "/tmp/d.bin", 9, 200);
+        set_canonical(&conn, FileId(3), FileId(3)).expect("self");
+        set_canonical(&conn, FileId(4), FileId(3)).expect("link");
+
+        assert_eq!(advance_dedup_fsm(&mut conn, false).expect("first tick").files_promoted, 0);
+        assert_eq!(advance_dedup_fsm(&mut conn, false).expect("second tick").files_promoted, 0);
     }
 
     #[test]
@@ -1275,7 +1302,7 @@ mod tests {
         assert_eq!(ingest_compare_outcome(&mut conn, &round2_res).expect("round 2 ingest"), 1);
         assert_eq!(inflight_count(&conn), 0);
         assert_eq!(searching_to_finished(&mut conn, false).expect("s2f"), 1);
-        assert_eq!(finish_to_done(&mut conn, false).expect("f2d"), 3);
+        assert_eq!(finish_to_done(&mut conn, false).expect("f2d"), 1);
 
         assert_eq!(group_state(&conn, 7, 100), "done");
         assert_eq!(row_canonical(&conn, 1), Some(1));
