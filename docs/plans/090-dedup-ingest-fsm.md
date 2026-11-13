@@ -37,14 +37,15 @@ No signatures change. Each `CachedStatement` is a temporary (dropped before the
 enclosing transaction commits), so the per-connection cache borrow is never held
 across `tx.commit()`.
 
-## 2. Single-transaction FSM tick (keep the five functions exposed)
+## 2. Single-transaction FSM tick
 
-1. Move each function's SQL body into a private
-   `fn *_in_tx(conn: &Connection, eager_filter: bool) -> Result<...>` that assumes
-   an ambient transaction (uses `conn.execute`, no own `transaction()`).
-2. Keep the five `pub fn`s as thin wrappers: open a transaction, call the
-   `*_in_tx` helper, commit. Signatures and standalone behavior are unchanged —
-   they remain individually callable for manual test injection.
+1. Each transition becomes a private `fn name(conn: &Connection, eager_filter: bool)`
+   that executes its statements directly. Outside an explicit transaction every
+   SQLite statement is already its own implicit transaction, so a single-statement
+   transition needs no `conn.transaction()`; the multi-statement ones rely on the
+   caller's ambient transaction for atomicity.
+2. The five `Database` methods are dropped. The only production entrypoint is the
+   aggregate below, which owns the one transaction.
 3. Add to `db/dedup.rs` (and re-export on `Database` in `db.rs`):
 
    ```rust
@@ -63,8 +64,8 @@ across `tx.commit()`.
        -> Result<DedupFsmProgress>
    ```
 
-   One `conn.transaction()`, the five `*_in_tx` calls in that order, one commit.
-   The doc comment lists the sequence explicitly (requested).
+   One `conn.transaction()`, the five calls in that order, one commit. The doc
+   comment lists the sequence explicitly (requested).
 4. `archive/dedup.rs:252-276` `tick` becomes one `advance_dedup_fsm` call:
    `groups_errored` drives the `fail_fast` branch, `files_promoted` drives
    `inc_both`, and `count_pending_dedup_groups() == 0` stays outside the wrapper
@@ -123,8 +124,8 @@ correct total. Recommended: fix it.
   host's missing SELinux context (`file system does not support SELinux`), as
   expected. The VM was unreachable (`No route to host`), so the full 817-test
   run still needs to be done there.
-- No new tests unless requested (the five keep their own tests; the wrapper
-  composes the same helpers).
+- No new tests unless requested (the five keep their own tests and are now
+  called directly with `&Connection`; the wrapper composes them).
 
 ## 7. Change map
 
@@ -132,6 +133,6 @@ correct total. Recommended: fix it.
 |---|---|
 | `db/flags.rs` | `set_file_flag` cached |
 | `db/common.rs` | `set_file_phase` cached |
-| `db/dedup.rs` | cached setters; five `*_in_tx` helpers + public wrappers; `advance_dedup_fsm` |
-| `db.rs` | `Database::advance_dedup_fsm` delegating to the module fn |
+| `db/dedup.rs` | cached setters; five private `&Connection` transitions; `advance_dedup_fsm` |
+| `db.rs` | dropped the five `Database` transition wrappers; kept `advance_dedup_fsm` |
 | `archive/dedup.rs` | `tick` uses `advance_dedup_fsm`; progress/fail-fast from the aggregate |
