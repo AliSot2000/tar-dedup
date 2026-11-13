@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::cli::{ConflictPolicy, ExtractArgs, HardLinkGrouping};
+use crate::common::defaults::{DB_NAME, SNAPSHOT_INIT_TAR_NAME};
 use crate::common::perms::{
     MapResolutionTarget, ModeSource, OwnerGroupSource, infer_same_owner, parse_mode_changes,
     parse_owner_group_args, validate_for_resolution_mode,
@@ -325,6 +326,23 @@ impl Validate for ExtractConfig {
                  Use --force to extract without it."
                     .into(),
             ));
+        }
+
+        // A bypass product is identified by its immutable `manifest.sqlite`; the
+        // disposable `tar-dedup.sqlite` work DB is never promoted to a catalog.
+        // `--force` may still resume an interrupted extraction from an existing
+        // work DB (enforced at run time).
+        if self.bypass_archive
+            && !self.paths.bypass_manifest_path().is_file()
+            && !self.process.force
+        {
+            return Err(Error::Config(format!(
+                "bypass product {} has no {}; re-run the archive, or pass --force to resume \
+                 from an existing {}",
+                self.paths.archive_path.display(),
+                SNAPSHOT_INIT_TAR_NAME,
+                DB_NAME,
+            )));
         }
         Ok(())
     }
