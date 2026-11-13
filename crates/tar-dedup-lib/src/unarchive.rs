@@ -54,45 +54,43 @@ fn resolve_extract_work(db_path: &Path) -> Result<(WorkPresence, ExtractRuntimeS
         Ok((WorkPresence::Absent, ExtractRuntimeState::new()))
     }
 }
-// TODO Remove with patch > v1.0.0 migration no longer needed
 /// Establish the immutable bypass catalog and materialize a disposable extract
 /// work DB from it.
 ///
-/// A finished product carries `manifest.sqlite`. A legacy product (or a crash
-/// between the archive's Done checkpoint and its final rename) instead has only
-/// a pristine `tar-dedup.sqlite`, which is promoted. The work DB is always a
-/// reflink/copy of the manifest, so extraction never mutates the catalog.
+/// A finished product carries `manifest.sqlite`, which is mandatory: extraction
+/// never promotes `tar-dedup.sqlite` to a catalog. The only exception is an
+/// explicit `--force` resume over an existing `Incomplete` work DB, so an
+/// interrupted run can finish after the catalog was deleted. The work DB is
+/// always a reflink/copy of the manifest, so extraction never mutates the
+/// catalog.
 fn ensure_bypass_catalog(config: &ExtractConfig, reset_work_db: bool) -> Result<()> {
     let work_db = config.paths.db_path();
-    let manifest = config.paths.extract_cache_dir().join(SNAPSHOT_INIT_TAR_NAME);
+    let manifest = config.paths.bypass_manifest_path();
 
-    // Manifest is not present!
     if !manifest.is_file() {
-        if !work_db.is_file() {
-            return Err(Error::Config(format!(
-                "bypass product {} has no {}; re-run the archive",
+        let force_resume = !reset_work_db
+            && config.process.start_policy == StartPolicy::Resume
+            && config.process.force
+            && matches!(resolve_extract_work(&work_db)?.0, WorkPresence::Incomplete);
+        if force_resume {
+            tracing::warn!(
+                "bypass product {} has no {}; resuming from {} (--force)",
                 config.paths.archive_path.display(),
                 SNAPSHOT_INIT_TAR_NAME,
-            )));
+                work_db.display(),
+            );
+            return Ok(());
         }
-        let pristine = {
-            let db = Database::open(&work_db)?;
-            let archive_done = db.load_archive_runtime_state()?
-                .is_some_and(|s| s.phase == crate::config::PipelinePhase::Done);
-            archive_done
-                && db.get_bypass_archive()?.unwrap_or(false)
-                && db.load_extract_runtime_state()?.is_none()
-        };
-        if !pristine {
-            return Err(Error::Config(format!(
-                "bypass product {} has no {} and {} is not a pristine catalog; \
-                 re-run the archive",
-                config.paths.archive_path.display(),
-                SNAPSHOT_INIT_TAR_NAME,
-                DB_NAME,
-            )));
-        }
-        std::fs::rename(&work_db, &manifest).map_err(|e| Error::io(&manifest, e))?;
+        return Err(Error::Config(format!(
+            "bypass product {} has no {}; re-run the archive{}",
+            config.paths.archive_path.display(),
+            SNAPSHOT_INIT_TAR_NAME,
+            if config.process.start_policy == StartPolicy::Resume {
+                " (or pass --force to resume from an existing work db)"
+            } else {
+                ""
+            },
+        )));
     }
 
     if reset_work_db || !work_db.is_file() {
