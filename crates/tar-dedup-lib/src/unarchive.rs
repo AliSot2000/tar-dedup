@@ -457,6 +457,14 @@ mod tests {
         );
     }
 
+    fn assert_ledger_start_stop(ledger: &[crate::db::TimeLedgerEntry], label: &str) {
+        let entries: Vec<_> = ledger.iter().filter(|e| e.phase == label).collect();
+        assert_eq!(entries.len(), 2, "{label}: {entries:?}");
+        assert_eq!(entries[0].event, LedgerEvent::Start, "{label}");
+        assert_eq!(entries[1].event, LedgerEvent::Stop, "{label}");
+        assert!(entries[1].at >= entries[0].at, "{label}");
+    }
+
     #[test]
     fn full_extract_run_end_to_end() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -552,6 +560,19 @@ fn bypass_archive_extract_round_trip() {
         "manifest was never mutated by extraction",
     );
     assert_eq!(mdb.count_errors(None).expect("manifest errors"), 0, "no stray-file errors");
+
+    // The extract work DB inherits the archive ledger and appends extract events.
+    let wdb = Database::open(&product.join(DB_NAME)).expect("open work db");
+    let ledger = wdb.time_ledger().expect("time ledger");
+    for label in [
+        "archive::inventory",
+        "archive::archive",
+        "extract::scan_tar",
+        "extract::place",
+        "extract::cleanup",
+    ] {
+        assert_ledger_start_stop(&ledger, label);
+    }
 }
 
 #[test]

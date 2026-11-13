@@ -371,6 +371,46 @@ mod tests {
         assert_archive_complete(dir.path());
     }
 
+    fn assert_ledger_start_stop(ledger: &[crate::db::TimeLedgerEntry], label: &str) {
+        let entries: Vec<_> = ledger.iter().filter(|e| e.phase == label).collect();
+        assert_eq!(entries.len(), 2, "{label}: {entries:?}");
+        assert_eq!(entries[0].event, LedgerEvent::Start, "{label}");
+        assert_eq!(entries[1].event, LedgerEvent::Stop, "{label}");
+        assert!(entries[1].at >= entries[0].at, "{label}");
+    }
+
+    #[test]
+    fn archive_run_records_phase_ledger_in_work_and_footer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cfg = full_archive_config(dir.path());
+        cfg.process.cleanup.db_retention = crate::config::DbRetention::Always;
+        let archive = cfg.paths.archive_path.clone();
+        run(cfg, Shutdown::detached()).expect("archive run");
+
+        let kept = std::fs::read_dir(dir.path()).expect("read dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.file_name()
+                .map(|n| n.to_string_lossy().ends_with("_test.sqlite"))
+                .unwrap_or(false))
+            .expect("retained work db");
+        let db = Database::open(&kept).expect("open retained db");
+        let ledger = db.time_ledger().expect("ledger");
+        assert_ledger_start_stop(&ledger, "archive::inventory");
+        assert_ledger_start_stop(&ledger, "archive::archive");
+
+        // The Archive Stop is written before the footer snapshot, so the
+        // integrity hash is excluded from the ledger.
+        let footer = dir.path().join("footer.sqlite");
+        assert!(
+            crate::archive_footer::read_footer(&archive, &footer).expect("read footer"),
+            "footer present"
+        );
+        let fdb = Database::open(&footer).expect("open footer db");
+        let footer_ledger = fdb.time_ledger().expect("footer ledger");
+        assert_ledger_start_stop(&footer_ledger, "archive::archive");
+    }
+
     #[test]
     fn archive_run_exit_after_stage_then_resume_to_done() {
         let dir = tempfile::tempdir().expect("tempdir");
