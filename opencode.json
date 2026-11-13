@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "graphify": {
+      "type": "local",
+      "command": ["/home/alisot2000/Documents/06_ReposNCode/tar-dedup/scripts/graphify-mcp.sh"],
+      "enabled": true
+    }
+  }
+}
