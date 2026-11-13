@@ -229,10 +229,9 @@ pub fn count_dedup_eligible_position(conn: &Connection, _eager_filter: bool) -> 
 /// `searching` -> `finished`: the active canonical is present and every other
 /// member has been resolved (checked/errored or already promoted out).
 /// Returns the number of groups transitioned.
-pub fn searching_to_finished(conn: &mut Connection, eager_filter: bool) -> Result<u64> {
+fn searching_to_finished(conn: &Connection, eager_filter: bool) -> Result<u64> {
     let phase = prev_phase(eager_filter);
-    let tx = conn.transaction().to_panic()?;
-    let n = tx.execute(
+    let n = conn.execute(
         &format!(
             "UPDATE dedup_progress SET state = 'finished'
              WHERE state = 'searching'
@@ -253,7 +252,6 @@ pub fn searching_to_finished(conn: &mut Connection, eager_filter: bool) -> Resul
             ":flag_completed": FileFlag::CheckWithCanonicalCompleted.mask_i64(),
         },
     ).to_panic()?;
-    tx.commit().to_panic()?;
     Ok(n as u64)
 }
 
@@ -261,11 +259,10 @@ pub fn searching_to_finished(conn: &mut Connection, eager_filter: bool) -> Resul
 /// remaining members to `deduped` and clear their check flag (the error flag is
 /// sticky), so the errored files still archive as their own payloads.
 /// Returns `(groups errored, files promoted)`.
-pub fn finish_to_error(conn: &mut Connection, eager_filter: bool) -> Result<(u64, u64)> {
+fn finish_to_error(conn: &Connection, eager_filter: bool) -> Result<(u64, u64)> {
     let phase = prev_phase(eager_filter);
-    let tx = conn.transaction().to_panic()?;
 
-    let n = tx.execute(
+    let n = conn.execute(
         &format!(
             "UPDATE dedup_progress SET state = 'errored'
              WHERE state = 'finished'
@@ -288,7 +285,7 @@ pub fn finish_to_error(conn: &mut Connection, eager_filter: bool) -> Result<(u64
     ).to_panic()?;
     // Group errored out -> promote all remaining members to deduped, unset the
     // check flag.
-    let n2 = tx.execute(
+    let n2 = conn.execute(
         "UPDATE files SET phase = 'deduped', flags = flags & ~:check_flag
          WHERE (sha1, size) IN (SELECT sha1, size
              FROM dedup_progress
@@ -297,7 +294,6 @@ pub fn finish_to_error(conn: &mut Connection, eager_filter: bool) -> Result<(u64
             ":check_flag": FileFlag::CheckWithCanonicalCompleted.mask_i64(),
         },
     ).to_panic()?;
-    tx.commit().to_panic()?;
     Ok((n as u64, n2 as u64))
 }
 
@@ -305,11 +301,10 @@ pub fn finish_to_error(conn: &mut Connection, eager_filter: bool) -> Result<(u64
 /// left member — every other candidate resolved to equal). Promote all
 /// remaining members to `deduped`, unset their check flag.
 /// Returns the number of files promoted.
-pub fn finish_to_done(conn: &mut Connection, eager_filter: bool) -> Result<u64> {
+fn finish_to_done(conn: &Connection, eager_filter: bool) -> Result<u64> {
     let phase = prev_phase(eager_filter);
-    let tx = conn.transaction().to_panic()?;
 
-    tx.execute(
+    conn.execute(
         &format!(
             "UPDATE dedup_progress SET state = 'done'
              WHERE state = 'finished'
@@ -327,7 +322,7 @@ pub fn finish_to_done(conn: &mut Connection, eager_filter: bool) -> Result<u64> 
             ":check_flag": FileFlag::CheckWithCanonicalCompleted.mask_i64(),
         },
     ).to_panic()?;
-    let n2 = tx.execute(
+    let n2 = conn.execute(
         "UPDATE files SET phase = 'deduped', flags = flags & ~:check_flag
          WHERE (sha1, size) IN (SELECT sha1, size
              FROM dedup_progress
@@ -336,7 +331,6 @@ pub fn finish_to_done(conn: &mut Connection, eager_filter: bool) -> Result<u64> 
             ":check_flag": FileFlag::CheckWithCanonicalCompleted.mask_i64(),
         },
     ).to_panic()?;
-    tx.commit().to_panic()?;
     Ok(n2 as u64)
 }
 
@@ -345,13 +339,12 @@ pub fn finish_to_done(conn: &mut Connection, eager_filter: bool) -> Result<u64> 
 /// and retires the active canonical to `deduped`; the next `ready_to_searching`
 /// elects a fresh canonical.
 /// Returns the number of canonicals promoted.
-pub fn finish_to_ready(conn: &mut Connection, eager_filter: bool) -> Result<u64> {
+fn finish_to_ready(conn: &Connection, eager_filter: bool) -> Result<u64> {
     let phase = prev_phase(eager_filter);
-    let tx = conn.transaction().to_panic()?;
     let check_bit = FileFlag::CheckWithCanonicalCompleted.mask_i64();
     let error_bit = FileFlag::ErrorWhileDedup.mask_i64();
 
-    tx.execute(
+    conn.execute(
         &format!(
             "UPDATE dedup_progress SET state = 'ready'
              WHERE state = 'finished'
@@ -373,7 +366,7 @@ pub fn finish_to_ready(conn: &mut Connection, eager_filter: bool) -> Result<u64>
         },
     ).to_panic()?;
     // Group has remaining members -> unset the checked flag for the whole group.
-    tx.execute(
+    conn.execute(
         "UPDATE files SET flags = flags & ~:check_flag
          WHERE (sha1, size) IN (SELECT sha1, size
              FROM dedup_progress
@@ -382,7 +375,7 @@ pub fn finish_to_ready(conn: &mut Connection, eager_filter: bool) -> Result<u64>
     ).to_panic()?;
     // Promote the current canonical to deduped to retire it and search for a
     // new canonical.
-    let n3 = tx.execute(
+    let n3 = conn.execute(
         &format!(
             "UPDATE files SET phase = 'deduped'
              WHERE phase = '{}'
@@ -394,25 +387,24 @@ pub fn finish_to_ready(conn: &mut Connection, eager_filter: bool) -> Result<u64>
         ),
         [],
     ).to_panic()?;
-    tx.commit().to_panic()?;
     Ok(n3 as u64)
 }
 
 /// `ready` -> `searching`: elect the lowest-id electable member as the active
-/// canonical for every `ready` group, in one transaction, then flip groups that
-/// have a pending member. Groups left `ready` (lone canonical, no pending) are
-/// closed: canonical promoted to `deduped`, group -> `done` (diagnoses the
-/// 2-member group that compared unequal: no further canonical is possible).
+/// canonical for every `ready` group, then flip groups that have a pending
+/// member. Groups left `ready` (lone canonical, no pending) are closed:
+/// canonical promoted to `deduped`, group -> `done` (diagnoses the 2-member
+/// group that compared unequal: no further canonical is possible).
 /// Returns `(canonicals elected, files promoted)`.
-pub fn ready_to_searching(conn: &mut Connection, eager_filter: bool) -> Result<(u64, u64)> {
+fn ready_to_searching(conn: &Connection, eager_filter: bool) -> Result<(u64, u64)> {
     let phase = prev_phase(eager_filter);
-    let tx = conn.transaction().to_panic()?;
     let check_bit = FileFlag::CheckWithCanonicalCompleted.mask_i64();
     let error_bit = FileFlag::ErrorWhileDedup.mask_i64();
 
-    // Elect a canonical for every ready group (atomic: an elected-but-not-
-    // `searching` group would be an inconsistent persisted state on restart).
-    let elected = tx.execute(
+    // Elect a canonical for every ready group (the five transitions share one
+    // transaction in `advance_dedup_fsm`, so an elected-but-not-`searching`
+    // group cannot persist on restart).
+    let elected = conn.execute(
         &format!(
             "UPDATE files SET canonical_id = id
              WHERE id IN (SELECT MIN(id) FROM files
@@ -435,7 +427,7 @@ pub fn ready_to_searching(conn: &mut Connection, eager_filter: bool) -> Result<(
         },
     ).to_panic()?;
     // Flip the groups with an elected canonical and at least one pending file.
-    tx.execute(
+    conn.execute(
         &format!(
             "UPDATE dedup_progress SET state = 'searching'
              WHERE state = 'ready'
@@ -454,7 +446,7 @@ pub fn ready_to_searching(conn: &mut Connection, eager_filter: bool) -> Result<(
     ).to_panic()?;
     // Any group still 'ready' elected a lone canonical (no pending member):
     // promote it and close the group.
-    let promoted = tx.execute(
+    let promoted = conn.execute(
         &format!(
             "UPDATE files SET phase = 'deduped'
              WHERE phase = '{}'
@@ -469,7 +461,7 @@ pub fn ready_to_searching(conn: &mut Connection, eager_filter: bool) -> Result<(
     // Any group still 'ready' has no in-phase member left (a lone canonical
     // was promoted above): close it. Guards on the member set so a group whose
     // only candidate failed election (e.g. all errored) is NOT closed here.
-    tx.execute(
+    conn.execute(
         &format!(
             "UPDATE dedup_progress SET state = 'done'
              WHERE state = 'ready'
@@ -480,8 +472,39 @@ pub fn ready_to_searching(conn: &mut Connection, eager_filter: bool) -> Result<(
         ),
         [],
     ).to_panic()?;
-    tx.commit().to_panic()?;
     Ok((elected as u64, promoted as u64))
+}
+
+/// Aggregated result of one [`advance_dedup_fsm`] tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DedupFsmProgress {
+    /// Groups that transitioned to `errored` (compare errors exhausted).
+    pub groups_errored: u64,
+    /// Files promoted to `deduped` across every transition in the tick.
+    pub files_promoted: u64,
+}
+
+/// Advance the dedup group FSM atomically. Calls, in order:
+///   1. `searching_to_finished`
+///   2. `finish_to_error`
+///   3. `finish_to_done`
+///   4. `finish_to_ready`
+///   5. `ready_to_searching`
+///
+/// One transaction covers all five transitions, so a tick commits whole or
+/// rolls back whole. `files_promoted` sums every promotion the tick made.
+pub fn advance_dedup_fsm(conn: &mut Connection, eager_filter: bool) -> Result<DedupFsmProgress> {
+    let tx = conn.transaction().to_panic()?;
+    searching_to_finished(&tx, eager_filter)?;
+    let (groups_errored, promoted_error) = finish_to_error(&tx, eager_filter)?;
+    let promoted_done = finish_to_done(&tx, eager_filter)?;
+    let promoted_ready = finish_to_ready(&tx, eager_filter)?;
+    let (_elected, promoted_searching) = ready_to_searching(&tx, eager_filter)?;
+    tx.commit().to_panic()?;
+    Ok(DedupFsmProgress {
+        groups_errored,
+        files_promoted: promoted_error + promoted_done + promoted_ready + promoted_searching,
+    })
 }
 
 /// Next slice of `(candidate, active canonical)` pairs still awaiting compare,
@@ -539,7 +562,7 @@ pub fn mark_inflight(conn: &Connection, ids: &[FileId]) -> Result<()> {
         return Ok(());
     }
     let mut stmt = conn
-        .prepare("INSERT OR IGNORE INTO dedup_inflight (candidate_id) VALUES (:id)")
+        .prepare_cached("INSERT OR IGNORE INTO dedup_inflight (candidate_id) VALUES (:id)")
         .to_panic()?;
     for id in ids {
         stmt.execute(named_params! { ":id": id.0 }).to_panic()?;
@@ -550,7 +573,7 @@ pub fn mark_inflight(conn: &Connection, ids: &[FileId]) -> Result<()> {
 /// Clear in-flight markers once the matching outcome is applied. Idempotent.
 pub fn unmark_inflight(conn: &Connection, ids: &[FileId]) -> Result<()> {
     let mut stmt = conn
-        .prepare("DELETE FROM dedup_inflight WHERE candidate_id = :id")
+        .prepare_cached("DELETE FROM dedup_inflight WHERE candidate_id = :id")
         .to_panic()?;
     for id in ids {
         stmt.execute(named_params! { ":id": id.0 }).to_panic()?;
@@ -560,8 +583,9 @@ pub fn unmark_inflight(conn: &Connection, ids: &[FileId]) -> Result<()> {
 
 /// Set canonical column of the row identified by file_id
 pub fn set_canonical(conn: &Connection, file_id: FileId, canonical_id: FileId) -> Result<()> {
-    conn.execute(
-        "UPDATE files SET canonical_id = :canonical_id, phase = 'deduped' WHERE id = :id",
+    conn.prepare_cached(
+        "UPDATE files SET canonical_id = :canonical_id, phase = 'deduped' WHERE id = :id"
+    ).to_panic()?.execute(
         named_params! {
             ":canonical_id": canonical_id.0,
             ":id": file_id.0,
