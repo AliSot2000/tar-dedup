@@ -250,24 +250,17 @@ fn run_enqueue_dequeue_loop_dedup(
     // tick: per-group FSM, advanced every iteration — guarded SQL flips only
     // complete groups, so a slow 50 GiB group never stalls the rest.
     let tick = || -> Result<bool> {
-        rt.db.searching_to_finished(eager_filter)?;
-        let (errored, promoted) = rt.db.finish_to_error(eager_filter)?;
-        if promoted > 0 {
-            rt.progress.inc_both(promoted);
+        let fsm = rt.db.advance_dedup_fsm(eager_filter)?;
+        if fsm.files_promoted > 0 {
+            rt.progress.inc_both(fsm.files_promoted);
         }
-        if fail_fast && errored > 0 {
+        if fail_fast && fsm.groups_errored > 0 {
             tracing::error!(
-                errored_groups = errored,
+                errored_groups = fsm.groups_errored,
                 "dedup fail-fast: group(s) could not elect a canonical (compare error(s) recorded)"
             );
             fail_fast_hit = true;
             return Ok(false);
-        }
-        let promoted1 = rt.db.finish_to_done(eager_filter)?;
-        let promoted2 = rt.db.finish_to_ready(eager_filter)?;
-        let (_, promoted3) = rt.db.ready_to_searching(eager_filter)?;
-        if promoted1 + promoted2 + promoted3 > 0 {
-            rt.progress.inc_both(promoted);
         }
         if rt.db.count_pending_dedup_groups()? == 0 {
             return Ok(false);
