@@ -100,6 +100,10 @@ Split the two roles:
    default (`on-error`: clean run deletes, error run keeps). Legacy handling is
    "upgrade pristine `tar-dedup.sqlite` → `manifest.sqlite`, else error".
 
+> Superseded by `091-bypass-manifest-required-and-cleanup-timestamp.md`: the
+> legacy pristine-DB upgrade is removed; `manifest.sqlite` is mandatory, with an
+> explicit `--force` resume from an incomplete work DB as the only exception.
+
 ## Tests / verification
 
 - `archive.rs::bypass_archive_writes_dir_product_and_sets_meta` (`:404-436`):
