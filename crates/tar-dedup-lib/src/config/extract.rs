@@ -1155,10 +1155,16 @@ mod tests {
         // `-f DIR` + `--bypass-archive`: the product dir becomes the work dir.
         let product = dir.path().join("product");
         std::fs::create_dir_all(&product).expect("mk product");
+        std::fs::write(product.join("manifest.sqlite"), b"dummy").expect("dummy manifest");
         let cfg = build(&product, &["--bypass-archive"]).expect("build bypass");
         assert!(cfg.bypass_archive, "bypass flag set");
         assert_eq!(cfg.paths.work_dir, product, "product dir doubles as work dir");
         assert_eq!(cfg.paths.db_path(), product.join("tar-dedup.sqlite"));
+        assert_eq!(
+            cfg.paths.bypass_manifest_path(),
+            product.join("manifest.sqlite"),
+            "manifest path points at the immutable catalog",
+        );
 
         // `-f DIR` without the flag is a hard error (not a tar file).
         let err = build(&product, &[]).unwrap_err();
@@ -1170,6 +1176,23 @@ mod tests {
         assert!(err.to_string().contains("not a directory"), "{err}");
         // `-f <file>` without the flag remains valid (normal tar extract).
         assert!(build(&arc, &[]).is_ok());
+    }
+
+    #[test]
+    fn bypass_archive_requires_manifest_unless_force() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let product = dir.path().join("product");
+        std::fs::create_dir_all(&product).expect("mk product");
+
+        let err = build(&product, &["--bypass-archive"]).unwrap_err();
+        assert!(err.to_string().contains("has no manifest.sqlite"), "{err}");
+
+        // `--force` is the explicit escape hatch (runtime still enforces the
+        // forced-resume policy).
+        assert!(build(&product, &["--bypass-archive", "--force"]).is_ok());
+
+        std::fs::write(product.join("manifest.sqlite"), b"dummy").expect("dummy manifest");
+        assert!(build(&product, &["--bypass-archive"]).is_ok());
     }
 
     #[test]

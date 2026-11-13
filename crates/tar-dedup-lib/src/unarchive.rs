@@ -102,7 +102,6 @@ fn ensure_bypass_catalog(config: &ExtractConfig, reset_work_db: bool) -> Result<
     Ok(())
 }
 
-// TODO Remove with patch > v1.0.0 migration no longer needed
 /// Remove an extract work DB together with its SQLite companions.
 fn remove_work_db(work_db: &Path) -> Result<()> {
     for path in [
@@ -604,48 +603,38 @@ fn extract_run_exit_after_stage_then_resume_to_done() {
     }
 
     #[test]
-    fn ensure_bypass_catalog_upgrades_pristine_legacy_db() {
+    fn ensure_bypass_catalog_requires_manifest() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let cfg = bypass_catalog_config(dir.path());
-        // Legacy product: only the pristine baked `tar-dedup.sqlite`.
-        write_finished_catalog(&cfg.paths.db_path());
-
-        ensure_bypass_catalog(&cfg, false).expect("upgrade");
-
-        let manifest = cfg.paths.work_dir.join(SNAPSHOT_INIT_TAR_NAME);
-        assert!(manifest.is_file(), "manifest promoted");
-        assert!(cfg.paths.db_path().is_file(), "work db re-materialized");
-        let mdb = Database::open(&manifest).expect("open manifest");
-        assert_eq!(mdb.get_bypass_archive().unwrap(), Some(true));
-        assert!(cfg.paths.db_path().exists());
-    }
-
-    #[test]
-    fn ensure_bypass_catalog_errors_without_usable_manifest() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cfg = bypass_catalog_config(dir.path());
+        let mut cfg = bypass_catalog_config(dir.path());
 
         // Nothing at all.
         let err = ensure_bypass_catalog(&cfg, false).unwrap_err();
         assert!(err.to_string().contains("has no manifest.sqlite"), "{err}");
 
-        // A bypass DB whose archive never finished is not a valid catalog.
-        let db = Database::open(&cfg.paths.db_path()).expect("open");
-        db.set_bypass_archive(true).expect("bypass meta");
-        db.checkpoint().expect("checkpoint");
-        drop(db);
-        let err = ensure_bypass_catalog(&cfg, false).unwrap_err();
-        assert!(err.to_string().contains("not a pristine catalog"), "{err}");
-
-        // A finished archive DB already touched by an extraction is not pristine
-        // either (the canonical catalog was clobbered by an old run).
+        // A finished work DB alone is never promoted to a manifest.
         write_finished_catalog(&cfg.paths.db_path());
+        let err = ensure_bypass_catalog(&cfg, false).unwrap_err();
+        assert!(err.to_string().contains("has no manifest.sqlite"), "{err}");
+        assert!(cfg.paths.db_path().is_file(), "work db is not renamed");
+        assert!(!cfg.paths.bypass_manifest_path().exists(), "no manifest fabricated");
+
+        // `--force` only helps an explicit Resume over an Incomplete work DB.
+        cfg.process.force = true;
+        cfg.process.start_policy = StartPolicy::Resume;
+        let err = ensure_bypass_catalog(&cfg, false).unwrap_err();
+        assert!(err.to_string().contains("has no manifest.sqlite"), "{err}");
+
         let db = Database::open(&cfg.paths.db_path()).expect("open");
-        db.init_extract_runtime_state().expect("extract state");
+        db.save_extract_runtime_state(&ExtractRuntimeState {
+            phase: ExtractPipelinePhase::Place,
+            snapshots_ingested: 1,
+        }).expect("dirty");
         db.checkpoint().expect("checkpoint");
         drop(db);
-        let err = ensure_bypass_catalog(&cfg, false).unwrap_err();
-        assert!(err.to_string().contains("not a pristine catalog"), "{err}");
+
+        ensure_bypass_catalog(&cfg, false).expect("forced resume");
+        assert!(!cfg.paths.bypass_manifest_path().exists(), "no manifest fabricated");
+        assert!(cfg.paths.db_path().is_file(), "work db untouched");
     }
 
     #[test]

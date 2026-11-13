@@ -3,6 +3,7 @@
 use crate::archive_footer::{read_footer, verify_archive_integrity};
 use crate::common::defaults::{DB_NAME, SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::common::files::{copy_reader_batched, read_probe};
+use crate::common::start::StartPolicy;
 use crate::config::{ExtractConfig, StageKeep};
 use crate::db::content_id::parse_content_id;
 use crate::db::flags::{ErrorFlags, FileFlag};
@@ -211,6 +212,10 @@ pub fn run(
 /// product dir, so `db_path()` holds the disposable work DB materialized from
 /// the product's `manifest.sqlite` by `unarchive::ensure_bypass_catalog`.
 ///
+/// `manifest.sqlite` is mandatory; the only exception is an explicit `--force`
+/// resume over an existing `Incomplete` work DB (catalog deleted after a crash).
+/// The work DB is always a mutable copy, never the catalog itself.
+///
 /// Flow:
 /// 1. open the work DB, confirm `bypass_archive` meta,
 /// 2. index the product dir: each `content_id` payload is read-probed (4 MiB
@@ -228,6 +233,17 @@ fn run_bypass(
     recorder: &mut Recorder,
     filter_buffer: &mut Option<ParseFilterBuffer>)
     -> Result<(Database, bool)>  {
+    debug_assert!(
+        rt.config.paths.bypass_manifest_path().is_file()
+            || (rt.config.process.force
+                && rt.config.process.start_policy == StartPolicy::Resume),
+        "PRECONDITION: bypass manifest missing without a forced resume"
+    );
+    debug_assert!(
+        rt.config.paths.db_path().is_file(),
+        "PRECONDITION: ensure_bypass_catalog must materialize the work db"
+    );
+
     // Bypass always persists the extract config (even when nothing escalates),
     // so `wrote_config` is unconditionally true.
     let mut escaled_keep = false;
