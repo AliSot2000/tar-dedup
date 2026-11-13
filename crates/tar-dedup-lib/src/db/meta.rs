@@ -9,11 +9,30 @@
 // EnumDiscriminatns << needed for the simpler MetaKey nomenclature.
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 
 use crate::common::perms::OwnerGroupPolicy;
 use crate::config::{ArchiveConfig, ExtractConfig, ExtractPipelinePhase, PipelinePhase};
 use crate::db::common::{get_meta, upsert_meta};
 use crate::error::{Error, Result, ToPanic};
+
+/// One event in the append-only phase time ledger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeLedgerEntry {
+    /// `pipeline::phase` slug, e.g. `archive::hash` or `extract::place`.
+    pub phase: String,
+    pub event: LedgerEvent,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LedgerEvent {
+    Start,
+    Stop,
+    Interrupt,
+    Error,
+}
 
 /// Closed set of known `meta.key` strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,6 +61,7 @@ pub enum MetaKey {
     TarDedupVersion,
     TarDedupOs,
     DbVersion,
+    TimeLedger,
 }
 
 impl MetaKey {
@@ -71,6 +91,7 @@ impl MetaKey {
             Self::TarDedupVersion => "tar_dedup_version",
             Self::TarDedupOs => "tar_dedup_os",
             Self::DbVersion => "db_version",
+            Self::TimeLedger => "time_ledger",
         }
     }
 
@@ -100,6 +121,7 @@ impl MetaKey {
             "tar_dedup_version" => Self::TarDedupVersion,
             "tar_dedup_os" => Self::TarDedupOs,
             "db_version" => Self::DbVersion,
+            "time_ledger" => Self::TimeLedger,
             _ => return None,
         })
     }
@@ -130,6 +152,7 @@ impl MetaKey {
             Self::TarDedupVersion,
             Self::TarDedupOs,
             Self::DbVersion,
+            Self::TimeLedger,
         ]
     }
 }
@@ -161,6 +184,7 @@ pub enum MetaEntry {
     TarDedupVersion(String),
     TarDedupOs(String),
     DbVersion(String),
+    TimeLedger(Vec<TimeLedgerEntry>),
 }
 
 impl MetaEntry {
@@ -190,6 +214,7 @@ impl MetaEntry {
             Self::TarDedupVersion(_) => MetaKey::TarDedupVersion,
             Self::TarDedupOs(_) => MetaKey::TarDedupOs,
             Self::DbVersion(_) => MetaKey::DbVersion,
+            Self::TimeLedger(_) => MetaKey::TimeLedger,
         }
     }
 
@@ -219,6 +244,9 @@ impl MetaEntry {
             Self::ArchiveConfig(v) => serde_json::to_string(v).expect("archive config serializable"),
             Self::ExtractConfig(v) => serde_json::to_string(v).expect("extract config serializable"),
             Self::TarDedupVersion(v) | Self::TarDedupOs(v) | Self::DbVersion(v) => v.clone(),
+            Self::TimeLedger(v) => {
+                serde_json::to_string(v).expect("time ledger serializable")
+            }
         }
     }
 
@@ -272,6 +300,9 @@ impl MetaEntry {
             MetaKey::TarDedupVersion => Ok(Self::TarDedupVersion(raw.to_string())),
             MetaKey::TarDedupOs => Ok(Self::TarDedupOs(raw.to_string())),
             MetaKey::DbVersion => Ok(Self::DbVersion(raw.to_string())),
+            MetaKey::TimeLedger => serde_json::from_str(raw)
+                .map(Self::TimeLedger)
+                .map_err(|_| Error::Config(format!("invalid time_ledger meta: {raw}"))),
         }
     }
 }
@@ -586,6 +617,19 @@ pub fn set_db_version(conn: &Connection, value: &str) -> Result<()> {
     set_entry(conn, &MetaEntry::DbVersion(value.to_string()))
 }
 
+pub fn get_time_ledger(conn: &Connection) -> Result<Option<Vec<TimeLedgerEntry>>> {
+    get_typed(conn, MetaKey::TimeLedger, |e| match e {
+        MetaEntry::TimeLedger(v) => Some(v),
+        _ => None,
+    })
+}
+
+pub fn append_time_ledger(conn: &Connection, entry: &TimeLedgerEntry) -> Result<()> {
+    let mut ledger = get_time_ledger(conn)?.unwrap_or_default();
+    ledger.push(entry.clone());
+    set_entry(conn, &MetaEntry::TimeLedger(ledger))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MetaDump {
     pub known: Vec<MetaEntry>,
@@ -633,6 +677,38 @@ mod tests {
         }
         assert_eq!(MetaKey::parse("phase"), None);
         assert_eq!(MetaKey::parse("archive_bytes_in"), None);
+    }
+
+    #[test]
+    fn time_ledger_appends_in_order_and_dumps() {
+        let (_dir, conn) = open_conn();
+        assert_eq!(get_time_ledger(&conn).unwrap(), None);
+
+        let t0 = Utc.with_ymd_and_hms(2026, 11, 13, 14, 20, 17).unwrap();
+        let t1 = t0 + chrono::Duration::milliseconds(1500);
+        for (phase, event, at) in [
+            ("archive::inventory", LedgerEvent::Start, t0),
+            ("archive::inventory", LedgerEvent::Stop, t1),
+            ("archive::archive", LedgerEvent::Error, t1),
+            ("extract::scan_tar", LedgerEvent::Interrupt, t1),
+        ] {
+            append_time_ledger(&conn, &TimeLedgerEntry {
+                phase: phase.into(),
+                event,
+                at,
+            }).expect("append");
+        }
+
+        let ledger = get_time_ledger(&conn).unwrap().expect("ledger");
+        assert_eq!(ledger.len(), 4);
+        assert_eq!(ledger[0].phase, "archive::inventory");
+        assert_eq!(ledger[0].event, LedgerEvent::Start);
+        assert_eq!(ledger[1].at, t1);
+        assert_eq!(ledger[2].event, LedgerEvent::Error);
+        assert_eq!(ledger[3].phase, "extract::scan_tar");
+
+        let dump = dump_meta(&conn).unwrap();
+        assert!(dump.known.iter().any(|e| matches!(e, MetaEntry::TimeLedger(v) if v == &ledger)));
     }
 
     #[test]

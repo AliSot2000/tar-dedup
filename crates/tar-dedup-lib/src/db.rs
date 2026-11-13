@@ -50,7 +50,7 @@ pub use scan::ScanState;
 pub use integrity::{
     ArchiveGate, archive_phase_check_count, extract_phase_check_count,
 };
-pub use meta::{MetaDump, MetaEntry, MetaKey, dump_meta};
+pub use meta::{LedgerEvent, MetaDump, MetaEntry, MetaKey, TimeLedgerEntry, dump_meta};
 pub use scan::ScanRemainderTally;
 use crate::db::dedup::CompareOutcome;
 use crate::db::hash::HashingOutcome;
@@ -609,6 +609,28 @@ impl Database {
 
     pub fn dump_meta(&self) -> Result<MetaDump> {
         dump_meta(&*self.conn())
+    }
+
+    /// See [`meta::get_time_ledger`].
+    pub fn time_ledger(&self) -> Result<Vec<TimeLedgerEntry>> {
+        Ok(meta::get_time_ledger(&*self.conn())?.unwrap_or_default())
+    }
+
+    /// Append one phase event to the time ledger. Best effort: a ledger failure
+    /// logs a warning and never aborts the pipeline.
+    pub fn record_phase_event(
+        &self,
+        phase: &str,
+        event: LedgerEvent,
+        at: chrono::DateTime<chrono::Utc>)
+    {
+        let entry = TimeLedgerEntry { phase: phase.to_string(), event, at };
+        if let Err(e) = self.with_transaction(|conn| meta::append_time_ledger(conn, &entry)) {
+            tracing::warn!(
+                "time ledger: failed to record {:?} for {phase}: {e}",
+                entry.event
+            );
+        }
     }
 
     /// See [`meta::get_tar_dedup_version`].
