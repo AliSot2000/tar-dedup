@@ -75,20 +75,20 @@ Behavioral note: a tick is now atomic. A panic mid-tick rolls back the whole
 tick instead of persisting earlier transitions; a resume sees one consistent FSM
 state.
 
-## 3. Existing progress-accounting bug (decision §5.1)
+## 3. Progress accounting (two bugs)
 
-`archive/dedup.rs:269-271`:
-
-```rust
-if promoted1 + promoted2 + promoted3 > 0 {
-    rt.progress.inc_both(promoted);   // `promoted` is finish_to_error's count
-}
-```
-
-The guard tests `promoted1+promoted2+promoted3` but increments by the
-`finish_to_error` count (and that count was already added at `:255-257`). With
-`files_promoted` aggregated in the wrapper, the natural implementation adds the
-correct total. Recommended: fix it.
+1. **Wrong delta.** `archive/dedup.rs:269-271` tested `promoted1 + promoted2 +
+   promoted3 > 0` but called `inc_both(promoted)` with `finish_to_error`'s count —
+   already added earlier in the tick. With the aggregate this is gone: the tick
+   adds `files_promoted` exactly once.
+2. **Terminal groups re-counted every tick.** `finish_to_error` / `finish_to_done`
+   promoted with only `(sha1, size) IN (SELECT … state = 'errored' | 'done')`.
+   Those states are terminal, so every later tick re-matched (and re-counted) the
+   entire membership of every terminal group — including files promoted in earlier
+   ticks. That is the "200k done of 30k" symptom. Both updates now also require
+   `phase = <prev>`, so they only touch rows actually leaving the pool; the count
+   is idempotent and matches the phase bar. Regression test:
+   `advance_dedup_fsm_does_not_recount_terminal_groups`.
 
 ## 4. Out of scope
 
@@ -119,11 +119,11 @@ correct total. Recommended: fix it.
   `fsm_roundtrip_three_member_unequal_than_equal_terminates_done`.
 - Existing ingest tests (`ingest_compare_outcome_*`).
 - `cargo test -p tar-dedup-lib --lib`, then `scripts/vm-test.sh` (`test-all`).
-- Result (2026-11-13): `--lib` **770 passed**; dedup subset **55 passed**.
-  `--lib --features test-all`: **811 passed, 6 failed** — all six fail on the
-  host's missing SELinux context (`file system does not support SELinux`), as
-  expected. The VM was unreachable (`No route to host`), so the full 817-test
-  run still needs to be done there.
+- Result (2026-11-13): `--lib` **771 passed**; dedup subset **56 passed**
+  (includes the new recount regression test). `--lib --features test-all`: the
+  host's missing SELinux context fails the six xattr/SELinux tests as expected.
+  The VM was unreachable (`No route to host`), so the full run still needs to be
+  done there.
 - No new tests unless requested (the five keep their own tests and are now
   called directly with `&Connection`; the wrapper composes them).
 
