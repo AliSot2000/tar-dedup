@@ -1,9 +1,10 @@
 //! Shared work-directory cleanup for archive (`.astage`) and extract (`.estage`).
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
+use chrono::{DateTime, SecondsFormat, Utc};
 
 use crate::config::{DbRetention, WorkLayout, archive_stem};
 use crate::error::{Error, Result};
@@ -22,11 +23,23 @@ pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode, bypass: bool
             // the work dir already). No rename, no timestamped copy.
             tracing::info!("kept database in place: {}", db_path.display());
         } else {
-            let dest = retained_db_path(config, mode);
+            let mut dest = retained_db_path(config, mode);
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
             }
-            fs::rename(&db_path, &dest).map_err(|e| Error::io(&dest, e))?;
+            if let Err(e) = fs::rename(&db_path, &dest) {
+                if e.kind() != io::ErrorKind::InvalidInput {
+                    return Err(Error::io(&dest, e));
+                }
+                // Some filesystems reject `:` in filenames (notably NTFS).
+                let name = dest
+                    .file_name()
+                    .expect("PRECONDITION: retained db path has a file name")
+                    .to_string_lossy();
+                let fallback = dest.with_file_name(sanitized_db_name(&name));
+                fs::rename(&db_path, &fallback).map_err(|e| Error::io(&fallback, e))?;
+                dest = fallback;
+            }
             tracing::info!("kept database: {}", dest.display());
         }
     } else if db_path.is_file() {
@@ -93,9 +106,18 @@ fn resolve_keep_db(config: &impl WorkLayout, mode: CleanupMode, db_path: &Path)
 
 fn retained_db_path(config: &impl WorkLayout, mode: CleanupMode) -> PathBuf {
     let stem = archive_stem(&config.paths().archive_path);
-    let ts = Utc::now().to_rfc3339().replace(':', "-");
-    let name = format!("{ts}_{stem}.sqlite");
-    config.kept_db_parent(mode).join(name)
+    config.kept_db_parent(mode).join(retained_db_name(&stem, Utc::now()))
+}
+
+/// `{ts}_{stem}.sqlite` with a second-precision UTC timestamp (`Z`), independent
+/// of logging/`--log-time`. Used purely as a collision witness.
+fn retained_db_name(stem: &str, ts: DateTime<Utc>) -> String {
+    let ts = ts.to_rfc3339_opts(SecondsFormat::Secs, true);
+    format!("{ts}_{stem}.sqlite")
+}
+
+fn sanitized_db_name(name: &str) -> String {
+    name.replace(':', "-")
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -349,5 +371,24 @@ mod tests {
         cleanup_workdir(&world.config, CleanupMode::Archive, false).expect("cleanup");
         assert!(!db_before.is_file(), "on-error with zero recorded errors drops the db");
         assert!(!world.config.paths.work_dir.exists(), "work dir removed");
+    }
+
+    #[test]
+    fn retained_db_name_is_second_precision_utc() {
+        let ts = DateTime::parse_from_rfc3339("2026-11-13T14:20:17.123456789Z")
+            .expect("parse")
+            .with_timezone(&Utc);
+        assert_eq!(
+            retained_db_name("backup", ts),
+            "2026-11-13T14:20:17Z_backup.sqlite"
+        );
+    }
+
+    #[test]
+    fn sanitized_db_name_replaces_only_colons() {
+        assert_eq!(
+            sanitized_db_name("2026-11-13T14:20:17Z_backup.sqlite"),
+            "2026-11-13T14-20-17Z_backup.sqlite"
+        );
     }
 }
