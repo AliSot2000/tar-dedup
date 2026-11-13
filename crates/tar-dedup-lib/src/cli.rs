@@ -334,7 +334,7 @@ pub struct ArchiveArgs {
         long = "min-pages",
         value_name = "PAGES",
         help_heading = "Sparse Files",
-        default_value_t = 0
+        default_value_t = 1
     )]
     pub min_pages: u64,
 
