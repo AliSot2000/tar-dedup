@@ -1,4 +1,4 @@
-use crate::common::defaults::DB_NAME;
+use crate::common::defaults::{DB_NAME, SNAPSHOT_INIT_TAR_NAME};
 use crate::config::Validate;
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,11 @@ impl Validate for PathLayout {
 impl PathLayout {
     pub fn db_path(&self) -> PathBuf {
         self.work_dir.join(DB_NAME)
+    }
+
+    /// Immutable bypass catalog. In bypass mode `work_dir` is the product dir.
+    pub fn bypass_manifest_path(&self) -> PathBuf {
+        self.work_dir.join(SNAPSHOT_INIT_TAR_NAME)
     }
 
     pub fn temp_db(&self) -> PathBuf {
