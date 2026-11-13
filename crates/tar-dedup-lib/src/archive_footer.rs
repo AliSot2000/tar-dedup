@@ -16,6 +16,7 @@ use crate::progress::ProgressBar;
 use sha1::{Digest, Sha1};
 
 use crate::common::hash::hash_file_range;
+use crate::common::timed;
 use crate::compression::{compress_footer_bytes, decompress_footer_bytes};
 use crate::error::{Error, Result};
 use crate::shutdown::Shutdown;
@@ -100,8 +101,12 @@ pub fn write_footer(
     let offset = std::fs::metadata(archive_path)
         .map_err(|e| Error::io(archive_path, e))?
         .len();
-    // Integrity of the finished compressed archive: hash [0..offset).
-    let content_digest = hash_archive_bytes(archive_path, offset, shutdown, bar)?;
+    // Integrity of the finished compressed archive: hash [0..offset). Timed for
+    // the log only; the phase ledger Stop already happened before this point.
+    let content_digest = timed(
+        || hash_archive_bytes(archive_path, offset, shutdown, bar),
+        "archive integrity",
+    )?;
     let xz_db_digest = Sha1::digest(&xz_db_bytes);
 
     let mut out = OpenOptions::new()

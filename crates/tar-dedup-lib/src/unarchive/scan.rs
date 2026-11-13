@@ -4,6 +4,7 @@ use crate::archive_footer::{read_footer, verify_archive_integrity};
 use crate::common::defaults::{DB_NAME, SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
 use crate::common::files::{copy_reader_batched, read_probe};
 use crate::common::start::StartPolicy;
+use crate::common::timed;
 use crate::config::{ExtractConfig, StageKeep};
 use crate::db::content_id::parse_content_id;
 use crate::db::flags::{ErrorFlags, FileFlag};
@@ -412,7 +413,10 @@ fn run_inner(
     // Only perform check if
     if footer_this_pass && rt.config.scan.verify_archive {
         rt.pb.set_message("verifying archive");
-        match verify_archive_integrity(&rt.config.paths.archive_path, rt.shutdown, Some(&rt.pb)) {
+        match timed(
+            || verify_archive_integrity(&rt.config.paths.archive_path, rt.shutdown, Some(&rt.pb)),
+            "archive integrity",
+        ) {
             Err(e @ Error::Interrupted) => return Err(e),
             Ok(true) => (),
             Ok(false) => {
