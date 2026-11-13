@@ -27,6 +27,11 @@ impl PipelinePhase {
         }
     }
 
+    /// `<command>::<phase>` label used by the append-only time ledger.
+    pub fn ledger_label(self) -> String {
+        format!("archive::{}", self.as_str())
+    }
+
     pub fn next(self, eager_filter: bool) -> Option<Self> {
         match (self, eager_filter) {
             (Self::Inventory, true) => Some(Self::Filter),
@@ -99,6 +104,11 @@ impl ExtractPipelinePhase {
             Self::Cleanup => "cleanup",
             Self::Done => "done",
         }
+    }
+
+    /// `<command>::<phase>` label used by the append-only time ledger.
+    pub fn ledger_label(self) -> String {
+        format!("extract::{}", self.as_str())
     }
 
     pub fn parse(raw: &str) -> crate::error::Result<Self> {
