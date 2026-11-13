@@ -9,6 +9,8 @@ mod scan;
 
 use std::path::Path;
 
+use chrono::Utc;
+
 use crate::common::cleanup::{self, CleanupMode};
 use crate::common::defaults::{DB_NAME, SNAPSHOT_INIT_TAR_NAME};
 use crate::common::files::copy_file_reflink;
@@ -17,7 +19,7 @@ use crate::common::start::{
 };
 use crate::common::timed;
 use crate::config::{ExitAfterStage, ExtractConfig, ExtractPipelinePhase, ExtractRuntimeState};
-use crate::db::{Database, Recorder};
+use crate::db::{Database, LedgerEvent, Recorder};
 use crate::error::{Error, Result};
 use crate::progress::{BarKind, BarScope, EXTRACT_MULTIPLIER, ProgressBarSet, register_mpb};
 use crate::shutdown::Shutdown;
@@ -172,6 +174,16 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
         enter_phase(&progress, state.phase);
 
         let completed = state.phase;
+        let ledger_label = completed.ledger_label();
+        let started_at = Utc::now();
+        let ledger_started = if let Some(edb) = db.as_ref() {
+            edb.record_phase_event(&ledger_label, LedgerEvent::Start, started_at);
+            true
+        } else {
+            // The fresh footer-less scan installs the DB mid-phase; write a
+            // back-dated Start once one exists.
+            false
+        };
 
         let phase_result: Result<()> = (|| {
             match state.phase {
@@ -241,6 +253,12 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
 
         match phase_result {
             Ok(()) => {
+                if let Some(edb) = db.as_ref() {
+                    if !ledger_started {
+                        edb.record_phase_event(&ledger_label, LedgerEvent::Start, started_at);
+                    }
+                    edb.record_phase_event(&ledger_label, LedgerEvent::Stop, Utc::now());
+                }
                 // Cleanup completed the run; exit the loop without the integrity
                 // battery / transition machinery.
                 if state.phase == ExtractPipelinePhase::Done {
@@ -249,6 +267,10 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
             }
             Err(Error::Interrupted) => {
                 if let Some(ref edb) = db {
+                    if !ledger_started {
+                        edb.record_phase_event(&ledger_label, LedgerEvent::Start, started_at);
+                    }
+                    edb.record_phase_event(&ledger_label, LedgerEvent::Interrupt, Utc::now());
                     edb.save_extract_runtime_state(&state)?;
                     // Only the resumable phases (scan, rehash) flush their
                     // mid-phase progress on interrupt; prologue / place /
@@ -262,7 +284,15 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                 }
                 return Ok(());
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                if let Some(ref edb) = db {
+                    if !ledger_started {
+                        edb.record_phase_event(&ledger_label, LedgerEvent::Start, started_at);
+                    }
+                    edb.record_phase_event(&ledger_label, LedgerEvent::Error, Utc::now());
+                }
+                return Err(e);
+            }
         }
 
         // Cross-phase integrity battery after each completed phase (the Cleanup

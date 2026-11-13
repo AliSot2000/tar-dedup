@@ -10,6 +10,7 @@ mod tar_builder;
 
 use std::fs::OpenOptions;
 
+use chrono::Utc;
 use fs4::fs_std::FileExt;
 
 use crate::archive_footer;
@@ -20,7 +21,7 @@ use crate::common::start::{
 };
 use crate::common::timed;
 use crate::config::{ArchiveConfig, ArchiveRuntimeState, ExitAfterStage, PipelinePhase};
-use crate::db::Database;
+use crate::db::{Database, LedgerEvent};
 use crate::error::{Error, Result};
 use crate::progress::{ARCHIVE_MULTIPLIER, BarKind, BarScope, ProgressBarSet, register_mpb};
 use crate::shutdown::Shutdown;
@@ -138,12 +139,21 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         shutdown.check_between_files()?;
 
         enter_phase(&progress, &state.phase);
+        let ledger_label = state.phase.ledger_label();
+        db.record_phase_event(&ledger_label, LedgerEvent::Start, Utc::now());
         match timed(|| run_phase(&state.phase, &rt), state.phase.as_str()) {
             Ok(()) => {
+                // The Archive phase records its own Stop before the footer
+                // snapshot so the footer carries the complete ledger and the
+                // integrity hash stays out of the phase timing.
+                if state.phase != PipelinePhase::Archive {
+                    db.record_phase_event(&ledger_label, LedgerEvent::Stop, Utc::now());
+                }
                 verify_after_phase(&rt, state.phase)?;
                 exit_phase(&progress, &state.phase, &db)?
             }
             Err(Error::Interrupted) => {
+                db.record_phase_event(&ledger_label, LedgerEvent::Interrupt, Utc::now());
                 db.save_archive_runtime_state(&state)?;
                 // Durable checkpoint on interrupt: mid-phase progress (hash /
                 // dedup / sparsify / stage / tar-writer) is row-committed, so
@@ -162,7 +172,10 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
                 }
                 return Ok(());
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                db.record_phase_event(&ledger_label, LedgerEvent::Error, Utc::now());
+                return Err(e);
+            }
         }
 
         let completed = state.phase;

@@ -2,6 +2,8 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::{fs, io};
 
+use chrono::Utc;
+
 use crate::archive::ArchiveRTArgs;
 use crate::archive_footer;
 use crate::common::defaults::{SNAPSHOT_INIT_TAR_NAME, SNAPSHOT_TAR_NAME};
@@ -11,7 +13,7 @@ use crate::config::PipelinePhase;
 use crate::db::ErrorPhase;
 use crate::db::flags::{ErrorFlags, FileFlag};
 use crate::db::types::{FilePhase, StrippedRecord};
-use crate::db::{Database, Recorder};
+use crate::db::{Database, LedgerEvent, Recorder};
 use crate::error::{Error, FileStatError, Result};
 use crate::progress::BarKind;
 use crate::tar_writer::TarWriter;
@@ -369,6 +371,11 @@ fn run_bypass_archive(rt: &ArchiveRTArgs) -> Result<()> {
     // to `manifest.sqlite` after the DB closes.
     rt.db.drop_archive_queue()?;
     recorder.flush()?;
+    rt.db.record_phase_event(
+        &PipelinePhase::Archive.ledger_label(),
+        LedgerEvent::Stop,
+        Utc::now(),
+    );
     rt.db.checkpoint()?;
 
     let done_bytes = rt.db.sum_archived_canonical_bytes()?;
@@ -505,9 +512,21 @@ fn end_session(
 
     match result {
         Ok((session_bytes_in, bytes_out)) => {
+            let archive_done_at = Utc::now();
             rt.db.finalize_tar_writer_session(session_id)?;
             rt.db.set_archive_bytes_in(bytes_in_base.saturating_add(session_bytes_in))?;
             rt.db.set_archive_bytes_out(bytes_out)?;
+
+            // The archive is fully written once `finalize` returns. Record the
+            // phase Stop now, before the footer snapshot, so the footer carries
+            // the complete ledger and excludes the integrity hash.
+            if write_tar_eof {
+                rt.db.record_phase_event(
+                    &PipelinePhase::Archive.ledger_label(),
+                    LedgerEvent::Stop,
+                    archive_done_at,
+                );
+            }
 
             if write_tar_eof && rt.config.pipeline.write_archive_footer {
                 rt.db.checkpoint()?;
@@ -571,7 +590,15 @@ fn run_footer_one_shot(rt: &ArchiveRTArgs) -> Result<()> {
         &rt.config.paths.archive_path,
         &rt.config.paths.db_path(),
         rt.shutdown,
-        Some(&hash_bar))
+        Some(&hash_bar))?;
+    // The stream was already written before the interrupted trailer; close the
+    // resumed Archive attempt (this Stop is work-DB only, the footer precedes it).
+    rt.db.record_phase_event(
+        &PipelinePhase::Archive.ledger_label(),
+        LedgerEvent::Stop,
+        Utc::now(),
+    );
+    Ok(())
 }
 
 // -------------------------------------------------------------------------------------------------
