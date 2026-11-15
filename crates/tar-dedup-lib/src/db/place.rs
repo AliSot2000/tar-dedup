@@ -33,9 +33,15 @@ pub fn insert_ref_out_rows(conn: &Connection, pairs: &[(OutTreeId, i64, FileId)]
     if pairs.is_empty() {
         return Ok(());
     }
+    // Idempotent: the prologue is re-entered after an interrupt and must not
+    // duplicate a mapping it already recorded.
     let mut stmt = conn.prepare(
         "INSERT INTO ref_out (out_id, source_id, file_id)
-         VALUES (:out_id, :source_id, :file_id)",
+         SELECT :out_id, :source_id, :file_id
+         WHERE NOT EXISTS (
+             SELECT 1 FROM ref_out
+             WHERE out_id = :out_id AND source_id = :source_id AND file_id = :file_id
+         )",
     ).to_panic()?;
     for (out_id, source_id, file_id) in pairs {
         stmt.execute(named_params! {
