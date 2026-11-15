@@ -16,14 +16,6 @@ Design stance (from `Readme.md`):
 - Compression defaults to xz (most aggressive). Not backwards compatible before v1.0.0.
 - Stored paths are **absolute**; relative mapping happens only at extract.
 
-## Plan-first workflow
-
-Before implementing any non-trivial change, write a plan to `docs/plans/{topic}.md` (see the
-existing `docs/plans/*.md` files for format) and settle it with the user before touching code.
-A plan may be a deliberate "session recap + next steps" if the design was already agreed
-in conversation; the file just needs to capture the agreed design so implementation can
-be verified against it. Skip the file only for trivial, self-contained edits.
-
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
@@ -37,6 +29,15 @@ Rules:
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
 - A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.
+
+
+## Plan-first workflow
+
+Before implementing any non-trivial change, write a plan to `docs/plans/{topic}.md` (see the
+existing `docs/plans/*.md` files for format) and settle it with the user before touching code.
+A plan may be a deliberate "session recap + next steps" if the design was already agreed
+in conversation; the file just needs to capture the agreed design so implementation can
+be verified against it. Skip the file only for trivial, self-contained edits.
 
 ## Workspace layout
 
