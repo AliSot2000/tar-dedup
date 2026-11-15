@@ -181,7 +181,19 @@ pub fn insert_out_tree_rows(
                 ).to_panic()?;
                 ids.push(OutTreeId(resident_id));
                 if let (true, Some(displaced)) = (enabled, row.file_id) {
-                    if resident_file != Some(displaced.0) {
+                    // Re-entry after an interrupt re-visits rows whose mapping
+                    // already exists; do not record the same conflict twice.
+                    let already_mapped: bool = tx.query_row(
+                        "SELECT EXISTS(
+                             SELECT 1 FROM ref_out
+                             WHERE out_id = :out_id AND file_id = :file_id)",
+                        named_params! {
+                            ":out_id": resident_id,
+                            ":file_id": displaced.0,
+                        },
+                        |r| r.get(0),
+                    ).to_panic()?;
+                    if !already_mapped && resident_file != Some(displaced.0) {
                         conflicts.push(RecordDraft {
                             file_id: Some(displaced),
                             out_tree_id: Some(OutTreeId(resident_id)),
