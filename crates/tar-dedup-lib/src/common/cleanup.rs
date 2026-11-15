@@ -424,4 +424,29 @@ mod tests {
             "2026-11-13T14-20-17Z_backup.sqlite"
         );
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn move_db_file_crosses_devices_by_copying() {
+        use std::os::unix::fs::MetadataExt;
+        if !Path::new("/dev/shm").is_dir() {
+            return;
+        }
+        let src_dir = tempfile::tempdir().expect("tempdir");
+        let dst_dir = tempfile::tempdir_in("/dev/shm").expect("shm tempdir");
+        let src_dev = src_dir.path().metadata().expect("src meta").dev();
+        let dst_dev = dst_dir.path().metadata().expect("dst meta").dev();
+        if src_dev == dst_dev {
+            return;
+        }
+
+        let src = src_dir.path().join("tar-dedup.sqlite");
+        std::fs::write(&src, b"db-bytes").expect("write src");
+        let dest = dst_dir.path().join("2026-11-13T14:20:17Z_out.sqlite");
+
+        let moved = move_db_file(&src, dest.clone()).expect("cross-device move");
+        assert_eq!(moved, dest);
+        assert!(!src.exists(), "source removed after copy");
+        assert_eq!(std::fs::read(&dest).expect("read dst"), b"db-bytes");
+    }
 }
