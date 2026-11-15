@@ -174,5 +174,11 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 - `rust-version = 1.95` and edition 2024 — modern std APIs fine.
 - `files.abs_path` is always absolute; filtering regexes match the absolute path, and a filter matching a directory excludes the directory metadata but NOT its contents (documented deviation from tar).
 - `--fresh` wipes work dir; a `.lock` file (fs4) guards concurrent runs.
+- CIFS/SMB work dirs: SQLite's default VFS cannot set WAL (`Database is locked`);
+  `Database::open` retries with `unix-excl` on SMB magic. CIFS also rejects
+  `symlink(2)`, which the stage step needs, so prefer a local `--work-dir` and
+  keep only the archive on the share.
+- Cleanup retention copies instead of renaming on `EXDEV` (local work dir +
+  remote archive), then deletes the source.
 - Debug feature `debug-force-utf8` makes DB dumps readable but panics on non-UTF8 bytes.
 - Old "raw sqlite footer" archives are not supported — only the current `MAGIC` trailer.
