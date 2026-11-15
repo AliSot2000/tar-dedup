@@ -3,7 +3,7 @@
 use std::cell::{Ref, RefCell, RefMut};
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use crate::common::perms::OwnerGroupPolicy;
 use crate::config::{ArchiveRuntimeState,
@@ -76,8 +76,28 @@ impl Database {
             std::fs::create_dir_all(parent).map_err(|e| crate::error::Error::io(parent, e))?;
         }
         let add_info = !path.exists();
-        let conn = Connection::open(path)?;
-        schema::initialize(&conn)?;
+        let conn = match Self::open_connection(path) {
+            Ok(conn) => conn,
+            Err(e) if Self::is_busy(&e) && Self::on_smb_filesystem(path) => {
+                // CIFS/SMB cannot upgrade SQLite's shared byte-range lock to
+                // the exclusive lock `PRAGMA journal_mode=WAL` needs. The
+                // `unix-excl` VFS takes the exclusive lock directly (once) and
+                // supports WAL, so retry there.
+                tracing::warn!(
+                    "SQLite cannot lock {} on this SMB/CIFS mount ({e}); retrying with the \
+                     unix-excl VFS",
+                    path.display(),
+                );
+                let conn = Connection::open_with_flags_and_vfs(
+                    path,
+                    OpenFlags::default(),
+                    "unix-excl",
+                )?;
+                schema::initialize(&conn)?;
+                conn
+            }
+            Err(e) => return Err(e),
+        };
         // Stamp the producing tool version + host, refreshed on every open so a
         // future schema migration can see which release last touched the db.
         if add_info {
@@ -102,6 +122,42 @@ impl Database {
         Ok(Self {
             conn: RefCell::new(conn),
         })
+    }
+
+    fn open_connection(path: &Path) -> Result<Connection> {
+        let conn = Connection::open(path)?;
+        schema::initialize(&conn)?;
+        Ok(conn)
+    }
+
+    fn is_busy(e: &Error) -> bool {
+        matches!(
+            e,
+            Error::Database(rusqlite::Error::SqliteFailure(err, _))
+                if matches!(
+                    err.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                )
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn on_smb_filesystem(path: &Path) -> bool {
+        use nix::sys::statfs::{FsType, SMB_SUPER_MAGIC, statfs};
+        const CIFS_MAGIC: FsType = FsType(0xFF53_4D42);
+        const SMB2_MAGIC: FsType = FsType(0xFE53_4D42);
+        let probe = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let Ok(stats) = statfs(probe) else { return false };
+        let magic = stats.filesystem_type();
+        magic == CIFS_MAGIC || magic == SMB2_MAGIC || magic == SMB_SUPER_MAGIC
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn on_smb_filesystem(_path: &Path) -> bool {
+        false
     }
 
     pub fn abs_path_exists(&self, path: &Path) -> Result<bool> {
