@@ -44,9 +44,9 @@ Debug assert in `process_results`: every non-`Interrupted` outcome sets ≥1 of
 
 - **Eager** (default): Files-pass drain, after `process_results`, delete the
   batch's terminal canonical caches (size-DESC order already from
-  `materialize_queue`). Skipped when `lazy_delete_stage`.
+  `materialize_queue`). Skipped when `eager_delete_stage`.
 - **Final**: `cleanup_stage` → gated sweep (PayloadRemoved-aware, same
-  predicate, incremental id-walk). Skipped when `lazy_delete_stage`.
+  predicate, incremental id-walk). Skipped when `eager_delete_stage`.
 
 ## 5. Lazy semantics
 
