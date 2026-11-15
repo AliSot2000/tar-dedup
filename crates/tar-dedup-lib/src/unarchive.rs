@@ -272,9 +272,11 @@ pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
                     }
                     edb.record_phase_event(&ledger_label, LedgerEvent::Interrupt, Utc::now());
                     edb.save_extract_runtime_state(&state)?;
-                    // Only the resumable phases (scan, rehash) flush their
-                    // mid-phase progress on interrupt; prologue / place /
-                    // permissions must restart cleanly, so no checkpoint there.
+                    // Only scan/rehash force a mid-phase WAL checkpoint on
+                    // interrupt. prologue/place/permissions commit per-batch
+                    // row state and are re-entrant; the work DB is
+                    // closed/checkpointed on return. Bypass scan intentionally
+                    // restarts from the beginning and is not checkpointed here.
                     if matches!(completed, ExtractPipelinePhase::Rehash) {
                         edb.checkpoint()?;
                     } else if matches!(completed, ExtractPipelinePhase::ScanTar)
