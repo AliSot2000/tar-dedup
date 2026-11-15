@@ -16,7 +16,6 @@ use crate::cli::HardLinkGrouping;
 use crate::common::batched_stepped_loop;
 use crate::common::defaults::ABSOLUTE_ROOT_SOURCE_ID;
 use crate::common::transform::{TransformExpr, TransformSource, parse_transform_expr};
-use crate::db::Database;
 use crate::db::flags::{OutTreeFlag, OutTreeFlags};
 use crate::db::types::{FileId, FileType, NewOutTreeRow, OutTreeId, SourceRecord, StrippedRecord};
 use crate::error::Result;
@@ -34,14 +33,17 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     // the out_tree from `abs_path` as before.
     let use_new_name = transform.is_some() || rt.config.strip_components > 0;
     if use_new_name {
+        rt.shutdown.check_between_files()?;
         tracing::info!("Apply name transformation");
         populate_new_names(rt, transform.as_ref())?;
     }
     if !rt.db.out_tree_is_built()? {
+        rt.shutdown.check_between_files()?;
         tracing::info!("Populating out tree");
         populate_out_tree(rt, use_new_name)?;
     }
     if rt.config.placement.strip_common_prefix {
+        rt.shutdown.check_between_files()?;
         tracing::info!("Stripping common prefix");
         strip_common_prefix(rt)?;
     }
@@ -49,9 +51,11 @@ pub fn run(rt: &ExtractRTArgs) -> Result<()> {
     // Canonical election is DB-only. It is meaningless `--link-tree` mode
     // (same branch as the pre-refactor `place::run`).
     if !rt.config.placement.link_tree {
+        rt.shutdown.check_between_files()?;
         tracing::info!("Determining hardlink canonicals");
         prepare_hardlink_canonicals(rt)?;
     }
+    rt.shutdown.check_between_files()?;
     rt.db.set_placement_prologue_done()?;
     let count = rt.db.count_out_tree_rows()?;
     tracing::info!(
@@ -150,7 +154,7 @@ fn populate_out_tree(
         populate_out_tree_rel(rt, use_new_name)?;
     }
 
-    ensure_parent(rt.db, rt.progress, rt.config.process.batch_size)?;
+    ensure_parent(rt)?;
     rt.db.set_out_tree_built()?;
     Ok(())
 }
@@ -171,15 +175,21 @@ fn strip_common_prefix(rt: &ExtractRTArgs) -> Result<()> {
     // INFO: Internally deletes all rows
     let n = rt.db.strip_common_prefix(&root, &shared)?;
     tracing::info!("re-rooted {n} out_tree rows");
-    ensure_parent(rt.db, rt.progress, rt.config.process.batch_size)?;
+    ensure_parent(rt)?;
     Ok(())
 }
 
 /// Elect hard-link canonicals in the out_tree (mark_canonical family of updates).
 fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
     let _updates: u64 = match rt.config.placement.hard_link_grouping {
-        HardLinkGrouping::None => rt.db.mark_all_canonical()?,
-        HardLinkGrouping::Global => rt.db.mark_global_canonical()?,
+        HardLinkGrouping::None => {
+            rt.shutdown.check_between_files()?;
+            rt.db.mark_all_canonical()?
+        }
+        HardLinkGrouping::Global => {
+            rt.shutdown.check_between_files()?;
+            rt.db.mark_global_canonical()?
+        }
         HardLinkGrouping::Source => {
             let mut sum = 0u64;
             batched_stepped_loop(
@@ -189,6 +199,7 @@ fn prepare_hardlink_canonicals(rt: &ExtractRTArgs) -> Result<()> {
                 |src| src.id,
                 |sources| {
                     for source in sources {
+                        rt.shutdown.check_between_files()?;
                         sum += rt.db.mark_source_canonical(source.id)?;
                     }
                 Ok(())
@@ -257,6 +268,7 @@ fn apply_renames(
     -> Result<()> {
 
     for entry in entries {
+        rt.shutdown.check_between_files()?;
         let member = path_rel_converter(&entry.abs_path);
         let mut name = member.to_string_lossy().into_owned();
         if let Some(t) = transform {
@@ -280,6 +292,7 @@ fn populate_out_tree_abs(
                   "PRECONDITION FAILED: Function builds absolute names");
 
     let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
+        rt.shutdown.check_between_files()?;
         // Process the entries
         let root = rt.config.effective_extraction_root();
         let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
@@ -321,6 +334,7 @@ fn populate_out_tree_rel(
         |sources| {
             for source in sources {
                 let mut apply = |entries: &Vec<StrippedRecord>| -> Result<()> {
+                    rt.shutdown.check_between_files()?;
                     let processed: Vec<NewOutTreeRow> = build_new_out_tree_rows(
                         entries, &root, Some((&source.abs_path, &source.original_path)), use_new_name
                     );
@@ -350,7 +364,7 @@ fn populate_out_tree_rel(
 /// a `--files-fromm` file had a file with `/path/to/not/covered/directory/file.txt`
 /// where `/path/to/other/*` is covered by recursive index. Creating file.txt would fail because
 /// there's no parent path.
-fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet, batch_size: u64)
+fn ensure_parent(rt: &ExtractRTArgs)
     -> Result<()> {
     let mut current_parents: HashSet<PathBuf> = HashSet::new();
     let mut parent_rows: Vec<NewOutTreeRow> = Vec::new();
@@ -359,13 +373,14 @@ fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet, batc
     let cref_flags = &flags;
 
     batched_stepped_loop(
-        batch_size,
+        rt.config.process.batch_size,
         || OutTreeId(0),
-        |lid, bs| db.list_out_tree(
+        |lid, bs| rt.db.list_out_tree(
             *lid, bs, None, Some(false)
         ),
         |o_rec| o_rec.id,
         |entries | {
+            rt.shutdown.check_between_files()?;
             for entry in entries {
                 let par = entry.abs_path.parent().expect("File NEEDs Parent");
                 current_parents.insert(par.to_path_buf());
@@ -378,8 +393,8 @@ fn ensure_parent(db: &Database, progress: &crate::progress::ProgressBarSet, batc
                     flags: cref_flags.clone(),
                 })
             }
-            progress.inc_phase(parent_rows.len() as u64);
-            db.insert_out_tree_rows(&parent_rows, false)?;
+            rt.progress.inc_phase(parent_rows.len() as u64);
+            rt.db.insert_out_tree_rows(&parent_rows, false)?;
             // Clear the accumulators before the next run to avoid huge structures in ram.
             current_parents.clear();
             parent_rows.clear();
@@ -1134,5 +1149,81 @@ mod tests {
         run(&world.rt()).expect("prologue");
         let ot = world.raw_out_tree();
         assert!(ot.iter().any(|(p, _, _, _)| p == "/ed/otl/Best-Movie-Ever.mp4"));
+    }
+
+    #[test]
+    fn run_stops_gracefully_and_resumes() {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |_| {});
+        world.add_file(None, "/a/one.txt", 1, FileType::File);
+        world.add_file(None, "/a/two.txt", 2, FileType::File);
+
+        let stop = crate::shutdown::Shutdown::detached();
+        stop.request_graceful();
+        let err = run(&world.rt_with(&stop)).expect_err("interrupt");
+        assert!(matches!(err, crate::error::Error::Interrupted), "{err:?}");
+        assert!(!world.db.placement_prologue_done().expect("flag"));
+        assert_eq!(world.db.count_out_tree_rows().expect("count"), 0);
+
+        run(&world.rt()).expect("resume");
+        assert!(world.db.placement_prologue_done().expect("done"));
+        assert_eq!(world.db.count_ref_out_rows().expect("ref_out"), 2);
+    }
+
+    #[test]
+    fn run_reuses_partial_out_tree_without_duplicate_ref_out() {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |_| {});
+        world.add_file(None, "/a/one.txt", 1, FileType::File);
+        world.add_file(None, "/a/two.txt", 2, FileType::File);
+        let entries = world.db.list_materialized_entries::<StrippedRecord>(
+            FileId(0), 100, None, None, false, true,
+        ).expect("entries");
+        let rows = build_new_out_tree_rows(&entries, Path::new("/ed"), None, false);
+        let ids = world.db.insert_out_tree_rows(&rows, true).expect("partial tree");
+        let pairs: Vec<_> = ids.iter().zip(&rows)
+            .map(|(id, row)| (*id, 0, row.file_id.expect("mapped")))
+            .collect();
+        world.db.insert_ref_out_rows(&pairs).expect("partial ref_out");
+        assert_eq!(world.db.count_ref_out_rows().expect("before"), 2);
+
+        run(&world.rt()).expect("resume");
+        assert_eq!(
+            world.db.count_ref_out_rows().expect("after"), 2,
+            "re-entry must not duplicate ref_out rows",
+        );
+        assert!(world.db.placement_prologue_done().expect("done"));
+    }
+
+    #[test]
+    fn reinserting_a_conflict_does_not_duplicate_the_error() {
+        let world = ExtractWorld::place_prologue(Path::new("/ed"), true, |_| {});
+        let f1 = world.add_file(None, "/a/one.txt", 1, FileType::File);
+        let f2 = world.add_file(None, "/a/two.txt", 2, FileType::File);
+        let mut flags = OutTreeFlags::default();
+        flags.set(OutTreeFlag::IsDirectory, false);
+        let rows = vec![
+            NewOutTreeRow {
+                abs_path: PathBuf::from("/ed/x"),
+                file_id: Some(f1),
+                flags: flags.clone(),
+            },
+            NewOutTreeRow {
+                abs_path: PathBuf::from("/ed/x"),
+                file_id: Some(f2),
+                flags,
+            },
+        ];
+        let ids = world.db.insert_out_tree_rows(&rows, true).expect("first");
+        let pairs: Vec<_> = ids.iter().zip(&rows)
+            .map(|(id, row)| (*id, 0, row.file_id.expect("mapped")))
+            .collect();
+        world.db.insert_ref_out_rows(&pairs).expect("ref_out");
+        let before = world.db.count_errors(None).expect("errors");
+        assert_eq!(before, 1, "one clobber conflict");
+
+        world.db.insert_out_tree_rows(&rows, true).expect("reinsert");
+        assert_eq!(
+            world.db.count_errors(None).expect("errors"), before,
+            "re-entry must not record the same conflict twice",
+        );
     }
 }
