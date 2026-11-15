@@ -217,6 +217,9 @@ pub fn run(
 /// resume over an existing `Incomplete` work DB (catalog deleted after a crash).
 /// The work DB is always a mutable copy, never the catalog itself.
 ///
+/// A partial bypass scan is intentionally not resumable mid-walk: the next run
+/// rescans the product dir from the beginning and recomputes the flags.
+///
 /// Flow:
 /// 1. open the work DB, confirm `bypass_archive` meta,
 /// 2. index the product dir: each `content_id` payload is read-probed (4 MiB
