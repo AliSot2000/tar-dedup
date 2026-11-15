@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 
+use crate::common::files::copy_file_reflink;
 use crate::config::{DbRetention, WorkLayout, archive_stem};
 use crate::error::{Error, Result};
 
@@ -23,23 +24,11 @@ pub fn cleanup_workdir(config: &impl WorkLayout, mode: CleanupMode, bypass: bool
             // the work dir already). No rename, no timestamped copy.
             tracing::info!("kept database in place: {}", db_path.display());
         } else {
-            let mut dest = retained_db_path(config, mode);
+            let dest = retained_db_path(config, mode);
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
             }
-            if let Err(e) = fs::rename(&db_path, &dest) {
-                if e.kind() != io::ErrorKind::InvalidInput {
-                    return Err(Error::io(&dest, e));
-                }
-                // Some filesystems reject `:` in filenames (notably NTFS).
-                let name = dest
-                    .file_name()
-                    .expect("PRECONDITION: retained db path has a file name")
-                    .to_string_lossy();
-                let fallback = dest.with_file_name(sanitized_db_name(&name));
-                fs::rename(&db_path, &fallback).map_err(|e| Error::io(&fallback, e))?;
-                dest = fallback;
-            }
+            let dest = move_db_file(&db_path, dest)?;
             tracing::info!("kept database: {}", dest.display());
         }
     } else if db_path.is_file() {
@@ -118,6 +107,50 @@ fn retained_db_name(stem: &str, ts: DateTime<Utc>) -> String {
 
 fn sanitized_db_name(name: &str) -> String {
     name.replace(':', "-")
+}
+
+/// Move the retained DB into place. Falls back to a colon-free name when the
+/// filesystem rejects `:`, and to copy+unlink when the destination is on a
+/// different filesystem (e.g. a local `--work-dir` with the archive on a NAS).
+fn move_db_file(src: &Path, dest: PathBuf) -> Result<PathBuf> {
+    match fs::rename(src, &dest) {
+        Ok(()) => Ok(dest),
+        Err(e) if e.kind() == io::ErrorKind::InvalidInput => {
+            let alt = sanitized_path(&dest);
+            if alt == dest {
+                return Err(Error::io(&dest, e));
+            }
+            fs::rename(src, &alt).map_err(|e| Error::io(&alt, e))?;
+            Ok(alt)
+        }
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+            match copy_then_remove(src, &dest) {
+                Ok(()) => Ok(dest),
+                Err(first) => {
+                    let alt = sanitized_path(&dest);
+                    if alt == dest {
+                        return Err(first);
+                    }
+                    copy_then_remove(src, &alt)?;
+                    Ok(alt)
+                }
+            }
+        }
+        Err(e) => Err(Error::io(&dest, e)),
+    }
+}
+
+fn sanitized_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .expect("PRECONDITION: retained db path has a file name")
+        .to_string_lossy();
+    path.with_file_name(sanitized_db_name(&name))
+}
+
+fn copy_then_remove(src: &Path, dest: &Path) -> Result<()> {
+    copy_file_reflink(src, dest)?;
+    fs::remove_file(src).map_err(|e| Error::io(src, e))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
