@@ -811,15 +811,14 @@ pub struct ExtractArgs {
     )]
     pub no_reflink: bool,
 
-    /// Do not delete extract-cache payloads during placement; only the end-of-run
-    /// cleanup may remove them. Off by default so the stage frees space eagerly.
+    /// Delete staged files immediately after they have been materialized to reduce storage use.
     #[arg(
-        long = "lazy-delete-stage",
+        long = "eager-delete-stage",
         default_value_t = false,
         action = ArgAction::SetTrue,
         help_heading = "Placement"
     )]
-    pub lazy_delete_stage: bool,
+    pub eager_delete_stage: bool,
 
     /// Re-root extracted files under the extraction root by stripping the longest
     /// common path prefix (component-wise) shared across the out-tree.

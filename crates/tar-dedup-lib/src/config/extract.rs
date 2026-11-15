@@ -576,7 +576,7 @@ impl ExtractConfig {
                 no_reflink: args.no_reflink,
                 hard_link_grouping: args.hard_link_grouping,
                 recreate_none_file_entries: args.create_other_entries,
-                lazy_delete_stage: args.lazy_delete_stage,
+                lazy_delete_stage: !args.eager_delete_stage,
                 strip_common_prefix: args.strip_common_prefix,
             },
             attributes: ExtractAttributeOptions {
