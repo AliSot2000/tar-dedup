@@ -343,8 +343,8 @@ fn run_bypass_archive(rt: &ArchiveRTArgs) -> Result<()> {
                     staging directory.",
                 );
                 let stage_src = rt.config.paths.stage_dir().join(&cid_name);
-                // Stage path is a symlink; resolve for the times warning and the
-                // underlying bytes are what the product needs.
+                // The product entry is a symlink (or a sparse copy); resolve it
+                // for the bytes and check timestamps against the original source.
                 let target = match fs::canonicalize(&stage_src) {
                     Ok(t) => t,
                     Err(e) => {
@@ -356,12 +356,11 @@ fn run_bypass_archive(rt: &ArchiveRTArgs) -> Result<()> {
                         continue;
                     }
                 };
-                let times = match !record.flags.get(FileFlag::HasSparse) {
-                    true => None,
-                    false => Some(warn_if_times_changed(
-                        &target, record.mtime, record.atime, record.ctime,
-                    ))
-                };
+                let times = record.fs_path().exists().then(|| {
+                    warn_if_times_changed(
+                        record.fs_path(), record.mtime, record.atime, record.ctime,
+                    )
+                });
 
                 rt.progress.set_phase_file("archive", &record.abs_path); // TODO check this.
                 match read_probe(&target, record.size, &mut buf) {
