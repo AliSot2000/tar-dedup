@@ -50,6 +50,7 @@ crossbeam-channel = { workspace = true }
 signal-hook = { workspace = true }
 num_cpus = { workspace = true }
 indicatif = { workspace = true }
+console = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }

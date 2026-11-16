@@ -38,6 +38,7 @@ crossbeam-channel = "0.5.17"
 signal-hook = "0.3"
 num_cpus = "1"
 indicatif = "0.17"
+console = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 serde = { version = "1", features = ["derive"] }
