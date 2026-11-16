@@ -186,6 +186,9 @@ pub struct ArchivePipelineOptions {
     /// Write a directory product (canonical payloads + `manifest.sqlite`)
     /// instead of a tar archive; another tool compresses/stores it.
     pub bypass_archive: bool,
+    /// Run the filesystem stage pass (canonical symlinks). The archive normally
+    /// reads payloads from `record.fs_path()`; this is a debug/bypass aid.
+    pub stage_pass: bool,
 }
 
 impl Default for ArchivePipelineOptions {
@@ -197,6 +200,7 @@ impl Default for ArchivePipelineOptions {
             max_shard_size: 1024 * 1024 * 5,
             write_archive_footer: true,
             bypass_archive: false,
+            stage_pass: false,
         }
     }
 }
@@ -526,6 +530,7 @@ impl ArchiveConfig {
                 max_shard_size: args.max_shard_size,
                 write_archive_footer: !args.bypass_archive,
                 bypass_archive: args.bypass_archive,
+                stage_pass: resolve_bool_flag(false, args.add_stage_pass, args.bypass_archive),
             },
         })
     }
