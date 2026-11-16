@@ -606,6 +606,10 @@ impl Database {
         stage::promote_unstageable_files(&self.conn())
     }
 
+    pub fn promote_sparsified_to_staged(&self) -> Result<u64> {
+        stage::promote_sparsified_to_staged(&self.conn())
+    }
+
     pub fn count_all_stage_candidates(&self) -> Result<u64> {
         stage::count_all_stage_candidates(&self.conn())
     }
