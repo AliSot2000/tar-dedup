@@ -186,6 +186,10 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 - `rust-version = 1.95` and edition 2024 — modern std APIs fine.
 - `files.abs_path` is always absolute; filtering regexes match the absolute path, and a filter matching a directory excludes the directory metadata but NOT its contents (documented deviation from tar).
 - `--fresh` wipes work dir; a `.lock` file (fs4) guards concurrent runs.
+- Progress: `--progress-mode` is wired. `per-thread` draws all bars with width-adaptive
+  `normal`/`compact`/`percent` layouts, `global` draws only the global line, `none` draws nothing.
+  Every bar stores its raw message and refits on terminal resize; thread bars are detached and
+  reattached, never recreated.
 - CIFS/SMB work dirs: SQLite's default VFS cannot set WAL (`Database is locked`);
   `Database::open` retries with `unix-excl` on SMB magic. CIFS also rejects
   `symlink(2)`, which `--add-stage-pass` / `--bypass-archive` needs, so prefer a
