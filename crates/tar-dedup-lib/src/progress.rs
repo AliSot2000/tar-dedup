@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use crate::common::formatting::{format_bytes_per_sec, format_elapsed};
 
-use indicatif::{MultiProgress, ProgressStyle};
+use indicatif::style::ProgressTracker;
+use indicatif::{MultiProgress, ProgressState, ProgressStyle};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::{FilterExt, LevelFilter, filter_fn};
@@ -40,10 +41,11 @@ pub enum BarKind {
     Count,
     /// Spinner + byte bar: `{spinner} {msg} [{bar:40}] {bytes}/{total_bytes} @ {bytes_per_sec}`.
     Bytes,
-    /// Like [`Bytes`](BarKind::Bytes) but a `{prefix}` slot is fed a cumulative
-    /// `@ avg (elapsed)` by a refresher thread started at construction (instead of
-    /// indicatif's sliding `@ {bytes_per_sec}`). The thread computes `avg` from the
-    /// bar's own `position()`/elapsed and exits once the bar is finished/gone.
+    /// Like [`Bytes`](BarKind::Bytes), but `{rate}` is a cumulative
+    /// `@ avg (elapsed)` computed from the bar's own position/elapsed at draw
+    /// time via an indicatif custom tracker. `elapsed` resets with `reset()`, so
+    /// dynamic per-file bars use the new interval; no background thread runs.
+    /// This keeps a useful rate while the producer stalls, e.g. xz compression.
     BytesRate,
 }
 
@@ -58,13 +60,48 @@ fn style_for(kind: BarKind) -> ProgressStyle {
             "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} @ {bytes_per_sec}"
         }
         BarKind::BytesRate => {
-            "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {prefix}"
+            "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {rate}"
         }
     };
-    ProgressStyle::with_template(template)
+    let style = ProgressStyle::with_template(template)
         .expect("valid indicatif template")
         .progress_chars("=>-")
-        .tick_strings(tick_strings())
+        .tick_strings(tick_strings());
+    match kind {
+        BarKind::BytesRate => style.with_key("rate", ByteRateTracker),
+        _ => style,
+    }
+}
+
+/// Cumulative `@ avg (elapsed)` tracker for [`BarKind::BytesRate`]. The rate is
+/// consumed bytes divided by the bar's elapsed time, so a producer stall does
+/// not collapse it to zero. `elapsed` resets with `ProgressBar::reset()`, which
+/// makes the same tracker correct for per-file dynamic bars.
+#[derive(Clone, Copy)]
+struct ByteRateTracker;
+
+impl ProgressTracker for ByteRateTracker {
+    fn clone_box(&self) -> Box<dyn ProgressTracker> {
+        Box::new(*self)
+    }
+
+    fn tick(&mut self, _state: &ProgressState, _now: Instant) {}
+
+    fn reset(&mut self, _state: &ProgressState, _now: Instant) {}
+
+    fn write(&self, state: &ProgressState, w: &mut dyn std::fmt::Write) {
+        let _ = write!(w, "{}", format_avg_rate(state.pos(), state.elapsed()));
+    }
+}
+
+/// Cumulative effective transfer rate: consumed bytes divided by elapsed time.
+fn format_avg_rate(pos: u64, elapsed: Duration) -> String {
+    let secs = elapsed.as_secs_f64().max(1e-3);
+    format!(
+        "@ {} ({})",
+        format_bytes_per_sec(pos as f64 / secs),
+        format_elapsed(elapsed),
+    )
 }
 
 /// Spinner frames shared by the phase bar styles.
@@ -555,38 +592,7 @@ fn make_bar(kind: BarKind, msg: &str) -> ProgressBar {
     bar.set_style(style_for(kind));
     bar.set_message(msg.to_string());
     bar.enable_steady_tick(Duration::from_millis(100));
-    if kind == BarKind::BytesRate {
-        start_byte_rate_refresher(&bar);
-    }
     bar
-}
-
-/// Start the cumulative `@ avg (elapsed)` refresher for a [`BarKind::BytesRate`]
-/// bar. Each second it reads the bar's own `position()` and the elapsed since
-/// construction, writes the rate into the `{prefix}` slot, and exits once the bar
-/// is finished/removed. Progress is driven entirely through the normal `inc`.
-fn start_byte_rate_refresher(bar: &ProgressBar) {
-    let inner = bar.0.clone();
-    let start = Instant::now();
-    thread::Builder::new()
-        .name("tar-dedup-byte-rate".into())
-        .spawn(move || {
-            loop {
-                thread::sleep(Duration::from_secs(1));
-                if inner.is_finished() {
-                    return;
-                }
-                let elapsed = start.elapsed();
-                let secs = elapsed.as_secs_f64().max(1e-3);
-                let prefix = format!(
-                    "@ {} ({})",
-                    format_bytes_per_sec(inner.position() as f64 / secs),
-                    format_elapsed(elapsed)
-                );
-                inner.set_prefix(prefix);
-            }
-        })
-        .expect("spawn byte-rate refresher");
 }
 
 /// Local scope wrapper: finishes the bars on success, abandons them on any
