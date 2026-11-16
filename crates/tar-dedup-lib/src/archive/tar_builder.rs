@@ -103,13 +103,10 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         total_bytes.saturating_sub(already_archived),
     );
 
-    let capture_error = |err: Error, rec: &mut Recorder, fid| {
-        match err {
-            Error::FileStat(e) => rec.record_file(
-                fid, ERROR_PHASE, e, ErrorFlags::default(),
-            ),
-            _ => panic!("PRECONDITION FAILED: Function may only process variant FileStatError")
-        }
+a    let capture_error = |err: &FileStatError, fid, rec: &mut Recorder| {
+        rec.record_file(
+            fid, ERROR_PHASE, err.recreate(), ErrorFlags::default(),
+        )
     };
 
     let mut stopped = false;
@@ -136,46 +133,81 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
                 }
 
                 let tar_name = record.tar_member_name().expect(
-                    "INVARIANT ERROR: Members to be encoded must have a symlink in the \
-                    staging directory.",
+                    "INVARIANT ERROR: Members to be encoded must be canonical payloads.",
                 );
-                let source = rt.config.paths.stage_dir().join(&tar_name);
 
-                // Stage path is a symlink; compare inventory times against the real target.
-                let target = match fs::canonicalize(&source) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        capture_error(Error::copy_io(&source, &e), &mut recorder, record.id);
-                        rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
-                        rt.db.set_file_phase(record.id, FilePhase::Archived)?;
-                        if rt.config.process.fail_fast {
-                            return Err(Error::io(&source, e));
-                        }
-                        continue;
+                // Check
+                #[cfg(debug_assertions)]
+                if rt.config.pipeline.stage_pass && !record.flags.get(FileFlag::HasSparse) {
+                    let link = rt.config.paths.stage_dir().join(&tar_name);
+                    if link.exists() {
+                        debug_assert_eq!(
+                            fs::canonicalize(&link).expect("stage symlink resolves"),
+                            fs::canonicalize(record.fs_path()).expect("source resolves"),
+                            "stage link must resolve to the file recorded in the DB",
+                        );
                     }
+                }
+
+                let payload = if record.flags.get(FileFlag::HasSparse) {
+                    let sparse = rt.config.paths.stage_dir().join(&tar_name);
+                    if sparse.is_file() {
+                        sparse
+                    } else {
+                        tracing::warn!(
+                            path = %sparse.display(),
+                            source = %record.fs_path().display(),
+                            "sparse payload missing; falling back to the source path"
+                        );
+                        capture_error(&FileStatError::general(
+                            Some(&sparse),
+                            format!(
+                                "missing sparse payload; falling back to {}",
+                                record.fs_path().display()
+                            ),
+                        ), record.id, &mut recorder);
+                        record.fs_path().to_path_buf()
+                    }
+                } else {
+                    record.fs_path().to_path_buf()
                 };
-                let times = warn_if_times_changed(
-                    &target, record.mtime, record.atime, record.ctime
-                );
+
+                // Timestamps describe the inventory-time source. A sparse stage
+                // copy has different times and must not be compared with them.
+                let times = record.fs_path().exists().then(|| {
+                    warn_if_times_changed(
+                        record.fs_path(),
+                        record.mtime,
+                        record.atime,
+                        record.ctime,
+                    )
+                });
 
                 progress.set_phase_file("archive", &record.abs_path);
-                match writer.append_path(
-                    &source, &tar_name, |n| progress.inc_phase(n)) {
+                match writer.append_path(&payload, &tar_name, |n| progress.inc_phase(n)) {
                     Ok(()) => {
                         tracing::debug!("appended {} ({} bytes)", tar_name, record.size);
                         rt.db.mark_tar_writer_session_pending(record.id, session_id)?;
-                        rt.db.or_file_flags(record.id, times.to_file_flags())?;
+                        if let Some(times) = times {
+                            rt.db.or_file_flags(record.id, times.to_file_flags())?;
+                        }
                         progress.inc_global(1);
                     }
                     Err(e @ Error::FileStat(_)) => {
                         tracing::error!(
                             path = %record.abs_path.display(),
+                            payload = %payload.display(),
                             error = %e,
                             "archive append_path failed; marking ErrorWhileArchive and continuing"
                         );
-                        capture_error(e, &mut recorder, record.id);
+                        let fse = e.to_only_file_stat()
+                            .expect("PRECONDITION: Only FileStatError expected");
+                        capture_error(&fse, record.id, &mut recorder);
                         rt.db.set_file_flag(record.id, FileFlag::ErrorWhileArchive, true)?;
                         rt.db.set_file_phase(record.id, FilePhase::Archived)?;
+                        if rt.config.process.fail_fast {
+                            return Err(e);
+                        }
                         // Do not mark the archive session — the member was not written.
                     }
                     Err(Error::Interrupted) => {
