@@ -120,7 +120,8 @@ pub fn run(config: ArchiveConfig, shutdown: Shutdown) -> Result<()> {
         }
     };
 
-    let progress = ProgressBarSet::new(ARCHIVE_MULTIPLIER);
+    let progress = ProgressBarSet::with_mode(
+        ARCHIVE_MULTIPLIER, config.process.progress_mode);
     register_mpb(progress.mp_handle());
     let mut bars = BarScope::new(&progress);
     // Resume anchor: a work DB already holds the full table size.

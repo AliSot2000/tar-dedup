@@ -122,7 +122,8 @@ fn remove_work_db(work_db: &Path) -> Result<()> {
 pub fn run(outer_config: ExtractConfig, shutdown: Shutdown) -> Result<()> {
     let mut config = outer_config;
     validate_exit_after_stage(&config)?;
-    let progress = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+    let progress = ProgressBarSet::with_mode(
+        EXTRACT_MULTIPLIER, config.process.progress_mode);
     progress.set_table_size(10);
     register_mpb(progress.mp_handle());
     let mut bars = BarScope::new(&progress);
