@@ -21,12 +21,24 @@ const EXPECTED_CANONICAL: &str = "stage: Expected only canonical files. \
                             Got wrong file type or non-canonical file";
 
 pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
-    fs::create_dir_all(rt.config.paths.stage_dir())
-        .map_err(|e| Error::io(&rt.config.paths.stage_dir(), e))?;
+    // The stage directory should only hold copies we are forced to make
+    // (sparsify output). Canonical symlinks are a debug/bypass artifact; the
+    // archive reads source paths straight from the DB unless `stage_pass` is on.
+    if rt.config.pipeline.stage_pass {
+        fs::create_dir_all(rt.config.paths.stage_dir())
+            .map_err(|e| Error::io(&rt.config.paths.stage_dir(), e))?;
+    }
 
     let promoted = rt.db.promote_unstageable_files()?;
     rt.progress.inc_global(promoted);
     tracing::info!(promoted, "promoted entries to staged which aren't eligible");
+
+    if !rt.config.pipeline.stage_pass {
+        let promoted = rt.db.promote_sparsified_to_staged()?;
+        rt.progress.inc_global(promoted);
+        tracing::info!(promoted, "stage pass disabled; promoted sparsified payloads to staged");
+        return Ok(());
+    }
 
     // Progress across sessions: the workload counts every eligible canonical file
     // (both sparsified pending and already-staged done); the position is the
