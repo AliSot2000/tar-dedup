@@ -2,14 +2,16 @@ use std::io::{self, IsTerminal, Write};
 use std::mem::take;
 use std::ops::Deref;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::common::formatting::{format_bytes_per_sec, format_elapsed};
+use crate::common::formatting::{format_bytes_per_sec, format_count_si, format_elapsed};
 
+use console::measure_text_width;
 use indicatif::style::ProgressTracker;
-use indicatif::{MultiProgress, ProgressState, ProgressStyle};
+use indicatif::{HumanBytes, MultiProgress, ProgressDrawTarget, ProgressState, ProgressStyle};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::{FilterExt, LevelFilter, filter_fn};
@@ -20,7 +22,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry;
 
-use crate::cli::LogLevel;
+use crate::cli::{LogLevel, ProgressMode};
 
 
 /// Number of element-iterating phases in the archive pipeline (Cleanup-style
@@ -50,25 +52,86 @@ pub enum BarKind {
 }
 
 const GLOBAL_TEMPLATE: &str = "{msg} [{bar:48.green/black}] {percent:>3}%";
+const MIN_MSG_NORMAL: usize = 12;
+const MIN_MSG_COMPACT: usize = 8;
 
-// TODO wide
-fn style_for(kind: BarKind) -> ProgressStyle {
-    let template = match kind {
-        BarKind::Counter => "{spinner} {msg} {pos}",
-        BarKind::Count => "{spinner} {msg} [{bar:40.cyan/blue}] {pos}/{len}",
-        BarKind::Bytes => {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BarRole {
+    Global,
+    Phase,
+    Sub,
+    Thread,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LayoutMode {
+    Normal,
+    Compact,
+    Percent,
+}
+
+fn normal_template(role: BarRole, kind: BarKind) -> &'static str {
+    match (role, kind) {
+        (BarRole::Global, _) => GLOBAL_TEMPLATE,
+        (BarRole::Thread, BarKind::Counter) => "{spinner} {prefix}: {msg} {pos}",
+        (BarRole::Thread, BarKind::Count) => {
+            "{spinner} {prefix}: {msg} [{bar:40.cyan/blue}] {pos}/{len}"
+        }
+        (BarRole::Thread, BarKind::Bytes) => {
+            "{spinner} {prefix}: {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} @ {bytes_per_sec}"
+        }
+        (BarRole::Thread, BarKind::BytesRate) => {
+            "{spinner} {prefix}: {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {rate}"
+        }
+        (_, BarKind::Counter) => "{spinner} {msg} {pos}",
+        (_, BarKind::Count) => "{spinner} {msg} [{bar:40.cyan/blue}] {pos}/{len}",
+        (_, BarKind::Bytes) => {
             "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} @ {bytes_per_sec}"
         }
-        BarKind::BytesRate => {
+        (_, BarKind::BytesRate) => {
             "{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {rate}"
         }
+    }
+}
+
+fn compact_template(role: BarRole, kind: BarKind) -> &'static str {
+    match (role, kind) {
+        (BarRole::Global, _) => "{spinner} {msg} {percent:>3}%",
+        (BarRole::Thread, BarKind::Counter) => "{spinner} {prefix}: {msg} {pos}",
+        (BarRole::Thread, _) => "{spinner} {prefix}: {msg} {percent:>3}%",
+        (_, BarKind::Counter) => "{spinner} {msg} {pos}",
+        (_, BarKind::Count) => "{spinner} {msg} {pos}/{len}",
+        (_, BarKind::Bytes | BarKind::BytesRate) => "{spinner} {msg} {bytes}/{total_bytes}",
+    }
+}
+
+fn percent_template(role: BarRole, kind: BarKind) -> &'static str {
+    match (role, kind) {
+        (BarRole::Global, _) => "{msg} {percent:>3}%",
+        // Thread bars are hidden in Percent; keep a harmless style if ever drawn.
+        (BarRole::Thread, _) => "{spinner} {prefix}: {msg} {percent:>3}%",
+        (_, BarKind::Counter) => "{msg} {si_pos}",
+        _ => "{msg} {percent:>3}%",
+    }
+}
+
+fn style_for_mode(role: BarRole, kind: BarKind, mode: LayoutMode) -> ProgressStyle {
+    let template = match mode {
+        LayoutMode::Normal => normal_template(role, kind),
+        LayoutMode::Compact => compact_template(role, kind),
+        LayoutMode::Percent => percent_template(role, kind),
     };
     let style = ProgressStyle::with_template(template)
         .expect("valid indicatif template")
         .progress_chars("=>-")
         .tick_strings(tick_strings());
-    match kind {
-        BarKind::BytesRate => style.with_key("rate", ByteRateTracker),
+    match (mode, kind) {
+        (LayoutMode::Normal, BarKind::BytesRate) => style.with_key("rate", ByteRateTracker),
+        (LayoutMode::Percent, BarKind::Counter)
+            if role != BarRole::Global && role != BarRole::Thread =>
+        {
+            style.with_key("si_pos", CountSiTracker)
+        }
         _ => style,
     }
 }
@@ -91,6 +154,24 @@ impl ProgressTracker for ByteRateTracker {
 
     fn write(&self, state: &ProgressState, w: &mut dyn std::fmt::Write) {
         let _ = write!(w, "{}", format_avg_rate(state.pos(), state.elapsed()));
+    }
+}
+
+/// SI-abbreviated running count for a Percent-mode [`BarKind::Counter`].
+#[derive(Clone, Copy)]
+struct CountSiTracker;
+
+impl ProgressTracker for CountSiTracker {
+    fn clone_box(&self) -> Box<dyn ProgressTracker> {
+        Box::new(*self)
+    }
+
+    fn tick(&mut self, _state: &ProgressState, _now: Instant) {}
+
+    fn reset(&mut self, _state: &ProgressState, _now: Instant) {}
+
+    fn write(&self, state: &ProgressState, w: &mut dyn std::fmt::Write) {
+        let _ = write!(w, "{}", format_count_si(state.pos()));
     }
 }
 
@@ -137,22 +218,59 @@ fn slow_sleep() {}
 /// `inc` increment is wrapped (the crate uses nothing else); the remaining API
 /// passes through `Deref`.
 #[derive(Clone)]
-pub struct ProgressBar(pub indicatif::ProgressBar);
+pub struct ProgressBar(pub indicatif::ProgressBar, Option<Arc<BarMeta>>);
 
 impl ProgressBar {
     pub fn new(len: u64) -> Self {
-        Self(indicatif::ProgressBar::new(len))
+        Self(indicatif::ProgressBar::new(len), None)
     }
     pub fn new_spinner() -> Self {
-        Self(indicatif::ProgressBar::new_spinner())
+        Self(indicatif::ProgressBar::new_spinner(), None)
     }
     pub fn hidden() -> Self {
-        Self(indicatif::ProgressBar::hidden())
+        Self(indicatif::ProgressBar::hidden(), None)
     }
 
     pub fn inc(&self, delta: u64) {
         slow_sleep();
         self.0.inc(delta);
+    }
+
+    /// Set the original (unfitted) message. The displayed form is derived from
+    /// the current layout width; the raw string is retained for resize refits.
+    pub fn set_message(&self, msg: impl Into<String>) {
+        let raw = msg.into();
+        if let Some(meta) = &self.1 {
+            *meta.raw.lock().expect("progress raw lock poisoned") = raw;
+            self.refit();
+        } else {
+            self.0.set_message(raw);
+        }
+    }
+
+    fn refit(&self) {
+        let Some(meta) = &self.1 else { return };
+        let raw = meta.raw.lock().expect("progress raw lock poisoned").clone();
+        let rendered = meta.render(&raw, self.0.position(), self.0.length());
+        self.0.set_message(rendered);
+    }
+
+    fn sync_style(&self) {
+        let Some(meta) = &self.1 else { return };
+        self.0.set_style(style_for_mode(meta.role, meta.kind(), meta.layout.mode()));
+    }
+
+    fn set_kind(&self, kind: BarKind) {
+        let Some(meta) = &self.1 else { return };
+        meta.set_kind(kind);
+        self.sync_style();
+        self.refit();
+    }
+
+    /// (Normal fixed width, Compact fixed width), excluding the message itself.
+    fn required_widths(&self) -> (usize, usize) {
+        let Some(meta) = &self.1 else { return (0, 0) };
+        meta.fixed_widths(self.0.position(), self.0.length())
     }
 }
 
@@ -163,6 +281,251 @@ impl Deref for ProgressBar {
     }
 }
 
+struct BarMeta {
+    role: BarRole,
+    kind: Mutex<BarKind>,
+    raw: Mutex<String>,
+    prefix: String,
+    layout: Arc<LayoutState>,
+}
+
+impl BarMeta {
+    fn kind(&self) -> BarKind {
+        *self.kind.lock().expect("progress kind lock poisoned")
+    }
+
+    fn set_kind(&self, kind: BarKind) {
+        *self.kind.lock().expect("progress kind lock poisoned") = kind;
+    }
+
+    fn fixed_widths(&self, pos: u64, len: Option<u64>) -> (usize, usize) {
+        (self.fixed_normal(pos, len), self.fixed_compact(pos, len))
+    }
+
+    fn fixed_normal(&self, pos: u64, len: Option<u64>) -> usize {
+        if self.role == BarRole::Global {
+            return self.raw.lock().expect("progress raw lock poisoned").len() + 56;
+        }
+        let thread = self.role == BarRole::Thread;
+        let prefix = if thread { self.prefix.len() } else { 0 };
+        match self.kind() {
+            BarKind::Counter if thread => 5 + prefix + digits(pos),
+            BarKind::Counter => 3 + digits(pos),
+            BarKind::Count if thread => 48 + prefix + suffix_count(pos, len),
+            BarKind::Count => 46 + suffix_count(pos, len),
+            BarKind::Bytes if thread => {
+                48 + prefix + suffix_bytes(pos, len, thread) + 3 + MAX_RATE_WIDTH
+            }
+            BarKind::Bytes => 46 + suffix_bytes(pos, len, thread) + 3 + MAX_RATE_WIDTH,
+            BarKind::BytesRate if thread => {
+                48 + prefix + suffix_bytes(pos, len, thread) + 1 + MAX_AVG_RATE_WIDTH
+            }
+            BarKind::BytesRate => {
+                46 + suffix_bytes(pos, len, thread) + 1 + MAX_AVG_RATE_WIDTH
+            }
+        }
+    }
+
+    fn fixed_compact(&self, pos: u64, len: Option<u64>) -> usize {
+        if self.role == BarRole::Global {
+            return self.raw.lock().expect("progress raw lock poisoned").len() + 7;
+        }
+        let thread = self.role == BarRole::Thread;
+        let prefix = if thread { self.prefix.len() } else { 0 };
+        match self.kind() {
+            BarKind::Counter if thread => 5 + prefix + digits(pos),
+            BarKind::Counter => 3 + digits(pos),
+            BarKind::Count if thread => 9 + prefix,
+            BarKind::Count => 3 + suffix_count(pos, len),
+            BarKind::Bytes | BarKind::BytesRate if thread => 9 + prefix,
+            BarKind::Bytes | BarKind::BytesRate => 3 + suffix_bytes(pos, len, thread),
+        }
+    }
+
+    fn fixed_percent(&self, _pos: u64, _len: Option<u64>) -> usize {
+        if self.role == BarRole::Global {
+            return self.raw.lock().expect("progress raw lock poisoned").len() + 5;
+        }
+        if self.role == BarRole::Thread {
+            return 9 + self.prefix.len();
+        }
+        match self.kind() {
+            BarKind::Counter => 1 + COUNT_SI_WIDTH,
+            BarKind::Count | BarKind::Bytes | BarKind::BytesRate => 5,
+        }
+    }
+
+    fn render(&self, raw: &str, pos: u64, len: Option<u64>) -> String {
+        let mode = self.layout.mode();
+        let width = self.layout.width();
+        if self.role == BarRole::Global {
+            if mode != LayoutMode::Percent {
+                return raw.to_string();
+            }
+            let budget = width.saturating_sub(5);
+            return pad_to(fit_tail(raw, budget), budget);
+        }
+        if self.role == BarRole::Thread && mode == LayoutMode::Percent {
+            return raw.to_string();
+        }
+        let fixed = match mode {
+            LayoutMode::Normal => self.fixed_normal(pos, len),
+            LayoutMode::Compact => self.fixed_compact(pos, len),
+            LayoutMode::Percent => self.fixed_percent(pos, len),
+        };
+        let budget = width.saturating_sub(fixed);
+        let fitted = match mode {
+            LayoutMode::Percent => fit_tail(raw, budget),
+            LayoutMode::Normal | LayoutMode::Compact => fit_middle(raw, budget),
+        };
+        pad_to(fitted, budget)
+    }
+}
+
+const MAX_RATE_WIDTH: usize = 16;
+const MAX_AVG_RATE_WIDTH: usize = 40;
+const MAX_BYTES_WIDTH: usize = 12;
+const COUNT_SI_WIDTH: usize = 6;
+
+fn digits(n: u64) -> usize {
+    if n == 0 { 1 } else { n.ilog10() as usize + 1 }
+}
+
+fn thread_prefix(idx: usize, count: usize) -> String {
+    let width = digits(count as u64);
+    format!("T{:0width$}", idx + 1, width = width)
+}
+
+fn suffix_count(pos: u64, len: Option<u64>) -> usize {
+    match len {
+        Some(len) => digits(pos) + 1 + digits(len),
+        None => digits(pos),
+    }
+}
+
+fn suffix_bytes(pos: u64, len: Option<u64>, thread: bool) -> usize {
+    if thread {
+        return MAX_BYTES_WIDTH;
+    }
+    match len {
+        Some(len) => {
+            format!("{}", HumanBytes(pos)).len() + 1 + format!("{}", HumanBytes(len)).len()
+        }
+        None => format!("{}", HumanBytes(pos)).len(),
+    }
+}
+
+struct LayoutState {
+    progress_mode: ProgressMode,
+    width: AtomicUsize,
+    mode: Mutex<LayoutMode>,
+}
+
+impl LayoutState {
+    fn new(progress_mode: ProgressMode) -> Self {
+        Self {
+            progress_mode,
+            width: AtomicUsize::new(terminal_cols()),
+            mode: Mutex::new(LayoutMode::Normal),
+        }
+    }
+
+    fn width(&self) -> usize {
+        self.width.load(Ordering::Relaxed)
+    }
+
+    fn mode(&self) -> LayoutMode {
+        *self.mode.lock().expect("progress layout lock poisoned")
+    }
+
+    fn set_mode(&self, mode: LayoutMode) {
+        *self.mode.lock().expect("progress layout lock poisoned") = mode;
+    }
+}
+
+fn terminal_cols() -> usize {
+    if let Ok(value) = std::env::var("TAR_DEDUP_TERM_WIDTH") {
+        if let Ok(cols) = value.trim().parse::<usize>() {
+            if cols > 0 {
+                return cols;
+            }
+        }
+    }
+    console::Term::stderr()
+        .size_checked()
+        .map(|(_, cols)| usize::from(cols))
+        .unwrap_or(120)
+}
+
+fn fit_middle(s: &str, budget: usize) -> String {
+    if measure_text_width(s) <= budget {
+        return s.to_string();
+    }
+    if budget == 0 {
+        return String::new();
+    }
+    let ell = "…";
+    let ell_width = measure_text_width(ell);
+    if budget <= ell_width {
+        return take_start_width(s, budget);
+    }
+    let left = (budget - ell_width) / 2;
+    let right = budget - ell_width - left;
+    format!(
+        "{}{ell}{}",
+        take_start_width(s, left),
+        take_end_width(s, right),
+    )
+}
+
+fn fit_tail(s: &str, budget: usize) -> String {
+    if measure_text_width(s) <= budget {
+        return s.to_string();
+    }
+    const ELL: &str = "...";
+    if budget <= ELL.len() {
+        return ".".repeat(budget);
+    }
+    let keep = budget - ELL.len();
+    format!("{}{ELL}", take_start_width(s, keep))
+}
+
+fn pad_to(mut s: String, budget: usize) -> String {
+    let used = measure_text_width(&s);
+    if used < budget {
+        s.push_str(&" ".repeat(budget - used));
+    }
+    s
+}
+
+fn take_start_width(s: &str, budget: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in s.chars() {
+        let w = measure_text_width(&ch.to_string());
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        out.push(ch);
+    }
+    out
+}
+
+fn take_end_width(s: &str, budget: usize) -> String {
+    let mut out = Vec::new();
+    let mut used = 0;
+    for ch in s.chars().rev() {
+        let w = measure_text_width(&ch.to_string());
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        out.push(ch);
+    }
+    out.into_iter().rev().collect()
+}
+
 /// The `MultiProgress` currently driving the terminal, if any. Registered by
 /// `ProgressBarSet` while a run is live; the tracing stdout writer consults it
 /// so log lines are printed above the bars.
@@ -171,10 +534,7 @@ static LOG_MPB: Mutex<Option<Arc<MultiProgress>>> = Mutex::new(None);
 // INFO: Since we are partially capturing the ProgressBarSet for rayon / multiprocessing. We need
 //  to make all things either behind one single mutex or multiple mutex-es to ensure we don't end
 //  with memory corruption
-/// One shared bar set: a fixed bottom global bar (percent only) plus the
-/// current phase bar(s) above it. All bars draw to stdout; `MultiProgress`
-/// auto-hides when stdout is not a terminal — `suspend`-printed logs still emit.
-pub struct ProgressBarSet {
+struct Inner {
     mp: Arc<MultiProgress>,
     global: ProgressBar,
     /// Whether `global` is currently a member of `mp` (and therefore anchors the
@@ -186,12 +546,15 @@ pub struct ProgressBarSet {
     /// While `Some`, every phase-targeting operation drives this bar instead of the
     /// real phase bar, and `inc_both`/`inc_global` stop advancing the global. Used
     /// to show a self-contained sub-step (e.g. the eager extract filter) above a
-    /// running phase without disturbing it. See [`Self::redirect_phase`].
+    /// running phase without disturbing it. See [`ProgressBarSet::redirect_phase`].
     override_phase: Mutex<Option<ProgressBar>>,
     subs: Mutex<Vec<ProgressBar>>,
     thread_bars: Mutex<ThreadBars>,
     table_size: Mutex<u64>,
     multiplier: u64,
+    layout: Arc<LayoutState>,
+    /// Serializes layout transitions with structural bar changes.
+    apply_lock: Mutex<()>,
 }
 
 /// Lazy pool of per-thread sub-bars, one per rayon worker (`rayon::current_thread_index()`).
@@ -201,19 +564,152 @@ struct ThreadBars {
     kind: Option<BarKind>,
     count: usize,
     bars: Vec<Option<ProgressBar>>,
+    /// Thread bars stay alive while detached; this tracks whether they are in `mp`.
+    attached: bool,
 }
 
-// TODO think through the phase redirect.
-// INFO: To share the ProgressBarSet amongst multiple threads all elements inside need to be thread safe. Rust does not
-//  know that ProgressBar is thread safe -> MutEx
+/// One shared bar set: a fixed bottom global bar (percent only) plus the
+/// current phase bar(s) above it. All bars draw to stdout; `MultiProgress`
+/// auto-hides when stdout is not a terminal — `suspend`-printed logs still emit.
+pub struct ProgressBarSet {
+    inner: Arc<Inner>,
+    watcher_stop: Arc<AtomicBool>,
+    watcher: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
 impl ProgressBarSet {
     pub fn new(multiplier: u64) -> Self {
+        Self::with_mode(multiplier, ProgressMode::PerThread)
+    }
+
+    pub fn with_mode(multiplier: u64, mode: ProgressMode) -> Self {
+        let inner = Arc::new(Inner::new(multiplier, mode));
+        let stop = Arc::new(AtomicBool::new(false));
+        let watcher = start_width_watcher(&inner, &stop);
+        let set = Self {
+            inner,
+            watcher_stop: stop,
+            watcher: Mutex::new(watcher),
+        };
+        set.inner.apply_layout();
+        set
+    }
+
+    pub fn register_global(&self) {
+        self.inner.register_global();
+    }
+
+    pub fn unregister_global(&self) {
+        self.inner.unregister_global();
+    }
+
+    pub fn single_bar(&self) {
+        self.inner.single_bar();
+    }
+
+    pub fn set_table_size(&self, n: u64) {
+        self.inner.set_table_size(n);
+    }
+
+    pub fn begin_phase(&self, idx: u64, msg: &str, kind: BarKind) {
+        self.inner.begin_phase(idx, msg, kind);
+    }
+
+    pub fn set_phase_total(&self, n: u64) {
+        self.inner.set_phase_total(n);
+    }
+
+    pub fn set_phase_position(&self, pos: u64) {
+        self.inner.set_phase_position(pos);
+    }
+
+    pub fn set_phase_msg(&self, s: &str) {
+        self.inner.set_phase_msg(s);
+    }
+
+    pub fn set_phase_file(&self, label: &str, file: impl AsRef<Path>) {
+        self.inner.set_phase_file(label, file);
+    }
+
+    pub fn set_phase_kind(&self, kind: BarKind) {
+        self.inner.set_phase_kind(kind);
+    }
+
+    pub fn push_sub_bar(&self, msg: &str, kind: BarKind) -> ProgressBar {
+        self.inner.push_sub_bar(msg, kind)
+    }
+
+    pub fn hide_bar(&self, bar: &ProgressBar) {
+        self.inner.hide_bar(bar);
+    }
+
+    pub fn redirect_phase(&self, bar: ProgressBar) -> PhaseRedirect<'_> {
+        self.inner.redirect_phase(bar)
+    }
+
+    pub fn begin_integrity(&self, total: u64) -> ProgressBar {
+        self.inner.begin_integrity(total)
+    }
+
+    pub fn create_thread_bars(&self, kind: BarKind, count: usize) {
+        self.inner.create_thread_bars(kind, count);
+    }
+
+    pub fn thread_bar(&self, idx: usize) -> ProgressBar {
+        self.inner.thread_bar(idx)
+    }
+
+    pub fn drop_thread_bars(&self) {
+        self.inner.drop_thread_bars();
+    }
+
+    pub fn inc_both(&self, n: u64) {
+        self.inner.inc_both(n);
+    }
+
+    pub fn inc_global(&self, n: u64) {
+        self.inner.inc_global(n);
+    }
+
+    pub fn inc_phase(&self, n: u64) {
+        self.inner.inc_phase(n);
+    }
+
+    pub fn phase_position(&self) -> u64 {
+        self.inner.phase_position()
+    }
+
+    pub fn global_position(&self) -> u64 {
+        self.inner.global_position()
+    }
+
+    pub fn finish(&self) {
+        self.inner.finish();
+    }
+
+    pub fn abandon(&self) {
+        self.inner.abandon();
+    }
+
+    pub fn mp_handle(&self) -> Arc<MultiProgress> {
+        self.inner.mp.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_width_for_test(&self, cols: usize) {
+        self.inner.layout.width.store(cols, Ordering::Relaxed);
+        self.inner.apply_layout();
+    }
+}
+
+impl Inner {
+    fn new(multiplier: u64, progress_mode: ProgressMode) -> Self {
+        let layout = Arc::new(LayoutState::new(progress_mode));
         let mp = Arc::new(MultiProgress::new());
-        let global = ProgressBar::new(0);
-        global.set_style(
-            ProgressStyle::with_template(GLOBAL_TEMPLATE).expect("valid indicatif template"),
-        );
-        global.set_message("tar-dedup");
+        if progress_mode == ProgressMode::None {
+            mp.set_draw_target(ProgressDrawTarget::hidden());
+        }
+        let global = make_global_bar(layout.clone());
         mp.add(global.0.clone());
         Self {
             mp,
@@ -226,83 +722,83 @@ impl ProgressBarSet {
                 kind: None,
                 count: 0,
                 bars: Vec::new(),
+                attached: false,
             }),
             table_size: Mutex::new(1),
             multiplier,
+            layout,
+            apply_lock: Mutex::new(()),
         }
     }
 
-    /// (Re-)join the global bar to the [`MultiProgress`], clearing the internal
-    /// presence flag. Idempotent — no-op when it is already registered.
-    pub fn register_global(&self) {
+    fn progress_mode(&self) -> ProgressMode {
+        self.layout.progress_mode
+    }
+
+    fn register_global(&self) {
         let mut f = self.global_registered
             .lock()
             .expect("global-registered lock poisoned");
-
         if !*f {
             self.mp.add(self.global.0.clone());
             *f = true;
         }
     }
 
-    /// Detach the global bar from the [`MultiProgress`] (it stays fully
-    /// functional as a handle, just not drawn) and set the internal presence
-    /// flag. Idempotent — no-op when it is already unregistered. Used by the
-    /// single-bar footer step; while unregistered, `begin_phase`/`thread_bar`
-    /// panic because they need the global as their `insert_before` anchor.
-    pub fn unregister_global(&self) {
+    fn unregister_global(&self) {
         let mut f = self.global_registered
             .lock()
             .expect("global-registered lock poisoned");
-
         if *f {
             self.mp.remove(&self.global.0);
             *f = false;
         }
     }
 
-    /// Tear the phase and global bars down so only the caller's own sub-bar
-    /// renders — the terminal step for an archive's footer integrity hash. The
-    /// phase bar is dropped (the next `begin_phase` rebuilds it) and the global
-    /// is unregistered; nothing on this `ProgressBarSet` may draw a new phase
-    /// afterwards.
-    pub fn single_bar(&self) {
+    fn single_bar(&self) {
+        if self.progress_mode() != ProgressMode::PerThread {
+            return;
+        }
+        let _guard = self.apply_lock.lock().expect("progress apply lock poisoned");
         if let Some(p) = self.phase
             .lock()
-            .expect("progress phase lock poisoned").take() {
-
+            .expect("progress phase lock poisoned")
+            .take()
+        {
             reset_bar(&p, ResetKind::Finish);
             self.mp.remove(&p);
         }
+        self.drop_thread_bars();
         self.unregister_global();
     }
 
-    /// Scale the global bar to the full table: length = `n * multiplier`.
-    pub fn set_table_size(&self, n: u64) {
+    fn set_table_size(&self, n: u64) {
         *self.table_size.lock().expect("progress size lock poisoned") = n;
         self.global.set_length(n.saturating_mul(self.multiplier));
     }
 
-    /// Drop the previous phase bar(s) and start a new phase. Snapping the
-    /// global to `idx * table_size` both "finishes off" the previous phase and
-    /// anchors resume runs mid-pipeline.
-    pub fn begin_phase(&self, idx: u64, msg: &str, kind: BarKind) {
+    fn begin_phase(&self, idx: u64, msg: &str, kind: BarKind) {
+        if self.progress_mode() == ProgressMode::PerThread {
+            assert!(
+                *self.global_registered.lock().expect("global-registered lock poisoned"),
+                "no global progressbar: `unregister_global()`/`single_bar()` removed it as the \
+                 last bar-modifying (footer) step; nothing may `begin_phase` on this \
+                 `ProgressBarSet` afterwards"
+            );
+        }
+        let _guard = self.apply_lock.lock().expect("progress apply lock poisoned");
         let total = *self.table_size.lock().expect("progress size lock poisoned");
         self.global.set_position(idx.saturating_mul(total));
         self.finish_current(ResetKind::Finish);
-        let bar = make_bar(kind, msg);
-        assert!(
-            *self.global_registered.lock().expect("global-registered lock poisoned"),
-            "no global progressbar: `unregister_global()`/`single_bar()` removed it as the \
-             last bar-modifying (footer) step; nothing may `begin_phase` on this \
-             `ProgressBarSet` afterwards"
-        );
-        self.mp.insert_before(&self.global, bar.0.clone());
+        let bar = make_bar(kind, BarRole::Phase, "", msg, self.layout.clone());
+        if self.progress_mode() == ProgressMode::PerThread {
+            self.mp.insert_before(&self.global, bar.0.clone());
+        }
         *self.phase.lock().expect("progress phase lock poisoned") = Some(bar);
+        drop(_guard);
+        self.apply_layout();
     }
 
-    /// The current phase target: the override bar while a redirect is active,
-    /// otherwise the real phase bar.
     fn phase_target(&self) -> Option<ProgressBar> {
         match self.override_phase.lock().expect("progress override lock poisoned").as_ref() {
             Some(o) => Some(o.clone()),
@@ -310,63 +806,65 @@ impl ProgressBarSet {
         }
     }
 
-    pub fn set_phase_total(&self, n: u64) {
+    fn set_phase_total(&self, n: u64) {
         if let Some(b) = self.phase_target() {
             b.set_length(n);
+            self.apply_layout();
         }
     }
 
-    pub fn set_phase_position(&self, pos: u64) {
+    fn set_phase_position(&self, pos: u64) {
         if let Some(b) = self.phase_target() {
             b.set_position(pos);
         }
     }
 
-    pub fn set_phase_msg(&self, s: &str) {
+    fn set_phase_msg(&self, s: &str) {
         if let Some(b) = self.phase_target() {
-            b.set_message(s.to_string());
+            b.set_message(s);
         }
     }
 
-    /// Shortened `label path` message on the phase bar (mimics the old
-    /// `set_file` helpers).
-    pub fn set_phase_file(&self, label: &str, file: impl AsRef<Path>) {
-        let short = truncate_middle(&file.as_ref().to_string_lossy(), 56);
-        self.set_phase_msg(&format!("{label} {short}"));
-    }
-
-    /// Switch the phase bar style without dropping it (spinner → bar once a
-    /// total is known). Keeps the current position.
-    pub fn set_phase_kind(&self, kind: BarKind) {
+    fn set_phase_file(&self, label: &str, file: impl AsRef<Path>) {
         if let Some(b) = self.phase_target() {
-            b.set_style(style_for(kind));
+            b.set_message(format!("{label} {}", file.as_ref().display()));
         }
     }
 
-    /// Insert a sub-bar on top of the sub-bar stack (newest above older ones,
-    /// above the phase bar / global). Used for complex phases.
-    pub fn push_sub_bar(&self, msg: &str, kind: BarKind) -> ProgressBar {
-        let bar = make_bar(kind, msg);
-        self.mp.insert(0, bar.0.clone());
+    fn set_phase_kind(&self, kind: BarKind) {
+        if let Some(b) = self.phase_target() {
+            b.set_kind(kind);
+            self.apply_layout();
+        }
+    }
+
+    fn push_sub_bar(&self, msg: &str, kind: BarKind) -> ProgressBar {
+        let _guard = self.apply_lock.lock().expect("progress apply lock poisoned");
+        let bar = make_bar(kind, BarRole::Sub, "", msg, self.layout.clone());
+        if self.progress_mode() == ProgressMode::PerThread {
+            self.mp.insert(0, bar.0.clone());
+        }
         self.subs.lock().expect("progress subs lock poisoned").push(bar.clone());
+        drop(_guard);
+        self.apply_layout();
         bar
     }
 
-    /// Finish and remove a sub-bar (and drop it from the tracked list). Used once a
-    /// transient step (e.g. filter loading) completes so it stops drawing.
-    pub fn hide_bar(&self, bar: &ProgressBar) {
+    fn hide_bar(&self, bar: &ProgressBar) {
+        let _guard = self.apply_lock.lock().expect("progress apply lock poisoned");
         bar.finish_and_clear();
-        self.mp.remove(bar);
+        if self.progress_mode() == ProgressMode::PerThread {
+            self.mp.remove(bar);
+        }
         self.subs
             .lock()
             .expect("progress subs lock poisoned")
             .retain(|b| !std::ptr::eq(b, bar));
+        drop(_guard);
+        self.apply_layout();
     }
 
-    /// Redirect phase-targeting operations to `bar` (typically a sub-bar) and
-    /// decouple them from the global until the returned guard is dropped. On drop
-    /// the previous override is restored and `bar` is finished + removed.
-    pub fn redirect_phase(&self, bar: ProgressBar) -> PhaseRedirect<'_> {
+    fn redirect_phase(&self, bar: ProgressBar) -> PhaseRedirect<'_> {
         let prev = self
             .override_phase
             .lock()
@@ -375,23 +873,15 @@ impl ProgressBarSet {
         PhaseRedirect { set: self, prev, bar }
     }
 
-    /// Start a fraction bar for a self-contained step between phases (e.g. the
-    /// cross-phase integrity battery). `total` is the number of steps; advance
-    /// with `inc(1)` on the returned handle. Torn down with the phase bars.
-    pub fn begin_integrity(&self, total: u64) -> ProgressBar {
+    fn begin_integrity(&self, total: u64) -> ProgressBar {
         let bar = self.push_sub_bar("integrity checks: ", BarKind::Count);
         bar.set_length(total);
+        self.apply_layout();
         bar
     }
 
-    /// Prepare a lazy per-thread bar pool for the current phase. Call once at the
-    /// start of a parallel phase; bars are materialized on first use by each
-    /// thread index (`thread_bar`) and torn down with [`Self::drop_thread_bars`]
-    /// at the end. `count` is the worker pool size (`effective_jobs`).
-    pub fn create_thread_bars(&self, kind: BarKind, count: usize) {
+    fn create_thread_bars(&self, kind: BarKind, count: usize) {
         debug_assert!(count > 0, "thread bar pool must have at least one slot");
-        // Defensive: rip out anything a previous phase forgot to drop. Runs
-        // before taking the lock below — `drop_thread_bars` locks this Mutex.
         self.drop_thread_bars();
         let mut tb = self.thread_bars
             .lock()
@@ -399,13 +889,12 @@ impl ProgressBarSet {
         tb.kind = Some(kind);
         tb.count = count;
         tb.bars.resize_with(count, || None);
+        tb.attached = false;
+        drop(tb);
+        self.apply_layout();
     }
 
-    /// Fetch the bar for a worker thread, creating it on first use. The returned
-    /// handle is reused by that thread index for the whole phase (reset + resize
-    /// per new file); collected by `drop_thread_bars`.
-    pub fn thread_bar(&self, idx: usize) -> ProgressBar {
-        // Attempt to get an existing bar and validate the idx.
+    fn thread_bar(&self, idx: usize) -> ProgressBar {
         let mut tb = self.thread_bars
             .lock()
             .expect("progress thread-bars lock poisoned");
@@ -416,51 +905,36 @@ impl ProgressBarSet {
             return b.clone();
         }
 
-        // PRECONDITION: No bar present in the vec.
         let kind = tb.kind.expect(
             "INVARIANT ERROR: create_thread_bars must be called before thread_bar");
-        let bar = make_bar(kind, "");
-
-        // Insert the bar into the MultiProgress bar.
-        match self.phase.lock().expect("progress phase lock poisoned").as_ref() {
-            Some(p) => self.mp.insert_before(p, bar.0.clone()),
-            None => {
-                assert!(
-                    *self.global_registered.lock().expect("global-registered lock poisoned"),
-                    "no global progressbar: `unregister_global()`/`single_bar()` removed it as \
-                     the last bar-modifying (footer) step; no thread bar may be created \
-                     afterwards"
-                );
-                self.mp.insert_before(&self.global, bar.0.clone())
-            }
-        };
-
-        // Update the vector with the new bar.
+        let prefix = thread_prefix(idx, tb.count);
+        let bar = make_bar(kind, BarRole::Thread, &prefix, "", self.layout.clone());
+        if self.should_show_threads() {
+            self.attach_bar(&bar);
+            tb.attached = true;
+        }
         tb.bars[idx] = Some(bar.clone());
         bar
     }
 
-    /// Remove every thread bar created since the last `create_thread_bars`,
-    /// leaving only the phase bar and the global bar. Idempotent.
-    pub fn drop_thread_bars(&self) {
+    fn drop_thread_bars(&self) {
         let mut tb = self.thread_bars
             .lock()
             .expect("progress thread-bars lock poisoned");
-
-        // Drop the bars
         for slot in take(&mut tb.bars) {
             if let Some(b) = slot {
                 b.finish_and_clear();
-                self.mp.remove(&b);
+                if tb.attached {
+                    self.mp.remove(&b);
+                }
             }
         }
         tb.count = 0;
         tb.kind = None;
+        tb.attached = false;
     }
 
-    /// Advance the phase bar and the global by `n`. While a redirect is active,
-    /// advances only the override bar (global decoupled).
-    pub fn inc_both(&self, n: u64) {
+    fn inc_both(&self, n: u64) {
         let redirected = self.override_phase
             .lock()
             .expect("progress override lock poisoned")
@@ -475,9 +949,7 @@ impl ProgressBarSet {
         }
     }
 
-    /// Advance only the global (bulk SQL promotions of rows leaving the phase).
-    /// While a redirect is active, advances the override bar instead.
-    pub fn inc_global(&self, n: u64) {
+    fn inc_global(&self, n: u64) {
         if let Some(o) = self.override_phase
             .lock()
             .expect("progress override lock poisoned")
@@ -489,47 +961,40 @@ impl ProgressBarSet {
         }
     }
 
-    /// Advance only the phase bar (byte-level progress inside a file).
-    pub fn inc_phase(&self, n: u64) {
+    fn inc_phase(&self, n: u64) {
         if let Some(b) = self.phase_target() {
             b.inc(n);
         }
     }
 
-    /// Current position of the active phase bar (the override bar while a
-    /// redirect is active, else the real phase bar).
-    pub fn phase_position(&self) -> u64 {
+    fn phase_position(&self) -> u64 {
         self.phase_target().map_or(0, |b| b.position())
     }
 
-    /// Current position of the global bar.
-    pub fn global_position(&self) -> u64 {
+    fn global_position(&self) -> u64 {
         self.global.position()
     }
 
-    /// Complete every bar; the global ends at 100%.
-    pub fn finish(&self) {
+    fn finish(&self) {
+        let _guard = self.apply_lock.lock().expect("progress apply lock poisoned");
         self.finish_current(ResetKind::Finish);
         self.global
             .set_position(self.global.length().unwrap_or(0));
         self.global.finish();
     }
 
-    /// Abandon every bar (interrupt / exit-after-stage). Leaves no live bar.
-    pub fn abandon(&self) {
+    fn abandon(&self) {
+        let _guard = self.apply_lock.lock().expect("progress apply lock poisoned");
         self.finish_current(ResetKind::Abandon);
         self.global.abandon();
-    }
-
-    pub fn mp_handle(&self) -> Arc<MultiProgress> {
-        self.mp.clone()
     }
 
     fn finish_current(&self, kind: ResetKind) {
         if let Some(p) = self.phase
             .lock()
             .expect("progress phase lock poisoned")
-            .take() {
+            .take()
+        {
             reset_bar(&p, kind);
             self.mp.remove(&p);
         }
@@ -543,13 +1008,127 @@ impl ProgressBarSet {
         }
         self.drop_thread_bars();
     }
+
+    fn should_show_threads(&self) -> bool {
+        self.progress_mode() == ProgressMode::PerThread
+            && self.layout.mode() != LayoutMode::Percent
+    }
+
+    fn attach_bar(&self, bar: &ProgressBar) {
+        let phase = self.phase.lock().expect("progress phase lock poisoned").clone();
+        if let Some(p) = phase {
+            self.mp.insert_before(&p, bar.0.clone());
+        } else if *self.global_registered.lock().expect("global-registered lock poisoned") {
+            self.mp.insert_before(&self.global, bar.0.clone());
+        }
+    }
+
+    fn select_mode(&self, cols: usize) -> LayoutMode {
+        if self.progress_mode() == ProgressMode::None {
+            return LayoutMode::Percent;
+        }
+        let (mut normal, mut compact) = self.global.required_widths();
+        if self.progress_mode() == ProgressMode::PerThread {
+            if let Some(p) = self.phase.lock().expect("progress phase lock poisoned").clone() {
+                let (n, c) = p.required_widths();
+                normal = normal.max(n);
+                compact = compact.max(c);
+            }
+            for s in self.subs.lock().expect("progress subs lock poisoned").clone() {
+                let (n, c) = s.required_widths();
+                normal = normal.max(n);
+                compact = compact.max(c);
+            }
+            let tb = self.thread_bars.lock().expect("progress thread-bars lock poisoned");
+            if tb.count > 0 {
+                if let Some(kind) = tb.kind {
+                    let prefix = thread_prefix(0, tb.count);
+                    let meta = BarMeta {
+                        role: BarRole::Thread,
+                        kind: Mutex::new(kind),
+                        raw: Mutex::new(String::new()),
+                        prefix,
+                        layout: self.layout.clone(),
+                    };
+                    let (n, c) = meta.fixed_widths(0, None);
+                    normal = normal.max(n);
+                    compact = compact.max(c);
+                }
+            }
+        }
+        if cols >= normal + MIN_MSG_NORMAL {
+            LayoutMode::Normal
+        } else if cols >= compact + MIN_MSG_COMPACT {
+            LayoutMode::Compact
+        } else {
+            LayoutMode::Percent
+        }
+    }
+
+    fn apply_layout(&self) {
+        let _guard = self.apply_lock.lock().expect("progress apply lock poisoned");
+        if self.progress_mode() == ProgressMode::None {
+            return;
+        }
+        let mode = self.select_mode(self.layout.width());
+        self.layout.set_mode(mode);
+        self.global.sync_style();
+        if let Some(p) = self.phase.lock().expect("progress phase lock poisoned").clone() {
+            p.sync_style();
+            p.refit();
+        }
+        for s in self.subs.lock().expect("progress subs lock poisoned").clone() {
+            s.sync_style();
+            s.refit();
+        }
+        let mut tb = self.thread_bars.lock().expect("progress thread-bars lock poisoned");
+        for b in tb.bars.iter().flatten() {
+            b.sync_style();
+            b.refit();
+        }
+        let show = self.progress_mode() == ProgressMode::PerThread
+            && mode != LayoutMode::Percent;
+        if show && !tb.attached {
+            for b in tb.bars.iter().flatten() {
+                self.attach_bar(b);
+            }
+            tb.attached = true;
+        } else if !show && tb.attached {
+            for b in tb.bars.iter().flatten() {
+                self.mp.remove(b);
+            }
+            tb.attached = false;
+        }
+    }
+}
+
+fn start_width_watcher(inner: &Arc<Inner>, stop: &Arc<AtomicBool>) -> Option<thread::JoinHandle<()>> {
+    if cfg!(test) || inner.progress_mode() == ProgressMode::None || !io::stderr().is_terminal() {
+        return None;
+    }
+    let weak = Arc::downgrade(inner);
+    let stop = stop.clone();
+    Some(thread::Builder::new()
+        .name("tar-dedup-term-width".into())
+        .spawn(move || {
+            loop {
+                thread::park_timeout(Duration::from_millis(250));
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let Some(inner) = weak.upgrade() else { break };
+                inner.layout.width.store(terminal_cols(), Ordering::Relaxed);
+                inner.apply_layout();
+            }
+        })
+        .expect("spawn term-width watcher"))
 }
 
 /// Scoped phase override: while alive, phase-targeting operations drive the
 /// override bar and the global stays put. Restores the previous override and
 /// finishes + removes the override bar on drop.
 pub struct PhaseRedirect<'a> {
-    set: &'a ProgressBarSet,
+    set: &'a Inner,
     prev: Option<ProgressBar>,
     bar: ProgressBar,
 }
@@ -581,17 +1160,51 @@ fn reset_bar(bar: &ProgressBar, kind: ResetKind) {
 impl Drop for ProgressBarSet {
     fn drop(&mut self) {
         unregister_mpb();
+        self.watcher_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.watcher.lock().expect("watcher lock poisoned").take() {
+            handle.thread().unpark();
+            let _ = handle.join();
+        }
     }
 }
 
-fn make_bar(kind: BarKind, msg: &str) -> ProgressBar {
-    let bar = match kind {
-        BarKind::Counter => ProgressBar::new_spinner(),
-        BarKind::Count | BarKind::Bytes | BarKind::BytesRate => ProgressBar::new(0),
+fn make_global_bar(layout: Arc<LayoutState>) -> ProgressBar {
+    let meta = Arc::new(BarMeta {
+        role: BarRole::Global,
+        kind: Mutex::new(BarKind::Count),
+        raw: Mutex::new("tar-dedup".to_string()),
+        prefix: String::new(),
+        layout,
+    });
+    let bar = ProgressBar(indicatif::ProgressBar::new(0), Some(meta));
+    bar.sync_style();
+    bar.0.set_message("tar-dedup");
+    bar.0.enable_steady_tick(Duration::from_millis(100));
+    bar
+}
+
+fn make_bar(
+    kind: BarKind,
+    role: BarRole,
+    prefix: &str,
+    msg: &str,
+    layout: Arc<LayoutState>,
+) -> ProgressBar {
+    let inner = match kind {
+        BarKind::Counter => indicatif::ProgressBar::new_spinner(),
+        BarKind::Count | BarKind::Bytes | BarKind::BytesRate => indicatif::ProgressBar::new(0),
     };
-    bar.set_style(style_for(kind));
-    bar.set_message(msg.to_string());
-    bar.enable_steady_tick(Duration::from_millis(100));
+    let meta = Arc::new(BarMeta {
+        role,
+        kind: Mutex::new(kind),
+        raw: Mutex::new(String::new()),
+        prefix: prefix.to_string(),
+        layout,
+    });
+    let bar = ProgressBar(inner, Some(meta));
+    bar.sync_style();
+    bar.set_message(msg);
+    bar.0.enable_steady_tick(Duration::from_millis(100));
     bar
 }
 
@@ -839,24 +1452,6 @@ pub fn unregister_mpb() {
     }
 }
 
-fn truncate_middle(s: &str, max_chars: usize) -> String {
-    let n = s.chars().count();
-    if n <= max_chars {
-        return s.to_string();
-    }
-    let keep = max_chars.saturating_sub(1) / 2;
-    let prefix: String = s.chars().take(keep).collect();
-    let suffix: String = s
-        .chars()
-        .rev()
-        .take(keep)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{prefix}…{suffix}")
-}
-
 //==================================================================================================
 // Testing
 //==================================================================================================
@@ -966,6 +1561,115 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fit_helpers_pad_or_truncate_to_exact_width() {
+        let long = "Hashing /mnt/Aljoscha-Storage/03_scratch/research/Sotoudeh-IMac/file.txt";
+        for budget in [0, 1, 5, 20, 60, 160] {
+            let middle = pad_to(fit_middle(long, budget), budget);
+            let tail = pad_to(fit_tail(long, budget), budget);
+            assert_eq!(measure_text_width(&middle), budget, "middle {budget}");
+            assert_eq!(measure_text_width(&tail), budget, "tail {budget}");
+        }
+        let unicode = "Hashing /Bilder Beide NICHT LÖSCHEN/写真.jpg";
+        for budget in [10, 17, 31] {
+            let middle = pad_to(fit_middle(unicode, budget), budget);
+            assert_eq!(measure_text_width(&middle), budget, "unicode {budget}");
+        }
+    }
+
+    #[test]
+    fn thread_prefix_scales_with_worker_count() {
+        assert_eq!(thread_prefix(0, 1), "T1");
+        assert_eq!(thread_prefix(7, 8), "T8");
+        assert_eq!(thread_prefix(0, 10), "T01");
+        assert_eq!(thread_prefix(15, 16), "T16");
+        assert_eq!(thread_prefix(0, 128), "T001");
+        assert_eq!(thread_prefix(127, 128), "T128");
+    }
+
+    #[test]
+    fn per_thread_layout_switches_with_width() {
+        let set = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+        set.begin_phase(0, "hash", BarKind::BytesRate);
+        set.set_phase_total(1_000);
+
+        set.set_width_for_test(120);
+        assert_eq!(set.inner.layout.mode(), LayoutMode::Normal);
+        set.set_width_for_test(60);
+        assert_eq!(set.inner.layout.mode(), LayoutMode::Compact);
+        set.set_width_for_test(10);
+        assert_eq!(set.inner.layout.mode(), LayoutMode::Percent);
+    }
+
+    #[test]
+    fn thread_bars_detach_and_reattach_on_width() {
+        let set = ProgressBarSet::new(EXTRACT_MULTIPLIER);
+        set.begin_phase(0, "hash", BarKind::Bytes);
+        set.set_phase_total(1_000);
+        set.create_thread_bars(BarKind::Bytes, 2);
+        let t0 = set.thread_bar(0);
+        let t1 = set.thread_bar(1);
+        assert!(set.inner.thread_bars.lock().expect("threads").attached);
+
+        set.set_width_for_test(10);
+        assert_eq!(set.inner.layout.mode(), LayoutMode::Percent);
+        assert!(!set.inner.thread_bars.lock().expect("threads").attached,
+                "thread bars detached, handles retained");
+
+        set.set_width_for_test(120);
+        assert_eq!(set.inner.layout.mode(), LayoutMode::Normal);
+        assert!(set.inner.thread_bars.lock().expect("threads").attached,
+                "same handles reattached");
+        t0.inc(1);
+        t1.inc(1);
+        assert_eq!(t0.position(), 1);
+        assert_eq!(t1.position(), 1);
+    }
+
+    #[test]
+    fn global_and_none_modes_gate_bars() {
+        let global = ProgressBarSet::with_mode(EXTRACT_MULTIPLIER, ProgressMode::Global);
+        global.begin_phase(0, "hash", BarKind::Counter);
+        assert!(global.inner.phase.lock().expect("phase").is_some());
+        global.push_sub_bar("sub", BarKind::Counter);
+        global.create_thread_bars(BarKind::Bytes, 1);
+        global.thread_bar(0);
+        assert!(!global.inner.thread_bars.lock().expect("threads").attached,
+                "global mode hides thread bars");
+
+        let none = ProgressBarSet::with_mode(EXTRACT_MULTIPLIER, ProgressMode::None);
+        assert!(none.inner.mp.is_hidden());
+        none.begin_phase(0, "hash", BarKind::Counter);
+        assert!(none.inner.phase.lock().expect("phase").is_some());
+        none.create_thread_bars(BarKind::Bytes, 1);
+        none.thread_bar(0);
+        assert!(!none.inner.thread_bars.lock().expect("threads").attached,
+                "none mode hides thread bars");
+    }
+
+    #[test]
+    fn raw_message_refits_from_the_original_on_width_change() {
+        let layout = Arc::new(LayoutState::new(ProgressMode::PerThread));
+        let meta = BarMeta {
+            role: BarRole::Phase,
+            kind: Mutex::new(BarKind::Counter),
+            raw: Mutex::new(String::new()),
+            prefix: String::new(),
+            layout: layout.clone(),
+        };
+        let raw = "Hashing /mnt/very/long/path/that/must/not/wrap/file.txt";
+        layout.width.store(140, Ordering::Relaxed);
+        layout.set_mode(LayoutMode::Normal);
+        let wide = meta.render(raw, 10, Some(20));
+        layout.width.store(40, Ordering::Relaxed);
+        layout.set_mode(LayoutMode::Compact);
+        let narrow = meta.render(raw, 10, Some(20));
+        assert_eq!(measure_text_width(&wide), 140 - meta.fixed_normal(10, Some(20)));
+        assert_eq!(measure_text_width(&narrow), 40 - meta.fixed_compact(10, Some(20)));
+        assert!(narrow.contains("file.txt"), "basename survives middle truncation");
+    }
+
+    #[test]
     fn single_bar_removes_phase_and_global_leaving_one_bar() {
         // A fresh phase bar exists; `single_bar` drops it (and the global), so the
         // caller's own sub-bar becomes the only rendered bar and `finish()` still
