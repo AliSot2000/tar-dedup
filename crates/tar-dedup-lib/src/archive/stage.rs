@@ -216,6 +216,10 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
+     fn stage_pass_world() -> TestWorld {
+        TestWorld::tuned(|c| c.pipeline.stage_pass = true)
+    }
+
     impl TestWorld {
         /// The canonical row for `id` as `sparsified`: the exact precondition the
         /// stage list evaluates. Sets the filter columns so the row is eligible.
@@ -244,7 +248,7 @@ mod tests {
 
     #[test]
     fn run_aborts_when_stage_dir_uncreatable() {
-        let world = TestWorld::new();
+        let world = stage_pass_world();
         let id = world.add_file(format!("a.bin").as_str(), &[1u8; 8][..]);
         world.seed_stage_row(id);
         // Replace the (auto-created) stage dir with a regular file so
@@ -263,8 +267,21 @@ mod tests {
     }
 
     #[test]
-    fn run_with_no_pending_returns_ok() {
+    fn run_default_is_db_only_and_creates_no_stage_link() {
         let world = TestWorld::new();
+        let id = world.add_file(format!("a.bin").as_str(), &[1u8; 8][..]);
+        world.seed_stage_row(id);
+
+        run(&world.rt()).expect("run ok");
+
+        assert_eq!(world.phase(id), FilePhase::Staged);
+        assert!(!world.target_path(id).exists(), "no canonical symlink by default");
+        assert!(world.errors_for(id).is_empty());
+    }
+
+    #[test]
+    fn run_with_no_pending_returns_ok() {
+        let world = stage_pass_world();
         let id = world.add_file(format!("a.bin").as_str(), &[1u8; 8][..]);
         world.seed_stage_row(id);
         world.seed_staged_row(id);   // nothing left sparsified
@@ -277,7 +294,7 @@ mod tests {
 
     #[test]
     fn run_retains_progress_and_does_not_redo_work() {
-        let world = TestWorld::new();
+        let world = stage_pass_world();
         let mut pre_staged = Vec::<FileId>::new();
         for i in [1, 2] {
             let id = world.add_file(format!("pre{i}.bin").as_str(), &[i as u8; 64][..]);
@@ -325,7 +342,7 @@ mod tests {
 
     #[test]
     fn run_detects_and_stores_mtime_change() {
-        let world = TestWorld::new();
+        let world = stage_pass_world();
         let stale = DateTime::from_timestamp(Utc::now().timestamp() - 3600, 0).expect("stale");
         let id = world.add_file_recorded("a.bin", &[7u8; 64], Some(stale), None, None);
         world.seed_stage_row(id);
@@ -339,7 +356,7 @@ mod tests {
 
     #[test]
     fn run_removes_stale_target_and_stages() {
-        let world = TestWorld::new();
+        let world = stage_pass_world();
         let id = world.add_file(format!("a.bin").as_str(), &[1u8; 8][..]);
         world.seed_stage_row(id);
         // A stale non-symlink at the target (e.g. leftover from an interrupted run).
@@ -357,7 +374,7 @@ mod tests {
 
     #[test]
     fn run_target_removal_failure_aborts_and_prevents_further_staging() {
-        let world = TestWorld::new();
+        let world = stage_pass_world();
         let mut ids = Vec::<FileId>::new();
         for (n, byte) in [(1, 10), (2, 20), (3, 30)] {
             let id = world.add_file(format!("f{n}.bin").as_str(), &[byte; 64][..]);
@@ -389,7 +406,7 @@ mod tests {
         if geteuid().is_root() {
             return;   // chmod 0555 does not block root
         }
-        let world = TestWorld::new();
+        let world = stage_pass_world();
         let id = world.add_file(format!("a.bin").as_str(), &[1u8; 8][..]);
         world.seed_stage_row(id);
 
@@ -421,7 +438,7 @@ mod tests {
 
     #[test]
     fn run_stages_a_dozen_and_updates_db() {
-        let world = TestWorld::new();
+        let world = stage_pass_world();
         let mut ids = Vec::<FileId>::new();
         for n in 0..12 {
             let id = world.add_file(format!("f{n}.bin").as_str(), &[n as u8; 64][..]);
