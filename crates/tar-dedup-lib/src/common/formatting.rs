@@ -108,6 +108,20 @@ mod tests {
     }
 
     #[test]
+    fn formats_si_counts() {
+        assert_eq!(format_count_si(0), "0");
+        assert_eq!(format_count_si(100), "100");
+        assert_eq!(format_count_si(999), "999");
+        assert_eq!(format_count_si(1_000), "1k");
+        assert_eq!(format_count_si(1_120), "1.12k");
+        assert_eq!(format_count_si(999_000), "999k");
+        assert_eq!(format_count_si(1_000_000), "1M");
+        assert_eq!(format_count_si(999_000_000), "999M");
+        assert_eq!(format_count_si(1_000_000_000), "1G");
+        assert_eq!(format_count_si(999_500), "1M", "boundary promotes");
+    }
+
+    #[test]
     fn formats_elapsed() {
         assert_eq!(format_elapsed(Duration::from_secs(0)), "0:00");
         assert_eq!(format_elapsed(Duration::from_secs(25 * 60 + 12)), "25:12");
