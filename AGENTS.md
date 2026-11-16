@@ -75,7 +75,9 @@ needs a phase; `resume` only allows overriding `--jobs` / `--exit-after-stage`.
 3. `filter.rs` — apply include/exclude regexes; `ingest_filters` populates `filter_reason`; `apply_no_filter_archive` catch-all.
 4. `dedup.rs` — group by `(sha1, size)`; elect canonical (self-link); dupes point `canonical_id` at it.
 5. `sparsify.rs` — `sparse-cp` materializes hole-y files into the work dir when `--sparsify`.
-6. `stage.rs` — symlink canonical work-dir payloads under the stage root.
+6. `stage.rs` — DB-only by default: promote eligible rows to `staged`; the archive reads
+   `files` payload paths directly. `--add-stage-pass` (implied by `--bypass-archive`) also
+   symlinks canonical payloads under the stage root for debugging/product layout.
 7. `tar_builder` — write canonical files + `manifest.sqlite` / `snapshot.sqlite` into a (compressed) tar stream; finalize, then `archive_footer::write_footer`.
 
 Each phase drives `files.phase` forward (`inventoried → hashed → filtered → deduped →
@@ -177,8 +179,9 @@ One physical copy per `(sha1, size)` cluster; metadata lives in `files` rows.
 - `--fresh` wipes work dir; a `.lock` file (fs4) guards concurrent runs.
 - CIFS/SMB work dirs: SQLite's default VFS cannot set WAL (`Database is locked`);
   `Database::open` retries with `unix-excl` on SMB magic. CIFS also rejects
-  `symlink(2)`, which the stage step needs, so prefer a local `--work-dir` and
-  keep only the archive on the share.
+  `symlink(2)`, which `--add-stage-pass` / `--bypass-archive` needs, so prefer a
+  local `--work-dir` and keep only the archive on the share. The default DB-only
+  stage pass does not create symlinks.
 - Cleanup retention copies instead of renaming on `EXDEV` (local work dir +
   remote archive), then deletes the source.
 - Debug feature `debug-force-utf8` makes DB dumps readable but panics on non-UTF8 bytes.
