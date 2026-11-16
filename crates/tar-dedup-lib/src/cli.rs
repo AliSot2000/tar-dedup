@@ -439,6 +439,12 @@ pub struct ArchiveArgs {
     #[arg(long = "bypass-archive", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Archive")]
     pub bypass_archive: bool,
 
+    /// Run the filesystem stage pass (canonical symlinks) for debugging. The
+    /// archive normally reads payload paths directly from the database, so this
+    /// pass is not needed. `--bypass-archive` enables it automatically.
+    #[arg(long = "add-stage-pass", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Archive")]
+    pub add_stage_pass: bool,
+
     /// Relax utf-8 policy to also process entries without a valid utf-8 path.
     #[arg(long = "relax-utf8", default_value_t = false, action = ArgAction::SetTrue, help_heading = "Process Options")]
     pub relax_utf8: bool,
