@@ -280,6 +280,9 @@ fn record_file_error(recorder: &mut Recorder, fid: crate::db::types::FileId, pat
 /// and the A7 append invariant still holds. There is no compression stream, no
 /// footer and no stream sha1: content rehash is the integrity guarantee on the
 /// extract side (`--force` opts out).
+///
+/// The product intentionally holds symlinks plus sparse copies, not full canonical
+/// copies; `--sparsify --min-pages 0` materialises full payload files.
 fn run_bypass_archive(rt: &ArchiveRTArgs) -> Result<()> {
     // Mark the product provenance before baking the catalog so the copy carries it.
     rt.db.set_bypass_archive(true)?;
