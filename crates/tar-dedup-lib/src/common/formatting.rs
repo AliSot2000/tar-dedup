@@ -42,6 +42,36 @@ pub fn format_mib(bytes: u64) -> String {
     format!("{} MiB", out.chars().rev().collect::<String>())
 }
 
+/// Render a large count with 1000-based SI suffixes (`1k`, `1.12M`, `999G`).
+/// Used for progress lines without a denominator; values below 1000 stay plain.
+pub fn format_count_si(n: u64) -> String {
+    const UNITS: [&str; 6] = ["k", "M", "G", "T", "P", "E"];
+    if n < 1000 {
+        return n.to_string();
+    }
+    let mut value = n as f64;
+    let mut unit = 0usize;
+    while value >= 1000.0 && unit < UNITS.len() {
+        value /= 1000.0;
+        unit += 1;
+    }
+    // Round at the suffix boundary (e.g. 999.95M -> 1G).
+    if value >= 999.5 && unit < UNITS.len() {
+        value = 1.0;
+        unit += 1;
+    }
+    let suffix = if unit == 0 { "" } else { UNITS[unit - 1] };
+    let text = if value >= 100.0 {
+        format!("{value:.0}")
+    } else if value >= 10.0 {
+        format!("{value:.1}")
+    } else {
+        format!("{value:.2}")
+    };
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    format!("{text}{suffix}")
+}
+
 /// Render an elapsed duration compactly: `MM:SS`, or `H:MM:SS` past an hour.
 pub fn format_elapsed(d: Duration) -> String {
     let total = d.as_secs();
