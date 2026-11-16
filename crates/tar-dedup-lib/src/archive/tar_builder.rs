@@ -67,7 +67,6 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
     let total_bytes = rt.db.sum_canonical_bytes_to_archive()?;
     let already_archived = rt.db.sum_archived_canonical_bytes()?;
 
-    // TODO update eta only when write to buff occurs.
     let progress = rt.progress;
     progress.set_phase_total(total_bytes);
     progress.set_phase_position(already_archived);
