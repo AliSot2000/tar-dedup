@@ -939,9 +939,9 @@ mod tests {
 
     #[test]
     fn bytes_rate_bar_is_a_bar_kind_and_finishes() {
-        // The rate is a plain `BarKind` variant: normal inc drives it, and
-        // finishing the bar lets its refresher thread observe `is_finished()` and
-        // exit. Nothing perpendicular to the wrapper is touched.
+        // The rate is a plain `BarKind` variant: normal inc drives it, and the
+        // style's `{rate}` tracker reads position/elapsed on each draw. Nothing
+        // perpendicular to the wrapper is touched.
         let set = ProgressBarSet::new(EXTRACT_MULTIPLIER);
         set.begin_phase(0, "archive", BarKind::BytesRate);
         set.set_phase_total(100);
@@ -950,6 +950,20 @@ mod tests {
         assert_eq!(set.phase_position(), 30);
         set.finish();
         assert_eq!(set.phase_position(), 0);
+    }
+
+    #[test]
+    fn avg_rate_uses_consumed_bytes_and_elapsed_time() {
+        assert_eq!(format_avg_rate(0, Duration::from_secs(1)), "@ 0B/s (0:01)");
+        assert_eq!(
+            format_avg_rate(2 * 1024 * 1024, Duration::from_secs(2)),
+            "@ 1.00MiB/s (0:02)"
+        );
+        // Same position, shorter elapsed interval -> the reset-aware rate rises.
+        assert_eq!(
+            format_avg_rate(2 * 1024 * 1024, Duration::from_secs(1)),
+            "@ 2.00MiB/s (0:01)"
+        );
     }
 
     fn single_bar_removes_phase_and_global_leaving_one_bar() {
