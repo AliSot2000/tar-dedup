@@ -103,7 +103,7 @@ pub fn run(rt: &ArchiveRTArgs) -> Result<()> {
         total_bytes.saturating_sub(already_archived),
     );
 
-a    let capture_error = |err: &FileStatError, fid, rec: &mut Recorder| {
+    let capture_error = |err: &FileStatError, fid, rec: &mut Recorder| {
         rec.record_file(
             fid, ERROR_PHASE, err.recreate(), ErrorFlags::default(),
         )
