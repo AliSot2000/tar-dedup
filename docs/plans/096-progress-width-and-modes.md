@@ -1,6 +1,7 @@
 # 096 — Width-aware progress layouts and `--progress-mode`
 
-Status: proposed (2026-11-16). Not implemented.
+Status: **implemented (2026-11-16).** `BytesRate` prerequisite, width-aware layouts, resize handling,
+and `--progress-mode` wiring are in. `cargo test -p tar-dedup-lib --lib`: 793 passed.
 
 ## Goal
 
@@ -31,6 +32,45 @@ still overflow with a fixed 40-column bar. `ProcessOptions.progress_mode` exists
 - Mode selection is fit-based, not hard width breakpoints.
 - No `Phase:` / `Total:` prefixes are introduced. Existing messages stay (`hash`, `tar-dedup`, etc.).
 
+## Prerequisite: make `BytesRate` role-independent
+
+The cumulative rate exists because the xz encoder loads a ~1.6 GiB slab and then compresses it for
+up to 5 minutes. Indicatif's sliding `{bytes_per_sec}` collapses to 0 during that stall; consumed
+bytes divided by elapsed time stays a meaningful effective transfer rate.
+
+`BytesRate` is a `BarKind`, so any bar can technically use it. Before the fix it was effectively
+phase-only:
+
+- `start_byte_rate_refresher` captured `start` when the bar was created. Thread bars call `reset()`
+  per file, so position reset while elapsed did not; the average would be wrong.
+- The refresher wrote into `{prefix}`, which is where thread IDs (`T01`) must go.
+- It spawned one OS thread per `BytesRate` bar.
+
+Generalization (implemented in `progress.rs`):
+
+- Replace the refresher with an indicatif `ProgressTracker` custom key (`{rate}`), computed from
+  `state.pos() / state.elapsed()` at draw time.
+- `state.elapsed()` is reset by `bar.reset()`, so per-file dynamic rates are correct.
+- No extra OS thread, and `{prefix}` is free for `Txx`.
+- `style_for` picks the role-specific `BytesRate` template; a thread variant includes
+  `{spinner} {prefix}: {msg} ... {rate}`.
+
+Keep thread bars on `Bytes` (`@ {bytes_per_sec}`) for now to preserve Normal behavior.
+
+Implemented 2026-11-16:
+
+- `ByteRateTracker` (`progress.rs`) is a `ProgressTracker` custom key `{rate}`.
+- Rate = `state.pos() / state.elapsed()`, formatted by `format_avg_rate`.
+- `bar.reset()` resets `elapsed`, so per-file dynamic bars use the new interval.
+- `start_byte_rate_refresher` and its per-bar OS thread are gone.
+- `{prefix}` is free for `Txx` thread IDs.
+- Unit test `avg_rate_uses_consumed_bytes_and_elapsed_time`.
+- `cargo test -p tar-dedup-lib --lib`: 785 passed.
+
+Open decision:
+
+- Whether thread bars should switch from sliding `Bytes` to cumulative `BytesRate`.
+
 ## Layouts
 
 ### Normal
@@ -45,7 +85,8 @@ Current styles are unchanged except for message fitting and the thread prefix:
 - `Counter`: `{spinner} {msg} {pos}`
 - `Count`:   `{spinner} {msg} [{bar:40.cyan/blue}] {pos}/{len}`
 - `Bytes`:   `{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} @ {bytes_per_sec}`
-- `BytesRate` (phase): `{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {prefix}`
+- `BytesRate` (any role): `{spinner} {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {rate}`
+  - thread variant: `{spinner} {prefix}: {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {rate}`
 - Global: `{msg} [{bar:48.green/black}] {percent:>3}%`
 - Thread bars use a separate template with `{prefix}` for `Txx`:
   `{spinner} {prefix}: {msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} @ {bytes_per_sec}`
@@ -148,15 +189,15 @@ Fixed-overhead values are conservative upper bounds derived from the kind and to
 - `pos/len`: `2 * digits(len) + 1`
 - humanized bytes: width of the formatted total on both sides plus the slash
 - rate: `" @ "` plus the maximum formatted rate width
-- cumulative `BytesRate` prefix: the maximum `@ <rate> (<elapsed>)` width
+- cumulative `BytesRate` rate text: the maximum `@ <rate> (<elapsed>)` width
 - bar glyphs: fixed 40 columns in Normal; zero in Compact/Percent
 - thread prefix: `T` + digit width + `": "`
 
 ## Resize behavior
 
 All bars share one `LayoutState` with atomic width/mode. A dedicated
-`tar-dedup-term-width` thread polls `console::Term::stdout().size_checked()` every ~250 ms while the
-bar set is live.
+`tar-dedup-term-width` thread polls `console::Term::stderr().size_checked()` every ~250 ms while the
+bar set is live. `TAR_DEDUP_TERM_WIDTH` overrides the detected width (tests/benchmarks).
 
 On a width change:
 
@@ -232,7 +273,9 @@ To keep columns stable after padding:
   - shared original-message storage,
   - role/kind and fixed prefix,
   - `refit()` and style-sync helpers.
+- Done: `ByteRateTracker` custom `{rate}` key, `format_avg_rate`, refresher removal.
 - Add `fit_middle`, `fit_tail`, `pad_to`.
+- Add role-specific `BytesRate` templates (plain and, when enabled, thread with `{prefix}`).
 - Add `ProgressBarSet::with_mode(multiplier, mode)`; keep `new()` as per-thread for tests.
 - Thread prefix creation in `thread_bar()` using the pool size.
 - Gate `begin_phase`, `push_sub_bar`, `begin_integrity`, `thread_bar`, `single_bar`,
@@ -249,24 +292,26 @@ To keep columns stable after padding:
 
 ### Tests
 
-- Fit/pad/pad-end tests at widths 20/40/80/120, ASCII, `LÖSCHEN`, CJK.
+Done:
+
+- Fit/pad/pad-end tests at widths 0/1/5/20/60/160, ASCII and wide/Unicode text.
 - SI formatter boundaries: 100, 1k, 1.12k, 999k, 1M, 999M, 1G.
-- Mode selection: Normal/Compact/Percent at widths around each required boundary.
+- Mode selection: Normal/Compact/Percent at widths around the required boundaries.
 - `progress_mode=global`: only the global line is inserted.
 - `progress_mode=none`: zero bars and zero percent lines.
-- Render into `indicatif::InMemoryTerm` (enable its `in_memory` feature for tests):
-  - every rendered line width <= terminal width at 40/80/120
-  - compact has no thread raw numbers on thread lines
-  - percent has thread lines absent
-  - percent tail truncation and padding are correct.
-- Resize simulation:
-  - narrow -> wide restores previously hidden text and re-attaches the same thread handles
-  - wide -> narrow truncates/pads the same handles
-  - no new `ProgressBar` objects are created for threads.
+- Raw-message refit test: wide -> narrow preserves the basename and exactly fills the budget.
+- Resize simulation: narrow -> wide re-attaches the same thread handles; wide -> narrow detaches
+  them without recreating.
 - Thread prefix tests at 1/8/10/16/128 workers: `T1`, `T1..T8`, `T01..T10`, `T01..T16`,
   `T001..T128`.
-- Percent mode length-less counter: `Scanned Entries 1.12k`.
+- `format_avg_rate` covers consumed bytes / elapsed and reset-window semantics.
 - Existing `ProgressBarSet::new` tests remain per-thread.
+
+Known gaps:
+
+- No `indicatif::InMemoryTerm` full-render test (the `in_memory` feature is not enabled).
+- No direct render test for a thread-style `BytesRate` bar.
+- No actual `bar.reset()` window test beyond the formatting-helper test.
 
 ### Docs
 
@@ -276,7 +321,10 @@ To keep columns stable after padding:
 
 ## Open items
 
+- Should thread bars move to the generalized cumulative `BytesRate` style, or keep the current
+  sliding `@ {bytes_per_sec}`? This plan keeps them on `Bytes`.
 - SI prefix case: plan assumes lowercase `k`, uppercase `M/G/T/P/E`.
 - Compact length-less `Counter` bars: plan keeps raw `pos`.
+
 - The user's `log10(...).min(1)` wording is interpreted as
   `digits = max(1, floor(log10(count)) + 1)` so a single thread is `T1` and 16 threads are `T01`.
