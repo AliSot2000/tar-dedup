@@ -24,6 +24,16 @@ pub fn promote_unstageable_files(conn: &Connection) -> Result<u64> {
     Ok(n as u64)
 }
 
+/// Promote every remaining `sparsified` row to `staged` without touching the
+/// filesystem. Call after `promote_unstageable_files`; what is left is an
+/// eligible canonical payload that the archive reads from its DB path.
+pub fn promote_sparsified_to_staged(conn: &Connection) -> Result<u64> {
+    let n = conn.execute(
+        "UPDATE files SET phase = 'staged' WHERE phase = 'sparsified'", [],
+    ).to_panic()?;
+    Ok(n as u64)
+}
+
 /// Number of rows that will ever be staged (across sessions): eligible
 /// canonical files currently either `sparsified` (pending) or already `staged`
 /// (done in a prior run). Ineligible rows promoted to `staged` never match.
