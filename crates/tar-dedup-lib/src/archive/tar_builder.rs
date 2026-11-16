@@ -1171,18 +1171,16 @@ mod tests {
     }
 
     #[test]
-    fn run_canonicalize_failure_marks_and_continues() {
+    fn run_missing_source_marks_and_continues() {
         let world = TestWorld::new();
         let bad = world.add_file("bad.bin", &[1u8; 8][..]);
         let good = world.add_file("good.bin", &[2u8; 8][..]);
         world.seed_staged_row(bad);
         world.seed_staged_row(good);
-        // Break only `bad`'s staged symlink; `good` stays intact.
-        world.place_symlink(good);
-        let bad_link = world.place_symlink(bad);
-        fs::remove_file(&bad_link).expect("remove symlink");
+        // Remove only `bad`'s source payload; `good` stays intact.
+        fs::remove_file(world.record(bad).fs_path()).expect("remove source");
 
-        run(&world.rt()).expect("run completes with soft canonicalize failure");
+        run(&world.rt()).expect("run completes with soft per-file failure");
 
         let flags = world.flags(bad);
         assert!(flags.get(FileFlag::ErrorWhileArchive));
@@ -1191,12 +1189,45 @@ mod tests {
     }
 
     #[test]
-    fn run_canonicalize_failure_fail_fast_raises() {
+    fn run_ignores_stale_stage_link() {
+        let world = TestWorld::new();
+        let id = world.add_file("a.bin", &[1u8; 8][..]);
+        world.seed_staged_row(id);
+        let link = world.place_symlink(id);
+        fs::remove_file(&link).expect("remove stage link");
+
+        run(&world.rt()).expect("run ok");
+
+        assert_eq!(world.phase(id), FilePhase::Archived);
+        assert!(!world.flags(id).get(FileFlag::ErrorWhileArchive));
+    }
+
+    #[test]
+    fn run_missing_sparse_falls_back_and_records() {
+        let world = TestWorld::new();
+        let id = world.add_file("sp.bin", &[3u8; 32][..]);
+        world.seed_staged_row(id);
+        world.db.set_file_flag(id, FileFlag::HasSparse, true).expect("set HasSparse");
+        // No sparse stage copy exists; the original source does.
+
+        run(&world.rt()).expect("run ok");
+
+        assert_eq!(world.phase(id), FilePhase::Archived);
+        assert!(!world.flags(id).get(FileFlag::ErrorWhileArchive));
+        let records = world.db.get_records_by_file_id(id).expect("get records");
+        assert!(
+            records.iter().any(|r| r.error_msg.contains("missing sparse payload")),
+            "missing sparse fallback must be recorded: {records:?}"
+        );
+    }
+
+    #[test]
+    fn run_missing_source_fail_fast_raises() {
         let mut world = TestWorld::new();
         world.config.process.fail_fast = true;
         let bad = world.add_file("bad.bin", &[1u8; 8][..]);
         world.seed_staged_row(bad);
-        // Symlink never created -> canonicalize fails -> fail_fast raises.
+        fs::remove_file(world.record(bad).fs_path()).expect("remove source");
         let res = run(&world.rt());
         assert!(matches!(res, Err(Error::FileStat(_))));
     }

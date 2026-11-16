@@ -767,6 +767,15 @@ mod tests {
     }
 
     #[test]
+    fn stage_pass_is_opt_in() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = build(&[&input_dir_cli(dir.path())]).expect("default");
+        assert!(!cfg.pipeline.stage_pass, "stage pass is off by default");
+        let cfg = build(&[&input_dir_cli(dir.path()), "--add-stage-pass"]).expect("explicit");
+        assert!(cfg.pipeline.stage_pass, "--add-stage-pass enables it");
+    }
+
+    #[test]
     fn bypass_archive_forces_keep_stage_and_db_retention() {
         // The bypass product dir holds the payloads and the baked catalog (work
         // dir + work DB), so both must survive cleanup no matter what the user
@@ -789,6 +798,7 @@ mod tests {
         let cfg = ArchiveConfig::build(&a, None).expect("bypass build");
         assert_eq!(cfg.process.cleanup.keep_stage, StageKeep::Always, "bypass keeps stage");
         assert_eq!(cfg.process.cleanup.db_retention, DbRetention::Always, "bypass keeps db");
+        assert!(cfg.pipeline.stage_pass, "bypass needs the filesystem stage pass");
     }
 
     #[test]

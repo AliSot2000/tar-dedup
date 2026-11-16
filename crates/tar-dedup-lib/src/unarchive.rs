@@ -504,6 +504,7 @@ fn bypass_archive_extract_round_trip() {
     }];
     acfg.pipeline.write_archive_footer = false;
     acfg.pipeline.bypass_archive = true;
+    acfg.pipeline.stage_pass = true;
     acfg.process.start_policy = crate::common::start::StartPolicy::Create;
     // The product (work dir + baked catalog) must survive the archive cleanup.
     acfg.process.cleanup.keep_stage = crate::config::StageKeep::Always;

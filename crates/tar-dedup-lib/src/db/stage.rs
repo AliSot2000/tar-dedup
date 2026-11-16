@@ -204,6 +204,21 @@ mod tests {
         assert_eq!(count_all_stage_candidates(&conn).expect("count"), 1);
     }
 
+    #[test]
+    fn promote_sparsified_to_staged_moves_all_remaining_rows() {
+        let (_dir, conn) = open_db();
+        insert_candidate(&conn, 1);
+        insert_candidate(&conn, 2);
+        conn.execute("UPDATE files SET ftype = 'dir' WHERE id = 2", []).expect("arm dir");
+
+        promote_unstageable_files(&conn).expect("promote ineligible");
+        let promoted = promote_sparsified_to_staged(&conn).expect("promote sparsified");
+
+        assert_eq!(promoted, 1);
+        assert_eq!(row_phase(&conn, 1), "staged");
+        assert_eq!(row_phase(&conn, 2), "staged");
+    }
+
     fn row_phase(conn: &Connection, id: i64) -> String {
         conn.query_row(
             "SELECT phase FROM files WHERE id = :id",
