@@ -314,15 +314,13 @@ impl BarMeta {
             BarKind::Count if thread => 48 + prefix + suffix_count(pos, len),
             BarKind::Count => 46 + suffix_count(pos, len),
             BarKind::Bytes if thread => {
-                48 + prefix + suffix_bytes(pos, len, thread) + 3 + MAX_RATE_WIDTH
+                48 + prefix + suffix_bytes(len) + 3 + MAX_RATE_WIDTH
             }
-            BarKind::Bytes => 46 + suffix_bytes(pos, len, thread) + 3 + MAX_RATE_WIDTH,
+            BarKind::Bytes => 46 + suffix_bytes(len) + 3 + MAX_RATE_WIDTH,
             BarKind::BytesRate if thread => {
-                48 + prefix + suffix_bytes(pos, len, thread) + 1 + MAX_AVG_RATE_WIDTH
+                48 + prefix + suffix_bytes(len) + 1 + MAX_AVG_RATE_WIDTH
             }
-            BarKind::BytesRate => {
-                46 + suffix_bytes(pos, len, thread) + 1 + MAX_AVG_RATE_WIDTH
-            }
+            BarKind::BytesRate => 46 + suffix_bytes(len) + 1 + MAX_AVG_RATE_WIDTH,
         }
     }
 
@@ -338,7 +336,7 @@ impl BarMeta {
             BarKind::Count if thread => 9 + prefix,
             BarKind::Count => 3 + suffix_count(pos, len),
             BarKind::Bytes | BarKind::BytesRate if thread => 9 + prefix,
-            BarKind::Bytes | BarKind::BytesRate => 3 + suffix_bytes(pos, len, thread),
+            BarKind::Bytes | BarKind::BytesRate => 3 + suffix_bytes(len),
         }
     }
 
@@ -382,9 +380,12 @@ impl BarMeta {
     }
 }
 
-const MAX_RATE_WIDTH: usize = 16;
+/// `{bytes_per_sec}` is `HumanBytes(per_sec)` + `/s`; `HumanBytes` never
+/// exceeds 11 columns (`1023.99 KiB`, `16.00 EiB`).
+const MAX_RATE_WIDTH: usize = 12;
 const MAX_AVG_RATE_WIDTH: usize = 40;
-const MAX_BYTES_WIDTH: usize = 12;
+/// Widest `HumanBytes` rendering for any unit (`1023.99 KiB` .. `1023.99 EiB`).
+const MAX_HUMAN_BYTES_WIDTH: usize = 11;
 const COUNT_SI_WIDTH: usize = 6;
 
 fn digits(n: u64) -> usize {
@@ -403,15 +404,27 @@ fn suffix_count(pos: u64, len: Option<u64>) -> usize {
     }
 }
 
-fn suffix_bytes(pos: u64, len: Option<u64>, thread: bool) -> usize {
-    if thread {
-        return MAX_BYTES_WIDTH;
-    }
+/// Worst-case width of `{bytes}/{total_bytes}`. `pos` grows up to `len` without
+/// a refit, so the bound is taken over `0..=len` rather than the current `pos`.
+/// A missing length is the only case where the range is unknown (thread bars get
+/// theirs before their first message).
+fn suffix_bytes(len: Option<u64>) -> usize {
     match len {
         Some(len) => {
-            format!("{}", HumanBytes(pos)).len() + 1 + format!("{}", HumanBytes(len)).len()
+            human_bytes_max_width(len) + 1 + format!("{}", HumanBytes(len)).len()
         }
-        None => format!("{}", HumanBytes(pos)).len(),
+        None => 2 * MAX_HUMAN_BYTES_WIDTH + 1,
+    }
+}
+
+/// Widest `HumanBytes(n)` for `0 <= n <= len`. In `[0, 1 MiB)` the rendering is
+/// non-decreasing, so `len` itself is widest; above that the widest value is the
+/// top of the `KiB` range (`1023.99 KiB`).
+fn human_bytes_max_width(len: u64) -> usize {
+    if len < 1024 * 1024 {
+        format!("{}", HumanBytes(len)).len()
+    } else {
+        MAX_HUMAN_BYTES_WIDTH
     }
 }
 
@@ -1667,6 +1680,35 @@ mod tests {
         assert_eq!(measure_text_width(&wide), 140 - meta.fixed_normal(10, Some(20)));
         assert_eq!(measure_text_width(&narrow), 40 - meta.fixed_compact(10, Some(20)));
         assert!(narrow.contains("file.txt"), "basename survives middle truncation");
+    }
+
+    #[test]
+    fn byte_bar_width_is_reserved_for_positions_up_to_len() {
+        // `set_message` refits while `pos` is still 0; the bar then advances up
+        // to `len` without another refit, so the reserved suffix must cover every
+        // `HumanBytes(pos)` in `0..=len` (this is what wrapped hashing lines by
+        // one or two columns before).
+        let sample = [
+            0u64, 1, 999, 1023, 1024, 1_048_575, 1_048_576, 2 * 1024 * 1024 * 1024, u64::MAX,
+        ];
+        for len in sample {
+            let human_len = format!("{}", HumanBytes(len)).len();
+            let reserved = suffix_bytes(Some(len));
+            for pos in sample {
+                let pos = pos.min(len);
+                let actual = format!("{}", HumanBytes(pos)).len() + 1 + human_len;
+                assert!(
+                    reserved >= actual,
+                    "len={len} pos={pos}: reserved {reserved} < actual {actual}"
+                );
+            }
+            assert!(
+                reserved <= 2 * MAX_HUMAN_BYTES_WIDTH + 1,
+                "reserved width is bounded for len={len}"
+            );
+        }
+        let max_rate = format!("{}/s", HumanBytes(u64::MAX)).len();
+        assert!(MAX_RATE_WIDTH >= max_rate, "{max_rate} > {MAX_RATE_WIDTH}");
     }
 
     #[test]
