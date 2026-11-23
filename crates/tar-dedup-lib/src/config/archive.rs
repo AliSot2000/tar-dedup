@@ -486,7 +486,8 @@ impl ArchiveConfig {
                                               capture_all),
                 numeric_ids_only: resolve_bool_flag(args.numeric_ids_only,
                                                     args.resolve_numeric_ids,
-                                                    capture_all),
+                                                    !capture_all), // INFO: Needs to be inverted
+                                                                   //  because its an off flag.
                 mode: args.mode.clone(),
                 transform: args.transform.clone(),
             },
